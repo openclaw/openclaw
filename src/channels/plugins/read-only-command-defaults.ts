@@ -22,6 +22,16 @@ export type ChannelCommandDefaults = Pick<
 
 type ManifestChannelConfigRecord = NonNullable<PluginManifestRecord["channelConfigs"]>[string];
 
+type ReadOnlyChannelCommandRecord = {
+  channelCatalogMeta?: {
+    commands?: ChannelCommandDefaults;
+    id: string;
+  };
+  channelConfigs?: Record<string, unknown>;
+  channels: string[];
+  id: string;
+};
+
 /**
  * Returns whether a manifest channel id is safe for own-property lookup.
  */
@@ -92,31 +102,87 @@ export function resolveReadOnlyChannelCommandDefaults(
     allowWorkspaceScopedCurrent: true,
   });
   for (const record of resolvedSnapshot.plugins) {
-    if (!record.channels.includes(normalizedChannelId)) {
+    const commandRecord = readOnlyChannelCommandRecord(record);
+    if (!commandRecord?.channels.includes(normalizedChannelId)) {
       continue;
     }
-    if (!isInstalledPluginEnabled(resolvedSnapshot.index, record.id, options.config)) {
+    if (!isInstalledPluginEnabled(resolvedSnapshot.index, commandRecord.id, options.config)) {
       continue;
     }
-    // Manifest channelConfigs are untrusted object data, so read the channel key
-    // through the guarded helper instead of indexing directly.
-    const channelConfigValue = record.channelConfigs
-      ? readOwnRecordValue(record.channelConfigs as Record<string, unknown>, normalizedChannelId)
-      : undefined;
-    const channelConfig =
-      channelConfigValue &&
-      typeof channelConfigValue === "object" &&
-      !Array.isArray(channelConfigValue)
-        ? (channelConfigValue as ManifestChannelConfigRecord)
-        : undefined;
-    const catalogCommands =
-      record.channelCatalogMeta?.id === normalizedChannelId
-        ? record.channelCatalogMeta.commands
-        : undefined;
-    const commands = normalizeChannelCommandDefaults(channelConfig?.commands ?? catalogCommands);
+    const commands = resolveCommandDefaultsFromRecord(commandRecord, normalizedChannelId);
     if (commands) {
       return commands;
     }
   }
   return undefined;
+}
+
+function readOnlyChannelCommandRecord(record: unknown): ReadOnlyChannelCommandRecord | null {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+
+  try {
+    const candidate = record as {
+      channelCatalogMeta?: unknown;
+      channelConfigs?: unknown;
+      channels?: unknown;
+      id?: unknown;
+    };
+    const { channelCatalogMeta, channelConfigs, channels, id } = candidate;
+    if (typeof id !== "string" || id.length === 0) {
+      return null;
+    }
+    if (!Array.isArray(channels)) {
+      return null;
+    }
+    return {
+      id,
+      channels: channels.filter((channel): channel is string => typeof channel === "string"),
+      ...(isRecord(channelConfigs) ? { channelConfigs } : {}),
+      ...(isChannelCatalogMeta(channelCatalogMeta) ? { channelCatalogMeta } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isChannelCatalogMeta(
+  value: unknown,
+): value is NonNullable<ReadOnlyChannelCommandRecord["channelCatalogMeta"]> {
+  if (!isRecord(value)) {
+    return false;
+  }
+  try {
+    return typeof value.id === "string";
+  } catch {
+    return false;
+  }
+}
+
+function resolveCommandDefaultsFromRecord(
+  record: ReadOnlyChannelCommandRecord,
+  normalizedChannelId: string,
+): ChannelCommandDefaults | undefined {
+  try {
+    // Manifest channelConfigs are untrusted object data, so read the channel key
+    // through the guarded helper instead of indexing directly.
+    const channelConfigValue = record.channelConfigs
+      ? readOwnRecordValue(record.channelConfigs, normalizedChannelId)
+      : undefined;
+    const channelConfig = isRecord(channelConfigValue)
+      ? (channelConfigValue as ManifestChannelConfigRecord)
+      : undefined;
+    const catalogCommands =
+      record.channelCatalogMeta?.id === normalizedChannelId
+        ? record.channelCatalogMeta.commands
+        : undefined;
+    return normalizeChannelCommandDefaults(channelConfig?.commands ?? catalogCommands);
+  } catch {
+    return undefined;
+  }
 }
