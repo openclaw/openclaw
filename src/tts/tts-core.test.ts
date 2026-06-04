@@ -142,6 +142,33 @@ describe("TTS core", () => {
     expect(result.outputLength).toBe("Concise audible summary.".length);
   });
 
+  it("strips truncated text_to_summarize echoes before returning summaries for speech", async () => {
+    const { config, deps } = createSummarizeTextFixture([
+      {
+        type: "text",
+        text: [
+          "Concise audible summary.",
+          "<text_to_summarize>",
+          "Original text should not be spoken again.",
+        ].join("\n"),
+      },
+    ]);
+
+    const result = await summarizeText(
+      {
+        text: "Long text that should be summarized for speech.",
+        targetLength: 120,
+        cfg: {},
+        config,
+        timeoutMs: 10_000,
+      },
+      deps,
+    );
+
+    expect(result.summary).toBe("Concise audible summary.");
+    expect(result.outputLength).toBe(result.summary.length);
+  });
+
   it("preserves valid leading first-person summary prose", async () => {
     const { config, deps } = createSummarizeTextFixture([
       {
