@@ -31,7 +31,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 
 | Group              | Tools                                                                                                                   |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                         |
+| `group:runtime`    | `exec`, `process`, `runtime`, `code_execution` (`bash` is accepted as an alias for `exec`)                              |
 | `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                  |
 | `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status` |
 | `group:memory`     | `memory_search`, `memory_get`                                                                                           |
@@ -116,6 +116,11 @@ Global tool allow/deny policy (deny wins). Case-insensitive, supports `*` wildca
   tools: { deny: ["browser", "canvas"] },
 }
 ```
+
+Use `tools.allow: ["runtime"]` or a profile/group that includes it, such as
+`tools.profile: "coding"` or `group:runtime`, when `runtimeContext.expose.mode`
+is `tool_hint` or `prompt_summary`. Otherwise the prompt may mention runtime
+details while policy filters the `runtime` tool out.
 
 `write` and `apply_patch` are separate tool ids. `allow: ["write"]` also enables `apply_patch` for compatible models, but `deny: ["write"]` does not deny `apply_patch`. To block all file mutation, deny `group:fs` or list each mutating tool explicitly:
 
