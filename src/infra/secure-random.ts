@@ -1,3 +1,4 @@
+// Provides secure random ids and bounded random numbers.
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 
 /** Generates a cryptographically secure UUID for runtime ids and cache keys. */

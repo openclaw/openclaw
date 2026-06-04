@@ -1,3 +1,4 @@
+// Covers canonical config schema defaults, validation, and sensitive redaction.
 import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";

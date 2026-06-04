@@ -1,3 +1,4 @@
+// Builds restart sentinel payloads for update handoff reporting.
 import {
   buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,

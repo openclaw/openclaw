@@ -1,3 +1,4 @@
+// Decides when config recovery should use snapshots, backups, or defaults.
 import type { ConfigFileSnapshot, ConfigValidationIssue } from "./types.openclaw.js";
 
 const PLUGIN_ENTRY_PATH_PREFIX = "plugins.entries.";

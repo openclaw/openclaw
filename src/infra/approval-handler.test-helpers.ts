@@ -1,3 +1,4 @@
+// Provides native approval runtime stubs for approval tests.
 import { vi } from "vitest";
 import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-runtime.js";
 

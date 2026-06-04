@@ -1,3 +1,4 @@
+// Builds deep-probe security findings from CLI and runtime evidence.
 import { formatCliCommand } from "../cli/command-format.js";
 import type { SecurityAuditFinding, SecurityAuditReport } from "./audit.types.js";
 

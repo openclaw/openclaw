@@ -1,3 +1,4 @@
+// Defines normalized provider catalog results from plugin metadata.
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
   copyArrayEntries,

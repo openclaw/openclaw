@@ -1,3 +1,4 @@
+// Applies policy checks to installed plugin index records.
 import type { OpenClawConfig } from "../config/types.js";
 import { listPluginCompatRecords } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";

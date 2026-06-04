@@ -1,3 +1,4 @@
+// Registers plugin-provided models into the model catalog.
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogSource,

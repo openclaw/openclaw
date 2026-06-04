@@ -1,3 +1,4 @@
+/** Reads legacy npm plugin declaration files left by early plugin installs. */
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { tryReadJsonSync } from "../infra/json-files.js";

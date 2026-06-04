@@ -1,3 +1,4 @@
+/** Builds doctor/install repair hints for missing official external plugin owners. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredChannelPresencePolicy } from "./channel-plugin-ids.js";
 import {

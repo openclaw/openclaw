@@ -1,3 +1,4 @@
+// Provides fixture helpers for config backup rotation tests.
 import path from "node:path";
 import { expect } from "vitest";
 

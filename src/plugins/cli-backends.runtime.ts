@@ -1,3 +1,4 @@
+// Runtime bridge for plugin-provided CLI backends.
 import { getActiveRuntimePluginRegistry } from "./active-runtime-registry.js";
 import type { CliBackendPlugin } from "./cli-backend.types.js";
 

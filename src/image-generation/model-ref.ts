@@ -1,3 +1,4 @@
+/** Parses image-generation model references into provider/model components. */
 import { parseGenerationModelRef } from "../../packages/media-generation-core/src/model-ref.js";
 
 // Image model refs share the generic media-generation provider/model grammar:

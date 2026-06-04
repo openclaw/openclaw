@@ -1,3 +1,4 @@
+// Test helper for reading SQLite pragma state.
 import type { DatabaseSync } from "node:sqlite";
 
 // SQLite pragma test helpers normalize node:sqlite bigint/number outputs.

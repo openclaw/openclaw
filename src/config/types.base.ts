@@ -1,3 +1,4 @@
+// Defines base configuration types shared by multiple config sections.
 import type { ChatType } from "../channels/chat-type.js";
 
 /** Reply handling mode for chat command surfaces. */

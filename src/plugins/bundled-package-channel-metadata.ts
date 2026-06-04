@@ -1,3 +1,4 @@
+// Collects bundled package channel metadata from plugin catalogs.
 import { listChannelCatalogEntries } from "./channel-catalog-registry.js";
 import type { PluginPackageChannel } from "./manifest.js";
 

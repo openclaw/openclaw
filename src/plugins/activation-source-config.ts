@@ -1,3 +1,4 @@
+/** Resolves the source config snapshot used for plugin activation policy decisions. */
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
