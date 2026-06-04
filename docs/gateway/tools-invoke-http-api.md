@@ -109,10 +109,13 @@ Gateway HTTP also applies a hard deny list by default (even if session policy al
 - `exec` - direct command execution (RCE surface)
 - `spawn` - arbitrary child process creation (RCE surface)
 - `shell` - shell command execution (RCE surface)
-- `fs_write` - arbitrary file mutation on the host
+- `read` - host filesystem read; opt-in via dual-key `gateway.tools.directInvoke.hostFsRead: true` AND `gateway.tools.allow: ["read"]` (see "Opt-in: coding tool `read` over direct-invoke" below)
+- `write` - canonical workspace write tool; opt-in via dual-key `gateway.tools.directInvoke.hostFsWrite: true` AND `gateway.tools.allow: ["write"]` (see "Opt-in: coding tools `write` / `edit` over direct-invoke" below)
+- `edit` - canonical workspace edit tool; same dual-key opt-in as `write`
+- `fs_write` - arbitrary file mutation on the host (legacy/alternate name)
 - `fs_delete` - arbitrary file deletion on the host
 - `fs_move` - arbitrary file move/rename on the host
-- `apply_patch` - patch application can rewrite arbitrary files
+- `apply_patch` - patch application can rewrite arbitrary files (factory entry NOT yet wired for direct-invoke; allowlisting has no effect on direct-invoke surface)
 - `sessions_spawn` - session orchestration; spawning agents remotely is RCE
 - `sessions_send` - cross-session message injection
 - `cron` - persistent automation control plane
