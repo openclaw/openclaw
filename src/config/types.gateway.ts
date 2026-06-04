@@ -493,9 +493,8 @@ export type GatewayDirectInvokeOptIns = {
    */
   hostFsRead?: boolean;
   /**
-   * Allow the host-filesystem write coding tools (`write`, `edit`,
-   * `apply_patch`) to be materialized for the gateway direct-invoke surfaces.
-   * Defaults to `false`.
+   * Allow the host-filesystem write coding tools (`write`, `edit`) to be
+   * materialized for the gateway direct-invoke surfaces. Defaults to `false`.
    *
    * Even when set to `true`, the operator MUST also include the specific
    * write tool name(s) in `gateway.tools.allow` (e.g. `["write", "edit"]`)
@@ -505,6 +504,13 @@ export type GatewayDirectInvokeOptIns = {
    * Exposes host filesystem writes outside the workspace unless
    * `tools.fs.workspaceOnly` is also enabled. STRONGLY recommend
    * `tools.fs.workspaceOnly: true` whenever this opt-in is set.
+   *
+   * `apply_patch` is in `DEFAULT_GATEWAY_HTTP_TOOL_DENY` for future-proofing
+   * but is intentionally NOT included in the materialized set yet — the
+   * coding tool factory does not produce an `apply_patch` entry for the
+   * direct-invoke surface. Operators including `"apply_patch"` in `allow`
+   * see no effect on the direct-invoke surface until a follow-up PR wires
+   * the factory entry.
    *
    * `exec`/`process`/`spawn`/`shell` (RCE-class) are intentionally NOT
    * controlled by this flag — they need a separate owner/admin enforcement
