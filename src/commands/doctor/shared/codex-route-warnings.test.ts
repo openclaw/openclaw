@@ -3830,6 +3830,45 @@ describe("collectCodexRouteWarnings", () => {
     expect(store.main.agentRuntimeOverride).toBeUndefined();
   });
 
+  it("repairs Telegram direct session routes while preserving canonical OpenAI auth pins", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:telegram:default:direct:8589344021": {
+        sessionId: "s-telegram",
+        updatedAt: 1,
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.5",
+        modelOverrideSource: "auto",
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "codex",
+        authProfileOverride: "openai:work",
+        authProfileOverrideSource: "auto",
+      },
+    };
+
+    const result = repairCodexSessionStoreRoutes({
+      store,
+      now: 123,
+    });
+    const entry = store["agent:main:telegram:default:direct:8589344021"];
+
+    expect(result).toEqual({
+      changed: true,
+      sessionKeys: ["agent:main:telegram:default:direct:8589344021"],
+    });
+    expect(entry.updatedAt).toBe(123);
+    expect(entry.modelProvider).toBe("openai");
+    expect(entry.model).toBe("gpt-5.5");
+    expect(entry.providerOverride).toBe("openai");
+    expect(entry.modelOverride).toBe("gpt-5.5");
+    expect(entry.modelOverrideSource).toBe("auto");
+    expect(entry.authProfileOverride).toBe("openai:work");
+    expect(entry.authProfileOverrideSource).toBe("auto");
+    expect(entry.agentHarnessId).toBeUndefined();
+    expect(entry.agentRuntimeOverride).toBeUndefined();
+  });
+
   it("repairs providerless auto Codex session overrides", () => {
     const store: Record<string, SessionEntry> = {
       main: {
