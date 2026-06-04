@@ -1428,6 +1428,12 @@ export async function dispatchReplyFromConfig(
     if (
       admission.status === "skipped" &&
       admission.reason === "active-run" &&
+      // Only visible reply turns may force-clear a stale terminal operation.
+      // A heartbeat/control turn can also see the terminal snapshot, but it must
+      // not abort an in-flight visible recovery a concurrent visible turn just
+      // admitted (before that op is marked `terminalRecovery`); let it fall
+      // through to normal busy/skip handling instead.
+      replyTurnKind === "visible" &&
       isRecoverableTerminalSessionStatus(sessionStoreEntry.entry?.status) &&
       // Only clear the proven stale leftover from the failed lifecycle. A
       // sibling recovery turn that already cleared the leftover and admitted a
