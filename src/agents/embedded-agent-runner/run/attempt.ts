@@ -3843,10 +3843,12 @@ export async function runEmbeddedAttempt(
             promptForRuntimeContextSplit,
             params.inputProvenance,
           );
-          promptForRuntimeContextSplit = appendRuntimeSelfContextToPrompt({
-            prompt: promptForRuntimeContextSplit,
-            config: params.config ?? getRuntimeConfig(),
-          });
+          if (transcriptPromptForRuntimeSplit !== undefined) {
+            promptForRuntimeContextSplit = appendRuntimeSelfContextToPrompt({
+              prompt: promptForRuntimeContextSplit,
+              config: params.config ?? getRuntimeConfig(),
+            });
+          }
         }
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
