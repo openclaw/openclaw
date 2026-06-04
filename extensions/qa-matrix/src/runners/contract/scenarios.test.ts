@@ -4616,6 +4616,7 @@ describe("matrix live qa scenarios", () => {
 
     const scenario = requireMatrixQaScenario("matrix-voice-preflight-mention");
     expect(scenario.configOverrides?.audio?.enabled).toBe(true);
+    expect(scenario.configOverrides?.groupMentionPatterns).toEqual(["\\S"]);
 
     const result = await runMatrixQaScenario(scenario, {
       baseUrl: "http://127.0.0.1:28008/",

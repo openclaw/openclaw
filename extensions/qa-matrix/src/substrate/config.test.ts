@@ -110,6 +110,7 @@ describe("matrix qa config", () => {
         allowBots: "mentions",
         configuredBotRoles: ["observer"],
         groupAllowFrom: ["@driver:matrix-qa.test", "@observer:matrix-qa.test"],
+        groupMentionPatterns: ["\\S"],
         groupsByKey: {
           secondary: {
             allowBots: false,
@@ -155,6 +156,7 @@ describe("matrix qa config", () => {
       echoTranscript: false,
       enabled: true,
     });
+    expect(next.messages?.groupChat?.mentionPatterns).toEqual(["\\S"]);
     const observer = next.channels?.matrix?.accounts?.["qa-observer-bot-source"];
     expect(observer?.accessToken).toBe("observer-token");
     expect(observer?.enabled).toBe(false);
@@ -235,6 +237,7 @@ describe("matrix qa config", () => {
         dm: {
           sessionScope: "per-room",
         },
+        groupMentionPatterns: ["\\S"],
         groupPolicy: "open",
         streaming: true,
       },
@@ -263,6 +266,7 @@ describe("matrix qa config", () => {
       execApprovals: undefined,
       configuredBotRoles: [],
       groupAllowFrom: ["@driver:matrix-qa.test"],
+      groupMentionPatterns: ["\\S"],
       groupPolicy: "open",
       groupsByKey: {
         main: {
@@ -285,6 +289,7 @@ describe("matrix qa config", () => {
     });
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("allowBots=<default>");
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("configuredBotRoles=<none>");
+    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("groupMentionPatterns=\\S");
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("autoJoin=allowlist");
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("streaming=partial");
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain(
