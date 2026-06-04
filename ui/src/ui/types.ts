@@ -788,6 +788,11 @@ export type ModelCatalogEntry = {
   contextWindow?: number;
   reasoning?: boolean;
   input?: Array<"text" | "image" | "document">;
+  agentRuntime?: {
+    id: string;
+    label: string;
+    source: "implicit" | "model" | "provider" | "session-key";
+  };
 };
 
 export type ToolCatalogProfile =

@@ -28,6 +28,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSecretRef } from "../../config/types.secrets.js";
+import { addConfiguredAgentRuntimeMetadata } from "./models-list-runtime-metadata.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListView = ModelCatalogBrowseView;
@@ -249,7 +250,7 @@ async function buildPublicModelsListEntries(params: {
   workspaceDir: string;
 }): Promise<ModelsListEntry[]> {
   const providerAuthChecker = createModelsListProviderAuthChecker(params);
-  return await Promise.all(
+  const publicEntries = await Promise.all(
     params.catalog.map((entry) =>
       buildPublicModelsListEntry({
         entry,
@@ -258,6 +259,11 @@ async function buildPublicModelsListEntries(params: {
       }),
     ),
   );
+  return addConfiguredAgentRuntimeMetadata({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    catalog: publicEntries,
+  });
 }
 
 export async function buildModelsListResult(params: {

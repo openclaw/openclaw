@@ -21,4 +21,9 @@ export type ModelCatalogEntry = {
   input?: ModelInputType[];
   compat?: ModelCompatConfig;
   mediaInput?: ModelMediaInputConfig;
+  agentRuntime?: {
+    id: string;
+    label: string;
+    source: "implicit" | "model" | "provider" | "session-key";
+  };
 };

@@ -70,6 +70,27 @@ describe("chat-model-ref helpers", () => {
     );
   });
 
+  it("surfaces configured agent runtime metadata in picker labels", () => {
+    const codexModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      provider: "openai",
+      agentRuntime: {
+        id: "codex",
+        label: "OpenAI Codex",
+        source: "model" as const,
+      },
+    };
+
+    expect(buildChatModelOption(codexModel, [codexModel])).toEqual({
+      value: "openai/gpt-5.5",
+      label: "GPT-5.5 · OpenAI Codex",
+    });
+    expect(formatCatalogChatModelDisplay("openai/gpt-5.5", [codexModel])).toBe(
+      "GPT-5.5 · OpenAI Codex",
+    );
+  });
+
   it("uses friendly catalog names for qualified nested model ids", () => {
     const nestedModel = {
       id: "moonshotai/kimi-k2.5",

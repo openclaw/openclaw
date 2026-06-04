@@ -91,6 +91,11 @@ type ModelCatalogRpcEntry = {
   contextWindow?: number;
   input?: string[];
   reasoning?: boolean;
+  agentRuntime?: {
+    id: string;
+    label: string;
+    source: "implicit" | "model" | "provider" | "session-key";
+  };
 };
 
 type AgentCatalogFixtureEntry = {

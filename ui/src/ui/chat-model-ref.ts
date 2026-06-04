@@ -165,9 +165,23 @@ export function formatChatModelDisplay(value: string): string {
   return `${trimmed.slice(separator + 1)} · ${trimmed.slice(0, separator)}`;
 }
 
+function formatAgentRuntimeSuffix(entry: ModelCatalogEntry): string {
+  const id = entry.agentRuntime?.id?.trim().toLowerCase();
+  const label = entry.agentRuntime?.label?.trim();
+  if (!id || id === "openclaw" || id === "auto" || id === "default" || !label) {
+    return "";
+  }
+  return ` · ${label}`;
+}
+
+function appendAgentRuntimeSuffix(label: string, entry: ModelCatalogEntry): string {
+  return `${label}${formatAgentRuntimeSuffix(entry)}`;
+}
+
 function formatRawCatalogLabel(entry: ModelCatalogEntry): string {
   const provider = entry.provider?.trim();
-  return provider ? `${entry.id} · ${provider}` : entry.id;
+  const rawLabel = provider ? `${entry.id} · ${provider}` : entry.id;
+  return appendAgentRuntimeSuffix(rawLabel, entry);
 }
 
 function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
@@ -218,13 +232,14 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
 
     const normalizedName = name.toLowerCase();
     if ((nameToValues.get(normalizedName)?.size ?? 0) <= 1) {
-      displayLookup.set(qualifiedKey, name);
+      displayLookup.set(qualifiedKey, appendAgentRuntimeSuffix(name, entry));
       continue;
     }
 
     const provider = entry.provider?.trim();
     if ((nameProviderToValues.get(createNameProviderKey(name, provider))?.size ?? 0) <= 1) {
-      displayLookup.set(qualifiedKey, provider ? `${name} · ${provider}` : `${name} · ${entry.id}`);
+      const providerLabel = provider ? `${name} · ${provider}` : `${name} · ${entry.id}`;
+      displayLookup.set(qualifiedKey, appendAgentRuntimeSuffix(providerLabel, entry));
       continue;
     }
 
