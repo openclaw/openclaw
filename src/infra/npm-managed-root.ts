@@ -1,9 +1,11 @@
+// Manages private npm package roots for plugin install flows.
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parse as parseYaml } from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errors.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
@@ -145,6 +147,13 @@ async function readManagedNpmRootManifest(filePath: string): Promise<ManagedNpmR
   return isRecord(parsed) ? { ...parsed } : {};
 }
 
+async function readHostWorkspaceOverrides(packageRoot: string): Promise<Record<string, unknown>> {
+  const workspace = parseYaml(
+    await fs.readFile(path.join(packageRoot, "pnpm-workspace.yaml"), "utf8"),
+  ) as unknown;
+  return isRecord(workspace) ? readOverrideRecord(workspace.overrides) : {};
+}
+
 function readHostDependencySpec(
   manifest: HostPackageManifest,
   packageName: string,
@@ -194,7 +203,7 @@ function filterUnsupportedManagedNpmRootOverrides(value: unknown): Record<string
   return filtered;
 }
 
-/** Read host OpenClaw package overrides for reuse inside a managed npm root. */
+/** Read host OpenClaw pnpm overrides for reuse inside a managed npm root. */
 export async function readOpenClawManagedNpmRootOverrides(params?: {
   argv1?: string;
   cwd?: string;
@@ -219,7 +228,7 @@ export async function readOpenClawManagedNpmRootOverrides(params?: {
       return {};
     }
     const hostManifest = manifest as HostPackageManifest;
-    const overrides = readOverrideRecord(hostManifest.overrides);
+    const overrides = await readHostWorkspaceOverrides(packageRoot);
     return Object.fromEntries(
       Object.entries(overrides).map(([key, value]) => [
         key,

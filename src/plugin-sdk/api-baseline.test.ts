@@ -58,8 +58,6 @@ describe("Plugin SDK API baseline", () => {
     const repoRoot = path.join(path.sep, "workspace", "node_modules", "openclaw");
     const sourcePath = path.join(repoRoot, "src", "plugin-sdk", "core.ts");
 
-    expect(normalizePluginSdkApiSourcePath(repoRoot, sourcePath)).toBe(
-      "src/plugin-sdk/core.ts",
-    );
+    expect(normalizePluginSdkApiSourcePath(repoRoot, sourcePath)).toBe("src/plugin-sdk/core.ts");
   });
 });

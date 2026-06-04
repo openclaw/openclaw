@@ -1,3 +1,4 @@
+// Inspects local gateway processes for status and diagnostics.
 import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";

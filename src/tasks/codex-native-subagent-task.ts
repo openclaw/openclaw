@@ -1,3 +1,4 @@
+// Runs Codex native subagent tasks and maps their lifecycle into task registry state.
 import type { TaskRecord } from "./task-registry.types.js";
 
 /** Runtime label used for Codex-native subagent task records. */

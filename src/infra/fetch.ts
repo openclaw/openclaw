@@ -1,3 +1,4 @@
+// Centralizes fetch access, timeout relay, and response parsing helpers.
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 import { normalizeRequestInitHeadersForFetch } from "./fetch-headers.js";
 

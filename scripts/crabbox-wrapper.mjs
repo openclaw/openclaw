@@ -2051,6 +2051,13 @@ function prepareFullCheckoutForSync(options = {}) {
       create();
       return true;
     },
+    exists() {
+      try {
+        return statSync(dir).isDirectory();
+      } catch {
+        return false;
+      }
+    },
     cleanup() {
       cleanupFullCheckout(dir, active);
       active = false;
@@ -2058,10 +2065,24 @@ function prepareFullCheckoutForSync(options = {}) {
   };
 }
 
-function startFullCheckoutKeepalive(checkout) {
+function startFullCheckoutKeepalive(checkout, options = {}) {
+  let missingReported = false;
+  const intervalMs = options.intervalMs ?? fullCheckoutKeepaliveIntervalMs();
   const refresh = () => {
     try {
-      checkout.restoreIfMissing();
+      if (!checkout.exists()) {
+        if (options.onMissing) {
+          if (!missingReported) {
+            missingReported = true;
+            console.error(
+              `[crabbox] temporary full checkout disappeared while Crabbox was running; terminating because the child cwd cannot be repaired: ${checkout.dir}`,
+            );
+            options.onMissing();
+          }
+          return;
+        }
+        checkout.restoreIfMissing();
+      }
       const now = new Date();
       utimesSync(checkout.dir, now, now);
     } catch (error) {
@@ -2072,11 +2093,6 @@ function startFullCheckoutKeepalive(checkout) {
   };
 
   refresh();
-  const intervalMs = parseNonNegativeIntegerEnv(
-    "OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS",
-    5000,
-    "millisecond interval",
-  );
   if (intervalMs <= 0) {
     return () => {};
   }
@@ -2084,6 +2100,14 @@ function startFullCheckoutKeepalive(checkout) {
   const interval = setInterval(refresh, intervalMs);
   interval.unref?.();
   return () => clearInterval(interval);
+}
+
+function fullCheckoutKeepaliveIntervalMs() {
+  return parseNonNegativeIntegerEnv(
+    "OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS",
+    5000,
+    "millisecond interval",
+  );
 }
 
 function cleanupFullCheckout(dir, active) {
@@ -2100,7 +2124,7 @@ function cleanupFullCheckout(dir, active) {
 function assertFullCheckoutAvailableBeforeExit(dir) {
   try {
     if (statSync(dir).isDirectory()) {
-      return;
+      return true;
     }
   } catch {
     // Report below.
@@ -2109,6 +2133,7 @@ function assertFullCheckoutAvailableBeforeExit(dir) {
   console.error(
     `[crabbox] temporary full checkout vanished before Crabbox finished syncing: ${dir}`,
   );
+  return false;
 }
 
 const version = checkedOutput(binary, ["--version"]);
@@ -2367,9 +2392,10 @@ const childArgs =
         ),
         remoteChangedGateBase,
       );
+let fullCheckoutKeepaliveIntervalMsValue = 0;
 if (fullCheckout) {
   try {
-    stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout);
+    fullCheckoutKeepaliveIntervalMsValue = fullCheckoutKeepaliveIntervalMs();
   } catch (error) {
     cleanupOnce();
     throw error;
@@ -2382,6 +2408,24 @@ const child = spawn(childInvocation.command, childInvocation.args, {
   env: childEnv,
   windowsVerbatimArguments: childInvocation.windowsVerbatimArguments,
 });
+if (fullCheckout) {
+  try {
+    stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout, {
+      intervalMs: fullCheckoutKeepaliveIntervalMsValue,
+      onMissing: () => {
+        if (!child.killed) {
+          child.kill("SIGTERM");
+        }
+      },
+    });
+  } catch (error) {
+    if (!child.killed) {
+      child.kill("SIGTERM");
+    }
+    cleanupOnce();
+    throw error;
+  }
+}
 
 const signalExitCodes = new Map([
   ["SIGHUP", 129],
@@ -2400,15 +2444,16 @@ for (const signal of signalExitCodes.keys()) {
 process.once("exit", cleanupOnce);
 
 child.on("exit", (code, signal) => {
+  let fullCheckoutAvailable = true;
   if (fullCheckout) {
-    assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
+    fullCheckoutAvailable = assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
   }
   cleanupOnce();
   if (signal) {
     process.exit(signalExitCodes.get(signal) ?? 1);
     return;
   }
-  process.exit(code ?? 1);
+  process.exit(fullCheckoutAvailable ? (code ?? 1) : 1);
 });
 
 child.on("error", (error) => {

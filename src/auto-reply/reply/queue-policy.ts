@@ -1,3 +1,4 @@
+// Resolves queue mode and admission policy for a reply turn.
 import type { QueueSettings } from "./queue.js";
 
 /** Queue decisions for messages that arrive while an agent run is active. */

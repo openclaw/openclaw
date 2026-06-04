@@ -1,3 +1,4 @@
+// Decides whether an inbound turn may start, queue, or abort a reply run.
 import {
   createReplyOperation,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,

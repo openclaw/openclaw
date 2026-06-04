@@ -1,3 +1,4 @@
+// Provides test helpers for TUI submit handler scenarios.
 import { vi } from "vitest";
 import { createEditorSubmitHandler } from "./tui-submit.js";
 

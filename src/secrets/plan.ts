@@ -1,3 +1,4 @@
+/** Validates and normalizes serialized secrets apply plans before config mutation. */
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
@@ -69,6 +70,7 @@ function hasForbiddenPathSegment(segments: string[]): boolean {
   return segments.some((segment) => FORBIDDEN_PATH_SEGMENTS.has(segment));
 }
 
+/** Resolves a user-supplied plan target through the registry after path safety checks. */
 export function resolveValidatedPlanTarget(candidate: {
   type?: SecretsPlanTargetType;
   path?: string;

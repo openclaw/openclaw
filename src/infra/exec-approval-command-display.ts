@@ -1,3 +1,4 @@
+// Sanitizes command text before it is displayed in approval prompts.
 import { redactSensitiveText, resolveRedactOptions } from "../logging/redact.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 

@@ -1,3 +1,4 @@
+// Builds message body text from session state and reply metadata.
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { setAbortMemory } from "./abort-primitives.js";

@@ -1,3 +1,4 @@
+// Applies semantic validators for safe-bin command arguments.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type SafeBinSemanticValidationParams = {

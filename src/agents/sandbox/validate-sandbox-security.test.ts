@@ -1,3 +1,5 @@
+// Sandbox security validation tests cover bind, network, seccomp, and AppArmor
+// hardening rules before Docker runtimes are created.
 import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -79,6 +81,8 @@ describe("getBlockedBindReason", () => {
   });
 
   it("blocks canonical OS-home aliases for credential paths", () => {
+    // Credential blocking uses canonical home aliases so a symlinked HOME cannot
+    // hide sensitive host paths.
     if (process.platform === "win32") {
       return;
     }
@@ -233,6 +237,8 @@ describe("validateBindMounts", () => {
   });
 
   it("blocks symlink-parent escapes with non-existent leaf outside allowed roots", () => {
+    // Docker may create the final leaf; validate the existing ancestor so
+    // symlink parents cannot escape an allowed root.
     if (process.platform === "win32") {
       // Windows symlink semantics differ; POSIX symlink escape coverage runs on POSIX hosts.
       return;

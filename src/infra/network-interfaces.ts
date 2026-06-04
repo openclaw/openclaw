@@ -1,3 +1,4 @@
+// Normalizes local network interface snapshots for discovery.
 import os from "node:os";
 
 /** Raw `os.networkInterfaces()` snapshot used by gateway discovery helpers. */

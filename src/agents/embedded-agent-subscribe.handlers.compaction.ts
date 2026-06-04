@@ -1,3 +1,8 @@
+/**
+ * Handles embedded-agent compaction lifecycle events. The handlers pause
+ * liveness, emit agent events, run hooks, reconcile persisted counts, and
+ * clear stale usage after compaction rewrites history.
+ */
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -25,6 +30,8 @@ type CompactionEndEvent =
       aborted?: unknown;
     };
 
+// Unknown reasons come from external runtimes or older sessions. Treat them as
+// threshold compaction so logs and event payloads stay on the closed reason set.
 function normalizeCompactionReason(reason: unknown): CompactionReason {
   return reason === "manual" || reason === "threshold" || reason === "overflow"
     ? reason
@@ -35,6 +42,7 @@ function compactionLogKind(reason: CompactionReason): string {
   return reason === "manual" ? "manual compaction" : "auto-compaction";
 }
 
+/** Handles compaction start events from an embedded agent session. */
 export function handleCompactionStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: CompactionStartEvent,
@@ -60,7 +68,8 @@ export function handleCompactionStart(
     data: { phase: "start" },
   });
 
-  // Run before_compaction plugin hook (fire-and-forget)
+  // Hooks are fire-and-forget so compaction state updates and liveness pauses
+  // cannot be delayed by plugin work.
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_compaction")) {
     void hookRunner
@@ -80,15 +89,15 @@ export function handleCompactionStart(
   }
 }
 
+/** Handles compaction completion, retry, and incomplete events. */
 export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: CompactionEndEvent) {
   const reason = normalizeCompactionReason(evt.reason);
   const kind = compactionLogKind(reason);
   ctx.state.compactionInFlight = false;
   const willRetry = Boolean(evt.willRetry);
-  // Increment counter whenever compaction actually produced a result,
-  // regardless of willRetry.  Overflow-triggered compaction sets willRetry=true
-  // (the framework retries the LLM request), but the compaction itself succeeded
-  // and context was trimmed — the counter must reflect that.  (#38905)
+  // Increment counter whenever compaction actually produced a result, regardless
+  // of willRetry. Overflow-triggered compaction retries the LLM request after
+  // trimming context, and the persisted count must reflect that successful trim.
   const hasResult = evt.result != null;
   const wasAborted = Boolean(evt.aborted);
   if (hasResult && !wasAborted) {
@@ -149,7 +158,8 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
     data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
   });
 
-  // Run after_compaction plugin hook (fire-and-forget)
+  // after_compaction runs only once the run will not retry, matching the visible
+  // post-compaction session state plugin authors observe.
   if (!willRetry) {
     const hookRunnerEnd = getGlobalHookRunner();
     if (hookRunnerEnd?.hasHooks("after_compaction")) {
@@ -169,6 +179,7 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
   }
 }
 
+/** Lazily reconciles persisted compaction count after a successful compaction. */
 export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   sessionKey?: string;
   agentId?: string;
@@ -181,6 +192,8 @@ export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   return reconcile(params);
 }
 
+// Compaction rewrites history, so assistant usage snapshots can refer to the
+// old context. Keep the usage field shape but zero it for fresh accounting.
 function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedAgentSubscribeContext): void {
   const messages = ctx.params.session.messages;
   if (!Array.isArray(messages)) {
@@ -194,8 +207,6 @@ function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedAgentSubscribeCo
     if (candidate.role !== "assistant") {
       continue;
     }
-    // session runtime expects assistant usage to exist when computing context usage.
-    // Reset stale snapshots to zeros instead of deleting the field.
     candidate.usage = makeZeroUsageSnapshot();
   }
 }

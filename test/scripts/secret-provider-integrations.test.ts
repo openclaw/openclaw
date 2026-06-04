@@ -90,6 +90,29 @@ function writeLeakingStartupOpenClaw(root: string): string {
   return scriptPath;
 }
 
+function writeSignaledStartupOpenClaw(root: string): string {
+  const scriptPath = path.join(root, "fake-signaled-openclaw.mjs");
+  fs.writeFileSync(
+    scriptPath,
+    [
+      "#!/usr/bin/env node",
+      "import { setTimeout as delay } from 'node:timers/promises';",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === 'gateway' && args[1] === 'run') {",
+      "  setTimeout(() => process.kill(process.pid, 'SIGTERM'), 50);",
+      "  await new Promise(() => {});",
+      "}",
+      "if (args[0] === 'gateway' && (args[1] === 'call' || args[1] === 'status')) {",
+      "  await delay(60_000);",
+      "}",
+      "process.exit(2);",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return scriptPath;
+}
+
 function runProofHarness(
   root: string,
   fakeOpenClaw: string,
@@ -148,6 +171,20 @@ describe("secret provider integration proof harness", () => {
     expect(result.status).toBe(0);
     const payload = JSON.parse(result.stdout);
     expect(payload.message).toContain("gateway did not become ready");
+    expect(payload.elapsedMs).toBeLessThan(750);
+  });
+
+  it("fails fast when startup exits by signal", () => {
+    const root = makeTempDir();
+    const fakeOpenClaw = writeSignaledStartupOpenClaw(root);
+    const result = runProofHarness(root, fakeOpenClaw, "start", {
+      OPENCLAW_SECRET_PROOF_READY_MS: "2000",
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.message).toContain("gateway exited during startup (signal SIGTERM)");
     expect(payload.elapsedMs).toBeLessThan(750);
   });
 

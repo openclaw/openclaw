@@ -1,3 +1,4 @@
+// Evaluates heartbeat active-hours windows.
 import { resolveUserTimezone } from "../agents/date-time.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

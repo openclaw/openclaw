@@ -1,3 +1,4 @@
+// Parses strict TCP port inputs for config and CLI surfaces.
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 
 // TCP port parsing is strict because config and CLI inputs both use this helper.

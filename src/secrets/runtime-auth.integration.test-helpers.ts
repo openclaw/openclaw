@@ -1,3 +1,4 @@
+/** Shared isolation helpers for auth-profile backed secrets runtime integration tests. */
 import { vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";

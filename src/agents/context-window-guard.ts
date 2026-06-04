@@ -1,3 +1,9 @@
+/**
+ * Resolves effective model context windows and formats guard warnings/blocks.
+ *
+ * Configured model values can cap provider metadata, and local endpoints get
+ * more actionable remediation text.
+ */
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
@@ -44,6 +50,7 @@ function modelIdMatchesProviderScope(params: {
   return stripProvider(configuredId) === stripProvider(params.modelId);
 }
 
+/** Resolve the effective context window and source for one provider/model. */
 export function resolveContextWindowInfo(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -83,6 +90,7 @@ export function resolveContextWindowInfo(params: {
 
   const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
   if (capTokens && capTokens < baseInfo.tokens) {
+    // Agent defaults can intentionally cap a larger model context window.
     return { tokens: capTokens, referenceTokens: baseInfo.tokens, source: "agentContextTokens" };
   }
 
@@ -116,6 +124,7 @@ function resolveContextWindowGuardHint(params: {
   };
 }
 
+/** Derive warning/block floors from the resolved model context window. */
 export function resolveContextWindowGuardThresholds(
   contextWindowTokens: number,
 ): ContextWindowGuardThresholds {
@@ -132,6 +141,7 @@ export function resolveContextWindowGuardThresholds(
   };
 }
 
+/** Format a non-blocking low-context warning message. */
 export function formatContextWindowWarningMessage(params: {
   provider: string;
   modelId: string;
@@ -161,6 +171,7 @@ export function formatContextWindowWarningMessage(params: {
   );
 }
 
+/** Format a blocking context-window guard message. */
 export function formatContextWindowBlockMessage(params: {
   guard: ContextWindowGuardResult;
   runtimeBaseUrl?: string | null;
@@ -188,6 +199,7 @@ export function formatContextWindowBlockMessage(params: {
   );
 }
 
+/** Evaluate whether the resolved context window should warn or block. */
 export function evaluateContextWindowGuard(params: {
   info: ContextWindowInfo;
   warnBelowTokens?: number;

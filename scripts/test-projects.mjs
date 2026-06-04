@@ -30,6 +30,7 @@ import {
   orderFullSuiteSpecsForParallelRun,
   parseTestProjectsArgs,
   resolveParallelFullSuiteConcurrency,
+  resolveChangedTestTargetPlanForArgs,
   resolveChangedTargetArgs,
   shouldAcquireLocalHeavyCheckLock,
   shouldRetryVitestNoOutputTimeout,
@@ -169,6 +170,26 @@ function isFullExtensionsProjectRun(specs) {
   );
 }
 
+function printNoChangedTestTargets(args, cwd, baseEnv) {
+  const plan = resolveChangedTestTargetPlanForArgs(args, cwd, undefined, { env: baseEnv });
+  const skippedBroadFallbackPaths = plan?.skippedBroadFallbackPaths ?? [];
+  if (skippedBroadFallbackPaths.length === 0) {
+    console.error("[test] no changed test targets; skipping Vitest.");
+    return;
+  }
+
+  console.error("[test] no precise changed test targets; skipping Vitest.");
+  console.error(
+    `[test] ${skippedBroadFallbackPaths.length} changed path${
+      skippedBroadFallbackPaths.length === 1 ? "" : "s"
+    } require broad Vitest fallback:`,
+  );
+  for (const changedPath of skippedBroadFallbackPaths) {
+    console.error(`[test]   ${changedPath}`);
+  }
+  console.error("[test] run `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` for broad coverage.");
+}
+
 async function runVitestSpecsParallel(specs, concurrency) {
   let nextIndex = 0;
   let exitCode = 0;
@@ -263,7 +284,7 @@ async function main() {
   );
 
   if (runSpecs.length === 0) {
-    console.error("[test] no changed test targets; skipping Vitest.");
+    printNoChangedTestTargets(args, process.cwd(), baseEnv);
     printTestSummary("skipped", 0, performance.now() - suiteStartedAt);
     return;
   }

@@ -1,3 +1,4 @@
+// Fetches and validates ClawHub package metadata and artifacts.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
@@ -28,7 +29,11 @@ const statusSectionTitles = new Set([
 ]);
 
 function normalizedStatusHeading(line) {
-  return stripAnsi(line).trim().replace(/^#+\s*/, "").trim().toLowerCase();
+  return stripAnsi(line)
+    .trim()
+    .replace(/^#+\s*/, "")
+    .trim()
+    .toLowerCase();
 }
 
 function extractStatusSection(text, title) {
@@ -49,12 +54,30 @@ function extractStatusSection(text, title) {
   return stripAnsi(section.join("\n"));
 }
 
+function readAuthProfileStoreText(agentDir) {
+  const dbPath = path.join(agentDir, "openclaw-agent.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    return "";
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
+      .get("primary");
+    return typeof row?.store_json === "string" ? row.store_json : "";
+  } catch {
+    return "";
+  } finally {
+    db?.close();
+  }
+}
+
 function assertOnboardState() {
   const home = process.argv[3];
   const stateDir = path.join(home, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
-  const authPath = path.join(agentDir, "auth-profiles.json");
 
   if (!fs.existsSync(configPath)) {
     throw new Error("onboard did not write openclaw.json");
@@ -62,14 +85,14 @@ function assertOnboardState() {
   if (!fs.existsSync(agentDir)) {
     throw new Error("onboard did not create main agent dir");
   }
-  if (!fs.existsSync(authPath)) {
-    throw new Error("onboard did not create auth-profiles.json");
+  const authStoreText = readAuthProfileStoreText(agentDir);
+  if (!authStoreText) {
+    throw new Error("onboard did not persist auth profile store");
   }
-  const authRaw = fs.readFileSync(authPath, "utf8");
-  if (!authRaw.includes("OPENAI_API_KEY")) {
+  if (!authStoreText.includes("OPENAI_API_KEY")) {
     throw new Error("auth profile did not persist OPENAI_API_KEY env ref");
   }
-  if (authRaw.includes("sk-openclaw-npm-onboard-e2e")) {
+  if (authStoreText.includes("sk-openclaw-npm-onboard-e2e")) {
     throw new Error("auth profile persisted the raw OpenAI test key");
   }
 }

@@ -1,3 +1,4 @@
+/** Public facade for bundle MCP tool materialization and session-scoped runtime management. */
 export type {
   BundleMcpToolRuntime,
   McpCatalogTool,

@@ -1,3 +1,5 @@
+// Subagent spawn test helpers install mocked runtime seams so sessions_spawn
+// tests can exercise orchestration without real gateway/session-store effects.
 import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi } from "vitest";
@@ -20,6 +22,7 @@ type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> 
   resetSubagentRegistryForTests: MockFn;
 };
 
+/** Build a minimal runtime config for sessions_spawn tests. */
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
   overrides?: Record<string, unknown>,
@@ -48,6 +51,7 @@ export function createSubagentSpawnTestConfig(
   };
 }
 
+/** Mock gateway calls for the common accepted-spawn flow. */
 export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementationTarget) {
   callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
     if (opts.method === "sessions.patch") {
@@ -75,6 +79,7 @@ function createDefaultSessionHelperMocks() {
   };
 }
 
+/** Install an updateSessionStore mock that captures mutations in memory. */
 export function installSessionStoreCaptureMock(
   updateSessionStoreMock: {
     mockImplementation: (
@@ -97,6 +102,7 @@ export function installSessionStoreCaptureMock(
   );
 }
 
+/** Assert the persisted session entry captured the expected runtime model. */
 export function expectPersistedRuntimeModel(params: {
   persistedStore: SessionStore | undefined;
   sessionKey: string | RegExp;
@@ -119,6 +125,7 @@ export function expectPersistedRuntimeModel(params: {
   }
 }
 
+/** Load subagent-spawn with runtime dependencies replaced by test doubles. */
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
@@ -189,6 +196,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resetModules?: boolean;
 }): Promise<SubagentSpawnModuleForTest> {
   if (params.resetModules ?? true) {
+    // The helper rewires imports with vi.doMock, so each test starts from a
+    // fresh module graph unless explicitly sharing mocks.
     vi.resetModules();
   }
 

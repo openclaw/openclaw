@@ -563,6 +563,28 @@ setInterval(() => {}, 1000);
     await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stderr");
   });
 
+  it("returns a failed row when measured command log writing fails", async () => {
+    const logDir = path.join(repoRoot, "not-a-directory");
+    await fs.writeFile(logDir, "blocks log directory creation", "utf8");
+
+    const row = await runMeasuredCommandLive({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: ["-e", "console.log('live stdout')"],
+      label: "live-log-failure",
+      phase: "probe",
+      timeoutMs: 1000,
+      timeMode: "none",
+    });
+
+    expect(row.status).toBe(1);
+    expect(row.diagnosticFailure).toBe("command-log-write-failure");
+    expect(row.logPath).toBeNull();
+    expect(row.logWriteError).toMatch(/EEXIST|ENOTDIR|not a directory/u);
+  });
+
   it("cleans parent signal handlers after live measured commands settle", async () => {
     const logDir = path.join(repoRoot, "logs");
     const before = process.listenerCount("SIGTERM");
