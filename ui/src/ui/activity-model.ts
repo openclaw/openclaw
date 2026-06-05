@@ -197,13 +197,7 @@ function answerCandidateActivityStatus(
 }
 
 function buildAnswerCandidateSummary(status: "candidate" | "superseded" | "selected"): string {
-  if (status === "candidate") {
-    return "Answer candidate streaming";
-  }
-  if (status === "superseded") {
-    return "Answer candidate superseded";
-  }
-  return "Answer candidate selected";
+  return `answer_candidate.${status}`;
 }
 
 export function updateActivityFromToolEvent(host: ActivityHost, payload: ToolEventPayload) {

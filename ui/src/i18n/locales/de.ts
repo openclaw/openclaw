@@ -483,6 +483,12 @@ export const de: TranslationMap = {
     argumentsHidden: "{count} Argumente ausgeblendet",
     streamLabel: "Einträge zur Tool-Aktivität",
     toolCallId: "Tool-Aufruf",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "Ausführen",
     session: "Sitzung",
     outputTruncated: "Vorschau geschwärzt und gekürzt.",

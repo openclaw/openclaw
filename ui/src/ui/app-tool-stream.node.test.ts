@@ -430,7 +430,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       entryKind: "answer_candidate",
       toolName: "answer_candidate",
       status: "done",
-      summary: "Answer candidate superseded",
+      summary: "answer_candidate.superseded",
       outputPreview: "Draft answer",
       hiddenArgumentCount: 0,
     });
@@ -441,7 +441,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       entryKind: "answer_candidate",
       toolName: "answer_candidate",
       status: "done",
-      summary: "Answer candidate selected",
+      summary: "answer_candidate.selected",
       outputPreview: "Final answer",
       hiddenArgumentCount: 0,
     });

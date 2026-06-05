@@ -478,6 +478,12 @@ export const ar: TranslationMap = {
     argumentsHidden: "تم إخفاء {count} وسيطات",
     streamLabel: "إدخالات نشاط الأدوات",
     toolCallId: "استدعاء الأداة",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "شغّل",
     session: "الجلسة",
     outputTruncated: "تم تنقيح المعاينة واقتطاعها.",

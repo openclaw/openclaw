@@ -1,5 +1,9 @@
 {
   "fallbackKeys": [
+    "activity.answerCandidate.candidate",
+    "activity.answerCandidate.selected",
+    "activity.answerCandidate.superseded",
+    "activity.itemId",
     "chat.workspaceFiles.collapse",
     "chat.workspaceFiles.empty",
     "chat.workspaceFiles.expand",
