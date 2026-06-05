@@ -32,6 +32,7 @@ import {
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionStoreKey,
+  shouldLoadModelCatalogForSessionModelResolution,
 } from "./session-utils.js";
 
 function resolveSyncRealpath(filePath: string): string {
@@ -63,6 +64,7 @@ function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
 function createModelDefaultsConfig(params: {
   primary: string;
   models?: Record<string, { agentRuntime?: { id: string } }>;
+  providers?: Record<string, unknown>;
   agentRuntime?: { id: string };
 }): OpenClawConfig {
   return {
@@ -77,6 +79,7 @@ function createModelDefaultsConfig(params: {
         },
       },
     },
+    ...(params.providers ? { models: { providers: params.providers } } : {}),
   } as OpenClawConfig;
 }
 
@@ -1717,6 +1720,268 @@ describe("resolveSessionModelRef", () => {
     });
 
     expect(resolved).toEqual({ provider: "openai", model: "gpt-5.4" });
+  });
+
+  test("ignores persisted overrides for providers removed from explicit config", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "custom-api-deepseek-com/deepseek-v4-pro",
+      providers: {
+        "custom-api-deepseek-com": {
+          api: "openai-completions",
+          models: [{ id: "deepseek-v4-pro" }],
+        },
+      },
+    });
+
+    const resolved = resolveSessionModelRef(
+      cfg,
+      {
+        sessionId: "deleted-provider-override",
+        updatedAt: Date.now(),
+        providerOverride: "ollama-cloud",
+        modelOverride: "deepseek-v4-pro:cloud",
+        modelProvider: "ollama-cloud",
+        model: "deepseek-v4-pro:cloud",
+      },
+      undefined,
+      { modelCatalog: [] },
+    );
+
+    expect(resolved).toEqual({
+      provider: "custom-api-deepseek-com",
+      model: "deepseek-v4-pro",
+    });
+  });
+
+  test("ignores stale runtime model fields for providers removed from explicit config", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "custom-api-deepseek-com/deepseek-v4-pro",
+      providers: {
+        "custom-api-deepseek-com": {
+          api: "openai-completions",
+          models: [{ id: "deepseek-v4-pro" }],
+        },
+      },
+    });
+
+    const resolved = resolveSessionModelRef(
+      cfg,
+      {
+        sessionId: "deleted-provider-runtime",
+        updatedAt: Date.now(),
+        modelProvider: "ollama-cloud",
+        model: "deepseek-v4-pro:cloud",
+      },
+      undefined,
+      { modelCatalog: [] },
+    );
+
+    expect(resolved).toEqual({
+      provider: "custom-api-deepseek-com",
+      model: "deepseek-v4-pro",
+    });
+  });
+
+  test("loads catalog validation when the deleted provider was the last custom row", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "openai/gpt-5.4",
+    });
+    const entry = {
+      sessionId: "deleted-last-provider",
+      updatedAt: Date.now(),
+      providerOverride: "custom-api-deepseek-com",
+      modelOverride: "deepseek-v4-pro",
+      modelProvider: "custom-api-deepseek-com",
+      model: "deepseek-v4-pro",
+    };
+
+    expect(shouldLoadModelCatalogForSessionModelResolution(cfg, entry)).toBe(true);
+    const resolved = resolveSessionModelRef(cfg, entry, undefined, { modelCatalog: [] });
+
+    expect(resolved).toEqual({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+  });
+
+  test("skips catalog validation for fresh custom-provider sessions", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "custom-api-deepseek-com/deepseek-v4-pro",
+      providers: {
+        "custom-api-deepseek-com": {
+          api: "openai-completions",
+          models: [{ id: "deepseek-v4-pro" }],
+        },
+      },
+    });
+
+    expect(shouldLoadModelCatalogForSessionModelResolution(cfg)).toBe(false);
+    expect(
+      shouldLoadModelCatalogForSessionModelResolution(cfg, {
+        sessionId: "fresh-custom-provider-session",
+        updatedAt: Date.now(),
+      }),
+    ).toBe(false);
+  });
+
+  test("skips catalog validation for default persisted custom-provider sessions", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "custom-api-deepseek-com/deepseek-v4-pro",
+      providers: {
+        "custom-api-deepseek-com": {
+          api: "openai-completions",
+          models: [{ id: "deepseek-v4-pro" }],
+        },
+      },
+    });
+
+    expect(
+      shouldLoadModelCatalogForSessionModelResolution(cfg, {
+        sessionId: "default-custom-provider-session",
+        updatedAt: Date.now(),
+        providerOverride: "custom-api-deepseek-com",
+        modelOverride: "deepseek-v4-pro",
+        modelProvider: "custom-api-deepseek-com",
+        model: "deepseek-v4-pro",
+      }),
+    ).toBe(false);
+  });
+
+  test("keeps persisted overrides for providers still present in explicit config", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "custom-api-deepseek-com/deepseek-v4-pro",
+      providers: {
+        "custom-api-deepseek-com": {
+          api: "openai-completions",
+          models: [{ id: "deepseek-v4-pro" }],
+        },
+        "ollama-cloud": {
+          api: "ollama",
+          models: [{ id: "deepseek-v4-pro:cloud" }],
+        },
+      },
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "configured-provider-override",
+      updatedAt: Date.now(),
+      providerOverride: "ollama-cloud",
+      modelOverride: "deepseek-v4-pro:cloud",
+    });
+
+    expect(resolved).toEqual({
+      provider: "ollama-cloud",
+      model: "deepseek-v4-pro:cloud",
+    });
+    expect(
+      shouldLoadModelCatalogForSessionModelResolution(cfg, {
+        sessionId: "configured-provider-override",
+        updatedAt: Date.now(),
+        providerOverride: "ollama-cloud",
+        modelOverride: "deepseek-v4-pro:cloud",
+      }),
+    ).toBe(false);
+  });
+
+  test("keeps valid built-in provider overrides in default merge mode", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "custom-api-deepseek-com/deepseek-v4-pro",
+      providers: {
+        "custom-api-deepseek-com": {
+          api: "openai-completions",
+          models: [{ id: "deepseek-v4-pro" }],
+        },
+      },
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "merge-mode-built-in-provider",
+      updatedAt: Date.now(),
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+    });
+
+    expect(resolved).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+  });
+
+  test("keeps catalog-backed provider overrides outside provider rows in merge mode", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "custom-api-deepseek-com/deepseek-v4-pro",
+      providers: {
+        "custom-api-deepseek-com": {
+          api: "openai-completions",
+          models: [{ id: "deepseek-v4-pro" }],
+        },
+      },
+    });
+
+    const resolved = resolveSessionModelRef(
+      cfg,
+      {
+        sessionId: "merge-mode-catalog-provider",
+        updatedAt: Date.now(),
+        providerOverride: "plugin-provider",
+        modelOverride: "plugin-model",
+      },
+      undefined,
+      {
+        modelCatalog: [
+          {
+            provider: "plugin-provider",
+            id: "plugin-model",
+            name: "Plugin Model",
+          },
+        ],
+      },
+    );
+
+    expect(resolved).toEqual({
+      provider: "plugin-provider",
+      model: "plugin-model",
+    });
+  });
+
+  test("loads catalog when stale persisted provider has no explicit provider rows", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-sonnet-4-6",
+    });
+
+    expect(
+      shouldLoadModelCatalogForSessionModelResolution(cfg, {
+        sessionId: "last-custom-provider-deleted",
+        updatedAt: Date.now(),
+        providerOverride: "ollama-cloud",
+        modelOverride: "deepseek-v4-pro:cloud",
+      }),
+    ).toBe(true);
+  });
+
+  test("ignores persisted overrides for deleted last custom provider", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-sonnet-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(
+      cfg,
+      {
+        sessionId: "last-custom-provider-deleted",
+        updatedAt: Date.now(),
+        providerOverride: "ollama-cloud",
+        modelOverride: "deepseek-v4-pro:cloud",
+        modelProvider: "ollama-cloud",
+        model: "deepseek-v4-pro:cloud",
+      },
+      undefined,
+      { modelCatalog: [] },
+    );
+
+    expect(resolved).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
   });
 
   test("falls back to resolved provider for unprefixed legacy runtime model", () => {

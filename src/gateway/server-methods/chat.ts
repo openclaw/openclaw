@@ -148,6 +148,7 @@ import {
   readRecentSessionMessagesAsync,
   resolveSessionModelRef,
   resolveSessionStoreKey,
+  shouldLoadModelCatalogForSessionModelResolution,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
@@ -2992,7 +2993,43 @@ export const chatHandlers: GatewayRequestHandlers = {
       agentId: selectedAgent.agentId,
       mainKey: cfg.session?.mainKey,
     });
-    const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
+    if (stopCommand) {
+      const defaultAgentId = resolveDefaultAgentId(cfg);
+      const stopAgentId =
+        sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
+      const res = await abortChatRunsForSessionKeyWithPartials({
+        context,
+        ops: createChatAbortOps(context),
+        sessionKey: rawSessionKey,
+        sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
+        agentId: stopAgentId,
+        sessionId: entry?.sessionId,
+        persistSessionKey: sessionKey,
+        defaultAgentId,
+        abortOrigin: "stop-command",
+        stopReason: "stop",
+        requester: resolveChatAbortRequester(client),
+      });
+      if (res.unauthorized) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+        return;
+      }
+      respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
+      return;
+    }
+    const sessionModelCatalog = shouldLoadModelCatalogForSessionModelResolution(cfg, entry, agentId)
+      ? await measureDiagnosticsTimelineSpan(
+          "gateway.chat_send.session_model_catalog",
+          async () => context.loadGatewayModelCatalog().catch(() => undefined),
+          {
+            config: cfg,
+            phase: "chat.send",
+          },
+        )
+      : undefined;
+    const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId, {
+      modelCatalog: sessionModelCatalog,
+    });
     const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
       config: cfg,
     });
@@ -3022,31 +3059,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
       );
-      return;
-    }
-
-    if (stopCommand) {
-      const defaultAgentId = resolveDefaultAgentId(cfg);
-      const stopAgentId =
-        sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
-      const res = await abortChatRunsForSessionKeyWithPartials({
-        context,
-        ops: createChatAbortOps(context),
-        sessionKey: rawSessionKey,
-        sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
-        agentId: stopAgentId,
-        sessionId: entry?.sessionId,
-        persistSessionKey: sessionKey,
-        defaultAgentId,
-        abortOrigin: "stop-command",
-        stopReason: "stop",
-        requester: resolveChatAbortRequester(client),
-      });
-      if (res.unauthorized) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
-        return;
-      }
-      respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
       return;
     }
 

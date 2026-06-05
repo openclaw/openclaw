@@ -500,6 +500,17 @@ describe("gateway server chat", () => {
     const dispatchRelease = createDeferred<void>();
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      testState.agentConfig = {
+        model: { primary: "test-provider/vision-model" },
+        models: {
+          providers: {
+            "test-provider": {
+              api: "openai-completions",
+              models: [{ id: "vision-model", name: "Vision Model" }],
+            },
+          },
+        },
+      };
       await writeSessionStore({
         entries: {
           main: {
@@ -629,6 +640,7 @@ describe("gateway server chat", () => {
       dispatchRelease.resolve();
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
+      testState.agentConfig = undefined;
       clearConfigCache();
       await fs.rm(sessionDir, { recursive: true, force: true });
     }
@@ -640,6 +652,17 @@ describe("gateway server chat", () => {
       createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      testState.agentConfig = {
+        model: { primary: "test-provider/vision-model" },
+        models: {
+          providers: {
+            "test-provider": {
+              api: "openai-completions",
+              models: [{ id: "vision-model", name: "Vision Model" }],
+            },
+          },
+        },
+      };
       await writeSessionStore({
         entries: {
           main: {
@@ -819,8 +842,208 @@ describe("gateway server chat", () => {
       firstCatalog.resolve([]);
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
+      testState.agentConfig = undefined;
       clearConfigCache();
       await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send stop command bypasses session model catalog validation", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      testState.agentConfig = {
+        model: { primary: "openai/gpt-5.4" },
+      };
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            providerOverride: "custom-api-deepseek-com",
+            modelOverride: "deepseek-v4-pro",
+            modelProvider: "custom-api-deepseek-com",
+            model: "deepseek-v4-pro",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(
+          async () => {
+            throw new Error("stop command must not load model catalog");
+          },
+        ),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "stop-bypasses-model-catalog",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "/stop",
+            idempotencyKey: "idem-stop-bypass-model-catalog",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "/stop",
+          idempotencyKey: "idem-stop-bypass-model-catalog",
+        },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(context.loadGatewayModelCatalog).not.toHaveBeenCalled();
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: { ok: true, aborted: false, runIds: [] },
+          error: undefined,
+        },
+      ]);
+    } finally {
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  test("chat.send fresh custom-provider session does not load model catalog", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeGatewayConfig({
+        agents: {
+          defaults: {
+            model: { primary: "custom-api-deepseek-com/deepseek-v4-pro" },
+          },
+        },
+        models: {
+          providers: {
+            "custom-api-deepseek-com": {
+              baseUrl: "https://deepseek.example.com/v1",
+              models: [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }],
+            },
+          },
+        },
+      });
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(
+          async () => {
+            throw new Error("fresh custom-provider session must not load model catalog");
+          },
+        ),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "fresh-custom-provider-no-catalog",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "hello",
+            idempotencyKey: "idem-fresh-custom-provider-no-catalog",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-fresh-custom-provider-no-catalog",
+        },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(context.loadGatewayModelCatalog).not.toHaveBeenCalled();
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({
+            runId: "idem-fresh-custom-provider-no-catalog",
+            status: "started",
+          }),
+          error: undefined,
+        },
+      ]);
+      await vi.waitFor(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      if (process.env.OPENCLAW_CONFIG_PATH) {
+        await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
+      }
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
