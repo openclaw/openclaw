@@ -71,6 +71,35 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
+  it("propagates attempt prep stages to the run meta", async () => {
+    const prepStages = {
+      totalMs: 12,
+      stages: [{ name: "system-prompt", elapsedMs: 12, atMs: 12 }],
+    };
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        prepStages,
+        assistantTexts: ["Done."],
+        lastAssistant: {
+          stopReason: "stop",
+          provider: "plain-provider",
+          model: "plain-model",
+          content: [{ type: "text", text: "Done." }],
+          usage: { input: 100, output: 5, totalTokens: 105 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "plain-provider",
+      model: "plain-model",
+      runId: "run-prep-stages-meta",
+    });
+
+    expect(result.meta.prepStages).toBe(prepStages);
+  });
+
   it("caps retries at MAX_EMPTY_ERROR_RETRIES and surfaces incomplete-turn error", async () => {
     // 1 initial + 3 retries = 4 attempts, all returning empty-error.
     for (let i = 0; i < 4; i += 1) {
