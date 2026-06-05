@@ -11,8 +11,10 @@ import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { getHeader } from "./http-utils.js";
 import {
+  normalizeMcpLoopbackBoundContext,
   resolveMcpLoopbackScopedTokenAuth,
   type McpLoopbackAuthContext,
+  type McpLoopbackBoundContext,
 } from "./mcp-http.loopback-runtime.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
@@ -70,6 +72,56 @@ function normalizeMcpCurrentInboundAudio(value: string | undefined): boolean | u
   return trimmed ? isTruthyEnvValue(trimmed) : undefined;
 }
 
+const MCP_LOOPBACK_BOUND_CONTEXT_FIELDS = [
+  "sessionKey",
+  "agentId",
+  "accountId",
+  "messageProvider",
+  "currentChannelId",
+  "currentThreadTs",
+  "currentMessageId",
+  "currentInboundAudio",
+  "inboundEventKind",
+  "sourceReplyDeliveryMode",
+] as const;
+
+type McpLoopbackBoundContextField = (typeof MCP_LOOPBACK_BOUND_CONTEXT_FIELDS)[number];
+
+function resolveMcpLoopbackBoundRequestContext(req: IncomingMessage): McpLoopbackBoundContext {
+  return normalizeMcpLoopbackBoundContext({
+    sessionKey: getHeader(req, "x-session-key"),
+    agentId: getHeader(req, "x-openclaw-agent-id"),
+    accountId: getHeader(req, "x-openclaw-account-id"),
+    messageProvider: getHeader(req, "x-openclaw-message-channel"),
+    currentChannelId: getHeader(req, "x-openclaw-current-channel-id"),
+    currentThreadTs: getHeader(req, "x-openclaw-current-thread-ts"),
+    currentMessageId: getHeader(req, "x-openclaw-current-message-id"),
+    currentInboundAudio: getHeader(req, "x-openclaw-current-inbound-audio"),
+    inboundEventKind: getHeader(req, "x-openclaw-inbound-event-kind"),
+    sourceReplyDeliveryMode: getHeader(req, "x-openclaw-source-reply-delivery-mode"),
+  });
+}
+
+function resolveMcpLoopbackContextMismatch(params: {
+  requested: McpLoopbackBoundContext;
+  token: McpLoopbackAuthContext;
+}):
+  | { field: McpLoopbackBoundContextField; requestedValue: string; tokenValue: string }
+  | undefined {
+  for (const field of MCP_LOOPBACK_BOUND_CONTEXT_FIELDS) {
+    const requestedValue = params.requested[field];
+    const tokenValue = params.token[field];
+    if (requestedValue !== tokenValue) {
+      return {
+        field,
+        requestedValue: requestedValue === undefined ? "" : String(requestedValue),
+        tokenValue: tokenValue === undefined ? "" : String(tokenValue),
+      };
+    }
+  }
+  return undefined;
+}
+
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   const origin = getHeader(req, "origin");
   if (!origin) {
@@ -101,16 +153,17 @@ function rejectMcpLoopbackScopedContextMismatch(params: {
   if (!params.auth.senderId) {
     return false;
   }
-  const requestedMessageProvider =
-    normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ?? undefined;
-  if (requestedMessageProvider === params.auth.messageProvider) {
+  const requested = resolveMcpLoopbackBoundRequestContext(params.req);
+  const mismatch = resolveMcpLoopbackContextMismatch({ requested, token: params.auth });
+  if (!mismatch) {
     return false;
   }
   logMcpLoopbackHttp("reject", {
     reason: "scoped_context_mismatch",
     method: params.req.method ?? "",
-    requestedMessageProvider: requestedMessageProvider ?? "",
-    tokenMessageProvider: params.auth.messageProvider ?? "",
+    field: mismatch.field,
+    requestedValue: mismatch.requestedValue,
+    tokenValue: mismatch.tokenValue,
   });
   params.res.writeHead(401, { "Content-Type": "application/json" });
   params.res.end(JSON.stringify({ error: "unauthorized" }));

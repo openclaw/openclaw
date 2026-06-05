@@ -1355,7 +1355,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         (
           runtime: { ownerToken: string; nonOwnerToken: string },
           senderIsOwner: boolean,
-          context?: { senderId?: string | null; messageProvider?: string | null },
+          context?: { senderId?: string | null },
         ) =>
           `${senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken}${
             context?.senderId ? `:sender:${context.senderId}` : ""
@@ -1408,6 +1408,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(context.preparedBackend.env).toMatchObject({
         OPENCLAW_MCP_TOKEN: "loopback-non-owner-token:sender:user-123",
+        OPENCLAW_MCP_AGENT_ID: "main",
         OPENCLAW_MCP_MESSAGE_CHANNEL: "telegram",
         OPENCLAW_MCP_CURRENT_CHANNEL_ID: "telegram:-100123:topic:42",
         OPENCLAW_MCP_CURRENT_THREAD_TS: "42",
@@ -1424,7 +1425,19 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           nonOwnerToken: "loopback-non-owner-token",
         },
         false,
-        { senderId: "user-123", messageProvider: "telegram" },
+        {
+          senderId: "user-123",
+          sessionKey: "agent:main:telegram:group:chat123",
+          agentId: "main",
+          accountId: undefined,
+          messageProvider: "telegram",
+          currentChannelId: "telegram:-100123:topic:42",
+          currentThreadTs: "42",
+          currentMessageId: "reply-message-1",
+          currentInboundAudio: true,
+          inboundEventKind: "room_event",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

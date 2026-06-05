@@ -1,4 +1,9 @@
 import crypto from "node:crypto";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "@openclaw/normalization-core/string-coerce";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 
@@ -16,7 +21,43 @@ type ActiveMcpLoopbackRuntime = McpLoopbackRuntime & {
 export type McpLoopbackAuthContext = {
   senderIsOwner: boolean;
   senderId: string | undefined;
+  sessionKey?: string;
+  agentId?: string;
+  accountId?: string;
   messageProvider?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string;
+  currentInboundAudio?: boolean;
+  inboundEventKind?: string;
+  sourceReplyDeliveryMode?: string;
+};
+
+export type McpLoopbackBoundContext = Pick<
+  McpLoopbackAuthContext,
+  | "sessionKey"
+  | "agentId"
+  | "accountId"
+  | "messageProvider"
+  | "currentChannelId"
+  | "currentThreadTs"
+  | "currentMessageId"
+  | "currentInboundAudio"
+  | "inboundEventKind"
+  | "sourceReplyDeliveryMode"
+>;
+
+export type McpLoopbackBoundContextInput = {
+  sessionKey?: string | null;
+  agentId?: string | null;
+  accountId?: string | null;
+  messageProvider?: string | null;
+  currentChannelId?: string | null;
+  currentThreadTs?: string | null;
+  currentMessageId?: string | number | null;
+  currentInboundAudio?: boolean | string | null;
+  inboundEventKind?: string | null;
+  sourceReplyDeliveryMode?: string | null;
 };
 
 const SCOPED_TOKEN_PREFIX = "ctx1";
@@ -28,8 +69,45 @@ function normalizeSenderId(senderId: string | null | undefined): string | undefi
   return trimmed || undefined;
 }
 
-function normalizeScopedMessageProvider(value: string | null | undefined): string | undefined {
-  return normalizeMessageChannel(value) ?? undefined;
+function normalizeScopedMessageProvider(value: unknown): string | undefined {
+  return normalizeMessageChannel(normalizeOptionalString(value)) ?? undefined;
+}
+
+function normalizeMcpLoopbackInboundEventKind(value: unknown): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed === "room_event" || trimmed === "user_request" ? trimmed : undefined;
+}
+
+function normalizeMcpLoopbackSourceReplyDeliveryMode(value: unknown): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
+}
+
+function normalizeMcpLoopbackCurrentInboundAudio(value: unknown): boolean | undefined {
+  if (value === true) {
+    return true;
+  }
+  const trimmed = normalizeOptionalString(value);
+  return trimmed && isTruthyEnvValue(trimmed) ? true : undefined;
+}
+
+export function normalizeMcpLoopbackBoundContext(
+  context: McpLoopbackBoundContextInput | null | undefined,
+): McpLoopbackBoundContext {
+  return {
+    sessionKey: normalizeOptionalString(context?.sessionKey),
+    agentId: normalizeOptionalString(context?.agentId),
+    accountId: normalizeOptionalString(context?.accountId),
+    messageProvider: normalizeScopedMessageProvider(context?.messageProvider),
+    currentChannelId: normalizeOptionalString(context?.currentChannelId),
+    currentThreadTs: normalizeOptionalString(context?.currentThreadTs),
+    currentMessageId: normalizeOptionalStringifiedId(context?.currentMessageId),
+    currentInboundAudio: normalizeMcpLoopbackCurrentInboundAudio(context?.currentInboundAudio),
+    inboundEventKind: normalizeMcpLoopbackInboundEventKind(context?.inboundEventKind),
+    sourceReplyDeliveryMode: normalizeMcpLoopbackSourceReplyDeliveryMode(
+      context?.sourceReplyDeliveryMode,
+    ),
+  };
 }
 
 function encodeScopedPayload(auth: McpLoopbackAuthContext): string {
@@ -50,9 +128,33 @@ function readScopedAuth(encodedPayload: string): McpLoopbackAuthContext | null {
       const messageProvider = normalizeScopedMessageProvider(
         (decoded as { messageProvider?: unknown }).messageProvider as string | undefined,
       );
+      const boundContext = normalizeMcpLoopbackBoundContext({
+        sessionKey: (decoded as { sessionKey?: unknown }).sessionKey as string | undefined,
+        agentId: (decoded as { agentId?: unknown }).agentId as string | undefined,
+        accountId: (decoded as { accountId?: unknown }).accountId as string | undefined,
+        messageProvider,
+        currentChannelId: (decoded as { currentChannelId?: unknown }).currentChannelId as
+          | string
+          | undefined,
+        currentThreadTs: (decoded as { currentThreadTs?: unknown }).currentThreadTs as
+          | string
+          | undefined,
+        currentMessageId: (decoded as { currentMessageId?: unknown }).currentMessageId as
+          | string
+          | undefined,
+        currentInboundAudio: (decoded as { currentInboundAudio?: unknown }).currentInboundAudio as
+          | boolean
+          | string
+          | undefined,
+        inboundEventKind: (decoded as { inboundEventKind?: unknown }).inboundEventKind as
+          | string
+          | undefined,
+        sourceReplyDeliveryMode: (decoded as { sourceReplyDeliveryMode?: unknown })
+          .sourceReplyDeliveryMode as string | undefined,
+      });
       const senderIsOwner = (decoded as { senderIsOwner?: unknown }).senderIsOwner;
       if (senderId && typeof senderIsOwner === "boolean") {
-        return { senderIsOwner, senderId, messageProvider };
+        return { senderIsOwner, senderId, ...boundContext };
       }
     }
   } catch {
@@ -102,7 +204,7 @@ export function setActiveMcpLoopbackRuntime(
 export function resolveMcpLoopbackBearerToken(
   runtime: McpLoopbackRuntime,
   senderIsOwner: boolean,
-  context?: { senderId?: string | null; messageProvider?: string | null },
+  context?: McpLoopbackBoundContextInput & { senderId?: string | null },
 ): string {
   const baseToken = senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken;
   const senderId = normalizeSenderId(context?.senderId);
@@ -116,7 +218,7 @@ export function resolveMcpLoopbackBearerToken(
   const encodedPayload = encodeScopedPayload({
     senderIsOwner,
     senderId,
-    messageProvider: normalizeScopedMessageProvider(context?.messageProvider),
+    ...normalizeMcpLoopbackBoundContext(context),
   });
   return [
     SCOPED_TOKEN_PREFIX,

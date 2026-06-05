@@ -531,7 +531,15 @@ describe("mcp loopback server", () => {
     const token = runtime
       ? resolveMcpLoopbackBearerToken(runtime, false, {
           senderId: "user-123",
+          sessionKey: "agent:main:telegram:group:chat123",
+          accountId: "work",
           messageProvider: "telegram",
+          currentChannelId: "telegram:chat123",
+          currentThreadTs: "42",
+          currentMessageId: "reply-message-1",
+          currentInboundAudio: true,
+          inboundEventKind: "room_event",
+          sourceReplyDeliveryMode: "message_tool_only",
         })
       : undefined;
     const response = await sendRaw({
@@ -579,6 +587,7 @@ describe("mcp loopback server", () => {
     const token = runtime
       ? resolveMcpLoopbackBearerToken(runtime, false, {
           senderId: "real-user",
+          sessionKey: "agent:main:discord:group:g1",
           messageProvider: "discord",
         })
       : undefined;
@@ -604,6 +613,7 @@ describe("mcp loopback server", () => {
     const { runtime } = await startLoopbackServerForTest();
     const token = resolveMcpLoopbackBearerToken(runtime, false, {
       senderId: "telegram-user",
+      sessionKey: "agent:main:telegram:group:t1",
       messageProvider: "telegram",
     });
 
@@ -616,6 +626,57 @@ describe("mcp loopback server", () => {
     });
 
     expect(response.status).toBe(401);
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects sender-scoped tokens replayed with a different same-provider context", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const baseHeaders = {
+      "x-session-key": "agent:main:discord:group:g1",
+      "x-openclaw-agent-id": "main",
+      "x-openclaw-account-id": "work",
+      "x-openclaw-message-channel": "discord",
+      "x-openclaw-current-channel-id": "discord:g1",
+      "x-openclaw-current-thread-ts": "thread-a",
+      "x-openclaw-current-message-id": "message-a",
+      "x-openclaw-current-inbound-audio": "true",
+      "x-openclaw-inbound-event-kind": "room_event",
+      "x-openclaw-source-reply-delivery-mode": "message_tool_only",
+    };
+    const token = resolveMcpLoopbackBearerToken(runtime, false, {
+      senderId: "discord-user",
+      sessionKey: baseHeaders["x-session-key"],
+      agentId: baseHeaders["x-openclaw-agent-id"],
+      accountId: baseHeaders["x-openclaw-account-id"],
+      messageProvider: baseHeaders["x-openclaw-message-channel"],
+      currentChannelId: baseHeaders["x-openclaw-current-channel-id"],
+      currentThreadTs: baseHeaders["x-openclaw-current-thread-ts"],
+      currentMessageId: baseHeaders["x-openclaw-current-message-id"],
+      currentInboundAudio: true,
+      inboundEventKind: baseHeaders["x-openclaw-inbound-event-kind"],
+      sourceReplyDeliveryMode: baseHeaders["x-openclaw-source-reply-delivery-mode"],
+    });
+
+    const mismatchedHeaders: Array<[string, Record<string, string>]> = [
+      ["session key", { "x-session-key": "agent:main:discord:group:g2" }],
+      ["agent id", { "x-openclaw-agent-id": "secondary" }],
+      ["account id", { "x-openclaw-account-id": "personal" }],
+      ["channel id", { "x-openclaw-current-channel-id": "discord:g2" }],
+      ["thread", { "x-openclaw-current-thread-ts": "thread-b" }],
+      ["message id", { "x-openclaw-current-message-id": "message-b" }],
+      ["inbound audio", { "x-openclaw-current-inbound-audio": "false" }],
+      ["event kind", { "x-openclaw-inbound-event-kind": "user_request" }],
+      ["delivery mode", { "x-openclaw-source-reply-delivery-mode": "automatic" }],
+    ];
+
+    for (const [field, override] of mismatchedHeaders) {
+      const response = await sendLoopbackToolsList({
+        token,
+        headers: { ...baseHeaders, ...override },
+      });
+
+      expect(response.status, field).toBe(401);
+    }
     expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
   });
 
