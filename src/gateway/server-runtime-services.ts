@@ -154,7 +154,7 @@ function recoverPendingSessionDeliveries(params: {
   deps: import("../cli/deps.types.js").CliDeps;
   log: GatewayRuntimeServiceLogger;
   maxEnqueuedAt: number;
-}): void {
+}): () => void {
   // Delay session continuation recovery so the gateway has time to publish ready state and
   // request routing before replaying restart-sentinel deliveries.
   const timer = setTimeout(() => {
@@ -192,6 +192,13 @@ function recoverPendingSessionDeliveries(params: {
     );
   }, 60_000);
   periodicTimer.unref?.();
+
+  // Return a stop handle so the gateway close path can cancel the periodic
+  // retry interval and prevent stale deliveries after shutdown.
+  return () => {
+    clearTimeout(timer);
+    clearInterval(periodicTimer);
+  };
 }
 
 function startGatewayModelPricingRefreshOnDemand(params: {
@@ -240,11 +247,19 @@ export function activateGatewayScheduledServices(params: {
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
   pluginLookUpTable?: PluginMetadataRegistryView;
-}): { heartbeatRunner: HeartbeatRunner; stopModelPricingRefresh: () => void } {
+}): {
+  heartbeatRunner: HeartbeatRunner;
+  stopModelPricingRefresh: () => void;
+  stopSessionDeliveryRecovery: () => void;
+} {
   if (params.minimalTestGateway) {
     // Minimal gateways keep handles callable but inert so tests can share shutdown paths with
     // production starts without launching background loops.
-    return { heartbeatRunner: createNoopHeartbeatRunner(), stopModelPricingRefresh: () => {} };
+    return {
+      heartbeatRunner: createNoopHeartbeatRunner(),
+      stopModelPricingRefresh: () => {},
+      stopSessionDeliveryRecovery: () => {},
+    };
   }
   const heartbeatRunner = startHeartbeatRunner({ cfg: params.cfgAtStart });
   if (params.startCron !== false) {
@@ -257,7 +272,7 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
-  recoverPendingSessionDeliveries({
+  const stopSessionDeliveryRecovery = recoverPendingSessionDeliveries({
     deps: params.deps,
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
@@ -269,5 +284,5 @@ export function activateGatewayScheduledServices(params: {
         log: params.log,
       })
     : () => {};
-  return { heartbeatRunner, stopModelPricingRefresh };
+  return { heartbeatRunner, stopModelPricingRefresh, stopSessionDeliveryRecovery };
 }

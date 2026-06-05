@@ -211,6 +211,27 @@ describe("server-runtime-services", () => {
     expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
   });
 
+  it("stops session delivery periodic retry after close — no retry fires after stop handle is called", async () => {
+    vi.useFakeTimers();
+    const log = createLog();
+    const { services } = activateScheduledServicesForTest({ log });
+
+    // Advance past the initial 1_250ms delay to trigger the first recovery call
+    await vi.advanceTimersByTimeAsync(1_250);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+
+    hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
+
+    // Stop the session delivery recovery — simulates gateway close/restart
+    services.stopSessionDeliveryRecovery();
+
+    // Advance well past the 60_000ms interval — no retry should fire
+    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).not.toHaveBeenCalled();
+  });
+
   it("can defer cron startup while activating other scheduled services", async () => {
     vi.useFakeTimers();
     const cron = { start: vi.fn(async () => undefined) };
