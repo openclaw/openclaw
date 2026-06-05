@@ -43,11 +43,11 @@ export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveControlUiLinks };
 
-/** Handles Clack cancellation by exiting through the runtime. */
+/** Handles Clack cancellation by exiting with SIGINT convention (130). */
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
-    runtime.exit(1);
+    runtime.exit(130);
     throw new Error("unreachable");
   }
   return value;
