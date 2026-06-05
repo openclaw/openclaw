@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -62,6 +63,7 @@ vi.mock("../plugins/setup-registry.js", () => ({
 }));
 
 const env = makeIsolatedEnv();
+const emptyDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
 
 function createPluginMetadataSnapshot(params: {
   config?: OpenClawConfig;
@@ -1030,6 +1032,7 @@ describe("applyPluginAutoEnable core", () => {
 
   it("reuses same-turn auto-enable results for identical fanout inputs", async () => {
     setupRegistryMock.resolvePluginSetupAutoEnableReasons.mockClear();
+    const manifestRegistry = makeRegistry([{ id: "browser", channels: [] }]);
     const config: OpenClawConfig = {
       plugins: {
         entries: {
@@ -1040,8 +1043,18 @@ describe("applyPluginAutoEnable core", () => {
       },
     };
 
-    const first = applyPluginAutoEnable({ config, env });
-    const second = applyPluginAutoEnable({ config, env });
+    const first = applyPluginAutoEnable({
+      config,
+      discovery: emptyDiscovery,
+      env,
+      manifestRegistry,
+    });
+    const second = applyPluginAutoEnable({
+      config,
+      discovery: emptyDiscovery,
+      env,
+      manifestRegistry,
+    });
 
     expect(second).toBe(first);
     expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalledTimes(1);
@@ -1049,11 +1062,40 @@ describe("applyPluginAutoEnable core", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    const third = applyPluginAutoEnable({ config, env });
+    const third = applyPluginAutoEnable({
+      config,
+      discovery: emptyDiscovery,
+      env,
+      manifestRegistry,
+    });
 
     expect(third).not.toBe(first);
     expect(third).toEqual(first);
     expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse same-turn results for omitted metadata after current snapshot replacement", () => {
+    const config: OpenClawConfig = {
+      channels: { apn: { someKey: "value" } },
+    };
+    const firstRegistry = makeRegistry([{ id: "apn-one", channels: ["apn"] }]);
+    const secondRegistry = makeRegistry([{ id: "apn-two", channels: ["apn"] }]);
+    setCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshot({ config, manifestRegistry: firstRegistry }),
+      { config, env },
+    );
+
+    const first = applyPluginAutoEnable({ config, env });
+    setCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshot({ config, manifestRegistry: secondRegistry }),
+      { config, env },
+    );
+    const second = applyPluginAutoEnable({ config, env });
+
+    expect(first.config.plugins?.entries?.["apn-one"]?.enabled).toBe(true);
+    expect(second.config.plugins?.entries?.["apn-two"]?.enabled).toBe(true);
+    expect(second.config.plugins?.entries?.["apn-one"]).toBeUndefined();
+    expect(second).not.toBe(first);
   });
 
   it("does not reuse same-turn auto-enable results across registry or env inputs", () => {

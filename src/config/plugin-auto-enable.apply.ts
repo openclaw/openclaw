@@ -13,8 +13,6 @@ import type {
 import { hashRuntimeConfigValue } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-const ABSENT_PLUGIN_AUTO_ENABLE_INPUT = {};
-
 type PluginAutoEnableCacheEntry = {
   configFingerprint: string;
   envFingerprint: string;
@@ -53,10 +51,6 @@ function getOrCreateWeakMap<K extends object, V>(
   const next = create();
   parent.set(key, next);
   return next;
-}
-
-function resolveInputIdentityKey(value: object | undefined): object {
-  return value ?? ABSENT_PLUGIN_AUTO_ENABLE_INPUT;
 }
 
 function stableFingerprintValue(value: unknown): string {
@@ -134,10 +128,8 @@ export function applyPluginAutoEnable(params: {
   discovery?: PluginDiscoveryResult;
 }): PluginAutoEnableResult {
   const config = params.config;
-  if (config && typeof config === "object") {
+  if (config && typeof config === "object" && params.manifestRegistry && params.discovery) {
     const env = params.env ?? process.env;
-    const manifestRegistry = resolveInputIdentityKey(params.manifestRegistry);
-    const discovery = resolveInputIdentityKey(params.discovery);
     const envCache = getOrCreateWeakMap(
       (sameTurnApplyCache ??= new WeakMap()),
       config,
@@ -150,10 +142,10 @@ export function applyPluginAutoEnable(params: {
     );
     const discoveryCache = getOrCreateWeakMap(
       registryCache,
-      manifestRegistry,
+      params.manifestRegistry,
       () => new WeakMap<object, PluginAutoEnableCacheEntry>(),
     );
-    const cached = discoveryCache.get(discovery);
+    const cached = discoveryCache.get(params.discovery);
     if (cached && isPluginAutoEnableCacheEntryFresh({ entry: cached, config, env })) {
       return cached.result;
     }
@@ -164,7 +156,7 @@ export function applyPluginAutoEnable(params: {
       env: params.env,
       manifestRegistry: params.manifestRegistry,
     });
-    discoveryCache.set(discovery, createPluginAutoEnableCacheEntry({ config, env, result }));
+    discoveryCache.set(params.discovery, createPluginAutoEnableCacheEntry({ config, env, result }));
     scheduleSameTurnApplyCacheClear();
     return result;
   }
