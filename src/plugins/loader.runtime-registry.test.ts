@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { getCompactionProvider, registerCompactionProvider } from "./compaction-provider.js";
 import { getEmbeddingProvider, registerEmbeddingProvider } from "./embedding-providers.js";
@@ -21,6 +25,7 @@ import {
   buildMemoryPromptSection,
   getMemoryRuntime,
   listMemoryCorpusSupplements,
+  listMemoryRerankProviders,
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
   registerMemoryPromptSupplement,
@@ -811,6 +816,47 @@ describe("loadOpenClawPlugins active runtime clearing", () => {
     expect(getEmbeddingProvider("stale-embedding")).toBeUndefined();
     expect(getCompactionProvider("stale-compaction")).toBeUndefined();
     expect(getMemoryEmbeddingProvider("stale-memory")).toBeUndefined();
+  });
+});
+
+describe("memory rerank provider contract gate", () => {
+  it("rejects an undeclared plugin and keeps the exclusive slot empty", () => {
+    const { config, registry } = createPluginRegistryFixture();
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "undeclared-rerank",
+      name: "Undeclared Rerank",
+      register(api) {
+        api.registerMemoryRerankProvider({ rerank: async () => [] });
+      },
+    });
+
+    expect(listMemoryRerankProviders()).toHaveLength(0);
+    const diagnostic = registry.registry.diagnostics.find(
+      (entry) => entry.pluginId === "undeclared-rerank",
+    );
+    expect(diagnostic?.message).toBe(
+      "plugin must declare contracts.memoryRerankProviders to register a memory rerank provider",
+    );
+  });
+
+  it("registers a declaring plugin into the exclusive slot", () => {
+    const { config, registry } = createPluginRegistryFixture();
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "declared-rerank",
+      name: "Declared Rerank",
+      contracts: { memoryRerankProviders: ["declared-rerank"] },
+      register(api) {
+        api.registerMemoryRerankProvider({ rerank: async () => [] });
+      },
+    });
+
+    expect(listMemoryRerankProviders().map((entry) => entry.pluginId)).toEqual(["declared-rerank"]);
   });
 });
 

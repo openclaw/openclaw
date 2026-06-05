@@ -10,11 +10,13 @@ import {
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
   listActiveMemoryPublicArtifacts,
+  listMemoryRerankProviders,
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
   registerMemoryPromptSection,
+  registerMemoryRerankProvider,
   registerMemoryRuntime,
   resolveMemoryFlushPlan,
   restoreMemoryPluginState,
@@ -52,10 +54,12 @@ function expectClearedMemoryState() {
 }
 
 function createMemoryStateSnapshot() {
+  // Mirror exactly what the plugin loader captures/restores for a warm cache hit.
   return {
     capability: getMemoryCapabilityRegistration(),
     corpusSupplements: listMemoryCorpusSupplements(),
     promptSupplements: listMemoryPromptSupplements(),
+    rerankProvider: listMemoryRerankProviders()[0],
   };
 }
 
@@ -356,5 +360,33 @@ describe("memory plugin state", () => {
     clearMemoryPluginState();
 
     expectClearedMemoryState();
+  });
+
+  it("registerMemoryRerankProvider is an exclusive slot (rejects a second owner)", () => {
+    const p = { rerank: async () => [] };
+    expect(registerMemoryRerankProvider("plugin-a", p)).toEqual({ ok: true });
+    expect(listMemoryRerankProviders().map((r) => r.pluginId)).toEqual(["plugin-a"]);
+    const second = registerMemoryRerankProvider("plugin-b", p);
+    expect(second).toEqual({ ok: false, existingOwner: "plugin-a" });
+    expect(listMemoryRerankProviders()).toHaveLength(1);
+  });
+
+  it("clearMemoryPluginState resets the rerank slot", () => {
+    registerMemoryRerankProvider("plugin-a", { rerank: async () => [] });
+    clearMemoryPluginState();
+    expect(listMemoryRerankProviders()).toHaveLength(0);
+  });
+
+  it("restoreMemoryPluginState carries the rerank slot through a snapshot round-trip", () => {
+    // Regression guard: the loader cache snapshot/restore must not drop a registered
+    // reranker on a warm gateway restart.
+    registerMemoryRerankProvider("plugin-a", { rerank: async () => [] });
+    const snapshot = createMemoryStateSnapshot();
+
+    resetMemoryPluginState();
+    expect(listMemoryRerankProviders()).toHaveLength(0);
+
+    restoreMemoryPluginState(snapshot);
+    expect(listMemoryRerankProviders().map((r) => r.pluginId)).toEqual(["plugin-a"]);
   });
 });

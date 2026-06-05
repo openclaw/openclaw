@@ -346,6 +346,7 @@ describe("memory_search unavailable payloads", () => {
         configuredMode?: unknown;
         effectiveMode?: unknown;
         fallback?: unknown;
+        rerank?: unknown;
         hits?: unknown;
         searchMs?: number;
       };
@@ -355,8 +356,102 @@ describe("memory_search unavailable payloads", () => {
     expect(details.debug?.configuredMode).toBe("search");
     expect(details.debug?.effectiveMode).toBe("query");
     expect(details.debug?.fallback).toBe("unsupported-search-flags");
+    expect(details.debug?.rerank).toBeUndefined();
     expect(details.debug?.hits).toBe(1);
     expect(details.debug?.searchMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("surfaces rerank state in search debug when emitted by the backend", async () => {
+    setMemoryBackend("builtin");
+    setMemorySearchImpl(async (opts) => {
+      opts?.onDebug?.({ backend: "builtin", rerank: "active" });
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.9,
+          snippet: "reranked result",
+          source: "memory",
+        },
+      ];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: { memory: { backend: "builtin" } },
+    });
+    const result = await tool.execute("debug", { query: "rerank test" });
+    const details = result.details as {
+      debug?: { rerank?: unknown };
+    };
+    expect(details.debug?.rerank).toBe("active");
+  });
+
+  it("preserves the manager's rerank+MMR order (no re-sort by rerankScore or raw score)", async () => {
+    setMemoryBackend("builtin");
+    // manager.search returns the rerank-then-MMR composed order. Here MMR kept a
+    // diverse hit ahead of a near-duplicate that has BOTH a higher rerankScore
+    // and a higher fusion score. The tool must preserve the manager's order:
+    // re-sorting by rerankScore (0.85 > 0.6) or by raw score (0.8 > 0.5) would
+    // each wrongly promote the near-duplicate and undo MMR's diversity reorder.
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/diverse.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.5,
+        rerankScore: 0.6,
+        snippet: "diverse hit kept ahead by MMR",
+        source: "memory" as const,
+      },
+      {
+        path: "memory/near-duplicate.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.8,
+        rerankScore: 0.85,
+        snippet: "near-duplicate demoted by MMR for diversity",
+        source: "memory" as const,
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow({ config: { memory: { backend: "builtin" } } });
+    const result = await tool.execute("mmr-order", { query: "anything" });
+    const results = (result.details as { results: Array<{ path: string }> }).results;
+
+    expect(results[0]?.path).toBe("memory/diverse.md");
+    expect(results[1]?.path).toBe("memory/near-duplicate.md");
+  });
+
+  it("preserves the manager's order when no reranker ran (rerankScore absent)", async () => {
+    setMemoryBackend("builtin");
+    // No reranker: manager.search returns fusion-score-descending order; the tool
+    // preserves it verbatim rather than re-deriving any ranking.
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/high.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.8,
+        snippet: "higher fusion score",
+        source: "memory" as const,
+      },
+      {
+        path: "memory/low.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.4,
+        snippet: "lower fusion score",
+        source: "memory" as const,
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow({ config: { memory: { backend: "builtin" } } });
+    const result = await tool.execute("no-rerank", { query: "anything" });
+    const results = (result.details as { results: Array<{ path: string }> }).results;
+
+    expect(results[0]?.path).toBe("memory/high.md");
+    expect(results[1]?.path).toBe("memory/low.md");
   });
 });
 

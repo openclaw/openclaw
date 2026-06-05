@@ -1118,5 +1118,13 @@
   {
     "source": "Z.AI (GLM)",
     "target": "Z.AI (GLM)"
+  },
+  {
+    "source": "Memory reranker",
+    "target": "Memory reranker"
+  },
+  {
+    "source": "Plugin SDK runtime helpers",
+    "target": "Plugin SDK runtime helpers"
   }
 ]

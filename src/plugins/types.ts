@@ -2884,6 +2884,10 @@ export type OpenClawPluginApi = {
   registerMemoryCorpusSupplement: (
     supplement: import("./memory-state.js").MemoryCorpusSupplement,
   ) => void;
+  /** Register a cross-encoder rerank provider for memory search results (exclusive slot). */
+  registerMemoryRerankProvider: (
+    provider: import("../memory-host-sdk/host/types.js").MemoryRerankProvider,
+  ) => void;
   /**
    * Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot).
    * @deprecated Use registerMemoryCapability({ flushPlanResolver }) instead.

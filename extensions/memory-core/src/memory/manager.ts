@@ -21,6 +21,10 @@ import {
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  listMemoryRerankProviders,
+  type MemoryRerankCandidate,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createEmbeddingProvider,
@@ -61,6 +65,8 @@ import {
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
+import { logMemoryRerankDegraded } from "./manager-vector-warning.js";
+import { applyMMRToHybridResults } from "./mmr.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
@@ -68,6 +74,8 @@ const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
+// Core-owned outer deadline; the provider also owns its own internal/HTTP timeout.
+const RERANK_DEADLINE_MS = 5000;
 const log = createSubsystemLogger("memory");
 type MemoryIndexManagerPurpose = "default" | "status" | "cli";
 
@@ -163,6 +171,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected batchFailureLastError?: string;
   protected batchFailureLastProvider?: string;
   protected batchFailureLock: Promise<void> = Promise.resolve();
+  // Optional cross-encoder rerank stage (builtin hybrid path). "disabled" = no
+  // provider registered; "degraded" = a registered provider is failing fail-open.
+  protected rerankState: "disabled" | "active" | "degraded" = "disabled";
+  protected rerankFailureCount = 0;
+  protected rerankLastError?: string;
+  protected rerankDeadlineMs = RERANK_DEADLINE_MS;
   protected db: DatabaseSync;
   protected override readonly sources: Set<MemorySource>;
   protected override providerKey: string;
@@ -657,10 +671,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       keyword: keywordResults,
       vectorWeight: hybrid.vectorWeight,
       textWeight: hybrid.textWeight,
-      mmr: hybrid.mmr,
       temporalDecay: hybrid.temporalDecay,
     });
-    const strict = merged.filter((entry) => entry.score >= minScore);
+    // Optional cross-encoder rerank between merge and MMR (builtin path only).
+    // The qmd backend delegates ranking to its own server-side reranker
+    // (see qmd-manager.ts buildV2Searches ~:2164), so it is not reranked here.
+    const reranked = await this.applyRerankStage(cleaned, merged, opts?.onDebug);
+    const ranked = applyMMRToHybridResults(reranked, hybrid.mmr);
+    const strict = ranked.filter((entry) => entry.score >= minScore);
     if (strict.length > 0 || keywordResults.length === 0) {
       return strict.slice(0, maxResults);
     }
@@ -675,13 +693,142 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ),
     );
     return this.selectScoredResults(
-      merged.filter((entry) =>
+      ranked.filter((entry) =>
         keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`),
       ),
       maxResults,
       minScore,
       relaxedMinScore,
     );
+  }
+
+  // Cross-encoder rerank stage: runs the registered provider under a core-owned
+  // aborting deadline, reorders `merged` by descending rerankScore, and fails
+  // open to pre-rerank order on any timeout/throw/invalid response. Never throws.
+  private async applyRerankStage(
+    query: string,
+    merged: MemorySearchResult[],
+    onDebug?: (debug: MemorySearchRuntimeDebug) => void,
+  ): Promise<MemorySearchResult[]> {
+    const reranker = listMemoryRerankProviders()[0];
+    if (!reranker) {
+      // No provider registered: leave order untouched. "disabled" must never be
+      // conflated with "degraded" (a registered-but-failing provider).
+      this.rerankState = "disabled";
+      onDebug?.({ backend: "builtin", rerank: this.rerankState });
+      return merged;
+    }
+    if (merged.length === 0) {
+      // Empty candidate pool: the reranker did not run, so don't emit a rerank
+      // state — emitting this.rerankState would report a stale "active" from a
+      // prior search. The earlier onDebug({backend}) stands (debug.rerank absent =
+      // accurate for this query); rerankState is left untouched for status().
+      return merged;
+    }
+    const candidates: MemoryRerankCandidate[] = merged.map((r, i) => ({
+      ref: i,
+      snippet: r.snippet,
+      source: r.source,
+    }));
+    const ac = new AbortController();
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        ac.abort();
+        reject(new Error(`deadline exceeded (${this.rerankDeadlineMs}ms)`));
+      }, this.rerankDeadlineMs);
+    });
+    try {
+      // Keep a stable reference so a post-deadline rejection cannot escape as an
+      // unhandledRejection once the deadline has already won the race.
+      const rerankPromise = reranker.provider.rerank({
+        query,
+        candidates,
+        signal: ac.signal,
+      });
+      rerankPromise.catch(() => {});
+      const scores = await Promise.race([rerankPromise, deadline]);
+      // Empty [] (kill-switch / endpoint down) is a degraded failure, not a no-op.
+      // Check it BEFORE the validator: isValidRerankScores requires length === poolSize,
+      // so [] would otherwise read as "invalid refs" instead of the no-scores reason.
+      if (scores.length === 0) {
+        throw new Error("reranker returned no scores");
+      }
+      if (!this.isValidRerankScores(scores, merged.length)) {
+        throw new Error("reranker returned invalid or duplicate refs");
+      }
+      const reranked = this.reorderByRerankScores(merged, scores);
+      // Re-arm the latch: a recovered provider returns to "active" only when
+      // scores were actually applied.
+      this.rerankState = "active";
+      onDebug?.({ backend: "builtin", rerank: this.rerankState });
+      return reranked;
+    } catch (err) {
+      // Read the abort flag before our own abort() so timeout stays
+      // distinguishable from a provider error in rerankLastError.
+      const abortedByDeadline = ac.signal.aborted;
+      ac.abort();
+      this.rerankFailureCount += 1;
+      this.rerankLastError = abortedByDeadline
+        ? `deadline exceeded (${this.rerankDeadlineMs}ms)`
+        : formatErrorMessage(err);
+      // Latched: warn only on the transition into "degraded", not per query.
+      logMemoryRerankDegraded({
+        alreadyDegraded: this.rerankState === "degraded",
+        reason: this.rerankLastError,
+        warn: (message) => log.warn(message),
+      });
+      this.rerankState = "degraded";
+      onDebug?.({ backend: "builtin", rerank: this.rerankState });
+      // Fail-open: pre-rerank order. Search must never throw because of rerank.
+      return merged;
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  // Enforces the bijection contract: exactly one finite score in [0,1] per
+  // candidate ref. length+unique+range together guarantee full coverage; the
+  // score checks reject NaN, Infinity, and values outside [0,1]. Any violation
+  // routes to the degraded failure path so partial/garbage scores never reach
+  // reorderByRerankScores.
+  private isValidRerankScores(
+    scores: ReadonlyArray<{ ref: number; score: number }>,
+    poolSize: number,
+  ): boolean {
+    if (scores.length !== poolSize) {
+      return false;
+    }
+    const seen = new Set<number>();
+    for (const entry of scores) {
+      const ref = entry.ref;
+      if (!Number.isInteger(ref) || ref < 0 || ref >= poolSize || seen.has(ref)) {
+        return false;
+      }
+      seen.add(ref);
+      if (!Number.isFinite(entry.score) || entry.score < 0 || entry.score > 1) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Scores are guaranteed complete (one per candidate) by isValidRerankScores,
+  // so a simple sort-by-rerankScore is sufficient; no "omitted refs appended"
+  // path is needed.
+  private reorderByRerankScores(
+    merged: MemorySearchResult[],
+    scores: ReadonlyArray<{ ref: number; score: number }>,
+  ): MemorySearchResult[] {
+    const scored: Array<{ item: MemorySearchResult; score: number }> = [];
+    for (const entry of scores) {
+      merged[entry.ref].rerankScore = entry.score;
+      scored.push({ item: merged[entry.ref], score: entry.score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.map((s) => s.item);
   }
 
   private selectScoredResults<T extends MemorySearchResult & { score: number }>(
@@ -777,7 +924,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     keyword: Array<MemorySearchResult & { id: string; textScore: number }>;
     vectorWeight: number;
     textWeight: number;
-    mmr?: { enabled: boolean; lambda: number };
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
   }): Promise<MemorySearchResult[]> {
     return mergeHybridResults({
@@ -801,7 +947,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       })),
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,
-      mmr: params.mmr,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
     }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
@@ -1024,6 +1169,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           successes: this.readonlyRecoverySuccesses,
           failures: this.readonlyRecoveryFailures,
           lastError: this.readonlyRecoveryLastError,
+        },
+        rerank: {
+          state: this.rerankState,
+          failureCount: this.rerankFailureCount,
+          lastError: this.rerankLastError,
         },
       },
     };

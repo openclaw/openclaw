@@ -1,0 +1,456 @@
+import { mkdirSync, rmSync } from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  clearMemoryEmbeddingProviders as clearRegistry,
+  registerMemoryEmbeddingProvider as registerAdapter,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  clearMemoryPluginState,
+  type MemoryRerankCandidate,
+  type MemoryRerankProvider,
+  type MemoryRerankScore,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "./test-runtime-mocks.js";
+import type { MemoryIndexManager } from "./index.js";
+import { closeAllMemorySearchManagers } from "./index.js";
+import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
+
+// Term-counting embedding so each fixture chunk gets a distinct vector; vector
+// search is disabled in tests (sqlite-vec mocked off) so ranking comes from FTS,
+// but the mock keeps the provider present so search() reaches the hybrid path.
+const TERMS = ["alpha", "beta", "gamma", "delta"];
+function embedText(text: string): number[] {
+  const lower = text.toLowerCase();
+  return TERMS.map((term) => lower.split(term).length - 1);
+}
+
+// Mock the embedding provider so search() reaches the hybrid merge path without
+// real embeddings; sqlite-vec stays mocked off via test-runtime-mocks.
+vi.mock("./embeddings.js", () => ({
+  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
+  createEmbeddingProvider: async () => ({
+    requestedProvider: "openai",
+    provider: {
+      id: "mock",
+      model: "mock-embed",
+      embedQuery: async (text: string) => embedText(text),
+      embedBatch: async (texts: string[]) => texts.map(embedText),
+      close: async () => {},
+    },
+  }),
+}));
+
+const RERANK_PLUGIN_ID = "test-reranker";
+
+// Seed the exclusive rerank slot through the GATED registration path (the same
+// harness the contract test uses): declare contracts.memoryRerankProviders and
+// register via api.registerMemoryRerankProvider. Keeps this unit test honest —
+// it cannot seed the slot in a way a real third-party plugin couldn't.
+function seedReranker(provider: MemoryRerankProvider, pluginId = RERANK_PLUGIN_ID): void {
+  const { config, registry } = createPluginRegistryFixture();
+  registerVirtualTestPlugin({
+    registry,
+    config,
+    id: pluginId,
+    name: pluginId,
+    contracts: { memoryRerankProviders: [pluginId] },
+    register(api) {
+      api.registerMemoryRerankProvider(provider);
+    },
+  });
+}
+
+type ManagerStatusCustom = {
+  rerank?: { state: string; failureCount: number; lastError?: string };
+};
+
+describe("memory rerank stage", () => {
+  let fixtureRoot = "";
+  let workspaceDir = "";
+  let memoryDir = "";
+  let storePath = "";
+  const managers = new Set<MemoryIndexManager>();
+
+  async function getManager(): Promise<MemoryIndexManager> {
+    const { MemoryIndexManager: ManagerCtor } = await import("./index.js");
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: storePath, vector: { enabled: false } },
+            chunking: { tokens: 4000, overlap: 0 },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+            query: {
+              minScore: 0,
+              // MMR disabled: keep the post-rerank order observable end-to-end.
+              hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+            },
+            sources: ["memory"],
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as unknown as Parameters<typeof ManagerCtor.get>[0]["cfg"];
+    const manager = await ManagerCtor.get({ cfg, agentId: "main" });
+    if (!manager) {
+      throw new Error("manager missing");
+    }
+    managers.add(manager);
+    return manager;
+  }
+
+  beforeEach(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-rerank-"));
+    workspaceDir = path.join(fixtureRoot, "workspace");
+    memoryDir = path.join(workspaceDir, "memory");
+    storePath = path.join(workspaceDir, "index.sqlite");
+    rmSync(workspaceDir, { recursive: true, force: true });
+    mkdirSync(memoryDir, { recursive: true });
+    // Three single-chunk files, each matching the query term so all survive FTS.
+    await fs.writeFile(path.join(memoryDir, "a.md"), "alpha topic one alpha.");
+    await fs.writeFile(path.join(memoryDir, "b.md"), "alpha topic two beta.");
+    await fs.writeFile(path.join(memoryDir, "c.md"), "alpha topic three gamma.");
+    clearRegistry();
+    clearMemoryPluginState();
+    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
+  });
+
+  afterEach(async () => {
+    await Promise.all(Array.from(managers).map((m) => m.close()));
+    await closeAllMemorySearchManagers();
+    managers.clear();
+    clearRegistry();
+    clearMemoryPluginState();
+  });
+
+  function ftsAvailable(manager: MemoryIndexManager): boolean {
+    return Boolean(manager.status().fts?.available);
+  }
+
+  it("(a) no reranker: results keep pre-rerank order and state is disabled", async () => {
+    const manager = await getManager();
+    if (!ftsAvailable(manager)) {
+      return;
+    }
+    await manager.sync({ reason: "test" });
+    const results = await manager.search("alpha", { maxResults: 10 });
+    expect(results.length).toBeGreaterThan(1);
+    // No reranker registered: rerankScore must stay unset.
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = manager.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("disabled");
+  });
+
+  it("(b) reranker reorders by descending rerankScore and sets active state", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preRerank = await baseline.search("alpha", { maxResults: 10 });
+    const preOrder = preRerank.map((r) => r.path);
+
+    // Assign ascending scores in candidate (pre-rerank pool) order so descending
+    // rerankScore reverses the merge order.
+    seedReranker({
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> =>
+        candidates.map((c, i) => ({ ref: c.ref, score: i / Math.max(1, candidates.length) })),
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    const postOrder = results.map((r) => r.path);
+    expect(postOrder).toStrictEqual(preOrder.toReversed());
+    expect(results.every((r) => typeof r.rerankScore === "number")).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("active");
+  });
+
+  it("(c) reranker throws: pre-rerank order, degraded state, failureCount 1", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+
+    seedReranker({
+      rerank: async (): Promise<MemoryRerankScore[]> => {
+        throw new Error("reranker boom");
+      },
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+    expect(custom.rerank?.failureCount).toBe(1);
+    expect(custom.rerank?.lastError).toContain("reranker boom");
+  });
+
+  it("(d) reranker exceeds deadline: pre-rerank order and the signal aborts", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+
+    let abortedFromSignal = false;
+    seedReranker({
+      rerank: async ({ signal }: { signal: AbortSignal }): Promise<MemoryRerankScore[]> =>
+        await new Promise<MemoryRerankScore[]>((_resolve, reject) => {
+          // Never resolve on its own; only the core deadline can abort it.
+          signal.addEventListener("abort", () => {
+            abortedFromSignal = true;
+            reject(new Error("aborted"));
+          });
+        }),
+    });
+
+    // Shrink the core deadline so the test does not wait the full 5s.
+    (baseline as unknown as { rerankDeadlineMs: number }).rerankDeadlineMs = 25;
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    expect(abortedFromSignal).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+    expect(custom.rerank?.lastError).toContain("deadline");
+  });
+
+  it("(e) invalid ref: rejected, pre-rerank order, degraded state", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+
+    seedReranker({
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> => [
+        // Out-of-range ref must be rejected as a failure.
+        { ref: candidates.length + 5, score: 0.9 },
+      ],
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+  });
+
+  it("(g) score out of range (>1): pre-rerank order, degraded state, no rerankScore applied", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+    expect(preOrder.length).toBeGreaterThan(0);
+
+    seedReranker({
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> =>
+        // score of 2 is outside [0,1] — must be rejected
+        candidates.map((c) => ({ ref: c.ref, score: 2 })),
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+    expect(custom.rerank?.failureCount).toBe(1);
+    expect(custom.rerank?.lastError).toBeTruthy();
+  });
+
+  it("(h) score out of range (<0): pre-rerank order, degraded state", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+
+    seedReranker({
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> =>
+        // score of -1 is outside [0,1] — must be rejected
+        candidates.map((c) => ({ ref: c.ref, score: -1 })),
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+  });
+
+  it("(i) NaN score: pre-rerank order, degraded state", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+
+    seedReranker({
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> =>
+        // NaN score must be rejected as non-finite
+        candidates.map((c) => ({ ref: c.ref, score: Number.NaN })),
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+  });
+
+  it("(j) Infinity score: pre-rerank order, degraded state", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+
+    seedReranker({
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> =>
+        // Infinity is non-finite — must be rejected
+        candidates.map((c) => ({ ref: c.ref, score: Infinity })),
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+  });
+
+  it("(k) incomplete scores (provider omits one ref): degraded state, pre-rerank order", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+    expect(preOrder.length).toBeGreaterThan(1);
+
+    seedReranker({
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> =>
+        // Return all but the last candidate — partial list must be rejected
+        candidates.slice(0, -1).map((c, i) => ({
+          ref: c.ref,
+          score: i / Math.max(1, candidates.length - 1),
+        })),
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    // Pre-rerank order must be preserved (not a partial reorder).
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    // No rerankScore applied since the response was rejected.
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("degraded");
+    expect(custom.rerank?.failureCount).toBe(1);
+  });
+
+  it("(f) reranker returns [] with non-empty candidates: pre-rerank order, degraded state, failureCount 1", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+    const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
+    expect(preOrder.length).toBeGreaterThan(0);
+
+    // Kill-switched or fail-open plugin returns [] without throwing.
+    seedReranker({
+      rerank: async (): Promise<MemoryRerankScore[]> => [],
+    });
+
+    const results = await baseline.search("alpha", { maxResults: 10 });
+    // Pre-rerank order preserved (fail-open).
+    expect(results.map((r) => r.path)).toStrictEqual(preOrder);
+    // No rerankScore applied since the provider returned no scores.
+    expect(results.every((r) => r.rerankScore === undefined)).toBe(true);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    // A registered-but-not-reranking provider must report "degraded", not "active".
+    expect(custom.rerank?.state).toBe("degraded");
+    expect(custom.rerank?.failureCount).toBe(1);
+    expect(custom.rerank?.lastError).toBeTruthy();
+  });
+
+  it("(g) empty candidate pool: reranker is not invoked and rerank state is left untouched", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+
+    let invocations = 0;
+    seedReranker({
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> => {
+        invocations += 1;
+        return candidates.map((c) => ({ ref: c.ref, score: 0.5 }));
+      },
+    });
+
+    // Matching query: the reranker runs and state becomes "active".
+    const hits = await baseline.search("alpha", { maxResults: 10 });
+    expect(hits.length).toBeGreaterThan(0);
+    expect(invocations).toBe(1);
+    expect((baseline.status().custom as ManagerStatusCustom).rerank?.state).toBe("active");
+
+    // No-match query -> empty candidate pool: the reranker must NOT be invoked, and
+    // the prior state must be left untouched (no stale flip, no false "degraded").
+    const empty = await baseline.search("zzzznomatchqyx", { maxResults: 10 });
+    expect(empty.length).toBe(0);
+    expect(invocations).toBe(1);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("active");
+    expect(custom.rerank?.failureCount).toBe(0);
+  });
+});

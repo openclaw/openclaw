@@ -13,6 +13,33 @@ export type MemorySearchResult = {
   snippet: string;
   source: MemorySource;
   citation?: string;
+  /** Cross-encoder relevance in [0,1]; kept separate from fusion `score` so minScore/telemetry stay on the fusion scale. */
+  rerankScore?: number;
+};
+
+export type MemoryRerankCandidate = {
+  /** Core-assigned dense index into the candidate pool; opaque, stable for the call. */
+  ref: number;
+  /** The passage text a cross-encoder scores. */
+  snippet: string;
+  /** Provided for rerankers that documentably special-case source; otherwise ignored. */
+  source: MemorySource;
+};
+
+export type MemoryRerankScore = {
+  /** MUST be one of the supplied candidate refs; unknown/duplicate refs are rejected by core. */
+  ref: number;
+  /** Normalized relevance in [0,1]; higher = more relevant. */
+  score: number;
+};
+
+export type MemoryRerankProvider = {
+  rerank(params: {
+    query: string;
+    candidates: ReadonlyArray<MemoryRerankCandidate>;
+    /** Core-owned deadline. Provider MUST forward it to its transport and reject promptly on abort. */
+    signal: AbortSignal;
+  }): Promise<ReadonlyArray<MemoryRerankScore>>;
 };
 
 /** Cached/probed embedding availability status. */
@@ -38,6 +65,7 @@ export type MemorySearchRuntimeDebug = {
   configuredMode?: string;
   effectiveMode?: string;
   fallback?: string;
+  rerank?: "active" | "degraded" | "disabled";
 };
 
 /** Result of reading a memory file, optionally paginated/truncated. */

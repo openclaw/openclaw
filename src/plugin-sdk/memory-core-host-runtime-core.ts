@@ -40,13 +40,20 @@ export type {
   MemoryPluginPublicArtifactsProvider,
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
+  MemoryRerankProviderRegistration,
 } from "../plugins/memory-state.js";
+export type {
+  MemoryRerankCandidate,
+  MemoryRerankProvider,
+  MemoryRerankScore,
+} from "../../packages/memory-host-sdk/src/host/types.js";
 export {
   buildMemoryPromptSection as buildActiveMemoryPromptSection,
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
+  listMemoryRerankProviders,
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
 } from "../plugins/memory-state.js";

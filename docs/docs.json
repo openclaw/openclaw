@@ -1256,7 +1256,8 @@
                   "plugins/cli-backend-plugins",
                   "plugins/hooks",
                   "plugins/plugin-permission-requests",
-                  "plugins/adding-capabilities"
+                  "plugins/adding-capabilities",
+                  "plugins/memory-reranker"
                 ]
               },
               {

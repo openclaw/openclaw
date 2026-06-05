@@ -1,0 +1,182 @@
+---
+summary: "Plugin-author guide for implementing and registering a memory rerank provider on the builtin sqlite-vec backend"
+read_when:
+  - You are building a cross-encoder or reranker plugin for OpenClaw memory search
+  - You want to reorder memory candidates by relevance before MMR diversification
+  - You need to understand the MemoryRerankProvider contract
+title: "Memory reranker"
+sidebarTitle: "Memory reranker"
+---
+
+A memory rerank provider lets a plugin reorder the wide pre-MMR candidate pool
+produced by the builtin sqlite-vec hybrid backend by cross-encoder relevance,
+before the core applies MMR diversification, score filtering, and result trimming.
+
+This seam is opt-in: no config is needed. Registration alone activates it.
+
+<Note>
+The rerank seam applies **only** to the builtin sqlite-vec backend. The QMD
+backend has its own server-side reranking and does not call this hook.
+</Note>
+
+## The `MemoryRerankProvider` contract
+
+Import the types from `openclaw/plugin-sdk/memory-core-host-runtime-core`:
+
+```typescript
+import type {
+  MemoryRerankProvider,
+  MemoryRerankCandidate,
+  MemoryRerankScore,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+```
+
+```typescript
+interface MemoryRerankCandidate {
+  ref: number; // core-assigned index; stable within a single search call
+  snippet: string; // text excerpt for the cross-encoder
+  source: "memory" | "sessions"; // the candidate's memory source (a MemorySource)
+}
+
+interface MemoryRerankScore {
+  ref: number; // matches a candidate ref
+  score: number; // normalized relevance in [0, 1]; higher = more relevant
+}
+
+interface MemoryRerankProvider {
+  rerank(params: {
+    query: string;
+    candidates: MemoryRerankCandidate[];
+    signal: AbortSignal;
+  }): Promise<MemoryRerankScore[]>;
+}
+```
+
+**Key constraints:**
+
+- Return **exactly one** `MemoryRerankScore` per input `ref` — complete coverage
+  is required. Core rejects responses that drop, duplicate, or add refs.
+- Every score must be a finite number in `[0, 1]`. `NaN`, `Infinity`, values
+  below `0`, and values above `1` are all rejected. Higher values are more
+  relevant.
+- Partial responses (fewer scores than candidates) are treated as invalid and
+  cause core to fall back to the pre-rerank order with `debug.rerank: "degraded"`.
+  Core does not append omitted refs after a partial result.
+- The provider must return scored refs, not full result objects. It cannot modify
+  candidate content or inject new results.
+- Core owns the deadline and passes an `AbortSignal`. Honor it.
+
+## Registering a provider
+
+Call `api.registerMemoryRerankProvider(provider)` inside your plugin's
+`register(api)` function:
+
+```typescript
+import type { MemoryRerankProvider } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+
+const myReranker: MemoryRerankProvider = {
+  async rerank({ query, candidates, signal }) {
+    // Call your cross-encoder here.
+    // Return scores in [0, 1] for every candidate ref.
+    return candidates.map((c) => ({ ref: c.ref, score: 0.5 }));
+  },
+};
+
+export default definePluginEntry({
+  // ...
+  plugin: {
+    register(api) {
+      api.registerMemoryRerankProvider(myReranker);
+    },
+  },
+});
+```
+
+## Manifest contract
+
+A plugin that registers a memory rerank provider **must** declare
+`memoryRerankProviders` in its `openclaw.plugin.json`. This follows the same
+pattern as other provider contracts:
+
+```json
+{
+  "id": "my-reranker",
+  "contracts": {
+    "memoryRerankProviders": ["my-reranker"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
+```
+
+See [Plugin manifest](/plugins/manifest) for the full `contracts` reference.
+
+## Behavior and semantics
+
+**Exclusive slot.** Only one plugin may register a memory rerank provider at a
+time. If a second plugin attempts to register, the registration is rejected with
+an error and the first provider remains active.
+
+**Before MMR.** The reranker runs on the full pre-MMR candidate pool, not the
+final result set. After reranking, core applies MMR diversification using the
+reranked scores, then applies `minScore` filtering and result trimming.
+
+**Fail-open.** If the provider returns an error or the core-owned deadline
+expires, the search continues with the original pre-rerank candidate order.
+No search results are lost due to reranker failure.
+
+**No core config.** There is no `openclaw.json` toggle for the reranker. The
+seam is active when a plugin has registered a provider and inactive otherwise.
+To disable the reranker at the operator level, disable or uninstall the plugin
+that registered it, or add a kill-switch inside the plugin's own config.
+
+## Result ordering
+
+The reranker scores the full pre-MMR candidate pool. After scores are applied,
+core runs MMR diversification using those scores, then applies `minScore`
+filtering and result trimming. The final output order is **rerank then MMR
+composed**: the highest-relevance candidate leads, but MMR may reorder
+near-tied tail entries to promote diversity. The output is therefore **not** a
+pure `rerankScore`-descending list — tail reordering is intentional.
+
+## Observing rerank state
+
+The rerank state is visible in two places:
+
+**`status().custom.rerank`** — the plugin's own status output exposes an object
+`{ state, failureCount, lastError }`, where `.state` is one of three values:
+
+- `"disabled"` — no reranker is registered.
+- `"active"` — a reranker is registered and applied scores during the most recent
+  search that had candidates. (For strict per-search state, read `debug.rerank`.)
+- `"degraded"` — a reranker is registered but its response was unusable. This
+  covers: provider timeout, thrown error, empty score list, incomplete coverage
+  (fewer scores than candidates), duplicate refs, out-of-range refs, and
+  non-finite or out-of-`[0,1]` scores. Core falls back to the pre-rerank order
+  and no `rerankScore` fields are set. A registered-but-not-working reranker
+  shows `"degraded"`, not a false `"active"`.
+
+**Memory-search debug block** — when memory-search debug output is enabled, the
+`debug.rerank` field carries the rerank state for that search (`"active"`,
+`"degraded"`, or `"disabled"`), and is absent when the search had no candidates to
+rerank. It carries state only — no timing information.
+
+The `memory_search` tool preserves the manager's final result order; it does not
+re-rank at the tool boundary. That final order is the manager's composed
+rerank-then-MMR output: the highest-relevance candidate leads, but MMR may reorder
+near-tied tail entries for diversity, so the output is not a pure
+`rerankScore`-descending list (and with no reranker it stays fusion-`score`
+descending). For `corpus=all`, the memory and supplement corpora are balanced by
+per-corpus selection first, then backfilled in corpus order — each corpus keeps its
+internal order, and the two scales (memory rerank/fusion vs supplement raw `score`)
+are never compared across corpora.
+
+## Related
+
+- [Plugin SDK subpaths](/plugins/sdk-subpaths) — subpath catalog including `memory-core-host-runtime-core`
+- [Plugin SDK runtime helpers](/plugins/sdk-runtime) — `api.runtime` reference
+- [Plugin manifest](/plugins/manifest) — `contracts` field reference
+- [Memory LanceDB](/plugins/memory-lancedb) — example memory plugin

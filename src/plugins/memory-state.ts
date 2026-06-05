@@ -1,7 +1,7 @@
 /** Registry state for plugin memory runtimes, prompt supplements, and flush planning. */
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import type { MemoryRerankProvider, MemorySearchManager } from "../memory-host-sdk/host/types.js";
 
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
@@ -58,6 +58,11 @@ export type MemoryCorpusSupplement = {
 export type MemoryCorpusSupplementRegistration = {
   pluginId: string;
   supplement: MemoryCorpusSupplement;
+};
+
+export type MemoryRerankProviderRegistration = {
+  pluginId: string;
+  provider: MemoryRerankProvider;
 };
 
 export type MemoryPromptSupplementRegistration = {
@@ -145,6 +150,7 @@ type MemoryPluginState = {
   capability?: MemoryPluginCapabilityRegistration;
   corpusSupplements: MemoryCorpusSupplementRegistration[];
   promptSupplements: MemoryPromptSupplementRegistration[];
+  rerankProvider?: MemoryRerankProviderRegistration;
 };
 
 const memoryPluginState: MemoryPluginState = {
@@ -203,6 +209,23 @@ export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistr
 
 export function listMemoryCorpusSupplements(): MemoryCorpusSupplementRegistration[] {
   return [...memoryPluginState.corpusSupplements];
+}
+
+// Only one reranker may be active at a time; a second distinct owner is an error not silent last-wins.
+export function registerMemoryRerankProvider(
+  pluginId: string,
+  provider: MemoryRerankProvider,
+): { ok: true } | { ok: false; existingOwner: string } {
+  const existing = memoryPluginState.rerankProvider;
+  if (existing !== undefined && existing.pluginId !== pluginId) {
+    return { ok: false, existingOwner: existing.pluginId };
+  }
+  memoryPluginState.rerankProvider = { pluginId, provider };
+  return { ok: true };
+}
+
+export function listMemoryRerankProviders(): ReadonlyArray<MemoryRerankProviderRegistration> {
+  return memoryPluginState.rerankProvider ? [memoryPluginState.rerankProvider] : [];
 }
 
 /** @deprecated Use registerMemoryCapability(pluginId, { promptBuilder }) instead. */
@@ -348,12 +371,14 @@ export function restoreMemoryPluginState(state: MemoryPluginState): void {
     : undefined;
   memoryPluginState.corpusSupplements = [...state.corpusSupplements];
   memoryPluginState.promptSupplements = [...state.promptSupplements];
+  memoryPluginState.rerankProvider = state.rerankProvider;
 }
 
 export function clearMemoryPluginState(): void {
   memoryPluginState.capability = undefined;
   memoryPluginState.corpusSupplements = [];
   memoryPluginState.promptSupplements = [];
+  memoryPluginState.rerankProvider = undefined;
 }
 
 export const resetMemoryPluginState = clearMemoryPluginState;

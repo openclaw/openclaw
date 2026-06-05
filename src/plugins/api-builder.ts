@@ -80,6 +80,7 @@ export type BuildPluginApiParams = {
       | "registerMemoryPromptSection"
       | "registerMemoryPromptSupplement"
       | "registerMemoryCorpusSupplement"
+      | "registerMemoryRerankProvider"
       | "registerMemoryFlushPlan"
       | "registerMemoryRuntime"
       | "registerMemoryEmbeddingProvider"
@@ -173,6 +174,8 @@ const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSe
 const noopRegisterMemoryPromptSupplement: OpenClawPluginApi["registerMemoryPromptSupplement"] =
   () => {};
 const noopRegisterMemoryCorpusSupplement: OpenClawPluginApi["registerMemoryCorpusSupplement"] =
+  () => {};
+const noopRegisterMemoryRerankProvider: OpenClawPluginApi["registerMemoryRerankProvider"] =
   () => {};
 const noopRegisterMemoryFlushPlan: OpenClawPluginApi["registerMemoryFlushPlan"] = () => {};
 const noopRegisterMemoryRuntime: OpenClawPluginApi["registerMemoryRuntime"] = () => {};
@@ -284,6 +287,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerMemoryPromptSupplement ?? noopRegisterMemoryPromptSupplement,
     registerMemoryCorpusSupplement:
       handlers.registerMemoryCorpusSupplement ?? noopRegisterMemoryCorpusSupplement,
+    registerMemoryRerankProvider:
+      handlers.registerMemoryRerankProvider ?? noopRegisterMemoryRerankProvider,
     registerMemoryFlushPlan: handlers.registerMemoryFlushPlan ?? noopRegisterMemoryFlushPlan,
     registerMemoryRuntime: handlers.registerMemoryRuntime ?? noopRegisterMemoryRuntime,
     registerMemoryEmbeddingProvider:
