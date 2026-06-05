@@ -1855,9 +1855,7 @@ describe("message tool description", () => {
       currentChannelProvider: "signal",
     });
 
-    expect(tool.description).toContain(
-      "Supports actions: delete, edit, react, send, topic-create.",
-    );
+    expect(tool.description).toContain("Supports actions: delete, edit, react, send.");
     expect(tool.description).not.toContain("Current channel");
     expect(tool.description).not.toContain("Other configured channels");
     expect(tool.description).not.toContain("telegram (");
