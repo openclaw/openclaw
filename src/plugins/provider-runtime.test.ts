@@ -86,6 +86,7 @@ let resolveProviderUsageAuthWithPlugin: typeof import("./provider-runtime.js").r
 let resolveProviderXHighThinking: typeof import("./provider-runtime.js").resolveProviderXHighThinking;
 let normalizeProviderToolSchemasWithPlugin: typeof import("./provider-runtime.js").normalizeProviderToolSchemasWithPlugin;
 let inspectProviderToolSchemasWithPlugin: typeof import("./provider-runtime.js").inspectProviderToolSchemasWithPlugin;
+let resolveProviderToolSchemaNormalizeCacheKey: typeof import("./provider-runtime.js").resolveProviderToolSchemaNormalizeCacheKey;
 let normalizeProviderResolvedModelWithPlugin: typeof import("./provider-runtime.js").normalizeProviderResolvedModelWithPlugin;
 let prepareProviderDynamicModel: typeof import("./provider-runtime.js").prepareProviderDynamicModel;
 let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").prepareProviderRuntimeAuth;
@@ -350,6 +351,7 @@ describe("provider-runtime", () => {
       resolveProviderXHighThinking,
       normalizeProviderToolSchemasWithPlugin,
       inspectProviderToolSchemasWithPlugin,
+      resolveProviderToolSchemaNormalizeCacheKey,
       normalizeProviderResolvedModelWithPlugin,
       prepareProviderDynamicModel,
       prepareProviderRuntimeAuth,
@@ -1866,6 +1868,15 @@ describe("provider-runtime", () => {
     const normalizeToolSchemas = vi.fn(
       ({ tools }: Pick<ProviderNormalizeToolSchemasContext, "tools">): AnyAgentTool[] => tools,
     );
+    const resolveToolSchemaCacheKey = vi.fn(
+      ({
+        provider,
+        workspaceDir,
+      }: Pick<ProviderNormalizeToolSchemasContext, "provider" | "workspaceDir">) => ({
+        provider,
+        workspaceDir,
+      }),
+    );
     const inspectToolSchemas = vi.fn(() => [] as { toolName: string; violations: string[] }[]);
     const resolveReasoningOutputMode = vi.fn(() => "tagged" as const);
     const resolveSyntheticAuth = vi.fn(() => ({
@@ -1922,6 +1933,7 @@ describe("provider-runtime", () => {
           sanitizeReplayHistory,
           validateReplayTurns,
           normalizeToolSchemas,
+          resolveToolSchemaCacheKey,
           inspectToolSchemas,
           resolveReasoningOutputMode,
           prepareExtraParams: ({ extraParams }) => ({
@@ -2234,6 +2246,18 @@ describe("provider-runtime", () => {
     ).toEqual([DEMO_TOOL]);
 
     expect(
+      resolveProviderToolSchemaNormalizeCacheKey({
+        provider: DEMO_PROVIDER_ID,
+        workspaceDir: "/tmp/demo-workspace",
+        context: createDemoResolvedModelContext({
+          workspaceDir: "/tmp/demo-workspace",
+          modelApi: MODEL.api,
+          tools: [DEMO_TOOL],
+        }),
+      }),
+    ).toContain('"hookCacheKey":{"provider":"demo","workspaceDir":"/tmp/demo-workspace"}');
+
+    expect(
       inspectProviderToolSchemasWithPlugin({
         provider: DEMO_PROVIDER_ID,
         context: createDemoResolvedModelContext({
@@ -2405,6 +2429,7 @@ describe("provider-runtime", () => {
       sanitizeReplayHistory,
       validateReplayTurns,
       normalizeToolSchemas,
+      resolveToolSchemaCacheKey,
       inspectToolSchemas,
       resolveReasoningOutputMode,
       refreshOAuth,
