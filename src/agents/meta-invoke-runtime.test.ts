@@ -124,7 +124,7 @@ function createStoreMock(): MetaRunStoreMock {
 }
 
 describe("createAgentMetaInvokePlanRunner", () => {
-  it("runs tool_call steps through the lifecycle executor and final agent tool ref", async () => {
+  it("stores only visible text and safe metadata from generic tool_call results", async () => {
     const execute = vi.fn(async () => {
       throw new Error("direct execute should not run");
     });
@@ -134,6 +134,8 @@ describe("createAgentMetaInvokePlanRunner", () => {
     const executeTool = vi.fn(async () =>
       textResult("read contents", {
         status: "ok",
+        token: "sk-private-token",
+        nested: { secret: "hidden diagnostic" },
       }),
     );
     const toolExecutorRef: MetaInvokeToolExecutorRef = {
@@ -154,8 +156,20 @@ describe("createAgentMetaInvokePlanRunner", () => {
           },
           onFailure: { kind: "fail" },
         },
+        {
+          id: "echo",
+          kind: "tool_call",
+          dependsOn: ["read"],
+          toolName: "read",
+          args: {
+            token: "{{read.result.details.token}}",
+            status: "{{read.result.details.status}}",
+            text: "{{read.text}}",
+          },
+          onFailure: { kind: "fail" },
+        },
       ],
-      finalTextMode: { kind: "step", stepId: "read" },
+      finalTextMode: { kind: "raw" },
     } satisfies MetaPlan;
 
     const result = await createAgentMetaInvokePlanRunner({ toolsRef, toolExecutorRef })({
@@ -165,6 +179,7 @@ describe("createAgentMetaInvokePlanRunner", () => {
         path: "notes.txt",
       },
     });
+    const readOutput = result.outputs.read;
 
     expect(execute).not.toHaveBeenCalled();
     expect(executeTool).toHaveBeenCalledWith({
@@ -176,20 +191,26 @@ describe("createAgentMetaInvokePlanRunner", () => {
       signal: undefined,
       onUpdate: undefined,
     });
-    expect(result).toMatchObject({
-      status: "succeeded",
-      finalText: "read contents",
-      outputs: {
-        read: {
+    expect(executeTool).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: {
+          token: "",
+          status: "",
           text: "read contents",
-          result: {
-            details: {
-              status: "ok",
-            },
-          },
         },
+      }),
+    );
+    expect(readOutput).toEqual({
+      text: "read contents",
+      result: {
+        text: "read contents",
       },
+      toolName: "read",
     });
+    expect(result.finalText).not.toContain("sk-private-token");
+    expect(result.finalText).not.toContain("hidden diagnostic");
+    expect(JSON.stringify(result.outputs)).not.toContain("sk-private-token");
+    expect(JSON.stringify(result.outputs)).not.toContain("hidden diagnostic");
   });
 
   it("fails tool_call steps when the lifecycle executor is unavailable", async () => {
@@ -818,6 +839,7 @@ describe("createAgentMetaInvokePlanRunner", () => {
         skillName: "demo skill",
         skillKey: "demo-skill",
         scanState: "clean",
+        token: "sk-workshop-private",
       }),
     );
     const plan = {
@@ -863,7 +885,22 @@ describe("createAgentMetaInvokePlanRunner", () => {
     expect(result).toMatchObject({
       status: "succeeded",
       finalText: "Created skill proposal proposal-1.",
+      outputs: {
+        proposal: {
+          result: {
+            details: {
+              id: "proposal-1",
+              status: "pending",
+              kind: "create",
+              skillName: "demo skill",
+              skillKey: "demo-skill",
+              scanState: "clean",
+            },
+          },
+        },
+      },
     });
+    expect(JSON.stringify(result.outputs)).not.toContain("sk-workshop-private");
     expect(store.recordEvidence).toHaveBeenCalledWith({
       evidenceId: expect.stringMatching(/^gate-/),
       runId,
@@ -911,6 +948,7 @@ describe("createAgentMetaInvokePlanRunner", () => {
           name: "demo skill",
           description: "Demo skill",
           proposalContent: "# Demo Skill\n",
+          token: "sk-prepare-private",
         });
       }
       return textResult("Created skill proposal proposal-1.", {
@@ -920,6 +958,7 @@ describe("createAgentMetaInvokePlanRunner", () => {
         skillName: "demo skill",
         skillKey: "demo-skill",
         scanState: "clean",
+        token: "sk-workshop-private",
       });
     });
     const plan = {
@@ -975,6 +1014,29 @@ describe("createAgentMetaInvokePlanRunner", () => {
 
     const runId = store.recordRunStarted.mock.calls[0]?.[0].runId;
     expect(result.status).toBe("succeeded");
+    expect(executeTool).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: {
+          action: "create",
+          name: "demo skill",
+          description: "Demo skill",
+          proposal_content: "# Demo Skill\n",
+        },
+      }),
+    );
+    expect(result.outputs.prepare).toMatchObject({
+      result: {
+        details: {
+          gatesOk: true,
+          workshopAction: "create",
+          name: "demo skill",
+          description: "Demo skill",
+          proposalContent: "# Demo Skill\n",
+        },
+      },
+    });
+    expect(JSON.stringify(result.outputs)).not.toContain("sk-prepare-private");
+    expect(JSON.stringify(result.outputs)).not.toContain("sk-workshop-private");
     expect(store.recordEvidence).toHaveBeenCalledWith({
       evidenceId: expect.stringMatching(/^gate-/),
       runId,

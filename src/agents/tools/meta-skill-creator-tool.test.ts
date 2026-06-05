@@ -458,19 +458,7 @@ describe("meta_skill_creator_prepare tool", () => {
       status: "succeeded",
       output: {
         result: {
-          details: {
-            messages: [
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "text",
-                    text: "Earlier we agreed release notes need QA owner signoff.",
-                  },
-                ],
-              },
-            ],
-          },
+          text: expect.stringContaining("Earlier we agreed release notes need QA owner signoff."),
         },
       },
     });
@@ -669,7 +657,10 @@ function createSessionsHistoryStubTool(messages: unknown[]): AnyAgentTool {
       content: [
         {
           type: "text" as const,
-          text: `Read session history for ${(args as { sessionKey?: string }).sessionKey ?? "unknown"}.`,
+          text: JSON.stringify({
+            sessionKey: (args as { sessionKey?: string }).sessionKey ?? "unknown",
+            messages,
+          }),
         },
       ],
       details: {

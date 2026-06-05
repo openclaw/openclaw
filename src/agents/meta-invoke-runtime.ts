@@ -22,6 +22,43 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 const BLOCKED_META_TOOL_CALL_TARGET_NAMES = new Set<string>(META_BLOCKED_TOOL_CALL_TARGET_NAMES);
 const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
+const META_SKILL_CREATOR_PREPARE_TOOL_NAME = "meta_skill_creator_prepare";
+
+const META_TOOL_RESULT_DETAIL_ALLOWLISTS: Record<string, ReadonlySet<string>> = {
+  [META_SKILL_CREATOR_PREPARE_TOOL_NAME]: new Set([
+    "name",
+    "description",
+    "workflow",
+    "skillKey",
+    "proposalContent",
+    "goal",
+    "evidence",
+    "gatesOk",
+    "gates",
+    "workshopAction",
+    "workshopSkillName",
+    "workshopProposalId",
+    "trigger",
+    "audience",
+    "requiredTools",
+    "supportFiles",
+    "priorContext",
+    "harvestedContext",
+    "riskProfile",
+    "representativeInvocation",
+    "nextAction",
+  ]),
+  [SKILL_WORKSHOP_TOOL_NAME]: new Set([
+    "id",
+    "status",
+    "kind",
+    "skillName",
+    "skillKey",
+    "supportFileCount",
+    "scanState",
+    "proposedVersion",
+  ]),
+};
 
 export type MetaInvokeToolRef = {
   current: readonly AnyAgentTool[];
@@ -85,6 +122,58 @@ function readToolText(result: AgentToolResult<unknown>): string | undefined {
     .map((block) => block.text)
     .join("\n");
   return text || undefined;
+}
+
+function toMetaSafeJsonValue(value: unknown): unknown {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(toMetaSafeJsonValue);
+  }
+  if (isPlainRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, toMetaSafeJsonValue(entry)]),
+    );
+  }
+  return undefined;
+}
+
+function buildMetaVisibleToolDetails(params: {
+  toolName: string;
+  result: AgentToolResult<unknown>;
+}): Record<string, unknown> | undefined {
+  const allowlist = META_TOOL_RESULT_DETAIL_ALLOWLISTS[params.toolName];
+  if (!allowlist || !isPlainRecord(params.result.details)) {
+    return undefined;
+  }
+  const details = Object.fromEntries(
+    Object.entries(params.result.details)
+      .filter(([key]) => allowlist.has(key))
+      .map(([key, value]) => [key, toMetaSafeJsonValue(value)])
+      .filter((entry): entry is [string, unknown] => entry[1] !== undefined),
+  );
+  return Object.keys(details).length > 0 ? details : undefined;
+}
+
+function buildMetaVisibleToolResult(params: {
+  toolName: string;
+  result: AgentToolResult<unknown>;
+  text?: string;
+}): Record<string, unknown> {
+  const details = buildMetaVisibleToolDetails({
+    toolName: params.toolName,
+    result: params.result,
+  });
+  return {
+    ...(params.text ? { text: params.text } : {}),
+    ...(details ? { details } : {}),
+  };
 }
 
 function readAssistantText(message: AssistantMessage): string {
@@ -598,7 +687,7 @@ export function createAgentMetaInvokePlanRunner(options: {
         });
         const text = readToolText(result);
         return {
-          result,
+          result: buildMetaVisibleToolResult({ toolName, result, ...(text ? { text } : {}) }),
           toolName,
           ...(text ? { text } : {}),
         };

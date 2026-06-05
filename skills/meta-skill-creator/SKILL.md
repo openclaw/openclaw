@@ -41,7 +41,7 @@ composition:
               "required_tools": "{{collect.required_tools}}",
               "support_files": "{{collect.support_files}}",
               "prior_context": "{{collect.prior_context}}",
-              "harvested_context": "{{harvest_context.result.details.messages}}",
+              "harvested_context": "{{harvest_context.result.text}}",
               "risk_profile": "{{collect.risk_profile}}",
               "representative_invocation": "{{collect.representative_invocation}}",
               "require_runtime_e2e": "{{collect.require_runtime_e2e}}",
