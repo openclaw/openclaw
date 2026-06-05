@@ -2276,6 +2276,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                           : undefined,
                         ...buildPreviewToolProgressReplyOptions(),
                         onModelSelected,
+                        // Matrix supports reasoning blocks delivered as m.notice events.
+                        supportsReasoningBlocks: true,
                       },
                     });
                   } finally {

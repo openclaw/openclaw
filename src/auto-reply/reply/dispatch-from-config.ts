@@ -2684,7 +2684,8 @@ export async function dispatchReplyFromConfig(
                 // Suppress reasoning payloads — channels using this generic dispatch
                 // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
                 // Telegram has its own dispatch path that handles reasoning splitting.
-                if (payload.isReasoning === true) {
+                // Matrix supports reasoning as m.notice via supportsReasoningBlocks opt-in.
+                if (payload.isReasoning === true && !params.replyOptions?.supportsReasoningBlocks) {
                   return;
                 }
                 // Accumulate block text for TTS generation after streaming.
@@ -2838,7 +2839,8 @@ export async function dispatchReplyFromConfig(
       throwIfDispatchOperationAborted();
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
-      if (reply.isReasoning === true) {
+      // Matrix supports reasoning as m.notice via supportsReasoningBlocks opt-in.
+      if (reply.isReasoning === true && !params.replyOptions?.supportsReasoningBlocks) {
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {

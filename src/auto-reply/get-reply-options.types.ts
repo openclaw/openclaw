@@ -215,4 +215,7 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Channel supports reasoning/thinking blocks. Generic dispatch suppresses reasoning
+   *  by default; channels with a reasoning lane (e.g. Matrix as m.notice) opt in. */
+  supportsReasoningBlocks?: boolean;
 };
