@@ -258,6 +258,17 @@ describe("createMusicGenerateTool", () => {
     ).toBeNull();
   });
 
+  it("skips registration availability checks when the caller already resolved them", () => {
+    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
+
+    expect(
+      createMusicGenerateTool({
+        config: asConfig({}),
+        availabilityResolved: true,
+      })?.name,
+    ).toBe("music_generate");
+  });
+
   it("registers when music-generation config is present", () => {
     expectMusicGenerateTool(
       createMusicGenerateTool({
