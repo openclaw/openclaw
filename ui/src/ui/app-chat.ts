@@ -1,5 +1,6 @@
 // Control UI module implements app chat behavior.
 import type { CommandsListResult } from "../../../packages/gateway-protocol/src/index.js";
+import { isNonTerminalAgentRunStatus } from "../../../src/shared/agent-run-status.js";
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
@@ -1084,7 +1085,7 @@ async function sendQueuedChatMessage(
           },
         );
         void loadChatHistory(host as unknown as ChatState);
-      } else {
+      } else if (isNonTerminalAgentRunStatus(ack.status)) {
         const hasAlreadyAdoptedRunStream =
           host.chatRunId === ack.runId && typeof host.chatStream === "string";
         host.chatRunId = ack.runId;
@@ -1097,6 +1098,9 @@ async function sendQueuedChatMessage(
             startedAt;
         }
       }
+      // Terminal non-"ok" acks (timeout = abort, error) are NOT adopted here:
+      // broadcastChatAborted / the error broadcast already drove the lifecycle,
+      // so re-adopting would resurrect a finished run. Issue #84176.
     }
     if (prepared.refreshSessions) {
       const refreshTarget = {

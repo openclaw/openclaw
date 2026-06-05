@@ -1,3 +1,4 @@
+import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 // Control UI controller manages chat gateway state.
 import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
 import {
@@ -864,7 +865,7 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
     : undefined;
 }
 
-export type ChatSendAckStatus = "started" | "in_flight" | "ok";
+export type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
 
 export type ChatSendAckServerTiming = {
   receivedToAckMs?: number;
@@ -909,7 +910,13 @@ function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSend
   const serverTiming = normalizeChatSendAckServerTiming(record.serverTiming);
   return {
     runId,
-    status: status === "in_flight" || status === "ok" ? status : "started",
+    // Preserve terminal statuses verbatim (timeout = abort, error) so the
+    // adopt-vs-clear gate can distinguish a live run from a finished one; only
+    // unknown statuses fall back to "started". Issue #84176.
+    status:
+      status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
+        ? status
+        : "started",
     ...(serverTiming ? { serverTiming } : {}),
   };
 }
@@ -1108,9 +1115,12 @@ export async function sendChatMessage(
           armLocalTerminalReconcile: true,
         },
       );
-    } else {
+    } else if (isNonTerminalAgentRunStatus(ack.status)) {
       state.chatRunId = ack.runId;
     }
+    // Terminal non-"ok" acks (timeout = abort, error) are not adopted: the
+    // abort/error broadcast already drove the lifecycle, so re-adopting would
+    // resurrect a finished run. Issue #84176.
     return ack.status === "ok" ? ack.runId : runId;
   } catch (err) {
     const error = formatConnectError(err);

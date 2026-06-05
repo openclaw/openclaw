@@ -3149,6 +3149,38 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       });
     };
+    // Minimal terminal ack for the chat.send caller: just runId + terminal
+    // status (parallel to the "started" ack). The richer abort detail
+    // (stopReason/summary/endedAt) lives in the dedupe entry for agent.wait.
+    const buildAbortedAckPayload = () => ({
+      runId: clientRunId,
+      status: "timeout" as const,
+    });
+    // Record a terminal abort outcome for this chat run, mirroring the
+    // {status:"timeout", stopReason} shape sessions.abort and the pre-registered
+    // agent abort already use. Reusing the existing terminal shape (not a new
+    // "aborted" status) keeps agent.wait/dedupe consumers consistent; a
+    // "rpc"/"stop" stopReason classifies as a sticky cancellation so a late
+    // "started"/"in_flight" write cannot resurrect the aborted run. Issue #84176.
+    const cacheChatSendAbortedDedupe = (stopReason: string) => {
+      const endedAt = Date.now();
+      setGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        key: `chat:${clientRunId}`,
+        entry: {
+          ts: endedAt,
+          ok: true,
+          payload: {
+            runId: clientRunId,
+            sessionKey,
+            status: "timeout" as const,
+            summary: "aborted",
+            stopReason,
+            endedAt,
+          },
+        },
+      });
+    };
     let chatSendDispatched = false;
     // Register before awaited attachment/model preprocessing so an immediate
     // chat.abort can find and cancel the run (issue #84176).
@@ -3255,9 +3287,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       } catch (err) {
         if (activeRunAbort.controller.signal.aborted) {
           // prestageMediaPathOffloads already cleaned offloaded refs and any
-          // partial sandbox staging before rethrow; only clear the abort handle.
-          const { ackPayload } = buildStartedAckPayload();
-          cacheChatSendDedupe(ackPayload);
+          // partial sandbox staging before rethrow. The run was aborted before
+          // dispatch, so report a terminal abort outcome (not a non-terminal
+          // "started" that resurrects the run / hangs agent.wait). Issue #84176.
+          const stopReason = activeRunAbort.entry?.abortStopReason ?? "rpc";
+          const ackPayload = buildAbortedAckPayload();
+          cacheChatSendAbortedDedupe(stopReason);
           activeRunAbort.cleanup();
           respond(true, ackPayload, undefined, { runId: clientRunId });
           return;
@@ -3296,8 +3331,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         mediaPathOffloadWorkspaceDir,
         logGateway: context.logGateway,
       });
-      const { ackPayload } = buildStartedAckPayload();
-      cacheChatSendDedupe(ackPayload);
+      // Aborted before dispatch — report a terminal abort outcome instead of a
+      // non-terminal "started" that resurrects the run / hangs agent.wait. #84176.
+      const stopReason = activeRunAbort.entry?.abortStopReason ?? "rpc";
+      const ackPayload = buildAbortedAckPayload();
+      cacheChatSendAbortedDedupe(stopReason);
       activeRunAbort.cleanup();
       respond(true, ackPayload, undefined, { runId: clientRunId });
       return;
@@ -4331,6 +4369,13 @@ export const chatHandlers: GatewayRequestHandlers = {
                     ...(returnedAgentError ? { error: returnedAgentError } : {}),
                   },
                 });
+              } else {
+                // The run was aborted post-dispatch. This guard previously skipped
+                // the dedupe write entirely, leaving chat:${runId} stuck at the
+                // non-terminal "started"/"in_flight" snapshot so agent.wait hangs
+                // until its own timeout. Record the terminal abort outcome so
+                // waiters resolve, consistent with the pre-dispatch path. #84176.
+                cacheChatSendAbortedDedupe(activeRunAbort.entry?.abortStopReason ?? "rpc");
               }
             },
             {

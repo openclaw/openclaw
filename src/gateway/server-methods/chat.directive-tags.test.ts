@@ -4525,7 +4525,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await send;
 
     expect(lastRespondCall(respond)?.[0]).toBe(true);
-    expect(lastRespondCall(respond)?.[1]).toEqual({ runId, status: "started" });
+    expect(lastRespondCall(respond)?.[1]).toEqual({ runId, status: "timeout" });
     expect(lastRespondCall(respond)?.[2]).toBeUndefined();
     expect(mockState.lastDispatchCtx).toBeUndefined();
     expect(context.logGateway.error).not.toHaveBeenCalled();
@@ -4609,7 +4609,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       await send;
 
       expect(lastRespondCall(respond)?.[0]).toBe(true);
-      expect(lastRespondCall(respond)?.[1]).toEqual({ runId, status: "started" });
+      expect(lastRespondCall(respond)?.[1]).toEqual({ runId, status: "timeout" });
       expect(lastRespondCall(respond)?.[2]).toBeUndefined();
       expect(mockState.lastDispatchCtx).toBeUndefined();
       expect(mockState.deleteMediaBufferCalls.map((c) => c.id).toSorted()).toEqual([
@@ -4705,7 +4705,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await send;
 
     expect(lastRespondCall(respond)?.[0]).toBe(true);
-    expect(lastRespondCall(respond)?.[1]).toEqual({ runId, status: "started" });
+    expect(lastRespondCall(respond)?.[1]).toEqual({ runId, status: "timeout" });
     expect(lastRespondCall(respond)?.[2]).toBeUndefined();
     expect(mockState.lastDispatchCtx).toBeUndefined();
     expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);

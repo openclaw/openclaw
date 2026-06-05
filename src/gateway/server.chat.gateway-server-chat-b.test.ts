@@ -901,7 +901,7 @@ describe("gateway server chat", () => {
         {
           id: "send",
           ok: true,
-          payload: { runId: "idem-abort-attachment-race", status: "started" },
+          payload: { runId: "idem-abort-attachment-race", status: "timeout" },
           error: undefined,
         },
       ]);
@@ -1067,16 +1067,20 @@ describe("gateway server chat", () => {
         {
           id: "send",
           ok: true,
-          payload: { runId: "idem-abort-attachment-retry", status: "started" },
+          payload: { runId: "idem-abort-attachment-retry", status: "timeout" },
           error: undefined,
         },
       ]);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(context.addChatRun).not.toHaveBeenCalled();
-      expect(context.dedupe.get("chat:idem-abort-attachment-retry")?.payload).toEqual({
-        runId: "idem-abort-attachment-retry",
-        status: "started",
-      });
+      expect(context.dedupe.get("chat:idem-abort-attachment-retry")?.payload).toEqual(
+        expect.objectContaining({
+          runId: "idem-abort-attachment-retry",
+          status: "timeout",
+          stopReason: "rpc",
+          endedAt: expect.any(Number),
+        }),
+      );
       expect(context.removeChatRun).toHaveBeenCalledWith(
         "idem-abort-attachment-retry",
         "idem-abort-attachment-retry",
@@ -1249,7 +1253,7 @@ describe("gateway server chat", () => {
       expect(responses[1]).toEqual({
         id: "send",
         ok: true,
-        payload: { runId, status: "started" },
+        payload: { runId, status: "timeout" },
         error: undefined,
       });
       expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
