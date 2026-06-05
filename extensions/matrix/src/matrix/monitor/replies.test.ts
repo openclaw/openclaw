@@ -197,6 +197,86 @@ describe("deliverMatrixReplies", () => {
     expect(sendOptions(0).cfg).toBe(cfg);
   });
 
+  it("delivers reasoning as m.notice when isReasoning=true", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        { text: "Thinking step 1...\nThinking step 2...", isReasoning: true },
+        { text: "Final visible answer" },
+      ],
+      roomId: "room:reasoning",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(2);
+    // Reasoning is sent as m.notice
+    expect(sendCall(0)[0]).toBe("room:reasoning");
+    expect(sendCall(0)[1]).toBe("Thinking step 1...\nThinking step 2...");
+    expect(sendOptions(0).msgtype).toBe("m.notice");
+    // Follow-up visible answer is sent normally as m.text
+    expect(sendCall(1)[0]).toBe("room:reasoning");
+    expect(sendCall(1)[1]).toBe("Final visible answer");
+    expect(sendOptions(1).msgtype).toBeUndefined();
+  });
+
+  it("delivers reasoning with thinking tags as m.notice when isReasoning=true", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "<thinking>I'm thinking deeply...</thinking>", isReasoning: true }],
+      roomId: "room:reasoning-tags",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[0]).toBe("room:reasoning-tags");
+    expect(sendCall(0)[1]).toBe("<thinking>I'm thinking deeply...</thinking>");
+    expect(sendOptions(0).msgtype).toBe("m.notice");
+  });
+
+  it("still suppresses reasoning-only text when isReasoning is not set", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "Reasoning:\n_hidden_" }, { text: "" }, { text: "Visible" }],
+      roomId: "room:suppress",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[1]).toBe("Visible");
+  });
+
+  it("reasoning notice respects replyToId when replyToMode=all", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        { text: "thinking...", isReasoning: true, replyToId: "user-msg-1" },
+        { text: "answer", replyToId: "user-msg-1" },
+      ],
+      roomId: "room:reply",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "all",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(2);
+    // Reasoning gets replyToId and m.notice
+    expect(sendOptions(0).msgtype).toBe("m.notice");
+    expect(sendOptions(0).replyToId).toBe("user-msg-1");
+    // Follow-up answer also gets replyToId as m.text
+    expect(sendOptions(1).msgtype).toBeUndefined();
+    expect(sendOptions(1).replyToId).toBe("user-msg-1");
+  });
+
   it("uses supplied cfg for chunking and send delivery without reloading runtime config", async () => {
     const explicitCfg = {
       channels: {

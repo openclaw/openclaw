@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { chunkMatrixText, sendMessageMatrix } from "../send.js";
+import { MsgType } from "../send/types.js";
 import type { MarkdownTableMode, OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
@@ -59,7 +60,10 @@ export async function deliverMatrixReplies(params: {
   let hasReplied = false;
   let deliveredAny = false;
   for (const reply of params.replies) {
-    if (reply.isReasoning === true || shouldSuppressReasoningReplyText(reply.text)) {
+    const isReasoning = reply.isReasoning === true;
+    if (isReasoning) {
+      logVerbose("matrix reasoning delivered as notice");
+    } else if (shouldSuppressReasoningReplyText(reply.text)) {
       logVerbose("matrix reply suppressed as reasoning-only");
       continue;
     }
@@ -103,6 +107,7 @@ export async function deliverMatrixReplies(params: {
           replyToId: replyToIdForReply,
           threadId: params.threadId,
           accountId: params.accountId,
+          ...(isReasoning ? { msgtype: MsgType.Notice } : {}),
         });
         deliveredAny = true;
         sentTextChunk = true;
