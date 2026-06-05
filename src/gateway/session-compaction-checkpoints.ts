@@ -1,3 +1,5 @@
+// Gateway session compaction checkpoint manager.
+// Captures, trims, forks, and cleans transcript checkpoints around compaction.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -132,6 +134,7 @@ function normalizeFileTimestampMs(value: number): number | undefined {
   return Math.max(0, Math.trunc(value));
 }
 
+/** Resolve the stored checkpoint reason from compaction trigger state. */
 export function resolveSessionCompactionCheckpointReason(params: {
   trigger?: "budget" | "overflow" | "manual";
   timedOut?: boolean;

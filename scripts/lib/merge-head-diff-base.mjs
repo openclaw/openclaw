@@ -1,8 +1,10 @@
+// Resolves the diff base for merge commits when first-parent comparison is requested.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_GIT_OUTPUT_MAX_BUFFER = 16 * 1024 * 1024;
 
+/** Resolve the git base ref to use when diffing a merge head. */
 export function resolveMergeHeadDiffBase({
   base,
   head = "HEAD",
