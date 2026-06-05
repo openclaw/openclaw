@@ -77,4 +77,12 @@ describe("disk-space helpers", () => {
     expect(formatDiskSpaceBytes(420 * 1024 * 1024)).toBe("420 MiB");
     expect(formatDiskSpaceBytes(1536 * 1024 * 1024)).toBe("1.5 GiB");
   });
+
+  it("promotes 1024 MiB boundary to GiB", () => {
+    // Values where unrounded mib is in [1023.5, 1024) round up to 1024 MiB
+    // and should be formatted as "1.0 GiB" instead of "1024 MiB"
+    expect(formatDiskSpaceBytes(Math.round(1023.5 * 1024 * 1024))).toBe("1.0 GiB");
+    expect(formatDiskSpaceBytes(Math.round(1023.7 * 1024 * 1024))).toBe("1.0 GiB");
+    expect(formatDiskSpaceBytes(Math.round(1023.9 * 1024 * 1024))).toBe("1.0 GiB");
+  });
 });
