@@ -1034,10 +1034,12 @@ async function rewriteLaunchAgentPlistForRestart({
   env,
   label,
   plistPath,
+  stdout,
 }: {
   env: GatewayServiceEnv;
   label: string;
   plistPath: string;
+  stdout?: NodeJS.WritableStream;
 }): Promise<boolean> {
   const existing = await readLaunchAgentProgramArgumentsFromFile(
     plistPath,
@@ -1059,6 +1061,7 @@ async function rewriteLaunchAgentPlistForRestart({
     label,
     programArguments: existing.programArguments,
     environment: existing.environment,
+    stdout,
   });
   const plist = buildLaunchAgentPlist({
     label,
@@ -1117,6 +1120,7 @@ export async function restartLaunchAgent({
       env: serviceEnv,
       label,
       plistPath,
+      stdout,
     });
     const handoff = scheduleDetachedLaunchdRestartHandoff({
       env: serviceEnv,
@@ -1147,6 +1151,7 @@ export async function restartLaunchAgent({
     env: serviceEnv,
     label,
     plistPath,
+    stdout,
   });
 
   // `openclaw gateway restart` is an explicit operator request to bring the
