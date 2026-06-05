@@ -112,7 +112,8 @@ When `inboundPolicy` is unset, msteams defaults to a **safe `"allowlist"`** (nev
 ```json5
 {
   provider: "msteams",
-  inboundPolicy: "open", // accept any authenticated Teams caller; or "allowlist" + allowFrom (the safe default)
+  inboundPolicy: "allowlist", // safe default; accept only listed callers
+  allowFrom: ["00000000-0000-0000-0000-000000000000"], // caller AAD object ids (use "open" to accept any authenticated Teams caller)
   responseModel: "microsoft-foundry/gpt-5.4", // agent model for the streaming path
 
   msteams: {
