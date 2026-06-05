@@ -45,8 +45,17 @@ function resolveMissingWebLoginPluginHint(context: GatewayRequestContext): strin
         channelId,
       }),
     )
-    .filter((hint) => Boolean(hint));
-  return hints.length === 1 ? hints[0]?.repairHint ?? null : null;
+    .filter((hint): hint is NonNullable<typeof hint> => Boolean(hint));
+  if (hints.length === 0) {
+    return null;
+  }
+  if (hints.length === 1) {
+    return hints[0].repairHint;
+  }
+  const labels = [...new Set(hints.map((hint) => hint.label))];
+  const installCommands = [...new Set(hints.map((hint) => hint.installCommand))];
+  const doctorFixCommand = hints[0].doctorFixCommand;
+  return `Configured official external channel plugins are missing for ${labels.join(", ")}. Install them with: ${installCommands.join("; ")}, or run: ${doctorFixCommand}.`;
 }
 
 function respondProviderUnavailable(params: {
