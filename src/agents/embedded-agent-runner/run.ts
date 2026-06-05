@@ -2291,6 +2291,48 @@ export async function runEmbeddedAgent(
                 );
               }
             }
+            // Overflow fallback: two-stage forced history trim.
+            // Stage 1: keep last 5 user turns.
+            // Stage 2: keep last 2 user turns (if stage 1 already done).
+            const overflowFallbackCountKey = `overflowFallbackCount_${activeSessionId}`;
+            const fallbackCount =
+              (globalThis as Record<string, number>)[overflowFallbackCountKey] ?? 0;
+            if (fallbackCount < 2) {
+              (globalThis as Record<string, number>)[overflowFallbackCountKey] = fallbackCount + 1;
+              const sessionMessages = attempt.messagesSnapshot ?? [];
+              const keepTurns = fallbackCount === 0 ? 5 : 2;
+              if (sessionMessages.length > 4) {
+                let userCount = 0;
+                let cutoffIdx = sessionMessages.length;
+                for (let i = sessionMessages.length - 1; i >= 0; i--) {
+                  if (sessionMessages[i].role === "user") {
+                    userCount++;
+                    if (userCount > keepTurns) {
+                      cutoffIdx = i + 1;
+                      break;
+                    }
+                  }
+                }
+                const trimmed = sessionMessages.slice(cutoffIdx);
+                if (trimmed.length < sessionMessages.length && trimmed.length > 0) {
+                  log.warn(
+                    `[context-overflow-recovery] Stage ${fallbackCount + 1} forced trim for ${provider}/${modelId}: ` +
+                      `${sessionMessages.length} -> ${trimmed.length} messages (keeping last ${keepTurns} user turns)`,
+                  );
+                  try {
+                    activeSession.agent.state.messages = trimmed;
+                    if (preflightRecovery?.source === "mid-turn") {
+                      continueFromCurrentTranscript();
+                    }
+                    continue;
+                  } catch {
+                    log.warn(
+                      `[context-overflow-recovery] Forced trim failed for ${provider}/${modelId} (session disposed)`,
+                    );
+                  }
+                }
+              }
+            }
             if (
               (isCompactionFailure ||
                 overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS) &&
@@ -2305,7 +2347,7 @@ export async function runEmbeddedAgent(
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
             const overflowRecoveryText =
               "Context overflow: prompt too large for the model. " +
-              "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+              "Some context has been trimmed. Try asking again, or use /new to start fresh.";
             log.warn(
               `[context-overflow-recovery] exhausted provider overflow recovery for ${provider}/${modelId}; ` +
                 `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,

@@ -465,13 +465,40 @@ export {
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
 
-function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
+function summarizeMessagePayload(msg: AgentMessage): {
+  textChars: number;
+  imageBlocks: number;
+  isToolResult: boolean;
+  isMemoryToolResult: boolean;
+  textCharsForToolResults: number;
+  textCharsForMemoryToolResult: number;
+} {
   const content = (msg as { content?: unknown }).content;
+  const toolName =
+    (msg as { toolName?: string }).toolName ?? (msg as { tool_name?: string }).tool_name;
+  const isToolResult =
+    (msg as { role?: unknown }).role === "toolResult" ||
+    (msg as { role?: unknown }).role === "tool";
+  const isMemoryTool = toolName === "memory_search";
   if (typeof content === "string") {
-    return { textChars: content.length, imageBlocks: 0 };
+    return {
+      textChars: content.length,
+      imageBlocks: 0,
+      isToolResult,
+      isMemoryToolResult: isMemoryTool,
+      textCharsForToolResults: isToolResult ? content.length : 0,
+      textCharsForMemoryToolResult: isMemoryTool ? content.length : 0,
+    };
   }
   if (!Array.isArray(content)) {
-    return { textChars: 0, imageBlocks: 0 };
+    return {
+      textChars: 0,
+      imageBlocks: 0,
+      isToolResult: false,
+      isMemoryToolResult: false,
+      textCharsForToolResults: 0,
+      textCharsForMemoryToolResult: 0,
+    };
   }
 
   let textChars = 0;
@@ -490,7 +517,14 @@ function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageB
     }
   }
 
-  return { textChars, imageBlocks };
+  return {
+    textChars,
+    imageBlocks,
+    isToolResult,
+    isMemoryToolResult: isMemoryTool,
+    textCharsForToolResults: isToolResult ? textChars : 0,
+    textCharsForMemoryToolResult: isMemoryTool ? textChars : 0,
+  };
 }
 
 function summarizeSessionContext(messages: AgentMessage[]): {
@@ -498,11 +532,17 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   totalTextChars: number;
   totalImageBlocks: number;
   maxMessageTextChars: number;
+  memoryToolResultCount: number;
+  memoryToolResultChars: number;
+  toolResultChars: number;
 } {
   const roleCounts = new Map<string, number>();
   let totalTextChars = 0;
   let totalImageBlocks = 0;
   let maxMessageTextChars = 0;
+  let memoryToolResultCount = 0;
+  let memoryToolResultChars = 0;
+  let toolResultChars = 0;
 
   for (const msg of messages) {
     const role = typeof msg.role === "string" ? msg.role : "unknown";
@@ -513,6 +553,13 @@ function summarizeSessionContext(messages: AgentMessage[]): {
     totalImageBlocks += payload.imageBlocks;
     if (payload.textChars > maxMessageTextChars) {
       maxMessageTextChars = payload.textChars;
+    }
+    if (payload.isToolResult) {
+      toolResultChars += payload.textCharsForToolResults;
+    }
+    if (payload.isMemoryToolResult) {
+      memoryToolResultCount++;
+      memoryToolResultChars += payload.textCharsForMemoryToolResult;
     }
   }
 
@@ -525,6 +572,9 @@ function summarizeSessionContext(messages: AgentMessage[]): {
     totalTextChars,
     totalImageBlocks,
     maxMessageTextChars,
+    memoryToolResultCount,
+    memoryToolResultChars,
+    toolResultChars,
   };
 }
 
@@ -3813,13 +3863,33 @@ export async function runEmbeddedAttempt(
 
           // Diagnostic: log context sizes before prompt to help debug early overflow errors.
           if (log.isEnabled("debug")) {
+            const historyTokens =
+              sessionSummary.totalTextChars > 0 ? Math.ceil(sessionSummary.totalTextChars / 4) : 0;
+            const systemTokens = systemLen > 0 ? Math.ceil(systemLen / 4) : 0;
+            const promptTokens = promptLen > 0 ? Math.ceil(promptLen / 4) : 0;
+            const toolResultTokens =
+              sessionSummary.toolResultChars > 0
+                ? Math.ceil(sessionSummary.toolResultChars / 2)
+                : 0;
+            const memoryResultTokensInHistory =
+              sessionSummary.memoryToolResultChars > 0
+                ? Math.ceil(sessionSummary.memoryToolResultChars / 2)
+                : 0;
+            const estimatedTotal = historyTokens + systemTokens + promptTokens;
             log.debug(
               `[context-diag] pre-prompt: sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `messages=${msgCount} roleCounts=${sessionSummary.roleCounts} ` +
                 `historyTextChars=${sessionSummary.totalTextChars} ` +
+                `historyTokens=${historyTokens} ` +
+                `toolResultTokens=${toolResultTokens} ` +
+                `memoryResultTokensInHistory=${memoryResultTokensInHistory} ` +
+                `memoryToolResultCount=${sessionSummary.memoryToolResultCount ?? 0} ` +
                 `maxMessageTextChars=${sessionSummary.maxMessageTextChars} ` +
                 `historyImageBlocks=${sessionSummary.totalImageBlocks} ` +
-                `systemPromptChars=${systemLen} promptChars=${promptLen} ` +
+                `systemPromptChars=${systemLen} systemTokens=${systemTokens} ` +
+                `promptChars=${promptLen} promptTokens=${promptTokens} ` +
+                `estimatedTotalTokens=${estimatedTotal} ` +
+                `contextTokenBudget=${contextTokenBudget} ` +
                 `promptImages=${imageResult.images.length} ` +
                 `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
             );

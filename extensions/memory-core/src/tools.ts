@@ -358,10 +358,8 @@ export function createMemorySearchTool(options: {
             const status = activeMemory.manager.status();
             const decorated = decorateCitations(rawResults, includeCitations);
             const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-            const memoryResults =
-              status.backend === "qmd"
-                ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
-                : decorated;
+            const injectedCharsBudget = resolved.qmd?.limits?.maxInjectedChars ?? 12000;
+            const memoryResults = clampResultsByInjectedChars(decorated, injectedCharsBudget);
             surfacedMemoryResults = memoryResults.map((result) => ({
               ...result,
               corpus: result.source,
@@ -402,7 +400,7 @@ export function createMemorySearchTool(options: {
             : [];
           // Wiki and memory scores use incomparable scales, so corpus=all first
           // balances candidate selection and then backfills any unused slots.
-          const effectiveMax = Math.max(1, maxResults ?? 10);
+          const effectiveMax = Math.max(1, Math.min(maxResults ?? 5, 10));
           const results = mergeMemorySearchCorpusResults({
             memoryResults: surfacedMemoryResults,
             supplementResults,

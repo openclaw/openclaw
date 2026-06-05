@@ -95,23 +95,30 @@ export function getHistoryLimitFromSessionKey(
   };
 
   const providerConfig = resolveProviderConfig(config, provider);
-  if (!providerConfig) {
-    return undefined;
-  }
 
   // For DM sessions: per-DM override -> dmHistoryLimit.
   // Accept both "direct" (new) and "dm" (legacy) for backward compat.
   if (kind === "dm" || kind === "direct") {
-    if (userId && providerConfig.dms?.[userId]?.historyLimit !== undefined) {
-      return providerConfig.dms[userId].historyLimit;
+    if (providerConfig) {
+      if (userId && providerConfig.dms?.[userId]?.historyLimit !== undefined) {
+        return providerConfig.dms[userId].historyLimit;
+      }
+      if (providerConfig.dmHistoryLimit !== undefined) {
+        return providerConfig.dmHistoryLimit;
+      }
     }
-    return providerConfig.dmHistoryLimit;
+    // Default: limit DM history to 20 user turns to prevent context overflow
+    return 20;
   }
 
   // For channel/group sessions: use historyLimit from provider config
   // This prevents context overflow in long-running channel sessions
   if (kind === "channel" || kind === "group") {
-    return providerConfig.historyLimit;
+    if (providerConfig?.historyLimit !== undefined) {
+      return providerConfig.historyLimit;
+    }
+    // Default: limit channel/group history to 30 user turns
+    return 30;
   }
 
   return undefined;
