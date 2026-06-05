@@ -6,7 +6,6 @@ import {
   validateNodePendingDrainParams,
   validateNodePendingEnqueueParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveNodeIdentityId } from "../node-identity.js";
 import {
   drainNodePendingWork,
   enqueueNodePendingWork,
@@ -33,18 +32,19 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const nodeId = resolveNodeIdentityId(client);
-    if (!nodeId) {
+    const nodeIdentity = client?.nodeIdentity?.nodeId;
+    if (!nodeIdentity) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "node.pending.drain requires a connected device identity",
+          "node.pending.drain requires an approved node identity",
         ),
       );
       return;
     }
+    const nodeId = nodeIdentity;
     const p = params as { maxItems?: number };
     const drained = drainNodePendingWork(nodeId, {
       maxItems: p.maxItems,

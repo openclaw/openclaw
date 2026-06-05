@@ -1645,9 +1645,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                     clientIp: browserRateLimitClientIp,
                   });
                 } catch (error) {
-                  if (error instanceof NodePairingRateLimitError && pairedNode) {
-                    // Paired upgrade reconnects can keep their approved surface;
-                    // only the fresh pending request is throttled here.
+                  if (
+                    error instanceof NodePairingRateLimitError &&
+                    pairedNode &&
+                    (typeof connectParams.device?.id === "string"
+                      ? connectParams.device.id.trim()
+                      : "") ===
+                      (typeof pairedNode.ownerDeviceId === "string"
+                        ? pairedNode.ownerDeviceId.trim()
+                        : "")
+                  ) {
+                    // Paired upgrade reconnects where the owning device is verified
+                    // can keep their approved surface; only the fresh pending request
+                    // is throttled here. Unmatched owners propagate rate_limited
+                    // to the outer catch so the client receives the intended response.
                     return null;
                   }
                   throw error;

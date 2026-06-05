@@ -145,10 +145,9 @@ export async function reconcileNodePairingOnConnect(params: {
   const registrationNodeId =
     params.pairedNode && !pairedNodeIsOwned ? deviceId || params.connectParams.client.id : nodeId;
   // Owner-checked adoption (isPairedNodeOwnedByDevice via ownerDeviceId or fallback nodeId==deviceId)
-  // intentionally allows moving persisted paired state from raw device id to custom signed nodeId
-  // on upgrade. This is the P1 "changes persisted session identity semantics" risk before merge.
-  // The ownerDeviceId binding (set at initial pairing) gates it to the authenticated device owner.
-  // See node-identity.ts for the centralized resolver and owner-checked adoption semantics.
+  // intentionally allows moving persisted paired state from raw device id to custom nodeId
+  // on upgrade. The ownerDeviceId binding (set at initial pairing) gates it to the authenticated
+  // device owner. See node-identity.ts for the centralized resolver.
   const policyNode = {
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,
