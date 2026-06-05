@@ -135,11 +135,10 @@ const SINGLE_ACTION_MULTI_STEP_PROMISE_RE =
 const SINGLE_ACTION_RESULT_STYLE_RE =
   /\b(?:i(?:'ll| will)\s+(?:summarize|explain|share|show|report|describe|clarify|answer|recap)(?:\s+\w+){0,4}\s*:|(?:here(?:'s| is)|summary|result|answer|findings?|root cause)\s*:)/i;
 const POST_TOOL_DETAIL_CONTINUATION_RE =
-  /\b(?:now\s+)?(?:let me|i(?:'ll| will)|i(?:'m| am)\s+going to)\b.{0,120}\b(?:get|fetch|grab|open|check|look(?:\s+up|\s+at)?|pull|retrieve)\b.{0,120}\b(?:details?|sources?|results?|pages?|urls?|links?|brief|report)\b/i;
+  /^\s*(?:now\s+)?(?:let me|i(?:'ll| will)|i(?:'m| am)\s+going to)\b[^.!?\n]{0,120}\b(?:get|fetch|grab|open|check|look(?:\s+up|\s+at)?|pull|retrieve)\b[^.!?\n]{0,120}\b(?:details?|sources?|results?|pages?|urls?|links?|brief|report)\b[^.!?\n]*[.!?]?\s*$/i;
 const LOOKUP_PROMISE_ONLY_RE =
-  /\b(?:hold on|one sec(?:ond)?|let me|i(?:'ll| will)|i(?:'m| am)\s+going to)\b.{0,100}\b(?:look (?:that|this|it)?\s*up|search(?:\s+(?:for|the web))?|check(?:\s+(?:that|this|it|the current|latest))?)\b/i;
-const ACTION_PROMISE_RETRY_SAFE_TOOL_NAME_RE =
-  /(?:^|[_:-])(?:fetch|get|lookup|read|retrieve|search)(?:$|[_:-])/;
+  /^\s*(?:hold on|one sec(?:ond)?|let me|i(?:'ll| will)|i(?:'m| am)\s+going to)\b[^.!?\n]{0,100}\b(?:look (?:that|this|it)?\s*up|search(?:\s+(?:for|the web))?|check(?:\s+(?:that|this|it|the current|latest))?)\b[^.!?\n]*[.!?]?\s*$/i;
+const ACTION_PROMISE_ASSERTIVE_CLAUSE_RE = /[:;]|\b(?:is|are|was|were|has|have)\b/i;
 const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "read",
   "search",
@@ -938,11 +937,7 @@ function hasOnlyReplaySafeActionPromiseToolActivity(
     .filter((entry) => entry.toolName !== "update_plan")
     .every((entry) => {
       const toolName = normalizeLowercaseStringOrEmpty(entry.toolName);
-      return (
-        toolName.length > 0 &&
-        (SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES.has(toolName) ||
-          ACTION_PROMISE_RETRY_SAFE_TOOL_NAME_RE.test(toolName))
-      );
+      return toolName.length > 0 && SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES.has(toolName);
     });
 }
 
@@ -975,14 +970,17 @@ function isSingleActionThenNarrativePattern(params: {
 
 function isActionPromiseOnlyPattern(assistantTexts?: readonly string[]): boolean {
   const text =
-    [...(assistantTexts ?? [])]
-      .reverse()
+    (assistantTexts ?? [])
+      .toReversed()
       .find((entry) => entry.trim())
       ?.trim() ?? "";
   if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT) {
     return false;
   }
   if (SINGLE_ACTION_RESULT_STYLE_RE.test(text) || PLANNING_ONLY_COMPLETION_RE.test(text)) {
+    return false;
+  }
+  if (ACTION_PROMISE_ASSERTIVE_CLAUSE_RE.test(text)) {
     return false;
   }
   return POST_TOOL_DETAIL_CONTINUATION_RE.test(text) || LOOKUP_PROMISE_ONLY_RE.test(text);

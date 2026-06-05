@@ -1158,96 +1158,93 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it.each([
-    {
-      name: "post-tool narration with provider-specific tool names",
-      prompt: "[cron:daily-summary] Prepare a short daily summary",
-      assistantTexts: [
-        "Now let me get the details on the most significant items to flesh out the brief properly.",
-      ],
-      toolMetas: [
-        { toolName: "third_party_lookup", meta: "query=public news item" },
-        { toolName: "external_page_read", meta: "url=https://example.test/story" },
-      ],
-    },
-    {
-      name: "no-tool lookup narration",
-      prompt: "What is the current public status?",
-      assistantTexts: ["Hold on — let me look that up."],
-    },
-  ])("retries replay-safe $name", ({ prompt, assistantTexts, toolMetas }) => {
+    [
+      "post-tool known-safe",
+      "[cron:daily-summary] Prepare a short daily summary",
+      {
+        assistantTexts: ["Now let me get the details on the most significant items."],
+        toolMetas: [{ toolName: "search" }, { toolName: "read" }],
+      },
+    ],
+    [
+      "no-tool lookup",
+      "What is the current public status?",
+      { assistantTexts: ["Hold on — let me look that up."] },
+    ],
+  ])("retries replay-safe action promises: %s", (_name, prompt, attempt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "ollama",
       modelId: "local-test-model",
       prompt,
       aborted: false,
       timedOut: false,
-      attempt: makeAttemptResult({ assistantTexts, toolMetas }),
+      attempt: makeAttemptResult(attempt),
     });
 
     expect(retryInstruction).toContain("Act now");
   });
 
-  it("does not retry post-tool narration after side-effect tools", () => {
-    const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "ollama",
-      modelId: "local-test-model",
-      prompt: "[cron:daily-summary] Prepare a short daily summary",
-      aborted: false,
-      timedOut: false,
-      attempt: makeAttemptResult({
+  it.each([
+    [
+      "side effect",
+      "[cron:daily-summary] Prepare a short daily summary",
+      {
         assistantTexts: ["Now let me send the finished report."],
         toolMetas: [{ toolName: "message", meta: "target=conversation" }],
         didSendViaMessagingTool: true,
         messagingToolSentTexts: ["partial report"],
-      }),
-    });
-
-    expect(retryInstruction).toBeNull();
-  });
-
-  it("does not retry post-tool narration while a lifecycle item is active", () => {
-    const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "ollama",
-      modelId: "local-test-model",
-      prompt: "What is the current public status?",
-      aborted: false,
-      timedOut: false,
-      attempt: makeAttemptResult({
+      },
+    ],
+    [
+      "active lifecycle",
+      "What is the current public status?",
+      {
         assistantTexts: ["Hold on — let me look that up."],
         itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
-      }),
-    });
-
-    expect(retryInstruction).toBeNull();
-  });
-
-  it("does not retry completed answers after an earlier lookup promise", () => {
-    const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "ollama",
-      modelId: "local-test-model",
-      prompt: "What is the current public status?",
-      aborted: false,
-      timedOut: false,
-      attempt: makeAttemptResult({
+      },
+    ],
+    [
+      "later completed answer",
+      "What is the current public status?",
+      {
         assistantTexts: ["Hold on — let me look that up.", "The current public status is active."],
         toolMetas: [{ toolName: "external_page_read" }],
-      }),
-    });
-
-    expect(retryInstruction).toBeNull();
-  });
-
-  it("does not retry post-tool narration after unclassified plugin tools", () => {
+      },
+    ],
+    [
+      "same-message answer",
+      "What is the current public status?",
+      { assistantTexts: ["Hold on — let me look that up. The current public status is active."] },
+    ],
+    [
+      "colon answer",
+      "What is the current public status?",
+      { assistantTexts: ["Let me check: the current public status is active."] },
+    ],
+    [
+      "unclassified tool",
+      "[cron:daily-summary] Prepare a short daily summary",
+      {
+        assistantTexts: ["Now let me get the report details."],
+        toolMetas: [{ toolName: "vendor_widget" }],
+      },
+    ],
+    [
+      "lookup-like plugin name",
+      "[cron:daily-summary] Prepare a short daily summary",
+      {
+        assistantTexts: ["Now let me get the report details."],
+        toolMetas: [{ toolName: "search_index_rebuild" }],
+      },
+    ],
+  ])("does not retry action promises after %s", (_name, prompt, attempt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "ollama",
       modelId: "local-test-model",
-      prompt: "[cron:daily-summary] Prepare a short daily summary",
+      prompt,
       aborted: false,
       timedOut: false,
-      attempt: makeAttemptResult({
-        assistantTexts: ["Now let me get the report details."],
-        toolMetas: [{ toolName: "vendor_widget" }],
-      }),
+      attempt: makeAttemptResult(attempt),
     });
 
     expect(retryInstruction).toBeNull();
