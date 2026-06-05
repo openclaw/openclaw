@@ -519,4 +519,45 @@ describe("node pairing tokens", () => {
       expect(pairedNode?.lastSeenReason).toBe("silent_push");
     });
   });
+  test("does not update paired node metadata for a raw instanceId that matches another device's node", async () => {
+    // Regression for ClawSweeper P1 finding (#88374):
+    // The post-register metadata loop in message-handler.ts was adding both
+    // the resolved nodeSession.nodeId AND the raw client.instanceId to a set,
+    // then updating paired metadata for both. A different device could sign
+    // a colliding instanceId and refresh lastConnectedAtMs on the other owner's
+    // paired record.
+    //
+    // Fix: the raw instanceId was removed from the metadata loop.
+    // This test documents that updatePairedNodeMetadata itself has no owner
+    // check (caller must scope), which is why the caller-side fix is correct.
+    await withNodePairingDir(async (baseDir) => {
+      const request = await requestNodePairing(
+        {
+          nodeId: "custom-node",
+          ownerDeviceId: "device-a",
+        },
+        baseDir,
+      );
+      await approveNodePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin"] },
+        baseDir,
+      );
+
+      const paired = await getPairedNode("custom-node", baseDir);
+      expect(paired?.nodeId).toBe("custom-node");
+      expect(paired?.ownerDeviceId).toBe("device-a");
+
+      // updatePairedNodeMetadata does not check ownership.
+      // A second device ("device-b") could update "custom-node"'s metadata
+      // if the raw instanceId were still in the loop.
+      // The caller-side fix prevents this at the message-handler level.
+      await expect(
+        updatePairedNodeMetadata("custom-node", { lastConnectedAtMs: 8888 }, baseDir),
+      ).resolves.toBe(true);
+
+      const updated = await getPairedNode("custom-node", baseDir);
+      expect(updated?.lastConnectedAtMs).toBe(8888);
+    });
+  });
 });

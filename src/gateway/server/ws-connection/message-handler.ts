@@ -1854,19 +1854,17 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const nodeSession = context.nodeRegistry.register(nextClient, {
             remoteIp: reportedClientIp,
           });
-          const instanceIdRaw = connectParams.client.instanceId;
-          const instanceIdLocal = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
-          const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
-          if (instanceIdLocal) {
-            nodeIdsForPairing.add(instanceIdLocal);
-          }
-          for (const nodeId of nodeIdsForPairing) {
-            void updatePairedNodeMetadata(nodeId, {
-              lastConnectedAtMs: nodeSession.connectedAtMs,
-            }).catch((err: unknown) =>
-              logGateway.warn(`failed to record last connect for ${nodeId}: ${formatForLog(err)}`),
-            );
-          }
+          // Only update metadata for the registered node identity (resolved by resolveNodeIdentityId).
+          // The raw client.instanceId is intentionally excluded here because it has not been
+          // owner-scope verified and a colliding instanceId from a different device could
+          // refresh lastConnectedAtMs on another owner's paired node record.
+          void updatePairedNodeMetadata(nodeSession.nodeId, {
+            lastConnectedAtMs: nodeSession.connectedAtMs,
+          }).catch((err: unknown) =>
+            logGateway.warn(
+              `failed to record last connect for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+            ),
+          );
           recordRemoteNodeInfo({
             nodeId: nodeSession.nodeId,
             displayName: nodeSession.displayName,
