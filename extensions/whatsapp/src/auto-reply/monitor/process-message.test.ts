@@ -444,6 +444,85 @@ describe("processMessage group system prompt wiring", () => {
     });
   });
 
+  it("fires message_received hooks with media metadata fields", async () => {
+    const internalReceived = vi.fn();
+    registerInternalHook("message:received", internalReceived);
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    buildContextMock.mockImplementationOnce(() => ({
+      Body: "check out this image",
+      BodyForCommands: "check out this image",
+      RawBody: "check out this image",
+      CommandBody: "check out this image",
+      From: GROUP_JID,
+      To: "+15550001111",
+      SessionKey: baseRoute.sessionKey,
+      AccountId: "default",
+      MessageSid: "msg-media-1",
+      SenderId: "+15550002222",
+      SenderName: "Alice",
+      SenderE164: "+15550002222",
+      Timestamp: 1710000001,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: GROUP_JID,
+      GroupSubject: "Test Group",
+      MediaPath: "/tmp/wa-media/abc123.jpg",
+      MediaType: "image/jpeg",
+      MediaUrl: "https://example.com/media/abc123.jpg",
+      MediaPaths: ["/tmp/wa-media/abc123.jpg"],
+      MediaTypes: ["image/jpeg"],
+      MediaUrls: ["https://example.com/media/abc123.jpg"],
+    }));
+
+    await callProcessMessage({
+      cfg: {
+        channels: {
+          whatsapp: {
+            pluginHooks: {
+              messageReceived: true,
+            },
+          },
+        },
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(runMessageReceivedMock).toHaveBeenCalledTimes(1);
+
+    // First arg is the PluginHookMessageReceivedEvent — check metadata media fields
+    const pluginEvent = mockCallArg(runMessageReceivedMock, "runMessageReceived", 0, 0) as Record<
+      string,
+      unknown
+    >;
+    expect(pluginEvent.metadata).toMatchObject({
+      mediaPath: "/tmp/wa-media/abc123.jpg",
+      mediaType: "image/jpeg",
+      mediaUrl: "https://example.com/media/abc123.jpg",
+      mediaPaths: ["/tmp/wa-media/abc123.jpg"],
+      mediaTypes: ["image/jpeg"],
+      mediaUrls: ["https://example.com/media/abc123.jpg"],
+    });
+
+    // Second arg is the internal message:received event — check media fields on context
+    expect(internalReceived).toHaveBeenCalledTimes(1);
+    const internalEvent = mockCallArg(internalReceived, "internal message received") as Record<
+      string,
+      unknown
+    >;
+    const context = internalEvent.context as Record<string, unknown>;
+    const metadata = context.metadata as Record<string, unknown>;
+    expect(metadata).toMatchObject({
+      mediaPath: "/tmp/wa-media/abc123.jpg",
+      mediaType: "image/jpeg",
+      mediaUrl: "https://example.com/media/abc123.jpg",
+      mediaPaths: ["/tmp/wa-media/abc123.jpg"],
+      mediaTypes: ["image/jpeg"],
+      mediaUrls: ["https://example.com/media/abc123.jpg"],
+    });
+  });
+
   it("does not fire WhatsApp message_received hooks without explicit opt-in", async () => {
     const internalReceived = vi.fn();
     registerInternalHook("message:received", internalReceived);
