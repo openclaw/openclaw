@@ -9,6 +9,17 @@ title: "iOS app"
 
 Availability: iPhone app builds are distributed through Apple channels when enabled for a release. Local development builds can also run from source.
 
+If the public iOS beta or TestFlight capacity is full, the supported install path is to build and run the app from source using the OpenClaw iOS project in Xcode. This is the official supported path when no distributed build slot is available.
+
+1. Install Xcode from the Mac App Store.
+2. Clone the OpenClaw repository.
+3. Open the iOS project/workspace in Xcode.
+4. Select a personal development team in Signing & Capabilities.
+5. Build and run the app to your iPhone.
+6. Pair the app with your Gateway the same way you would with an official build.
+
+This keeps you on a supported route instead of waiting for beta capacity to reopen.
+
 ## What it does
 
 - Connects to a Gateway over WebSocket (LAN or tailnet).
