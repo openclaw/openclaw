@@ -277,13 +277,15 @@ async function dispatchVcMeetingInvitedTurn(params: {
 
   const bodyForAgent = `[message_id: ${params.turn.messageId}]\n${params.turn.inviter.name ?? params.turn.inviter.senderId}: ${params.turn.prompt}`;
   const timestamp = parseInviteTimestamp(params.turn.inviteTime);
+  const target = params.turn.inviter.openId ?? params.turn.inviter.senderId;
+  const replyTarget = `user:${target}`;
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: bodyForAgent,
     BodyForAgent: bodyForAgent,
     RawBody: params.turn.prompt,
     CommandBody: params.turn.prompt,
     From: `feishu:${params.turn.inviter.senderId}`,
-    To: `vc-meeting:${params.turn.meetingNo}`,
+    To: replyTarget,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
     ChatType: "direct",
@@ -299,7 +301,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
     WasMentioned: true,
     CommandAuthorized: false,
     OriginatingChannel: "feishu",
-    OriginatingTo: `vc-meeting:${params.turn.meetingNo}`,
+    OriginatingTo: replyTarget,
   });
   const storePath = core.channel.session.resolveStorePath(effectiveCfg.session?.store, {
     agentId: route.agentId,

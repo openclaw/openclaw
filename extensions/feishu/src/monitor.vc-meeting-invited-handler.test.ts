@@ -314,11 +314,11 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     expect(finalizedContext).toEqual(
       expect.objectContaining({
         From: "feishu:ou_inviter_1",
-        To: "vc-meeting:123456789",
+        To: "user:ou_inviter_1",
         Surface: "feishu-vc-meeting-invited",
         MessageSid: "vc-invited:event:evt_vc_123",
         Timestamp: 1712345678000,
-        OriginatingTo: "vc-meeting:123456789",
+        OriginatingTo: "user:ou_inviter_1",
       }),
     );
     expect(finalizedContext?.BodyForAgent).toContain(
