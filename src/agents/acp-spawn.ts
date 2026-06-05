@@ -1564,6 +1564,7 @@ export async function spawnAcpDirect(
       logPath: streamLogPath,
       deliveryContext: parentDeliveryCtx,
       emitStartNotice: false,
+      cfg,
     });
   }
   const gatewayAttachments = toGatewayImageAttachments(params.attachments);
@@ -1623,6 +1624,7 @@ export async function spawnAcpDirect(
         logPath: streamLogPath,
         deliveryContext: parentDeliveryCtx,
         emitStartNotice: false,
+        cfg,
       });
     }
     parentRelay?.notifyStarted();

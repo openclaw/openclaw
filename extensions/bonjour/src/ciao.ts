@@ -56,7 +56,7 @@ export function classifyCiaoProcessError(reason: unknown): CiaoProcessErrorClass
   return null;
 }
 
-/** Classifier for ciao unhandled-rejection errors. */
+/** Alternate export name for unhandled-rejection classification. */
 export const classifyCiaoUnhandledRejection = classifyCiaoProcessError;
 
 /** Return whether a ciao unhandled rejection is known and ignorable. */
