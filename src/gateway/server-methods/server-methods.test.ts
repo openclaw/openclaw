@@ -590,6 +590,44 @@ describe("waitForAgentJob", () => {
       vi.useRealTimers();
     }
   });
+
+  it("surfaces pending timeout snapshot when outer timeout fires before timeout grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-timeout-asymmetric-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 10_000 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 10_000,
+          endedAt: 11_000,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+
+      // Advance past the wait-timer timeout (5_000ms) but before the grace window (15_000ms)
+      // The wait-timer fallback must find the pending timeout snapshot and return it.
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe("timeout");
+      expect(result?.endedAt).toBe(11_000);
+      expect(result?.timeoutPhase).toBe("provider");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {
