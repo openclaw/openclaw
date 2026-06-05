@@ -42,6 +42,67 @@ vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillDirs: vi.fn(() => []),
 }));
 
+const SKILLS_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.skillsNativeWatchFactory");
+
+type NativeWatchCall = {
+  path: string;
+  options: { recursive?: boolean } | undefined;
+  listener: (eventType: string, filename: string | null) => void;
+  emit: (event: string, ...args: unknown[]) => void;
+  close: ReturnType<typeof vi.fn>;
+};
+
+// Capture the skills watcher's native fs.watch usage by injecting a fake factory
+// through the same test hook the production code consults (see
+// resolveSkillsNativeWatchFactory in refresh.ts).
+function installNativeWatchCapture(): { calls: NativeWatchCall[]; restore: () => void } {
+  const calls: NativeWatchCall[] = [];
+  (globalThis as Record<PropertyKey, unknown>)[SKILLS_NATIVE_WATCH_FACTORY_KEY] = (
+    watchPath: unknown,
+    options: unknown,
+    listener: unknown,
+  ) => {
+    const handlers = new Map<string, (...args: unknown[]) => void>();
+    const close = vi.fn();
+    const watcher = {
+      on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+        handlers.set(event, cb);
+        return watcher;
+      }),
+      close,
+    };
+    calls.push({
+      path: String(watchPath),
+      options: options as { recursive?: boolean } | undefined,
+      listener: listener as NativeWatchCall["listener"],
+      emit: (event: string, ...args: unknown[]) => handlers.get(event)?.(...args),
+      close,
+    });
+    return watcher;
+  };
+  return {
+    calls,
+    restore: () => {
+      delete (globalThis as Record<PropertyKey, unknown>)[SKILLS_NATIVE_WATCH_FACTORY_KEY];
+    },
+  };
+}
+
+async function withPlatform(
+  value: NodeJS.Platform,
+  run: () => void | Promise<void>,
+): Promise<void> {
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { configurable: true, value });
+  try {
+    await run();
+  } finally {
+    if (original) {
+      Object.defineProperty(process, "platform", original);
+    }
+  }
+}
+
 describe("ensureSkillsWatcher", () => {
   beforeAll(async () => {
     refreshModule = await import("./refresh.js");
@@ -811,5 +872,200 @@ describe("ensureSkillsWatcher", () => {
       reason: "watch",
       changedPath: "/tmp/shared/demo/SKILL.md",
     });
+  });
+
+  it.each(["darwin", "win32"] as const)(
+    "watches each skill root with one native recursive fs.watch, not one per SKILL.md on %s (#90578)",
+    async (platform) => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-native-"));
+      const capture = installNativeWatchCapture();
+      try {
+        await fs.mkdir(path.join(workspaceDir, "skills", "demo"), { recursive: true });
+        await fs.writeFile(
+          path.join(workspaceDir, "skills", "demo", "SKILL.md"),
+          "---\nname: demo\ndescription: Demo\n---\n",
+        );
+        const workspaceSkillsRoot = path.join(workspaceDir, "skills").replaceAll("\\", "/");
+
+        await withPlatform(platform, () => {
+          refreshModule.ensureSkillsWatcher({ workspaceDir });
+        });
+
+        // The existing on-disk skill root is covered by a single native recursive
+        // watcher (one fd per tree), not chokidar's per-file fan-out.
+        const rootCall = capture.calls.find(
+          (call) => call.path.replaceAll("\\", "/") === workspaceSkillsRoot,
+        );
+        expect(rootCall?.options?.recursive).toBe(true);
+        const chokidarTargets = (watchMock.mock.calls as unknown as Array<[string]>).map(([p]) =>
+          p.replaceAll("\\", "/"),
+        );
+        expect(chokidarTargets).not.toContain(workspaceSkillsRoot);
+
+        // The #90578 regression: zero native watchers are opened on a SKILL.md
+        // file (that per-file fan-out was the leaked descriptor).
+        const nativeSkillMdWatchers = capture.calls
+          .map((call) => call.path.replaceAll("\\", "/"))
+          .filter((p) => p.endsWith("SKILL.md"));
+        expect(nativeSkillMdWatchers).toStrictEqual([]);
+      } finally {
+        capture.restore();
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["add", "change", "unlink"] as const)(
+    "detects a skill %s through the native macOS watcher, not just directory churn",
+    async (kind) => {
+      vi.useFakeTimers();
+      const seen: SkillsChangeEvent[] = [];
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-native-evt-"));
+      const capture = installNativeWatchCapture();
+      try {
+        const skillFile = path.join(workspaceDir, "skills", "demo", "SKILL.md");
+        await fs.mkdir(path.dirname(skillFile), { recursive: true });
+        await fs.writeFile(skillFile, "---\nname: demo\ndescription: Demo\n---\n");
+        const workspaceSkillsRoot = path.join(workspaceDir, "skills").replaceAll("\\", "/");
+
+        refreshModule.registerSkillsChangeListener((change) => seen.push(change));
+        await withPlatform("darwin", () => {
+          refreshModule.ensureSkillsWatcher({
+            workspaceDir,
+            config: { skills: { load: { watchDebounceMs: 10 } } },
+          });
+        });
+
+        const rootCall = capture.calls.find(
+          (call) =>
+            call.options?.recursive === true &&
+            call.path.replaceAll("\\", "/") === workspaceSkillsRoot,
+        );
+        expect(rootCall).toBeDefined();
+
+        if (kind === "unlink") {
+          await fs.rm(skillFile);
+        }
+        // Native fs.watch reports a path relative to the watched root; the handler
+        // re-stats and refreshes for SKILL.md adds, in-place edits, and removals
+        // alike (a directory-only watch would miss the in-place edit).
+        rootCall?.listener(kind === "change" ? "change" : "rename", "demo/SKILL.md");
+        await vi.advanceTimersByTimeAsync(10);
+
+        expect(seen).toEqual([
+          {
+            workspaceDir,
+            reason: "watch",
+            changedPath: skillFile,
+          },
+        ]);
+      } finally {
+        capture.restore();
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("keeps the chokidar watcher on non-native platforms", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-linux-"));
+    const capture = installNativeWatchCapture();
+    try {
+      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+      const workspaceSkillsRoot = path.join(workspaceDir, "skills").replaceAll("\\", "/");
+
+      await withPlatform("linux", () => {
+        refreshModule.ensureSkillsWatcher({ workspaceDir });
+      });
+
+      // Native recursive fs.watch is never consulted on Linux (it would fan out to
+      // every file); the directory is watched through chokidar instead.
+      expect(capture.calls).toStrictEqual([]);
+      const chokidarTargets = (watchMock.mock.calls as unknown as Array<[string]>).map(([p]) =>
+        p.replaceAll("\\", "/"),
+      );
+      expect(chokidarTargets).toContain(workspaceSkillsRoot);
+    } finally {
+      capture.restore();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to a single chokidar watcher when the native skill watcher errors (#90578)", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-watch-native-fallback-"),
+    );
+    const capture = installNativeWatchCapture();
+    try {
+      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+      const workspaceSkillsRoot = path.join(workspaceDir, "skills").replaceAll("\\", "/");
+
+      await withPlatform("darwin", () => {
+        refreshModule.ensureSkillsWatcher({ workspaceDir });
+      });
+      const rootCall = capture.calls.find(
+        (call) =>
+          call.options?.recursive === true &&
+          call.path.replaceAll("\\", "/") === workspaceSkillsRoot,
+      );
+      expect(rootCall).toBeDefined();
+      const chokidarTargetsBefore = (watchMock.mock.calls as unknown as Array<[string]>)
+        .map(([p]) => p.replaceAll("\\", "/"))
+        .filter((p) => p === workspaceSkillsRoot);
+      expect(chokidarTargetsBefore).toStrictEqual([]);
+
+      // A native error tears the native watcher down and restores coverage through a
+      // single chokidar watcher on the same root (no leaked or duplicated watcher).
+      rootCall?.emit("error", new Error("native watcher died"));
+
+      expect(rootCall?.close).toHaveBeenCalled();
+      const chokidarTargetsAfter = (watchMock.mock.calls as unknown as Array<[string]>)
+        .map(([p]) => p.replaceAll("\\", "/"))
+        .filter((p) => p === workspaceSkillsRoot);
+      expect(chokidarTargetsAfter).toHaveLength(1);
+    } finally {
+      capture.restore();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not re-attach a watcher after the skill watcher is torn down (#90578)", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-watch-native-disposed-"),
+    );
+    const capture = installNativeWatchCapture();
+    try {
+      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+      const workspaceSkillsRoot = path.join(workspaceDir, "skills").replaceAll("\\", "/");
+
+      await withPlatform("darwin", () => {
+        refreshModule.ensureSkillsWatcher({ workspaceDir });
+      });
+      const rootCall = capture.calls.find(
+        (call) =>
+          call.options?.recursive === true &&
+          call.path.replaceAll("\\", "/") === workspaceSkillsRoot,
+      );
+      const parentCall = capture.calls.find((call) => call.options?.recursive === false);
+      expect(rootCall).toBeDefined();
+
+      // Disable watching: the state is torn down and dropped from the watcher map.
+      await withPlatform("darwin", () => {
+        refreshModule.ensureSkillsWatcher({
+          workspaceDir,
+          config: { skills: { load: { watch: false } } },
+        });
+      });
+
+      // A stale native error / parent event arriving after teardown must not
+      // re-attach a watcher onto the orphaned state (that leak re-creates #90578).
+      watchMock.mockClear();
+      rootCall?.emit("error", new Error("stale native error"));
+      parentCall?.listener("rename", "skills");
+
+      expect(watchMock).not.toHaveBeenCalled();
+    } finally {
+      capture.restore();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 });

@@ -23,7 +23,20 @@ export {
 } from "./refresh-state.js";
 
 type SkillsPathWatchState = {
-  watcher: FSWatcher;
+  // chokidar watcher used on non-native platforms (Linux/Windows) and as the
+  // fallback when a native recursive watcher can't attach. Null while a native
+  // recursive watcher is covering this directory instead.
+  watcher: FSWatcher | null;
+  // Native recursive fs.watch (macOS only) plus a non-recursive parent-directory
+  // watch that detects root replacement (`rm -rf root && mkdir root`) by inode.
+  nativeMain: fs.FSWatcher | null;
+  nativeParent: fs.FSWatcher | null;
+  nativeInode: number | null;
+  // Set on teardown so a watcher event that races teardown — or a stale callback
+  // from a replaced native watcher — cannot re-attach onto this orphaned state and
+  // leak an untracked watcher (which would re-create the #90578 fd leak). Mirrors
+  // the memory watcher's `closed` guard.
+  disposed: boolean;
   depth: number;
   debounceMs: number;
   timer?: ReturnType<typeof setTimeout>;
@@ -65,6 +78,41 @@ const workspaceWatchLastEnsuredAt = new Map<string, number>();
 // Session turns re-ensure their workspace; entries older than this are treated
 // as abandoned subscriptions and evicted by the next ensure call.
 const SKILLS_WORKSPACE_WATCH_IDLE_TTL_MS = 60 * 60_000;
+
+// On macOS each native fs.watch is backed by an open file descriptor, so
+// chokidar's per-file SKILL.md watchers accumulate one descriptor per installed
+// skill and grow the gateway's FD count linearly until it hits the per-process
+// limit (#90578). A single native recursive fs.watch per skill root replaces that
+// per-file fan-out with one watcher per directory tree (FSEvents on macOS,
+// ReadDirectoryChangesW on Windows) that still catches in-place SKILL.md edits,
+// so the descriptor count stays flat regardless of skill count. Mirrors the
+// memory watcher fix for the sibling bug (#86613), which gates on the same set.
+//
+// Linux is intentionally excluded: Node's `fs.watch(dir, { recursive: true })`
+// watches every file there (inotify fan-out), so Linux keeps chokidar, which has
+// no per-process fd leak either. chokidar also remains the fallback on every
+// platform when a native watcher can't attach.
+const NATIVE_RECURSIVE_SKILLS_WATCH_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "win32"]);
+
+const TEST_SKILLS_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.skillsNativeWatchFactory");
+
+function nativeRecursiveSkillsWatchSupported(): boolean {
+  return NATIVE_RECURSIVE_SKILLS_WATCH_PLATFORMS.has(process.platform);
+}
+
+// Indirection so tests can inject a fake native watch factory (the same pattern
+// the memory watcher uses); production always returns the real fs.watch.
+function resolveSkillsNativeWatchFactory(): typeof fs.watch {
+  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+    const override = (globalThis as Record<PropertyKey, unknown>)[
+      TEST_SKILLS_NATIVE_WATCH_FACTORY_KEY
+    ];
+    if (typeof override === "function") {
+      return override as typeof fs.watch;
+    }
+  }
+  return fs.watch.bind(fs);
+}
 
 setSkillsChangeListenerErrorHandler((err) => {
   log.warn(`skills change listener failed: ${String(err)}`);
@@ -423,28 +471,14 @@ function sameWatchTargets(a: WatchTarget[], b: WatchTarget[]): boolean {
   return true;
 }
 
-function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): SkillsPathWatchState {
-  const watcher = chokidar.watch(target.path, {
-    ignoreInitial: true,
-    followSymlinks: false,
-    // Skill root precedence and grouped discovery use the same bounded depth,
-    // so watcher invalidation must observe that whole decision surface.
-    depth: target.depth,
-    awaitWriteFinish: {
-      stabilityThreshold: debounceMs,
-      pollInterval: 100,
-    },
-    ignored: shouldIgnoreSkillsWatchPath,
-  });
-
-  const state: SkillsPathWatchState = {
-    watcher,
-    depth: target.depth,
-    debounceMs,
-    subscribers: new Set<string>(),
-  };
-
-  const schedule = (changedPath?: string) => {
+function makeSkillsWatchSchedule(
+  state: SkillsPathWatchState,
+  debounceMs: number,
+): (changedPath?: string) => void {
+  return (changedPath?: string) => {
+    if (state.disposed) {
+      return;
+    }
     state.pendingPath = changedPath ?? state.pendingPath;
     if (state.timer) {
       clearTimeout(state.timer);
@@ -465,7 +499,32 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
       }
     }, debounceMs);
   };
+}
 
+function attachChokidarSkillsWatch(
+  state: SkillsPathWatchState,
+  target: WatchTarget,
+  debounceMs: number,
+  schedule: (changedPath?: string) => void,
+): void {
+  // Idempotent + disposed-guarded: never replace a live chokidar watcher (which
+  // would leak the previous one) and never attach onto a torn-down state.
+  if (state.disposed || state.watcher) {
+    return;
+  }
+  const watcher = chokidar.watch(target.path, {
+    ignoreInitial: true,
+    followSymlinks: false,
+    // Skill root precedence and grouped discovery use the same bounded depth,
+    // so watcher invalidation must observe that whole decision surface.
+    depth: target.depth,
+    awaitWriteFinish: {
+      stabilityThreshold: debounceMs,
+      pollInterval: 100,
+    },
+    ignored: shouldIgnoreSkillsWatchPath,
+  });
+  state.watcher = watcher;
   watcher.on("add", (p) => schedule(p));
   watcher.on("change", (p) => schedule(p));
   watcher.on("unlink", (p) => schedule(p));
@@ -473,15 +532,199 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
   watcher.on("error", (err) => {
     log.warn(`skills watcher error (${target.path}): ${String(err)}`);
   });
+}
 
+function closeNativeSkillsWatchers(state: SkillsPathWatchState): void {
+  if (state.nativeMain) {
+    try {
+      state.nativeMain.close();
+    } catch {
+      // ignore close failures
+    }
+    state.nativeMain = null;
+  }
+  if (state.nativeParent) {
+    try {
+      state.nativeParent.close();
+    } catch {
+      // ignore close failures
+    }
+    state.nativeParent = null;
+  }
+  state.nativeInode = null;
+}
+
+// Attach one native recursive fs.watch to the skill root (macOS only) plus a
+// non-recursive parent-directory watch that detects root replacement
+// (`rm -rf root && mkdir root`) by inode comparison. Returns true when the main
+// native watcher attached; false (leaving no native state behind) when the
+// caller should fall back to chokidar. Mirrors the memory watcher house pattern.
+function attachNativeSkillsRecursiveWatch(
+  state: SkillsPathWatchState,
+  target: WatchTarget,
+  schedule: (changedPath?: string) => void,
+  debounceMs: number,
+): boolean {
+  // Don't attach onto a torn-down state, or alongside an active chokidar fallback
+  // (native and chokidar coverage for one root are mutually exclusive).
+  if (state.disposed || state.watcher) {
+    return false;
+  }
+  let recordedInode: number;
+  try {
+    recordedInode = fs.statSync(target.path).ino;
+  } catch {
+    // Root doesn't exist yet; fall back to chokidar, which can watch a
+    // not-yet-created path and pick it up once it appears.
+    return false;
+  }
+  let mainWatcher: fs.FSWatcher;
+  try {
+    mainWatcher = resolveSkillsNativeWatchFactory()(
+      target.path,
+      { recursive: true },
+      (_eventType, filename) => {
+        if (filename == null) {
+          // filename can be null on some platforms even when recursive watching
+          // works; refresh broadly rather than dropping the event.
+          schedule();
+          return;
+        }
+        const full = path.join(target.path, filename);
+        // Preserve chokidar's depth bound on the native path: native recursive
+        // watches the whole tree, so ignore events deeper than the watch target
+        // would have traversed.
+        const relativeSegments = path.relative(target.path, full).split(path.sep);
+        if (relativeSegments.length - 1 > target.depth) {
+          return;
+        }
+        let stats: fs.Stats | undefined;
+        try {
+          stats = fs.lstatSync(full, { throwIfNoEntry: false }) ?? undefined;
+        } catch {
+          stats = undefined;
+        }
+        if (shouldIgnoreSkillsWatchPath(full, stats)) {
+          return;
+        }
+        schedule(full);
+      },
+    );
+  } catch (err) {
+    log.warn(
+      `skills native watcher could not start on ${target.path}: ${String(err)}; falling back to chokidar`,
+    );
+    return false;
+  }
+  state.nativeMain = mainWatcher;
+  state.nativeInode = recordedInode;
+  mainWatcher.on("error", (err) => {
+    // Ignore a stale error from a watcher this state no longer owns (replaced by a
+    // reattach) or after teardown; otherwise we'd re-attach onto a dead state.
+    if (state.disposed || state.nativeMain !== mainWatcher) {
+      return;
+    }
+    log.warn(`skills native watcher error (${target.path}): ${String(err)}`);
+    // Per Node docs an FSWatcher is unusable after an error. Tear down, force a
+    // refresh to cover the gap, then restore coverage with chokidar.
+    closeNativeSkillsWatchers(state);
+    schedule();
+    attachChokidarSkillsWatch(state, target, debounceMs, schedule);
+  });
+  // Non-recursive parent watch: catches root replacement so the main watcher can
+  // reattach on the new inode instead of silently watching the dead one.
+  try {
+    const parentDir = path.dirname(target.path);
+    const baseName = path.basename(target.path);
+    const parentWatcher = resolveSkillsNativeWatchFactory()(
+      parentDir,
+      { recursive: false },
+      (_eventType, filename) => {
+        // Ignore a stale parent event after this watcher was replaced or the state
+        // was torn down, so we don't reattach onto an orphaned/superseded state.
+        if (state.disposed || state.nativeParent !== parentWatcher) {
+          return;
+        }
+        // filename can be null on some platforms; otherwise filter by basename so
+        // sibling churn in the parent directory doesn't trigger a reattach.
+        if (filename !== null && filename !== baseName) {
+          return;
+        }
+        let currentInode: number | null;
+        try {
+          currentInode = fs.statSync(target.path).ino;
+        } catch {
+          currentInode = null;
+        }
+        if (currentInode === state.nativeInode) {
+          return;
+        }
+        // Root was replaced or removed: tear down, force a refresh, then reattach
+        // natively on the new inode (or fall back to chokidar if it's gone).
+        closeNativeSkillsWatchers(state);
+        schedule();
+        if (currentInode !== null) {
+          if (!attachNativeSkillsRecursiveWatch(state, target, schedule, debounceMs)) {
+            attachChokidarSkillsWatch(state, target, debounceMs, schedule);
+          }
+        } else {
+          attachChokidarSkillsWatch(state, target, debounceMs, schedule);
+        }
+      },
+    );
+    parentWatcher.on("error", (err) => {
+      log.warn(`skills native parent watcher error (${parentDir}): ${String(err)}`);
+      try {
+        parentWatcher.close();
+      } catch {
+        // ignore close failures
+      }
+      if (state.nativeParent === parentWatcher) {
+        state.nativeParent = null;
+      }
+      // Main watcher still alive — only root-replacement detection is lost.
+    });
+    state.nativeParent = parentWatcher;
+  } catch (err) {
+    log.warn(`skills native parent watcher could not start on ${target.path}: ${String(err)}`);
+  }
+  return true;
+}
+
+function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): SkillsPathWatchState {
+  const state: SkillsPathWatchState = {
+    watcher: null,
+    nativeMain: null,
+    nativeParent: null,
+    nativeInode: null,
+    disposed: false,
+    depth: target.depth,
+    debounceMs,
+    subscribers: new Set<string>(),
+  };
+  const schedule = makeSkillsWatchSchedule(state, debounceMs);
+  // macOS leaks one descriptor per native file watcher, so use a single native
+  // recursive watcher per skill root there (#90578). Every other platform keeps
+  // chokidar, which also serves as the fallback if native attach fails.
+  if (
+    nativeRecursiveSkillsWatchSupported() &&
+    attachNativeSkillsRecursiveWatch(state, target, schedule, debounceMs)
+  ) {
+    return state;
+  }
+  attachChokidarSkillsWatch(state, target, debounceMs, schedule);
   return state;
 }
 
 function teardownSkillsPathWatcher(state: SkillsPathWatchState): void {
+  state.disposed = true;
   if (state.timer) {
     clearTimeout(state.timer);
   }
-  void state.watcher.close().catch(() => {});
+  closeNativeSkillsWatchers(state);
+  if (state.watcher) {
+    void state.watcher.close().catch(() => {});
+  }
 }
 
 function subscribeWorkspaceToPath(
@@ -620,13 +863,17 @@ export async function resetSkillsRefreshForTest(): Promise<void> {
   workspaceWatchLastEnsuredAt.clear();
   await Promise.all(
     active.map(async (state) => {
+      state.disposed = true;
       if (state.timer) {
         clearTimeout(state.timer);
       }
-      try {
-        await state.watcher.close();
-      } catch {
-        // Best-effort test cleanup.
+      closeNativeSkillsWatchers(state);
+      if (state.watcher) {
+        try {
+          await state.watcher.close();
+        } catch {
+          // Best-effort test cleanup.
+        }
       }
     }),
   );
