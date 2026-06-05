@@ -50,6 +50,7 @@ import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
   capFrozenResultText,
+  formatDefaultGiveUpError,
   logAnnounceGiveUp,
   MAX_ANNOUNCE_RETRY_COUNT,
   MIN_ANNOUNCE_RETRY_DELAY_MS,
@@ -583,9 +584,14 @@ export function createSubagentRegistryLifecycleController(params: {
     reason: "retry-limit" | "expiry";
     error?: string;
   }) => {
+    // Ensure deliveryError is always populated for auditability (#44925)
+    const deliveryError =
+      args.error ??
+      getDeliveryLastError(args.entry) ??
+      formatDefaultGiveUpError(args.entry, args.reason);
     markPendingFinalDelivery({
       entry: args.entry,
-      error: args.error ?? getDeliveryLastError(args.entry) ?? args.reason,
+      error: deliveryError,
     });
     const now = Date.now();
     const delivery = ensureDeliveryState(args.entry);
@@ -602,13 +608,23 @@ export function createSubagentRegistryLifecycleController(params: {
       runId: args.runId,
       childSessionKey: args.entry.childSessionKey,
       deliveryStatus: "failed",
-      deliveryError: getDeliveryLastError(args.entry) ?? args.reason,
+      deliveryError,
     });
     safeMarkRequiredCompletionDeliveryBlocked({
       entry: args.entry,
-      reason: getDeliveryLastError(args.entry) ?? args.reason,
+      reason: deliveryError,
     });
     logAnnounceGiveUp(args.entry, args.reason);
+
+    // Layer 2: Emit session lifecycle event to notify observers of delivery failure (#44925)
+    emitSessionLifecycleEvent({
+      sessionKey: args.entry.childSessionKey,
+      reason: "subagent-delivery-failed",
+      parentSessionKey: args.entry.requesterSessionKey,
+      label: args.entry.label,
+      displayName: deliveryError,
+    });
+
     params.persist();
   };
 
@@ -632,7 +648,10 @@ export function createSubagentRegistryLifecycleController(params: {
       });
       return;
     }
-    const deliveryError = getDeliveryLastError(giveUpParams.entry) ?? giveUpParams.reason;
+    // Ensure deliveryError is always populated for auditability (#44925)
+    const deliveryError =
+      getDeliveryLastError(giveUpParams.entry) ??
+      formatDefaultGiveUpError(giveUpParams.entry, giveUpParams.reason);
     clearPendingFinalDelivery(giveUpParams.entry);
     const failedDelivery = ensureDeliveryState(giveUpParams.entry);
     failedDelivery.status = "failed";
@@ -658,6 +677,16 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     const completionReason = resolveCleanupCompletionReason(giveUpParams.entry);
     logAnnounceGiveUp(giveUpParams.entry, giveUpParams.reason);
+
+    // Layer 2: Emit session lifecycle event to notify observers of delivery failure (#44925)
+    emitSessionLifecycleEvent({
+      sessionKey: giveUpParams.entry.childSessionKey,
+      reason: "subagent-delivery-failed",
+      parentSessionKey: giveUpParams.entry.requesterSessionKey,
+      label: giveUpParams.entry.label,
+      displayName: deliveryError,
+    });
+
     // Retry-limit / expiry give-up should not leave cleanup stuck behind the
     // best-effort ended hook. Mark the run cleaned first, then fire the hook.
     completeCleanupBookkeeping({
@@ -909,7 +938,9 @@ export function createSubagentRegistryLifecycleController(params: {
         });
         return;
       }
-      const deliveryError = getDeliveryLastError(entry) ?? deferredDecision.reason;
+      // Ensure deliveryError is always populated for auditability (#44925)
+      const deliveryError =
+        getDeliveryLastError(entry) ?? formatDefaultGiveUpError(entry, deferredDecision.reason);
       clearPendingFinalDelivery(entry);
       const failedDelivery = ensureDeliveryState(entry);
       failedDelivery.status = "failed";
@@ -938,6 +969,16 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       const completionReason = resolveCleanupCompletionReason(entry);
       logAnnounceGiveUp(entry, deferredDecision.reason);
+
+      // Layer 2: Emit session lifecycle event to notify observers of delivery failure (#44925)
+      emitSessionLifecycleEvent({
+        sessionKey: entry.childSessionKey,
+        reason: "subagent-delivery-failed",
+        parentSessionKey: entry.requesterSessionKey,
+        label: entry.label,
+        displayName: deliveryError,
+      });
+
       // Giving up on announce delivery is terminal for cleanup even if the
       // best-effort hook is still resolving.
       completeCleanupBookkeeping({

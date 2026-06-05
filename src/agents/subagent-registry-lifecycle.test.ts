@@ -87,15 +87,25 @@ vi.mock("./subagent-registry-cleanup.js", () => ({
 }));
 
 vi.mock("./subagent-registry-helpers.js", () => ({
-  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS: 30 * 60_000,
-  ANNOUNCE_EXPIRY_MS: 5 * 60_000,
-  MAX_ANNOUNCE_RETRY_COUNT: 3,
+  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS: 45 * 60_000,
+  ANNOUNCE_EXPIRY_MS: 10 * 60_000,
+  MAX_ANNOUNCE_RETRY_COUNT: 5,
   MIN_ANNOUNCE_RETRY_DELAY_MS: 1_000,
   capFrozenResultText: (text: string) => text.trim(),
+  formatDefaultGiveUpError: (entry: { label?: string; task?: string }, reason: string) => {
+    const label = entry.label ?? entry.task?.slice(0, 60) ?? "unknown";
+    return `subagent "${label}" delivery failed after 0 retries (${reason})`;
+  },
   logAnnounceGiveUp: helperMocks.logAnnounceGiveUp,
   persistSubagentSessionTiming: helperMocks.persistSubagentSessionTiming,
-  resolveAnnounceRetryDelayMs: (retryCount: number) =>
-    Math.min(1_000 * 2 ** Math.max(0, retryCount - 1), 8_000),
+  resolveAnnounceRetryDelayMs: (retryCount: number) => {
+    // Deterministic mock (no randomness) -- returns midpoint of jitter range
+    const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
+    const backoffExponent = Math.max(0, boundedRetryCount - 1);
+    const baseDelay = 1_000 * 2 ** backoffExponent;
+    const cappedDelay = Math.min(baseDelay, 30_000);
+    return Math.round(cappedDelay * 0.75);
+  },
   safeRemoveAttachmentsDir: helperMocks.safeRemoveAttachmentsDir,
 }));
 
@@ -935,6 +945,46 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
     expect(Number.isNaN(entry.cleanupCompletedAt)).toBe(false);
+  });
+
+  it("always populates delivery error on give-up even when no prior error exists (#44925)", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_ERROR,
+      expectsCompletionMessage: true,
+      // No prior delivery error recorded -- this is the scenario where 13/16
+      // production rows had empty error strings before the fix.
+      delivery: { status: "pending" },
+      outcome: { status: "error" as const, error: "child crashed" },
+      retainAttachmentsOnKeep: false,
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    // deliveryError must always be populated for audit/observability (#44925)
+    expect(entry.delivery?.lastError).toBe(
+      'subagent "finish the task" delivery failed after 0 retries (retry-limit)',
+    );
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      deliveryStatus: "failed",
+      error: 'subagent "finish the task" delivery failed after 0 retries (retry-limit)',
+    });
+    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+    expect(persist).toHaveBeenCalled();
   });
 
   it("suspends successful keep-mode final delivery instead of completing cleanup on retry exhaustion", async () => {
