@@ -2942,15 +2942,15 @@ describe("qa mock openai server", () => {
         "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
         "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
     );
-    const previousPollInput = makeUserInput(
-      "Reply with only this exact marker after seeing this poll: QA_WHATSAPP_POLL_OK",
+    const previousExactMarkerInput = makeUserInput(
+      "Reply with only this previous unrelated exact marker: QA_WHATSAPP_PREVIOUS_OK",
     );
 
     const locationResponse = await postResponses(server, {
       stream: false,
       input: [
         setupInput,
-        previousPollInput,
+        previousExactMarkerInput,
         makeUserInput(
           [
             "Conversation info (untrusted metadata):",
@@ -2967,7 +2967,7 @@ describe("qa mock openai server", () => {
       stream: false,
       input: [
         setupInput,
-        previousPollInput,
+        previousExactMarkerInput,
         makeUserInput(
           ["Sender (untrusted metadata):", "```json", '{"name":"QA"}', "```", "", "<contact>"].join(
             "\n",
@@ -2979,7 +2979,7 @@ describe("qa mock openai server", () => {
       stream: false,
       input: [
         setupInput,
-        previousPollInput,
+        previousExactMarkerInput,
         makeUserInput(
           [
             "Conversation info (untrusted metadata):",
@@ -3032,14 +3032,14 @@ describe("qa mock openai server", () => {
             "Reply with only this exact marker: QA_INITIAL_STREAM_OK",
         ),
         makeUserInput(
-          "Reply with only this exact marker after seeing this poll: QA_WHATSAPP_POLL_STREAM_OK",
+          "Reply with only this previous unrelated exact marker: QA_WHATSAPP_PREVIOUS_STREAM_OK",
         ),
         makeUserInput("📍 37.774900, -122.419400"),
       ],
     });
 
     expect(body).toContain("QA_WHATSAPP_LOCATION_STREAM_OK");
-    expect(body).not.toContain("QA_WHATSAPP_POLL_STREAM_OK");
+    expect(body).not.toContain("QA_WHATSAPP_PREVIOUS_STREAM_OK");
   });
 
   it("uses image generation directives from request context when the latest user text is generic", async () => {
@@ -3690,6 +3690,42 @@ describe("qa mock openai server", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
+      text: "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK",
+    });
+  });
+
+  it("serves deterministic WhatsApp group audio transcription for large audio uploads", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const triggered = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=qa",
+      },
+      body: `--qa\r\ncontent-disposition: form-data; name="file"; filename="upload.wav"\r\n\r\n${"x".repeat(
+        64_000,
+      )}\r\n--qa--\r\n`,
+    });
+    const quiet = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=qa",
+      },
+      body: '--qa\r\ncontent-disposition: form-data; name="file"; filename="upload.wav"\r\n\r\nx\r\n--qa--\r\n',
+    });
+
+    expect(triggered.status).toBe(200);
+    await expect(triggered.json()).resolves.toEqual({
+      text: "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK",
+    });
+    expect(quiet.status).toBe(200);
+    await expect(quiet.json()).resolves.toEqual({
       text: "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK",
     });
   });

@@ -183,6 +183,9 @@ const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
 const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
+const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
+  "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK";
+const QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS = 48_000;
 const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
@@ -220,6 +223,13 @@ function readBody(req: IncomingMessage): Promise<string> {
     maxBytes: MOCK_OPENAI_MAX_BODY_BYTES,
     timeoutMs: MOCK_OPENAI_BODY_TIMEOUT_MS,
   });
+}
+
+function transcriptionTextForAudioRequest(rawBody: string) {
+  if (rawBody.length >= QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS) {
+    return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
+  }
+  return QA_AUDIO_TRANSCRIPTION_TEXT;
 }
 
 function writeJson(res: ServerResponse, status: number, body: unknown) {
@@ -3317,9 +3327,9 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/audio/transcriptions") {
-        await readBody(req);
+        const raw = await readBody(req);
         writeJson(res, 200, {
-          text: QA_AUDIO_TRANSCRIPTION_TEXT,
+          text: transcriptionTextForAudioRequest(raw),
         });
         return;
       }

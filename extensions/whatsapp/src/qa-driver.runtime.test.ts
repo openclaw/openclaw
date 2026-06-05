@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./session.js", () => ({
   createWaSocket: mocks.createWaSocket,
+  formatError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  getStatusCode: (error: unknown) =>
+    (error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode,
   waitForWaConnection: mocks.waitForWaConnection,
 }));
 
@@ -616,6 +619,73 @@ describe("startWhatsAppQaDriverSession", () => {
     expect(mocks.waitForWaConnection).toHaveBeenCalledWith(sock, { timeoutMs: 45_000 });
 
     await session.close();
+  });
+
+  it("can wait for pending notifications before returning the driver session", async () => {
+    const sock = createMockSocket();
+    mocks.createWaSocket.mockResolvedValue(sock);
+    mocks.waitForWaConnection.mockResolvedValue(undefined);
+
+    const pending = startWhatsAppQaDriverSession({
+      authDir: "/tmp/openclaw-whatsapp-auth",
+      connectionTimeoutMs: 10_000,
+      waitForPendingNotifications: true,
+    });
+    let settled = false;
+    pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    sock.ev.emit("connection.update", { receivedPendingNotifications: true });
+
+    const session = await pending;
+    expect(settled).toBe(true);
+    await session.close();
+  });
+
+  it("rejects pending and future waits when the connected driver session closes", async () => {
+    const sock = createMockSocket();
+    mocks.createWaSocket.mockResolvedValue(sock);
+    mocks.waitForWaConnection.mockResolvedValue(undefined);
+
+    const session = await startWhatsAppQaDriverSession({
+      authDir: "/tmp/openclaw-whatsapp-auth",
+    });
+    const pending = session.waitForMessage({
+      match: (message) => message.text.includes("approval required"),
+      timeoutMs: 60_000,
+    });
+
+    sock.ev.emit("connection.update", {
+      connection: "close",
+      lastDisconnect: {
+        date: new Date("2026-06-05T17:54:52.000Z"),
+        error: {
+          output: {
+            statusCode: 428,
+          },
+        },
+      },
+    });
+
+    await expect(pending).rejects.toThrow("WhatsApp QA driver connection closed (status 428)");
+    await expect(
+      session.waitForMessage({
+        match: (message) => message.text.includes("approval required"),
+        timeoutMs: 60_000,
+      }),
+    ).rejects.toThrow("WhatsApp QA driver connection closed (status 428)");
+    expect(sock.ev.listenerCount("messages.upsert")).toBe(0);
+    expect(sock.ev.listenerCount("connection.update")).toBe(0);
+    expect(sock.end).toHaveBeenCalledOnce();
   });
 
   it("closes the socket and removes listeners when connection setup times out", async () => {

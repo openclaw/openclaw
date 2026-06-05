@@ -121,10 +121,18 @@ type MessageUpsertEvent = {
   messages?: WAMessage[];
 };
 
+type ConnectionUpdateEvent = Partial<ConnectionState>;
+
 type Waiter = {
   predicate: (message: WhatsAppQaDriverObservedMessage) => boolean;
   reject: (error: Error) => void;
   resolve: (message: WhatsAppQaDriverObservedMessage) => void;
+  timeout: NodeJS.Timeout;
+};
+
+type PendingNotificationsWaiter = {
+  reject: (error: Error) => void;
+  resolve: () => void;
   timeout: NodeJS.Timeout;
 };
 
@@ -322,14 +330,26 @@ function closeSocket(sock: Awaited<ReturnType<typeof createWaSocket>>) {
   }
 }
 
+function createConnectionClosedError(update: ConnectionUpdateEvent) {
+  const reason = update.lastDisconnect?.error;
+  const status = getStatusCode(reason);
+  const details = reason ? `: ${formatError(reason)}` : "";
+  const statusLabel = typeof status === "number" ? ` (status ${status})` : "";
+  return new Error(`WhatsApp QA driver connection closed${statusLabel}${details}`);
+}
+
 export async function startWhatsAppQaDriverSession(params: {
   authDir: string;
   connectionTimeoutMs?: number;
+  waitForPendingNotifications?: boolean;
 }): Promise<WhatsAppQaDriverSession> {
   const sock = await createWaSocket(false, false, { authDir: params.authDir });
   const observedMessages: WhatsAppQaDriverObservedMessage[] = [];
+  const pendingNotificationsWaiters: PendingNotificationsWaiter[] = [];
   const waiters: Waiter[] = [];
   let closed = false;
+  let closedError: Error | undefined;
+  let receivedPendingNotifications = false;
 
   const removeWaiter = (waiter: Waiter) => {
     const index = waiters.indexOf(waiter);
@@ -337,6 +357,25 @@ export async function startWhatsAppQaDriverSession(params: {
       waiters.splice(index, 1);
     }
     clearTimeout(waiter.timeout);
+  };
+
+  const removePendingNotificationsWaiter = (waiter: PendingNotificationsWaiter) => {
+    const index = pendingNotificationsWaiters.indexOf(waiter);
+    if (index >= 0) {
+      pendingNotificationsWaiters.splice(index, 1);
+    }
+    clearTimeout(waiter.timeout);
+  };
+
+  const markPendingNotificationsReceived = () => {
+    if (receivedPendingNotifications) {
+      return;
+    }
+    receivedPendingNotifications = true;
+    for (const waiter of pendingNotificationsWaiters.slice()) {
+      removePendingNotificationsWaiter(waiter);
+      waiter.resolve();
+    }
   };
 
   const observe = (message: WhatsAppQaDriverObservedMessage) => {
@@ -359,11 +398,24 @@ export async function startWhatsAppQaDriverSession(params: {
     }
   };
 
+  const onConnectionUpdate = (event: ConnectionUpdateEvent) => {
+    if (event.receivedPendingNotifications === true) {
+      markPendingNotificationsReceived();
+    }
+    if (event.connection === "close") {
+      closeSessionResources(createConnectionClosedError(event));
+    }
+  };
+
   const removeMessageListener = () => {
     const evWithOff = sock.ev as unknown as {
-      off?: (event: string, listener: (event: MessageUpsertEvent) => void) => void;
+      off?: (
+        event: string,
+        listener: ((event: ConnectionUpdateEvent) => void) | ((event: MessageUpsertEvent) => void),
+      ) => void;
     };
     evWithOff.off?.("messages.upsert", onMessagesUpsert);
+    evWithOff.off?.("connection.update", onConnectionUpdate);
   };
 
   const closeSessionResources = (waiterError?: Error) => {
@@ -371,6 +423,13 @@ export async function startWhatsAppQaDriverSession(params: {
       return;
     }
     closed = true;
+    closedError = waiterError;
+    for (const waiter of pendingNotificationsWaiters.slice()) {
+      removePendingNotificationsWaiter(waiter);
+      if (waiterError) {
+        waiter.reject(waiterError);
+      }
+    }
     for (const waiter of waiters.slice()) {
       removeWaiter(waiter);
       if (waiterError) {
@@ -382,8 +441,35 @@ export async function startWhatsAppQaDriverSession(params: {
   };
 
   sock.ev.on("messages.upsert", onMessagesUpsert);
+  sock.ev.on("connection.update", onConnectionUpdate);
   try {
     await waitForWaConnection(sock, { timeoutMs: params.connectionTimeoutMs ?? 45_000 });
+    if (params.waitForPendingNotifications) {
+      await new Promise<void>((resolve, reject) => {
+        if (receivedPendingNotifications) {
+          resolve();
+          return;
+        }
+        if (closed) {
+          reject(closedError ?? new Error("WhatsApp QA driver session closed"));
+          return;
+        }
+        const timeoutMs = params.connectionTimeoutMs ?? 45_000;
+        const waiter: PendingNotificationsWaiter = {
+          resolve,
+          reject,
+          timeout: setTimeout(() => {
+            removePendingNotificationsWaiter(waiter);
+            reject(
+              new Error(
+                `timed out after ${timeoutMs}ms waiting for WhatsApp QA driver pending notifications`,
+              ),
+            );
+          }, timeoutMs),
+        };
+        pendingNotificationsWaiters.push(waiter);
+      });
+    }
   } catch (error) {
     closeSessionResources(
       error instanceof Error ? error : new Error("failed starting WhatsApp QA driver session"),
@@ -460,6 +546,9 @@ export async function startWhatsAppQaDriverSession(params: {
       const existing = observedMessages.find(predicate);
       if (existing) {
         return existing;
+      }
+      if (closed) {
+        throw closedError ?? new Error("WhatsApp QA driver session closed");
       }
       return await new Promise<WhatsAppQaDriverObservedMessage>((resolve, reject) => {
         const waiter: Waiter = {
