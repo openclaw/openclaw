@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <style>
+      text { font-size: 13px; }
+      .label { font-size: 14px; font-weight: 600; fill: #333; }
+      .desc { font-size: 11px; fill: #666; }
+    </style>
+  </defs>
+
+  <!-- BEFORE panel -->
+  <rect x="20" y="20" width="360" height="460" rx="8" fill="#f8f9fa" stroke="#ddd" stroke-width="1.5"/>
+  <text x="200" y="50" text-anchor="middle" font-size="15" font-weight="700" fill="#d32f2f">BEFORE</text>
+
+  <!-- Chat area -->
+  <rect x="35" y="70" width="200" height="380" rx="6" fill="#fff" stroke="#e0e0e0"/>
+  <text x="135" y="100" text-anchor="middle" class="label" fill="#999">Chat Messages</text>
+  <rect x="45" y="115" width="180" height="36" rx="4" fill="#e3f2fd"/>
+  <text x="55" y="137" font-size="12" fill="#1565c0">User: hi, can you help me...</text>
+  <rect x="45" y="160" width="180" height="24" rx="4" fill="#f3f3f3"/>
+  <text x="55" y="176" font-size="11" fill="#666">Agent: Sure, let me check...</text>
+
+  <!-- Workspace rail (BEFORE - no collapse) -->
+  <rect x="245" y="70" width="120" height="380" rx="6" fill="#fff" stroke="#e8e8e8"/>
+  <line x1="245" y1="70" x2="245" y2="450" stroke="#e8e8e8" stroke-width="1"/>
+
+  <!-- Header -->
+  <text x="255" y="92" font-size="10" fill="#999" text-transform="uppercase">WORKSPACE</text>
+  <text x="255" y="107" font-size="13" font-weight="600" fill="#333">Files</text>
+  <rect x="330" y="78" width="24" height="24" rx="4" fill="#f0f0f0"/>
+  <text x="342" y="94" text-anchor="middle" font-size="14" fill="#666">↻</text>
+
+  <!-- Files -->
+  <line x1="255" y1="120" x2="355" y2="120" stroke="#eee"/>
+  <rect x="255" y="130" width="90" height="28" rx="4" fill="#f5f5f5"/>
+  <text x="262" y="148" font-size="11" fill="#333">📄 AGENTS.md</text>
+  <rect x="255" y="163" width="90" height="28" rx="4" fill="#f0f8ff"/>
+  <text x="262" y="181" font-size="11" fill="#1565c0">📄 SOUL.md</text>
+  <rect x="255" y="196" width="90" height="28" rx="4" fill="#f5f5f5"/>
+  <text x="262" y="214" font-size="11" fill="#333">📄 MEMORY.md</text>
+  <rect x="255" y="229" width="90" height="28" rx="4" fill="#f5f5f5"/>
+  <text x="262" y="247" font-size="11" fill="#333">📄 USER.md</text>
+
+  <!-- Problem indicator -->
+  <text x="200" y="470" text-anchor="middle" class="desc" fill="#d32f2f">No collapse button — always visible, wastes space</text>
+
+  <!-- Arrow -->
+  <text x="395" y="260" font-size="28" fill="#999" font-weight="300">→</text>
+
+  <!-- AFTER panel -->
+  <rect x="420" y="20" width="360" height="460" rx="8" fill="#f8f9fa" stroke="#ddd" stroke-width="1.5"/>
+  <text x="600" y="50" text-anchor="middle" font-size="15" font-weight="700" fill="#2e7d32">AFTER</text>
+
+  <!-- Chat area (expanded) -->
+  <rect x="435" y="70" width="330" height="380" rx="6" fill="#fff" stroke="#e0e0e0"/>
+  <text x="600" y="100" text-anchor="middle" class="label" fill="#999">Chat Messages (full width)</text>
+  <rect x="445" y="115" width="180" height="36" rx="4" fill="#e3f2fd"/>
+  <text x="455" y="137" font-size="12" fill="#1565c0">User: hi, can you help me...</text>
+  <rect x="445" y="160" width="300" height="24" rx="4" fill="#f3f3f3"/>
+  <text x="455" y="176" font-size="11" fill="#666">Agent: Sure, let me check your workspace files...</text>
+
+  <!-- Collapsed workspace rail (just thin bar) -->
+  <rect x="740" y="70" width="25" height="380" rx="6" fill="#fff" stroke="#e8e8e8"/>
+  <rect x="745" y="78" width="16" height="16" rx="3" fill="#f0f0f0"/>
+  <text x="753" y="90" text-anchor="middle" font-size="10" fill="#666">◀</text>
+
+  <!-- Callout - collapse button -->
+  <rect x="680" y="65" width="70" height="20" rx="4" fill="#e8f5e9"/>
+  <text x="715" y="79" text-anchor="middle" font-size="10" fill="#2e7d32">Collapse ▷ button</text>
+
+  <!-- Callout - expand arrow -->
+  <rect x="710" y="240" width="65" height="20" rx="4" fill="#e8f5e9"/>
+  <text x="742" y="254" text-anchor="middle" font-size="10" fill="#2e7d32">▶ to expand</text>
+
+  <text x="600" y="470" text-anchor="middle" class="desc" fill="#2e7d32">Toggle button to collapse/expand — chat fills freed space</text>
+</svg>
