@@ -992,6 +992,18 @@ export const SlackAccountSchema = z
     userTokenReadOnly: z.boolean().optional().default(true),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
     botLoopProtection: BotLoopProtectionSchema.optional(),
+    memberPolicy: z
+      .object({
+        enabled: z.boolean().optional(),
+        teamId: z.string().min(1).optional(),
+        requireWorkspaceTeam: z.boolean().optional(),
+        denyGuests: z.boolean().optional(),
+        denyExternal: z.boolean().optional(),
+        denyBots: z.boolean().optional(),
+        denyDeleted: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),

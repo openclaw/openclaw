@@ -123,6 +123,25 @@ describe("slack config schema", () => {
     });
   });
 
+  it("accepts workspace member policy at root and account level", () => {
+    expectSlackConfigValid({
+      memberPolicy: {
+        enabled: true,
+        teamId: "T123",
+        denyGuests: true,
+        denyExternal: true,
+      },
+      accounts: {
+        ops: {
+          memberPolicy: {
+            enabled: true,
+            denyBots: false,
+          },
+        },
+      },
+    });
+  });
+
   it("requires every relay connection field", () => {
     expectSlackConfigIssue({ mode: "relay" }, "relay.url");
     expectSlackConfigIssue(
@@ -138,6 +157,29 @@ describe("slack config schema", () => {
         },
       },
       "relay.gatewayId",
+    );
+  });
+
+  it("rejects invalid workspace member policy", () => {
+    expectSlackConfigIssue(
+      {
+        memberPolicy: {
+          enabled: "yes",
+        },
+      },
+      "memberPolicy.enabled",
+    );
+    expectSlackConfigIssue(
+      {
+        accounts: {
+          ops: {
+            memberPolicy: {
+              teamId: "",
+            },
+          },
+        },
+      },
+      "accounts.ops.memberPolicy.teamId",
     );
   });
 

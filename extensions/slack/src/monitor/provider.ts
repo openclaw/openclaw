@@ -395,6 +395,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     defaultRequireMention: slackCfg.requireMention,
     channelsConfig,
     groupPolicy,
+    memberPolicy: slackCfg.memberPolicy,
     useAccessGroups,
     reactionMode,
     reactionAllowlist,

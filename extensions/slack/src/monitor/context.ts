@@ -4,6 +4,7 @@ import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type {
   OpenClawConfig,
+  SlackMemberPolicyConfig,
   SlackReactionNotificationMode,
 } from "openclaw/plugin-sdk/config-contracts";
 import type { SessionScope } from "openclaw/plugin-sdk/config-contracts";
@@ -119,6 +120,7 @@ export type SlackMonitorContext = {
   channelsConfig?: SlackChannelConfigEntries;
   channelsConfigKeys: string[];
   groupPolicy: GroupPolicy;
+  memberPolicy?: SlackMemberPolicyConfig;
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
@@ -155,6 +157,15 @@ export type SlackMonitorContext = {
     purpose?: string;
   }>;
   resolveUserName: (userId: string) => Promise<{ name?: string }>;
+  resolveUserAccess: (userId: string) => Promise<{
+    name?: string;
+    teamId?: string;
+    deleted?: boolean;
+    isBot?: boolean;
+    isRestricted?: boolean;
+    isUltraRestricted?: boolean;
+    isStranger?: boolean;
+  }>;
   setSlackThreadStatus: (params: {
     channelId: string;
     threadTs?: string;
@@ -204,6 +215,7 @@ export function createSlackMonitorContext(params: {
   defaultRequireMention?: boolean;
   channelsConfig?: SlackMonitorContext["channelsConfig"];
   groupPolicy: SlackMonitorContext["groupPolicy"];
+  memberPolicy?: SlackMemberPolicyConfig;
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
@@ -230,7 +242,18 @@ export function createSlackMonitorContext(params: {
       purpose?: string;
     }
   >();
-  const userCache = new Map<string, { name?: string }>();
+  const userCache = new Map<
+    string,
+    {
+      name?: string;
+      teamId?: string;
+      deleted?: boolean;
+      isBot?: boolean;
+      isRestricted?: boolean;
+      isUltraRestricted?: boolean;
+      isStranger?: boolean;
+    }
+  >();
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
   const assistantThreadContexts = new Map<string, SlackAssistantThreadContext>();
   let lastAssistantContextCleanupAt = Date.now();
@@ -420,21 +443,46 @@ export function createSlackMonitorContext(params: {
     }
   };
 
-  const resolveUserName = async (userId: string) => {
+  const resolveUserAccess = async (userId: string) => {
     const cached = userCache.get(userId);
     if (cached) {
       return cached;
     }
+    const info = await params.app.client.users.info({
+      token: params.botToken,
+      user: userId,
+    });
+    const user = info.user as
+      | {
+          name?: string;
+          team_id?: string;
+          deleted?: boolean;
+          is_bot?: boolean;
+          is_app_user?: boolean;
+          is_restricted?: boolean;
+          is_ultra_restricted?: boolean;
+          is_stranger?: boolean;
+          profile?: { display_name?: string; real_name?: string };
+        }
+      | undefined;
+    const profile = user?.profile;
+    const entry = {
+      name: profile?.display_name || profile?.real_name || user?.name || undefined,
+      teamId: user?.team_id,
+      deleted: user?.deleted,
+      isBot: user?.is_bot || user?.is_app_user,
+      isRestricted: user?.is_restricted,
+      isUltraRestricted: user?.is_ultra_restricted,
+      isStranger: user?.is_stranger,
+    };
+    userCache.set(userId, entry);
+    return entry;
+  };
+
+  const resolveUserName = async (userId: string) => {
     try {
-      const info = await params.app.client.users.info({
-        token: params.botToken,
-        user: userId,
-      });
-      const profile = info.user?.profile;
-      const name = profile?.display_name || profile?.real_name || info.user?.name || undefined;
-      const entry = { name };
-      userCache.set(userId, entry);
-      return entry;
+      const { name } = await resolveUserAccess(userId);
+      return { name };
     } catch {
       return {};
     }
@@ -620,6 +668,7 @@ export function createSlackMonitorContext(params: {
     channelsConfig: params.channelsConfig,
     channelsConfigKeys,
     groupPolicy: params.groupPolicy,
+    memberPolicy: params.memberPolicy,
     useAccessGroups: params.useAccessGroups,
     reactionMode: params.reactionMode,
     reactionAllowlist: params.reactionAllowlist,
@@ -641,6 +690,7 @@ export function createSlackMonitorContext(params: {
     isChannelAllowed,
     resolveChannelName,
     resolveUserName,
+    resolveUserAccess,
     setSlackThreadStatus,
     getSlackAssistantThreadContext,
     saveSlackAssistantThreadContext,

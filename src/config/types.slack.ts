@@ -149,6 +149,23 @@ export type SlackRelayConfig = {
   gatewayId?: string;
 };
 
+export type SlackMemberPolicyConfig = {
+  /** If true, verify Slack senders before dispatching inbound messages and actions. Default: false. */
+  enabled?: boolean;
+  /** Expected Slack workspace team ID. Defaults to the team_id returned by auth.test. */
+  teamId?: string;
+  /** Require the sender's team_id to match the workspace team. Default: true when enabled. */
+  requireWorkspaceTeam?: boolean;
+  /** Deny restricted and ultra-restricted Slack guest accounts. Default: true when enabled. */
+  denyGuests?: boolean;
+  /** Deny Slack Connect/external users reported as strangers. Default: true when enabled. */
+  denyExternal?: boolean;
+  /** Deny bot/app users. Default: true when enabled. */
+  denyBots?: boolean;
+  /** Deny deleted/deactivated Slack users. Default: true when enabled. */
+  denyDeleted?: boolean;
+};
+
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -183,6 +200,8 @@ export type SlackAccountConfig = {
   allowBots?: boolean | "mentions";
   /** Sliding-window bot-pair loop guard for accepted bot-authored Slack messages. */
   botLoopProtection?: ChannelBotLoopProtectionConfig;
+  /** Optional workspace-member authorization for inbound Slack senders. */
+  memberPolicy?: SlackMemberPolicyConfig;
   /**
    * Break-glass override: allow mutable identity matching (name/slug) in allowlists.
    * Default behavior is ID-only matching.
