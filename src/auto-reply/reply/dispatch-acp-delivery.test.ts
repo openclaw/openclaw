@@ -1,6 +1,7 @@
 // Tests ACP dispatch delivery routing and visible reply handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher, type ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -966,10 +967,13 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     const delivered = await coordinator.deliver(
       "final",
-      {
-        text: "spoken caption",
-        mediaUrls: ["https://example.com/audio.ogg"],
-      },
+      markReplyPayloadAsTtsSupplement(
+        {
+          text: "spoken caption",
+          mediaUrls: ["https://example.com/audio.ogg"],
+        },
+        "spoken caption",
+      ),
       { skipTts: true },
     );
 
@@ -1002,10 +1006,13 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     const delivered = await coordinator.deliver(
       "final",
-      {
-        text: "spoken caption",
-        mediaUrls: ["https://example.com/audio.ogg"],
-      },
+      markReplyPayloadAsTtsSupplement(
+        {
+          text: "spoken caption",
+          mediaUrls: ["https://example.com/audio.ogg"],
+        },
+        "spoken caption",
+      ),
       { skipTts: true },
     );
 
@@ -1014,6 +1021,39 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(delivered).toBe(true);
     expect(coordinator.hasDeliveredFinalReply()).toBe(true);
     expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(true);
+    expect(coordinator.hasDeliveredFinalReplyToUser()).toBe(true);
+  });
+
+  it("does not mark final TTS media for an ordinary (non-supplement) routed media final", async () => {
+    // Defensive invariant: ACP only emits text finals plus the genuine synthesized
+    // voice supplement today. An ordinary media-only final (no TTS supplement
+    // marker) must never satisfy the TTS-media gate, or it would wrongly suppress
+    // the downstream block-text fallback.
+    deliveryMocks.routeReply.mockResolvedValueOnce({ ok: true, messageId: "final-1" });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver(
+      "final",
+      { mediaUrls: ["https://example.com/photo.png"] },
+      { skipTts: true },
+    );
+
+    expect(delivered).toBe(true);
+    expect(coordinator.hasDeliveredFinalReply()).toBe(true);
+    // Ordinary media final reached the user, but it is not synthesized TTS media.
+    expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
     expect(coordinator.hasDeliveredFinalReplyToUser()).toBe(true);
   });
 
