@@ -31,7 +31,7 @@ const baseModel = {
 } satisfies TestOpenAICompletionsModel;
 
 describe("model thinking levels", () => {
-  it("exposes xhigh/max when an OpenAI-compatible model advertises xhigh reasoning effort", () => {
+  it("exposes xhigh when an OpenAI-compatible model advertises xhigh reasoning effort", () => {
     const model = {
       ...baseModel,
       compat: {
@@ -47,10 +47,9 @@ describe("model thinking levels", () => {
       "medium",
       "high",
       "xhigh",
-      "max",
     ]);
     expect(clampThinkingLevel(model, "xhigh")).toBe("xhigh");
-    expect(clampThinkingLevel(model, "max")).toBe("max");
+    expect(clampThinkingLevel(model, "max")).toBe("xhigh");
   });
 
   it("uses compat reasoning effort maps for extended thinking levels", () => {
@@ -76,6 +75,30 @@ describe("model thinking levels", () => {
     ]);
     expect(clampThinkingLevel(model, "xhigh")).toBe("xhigh");
     expect(clampThinkingLevel(model, "max")).toBe("xhigh");
+  });
+
+  it("exposes max only when compat metadata explicitly supports max", () => {
+    const model = {
+      ...baseModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+        reasoningEffortMap: {
+          max: "xhigh",
+        },
+      },
+    } satisfies TestOpenAICompletionsModel;
+
+    expect(getSupportedThinkingLevels(model)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(clampThinkingLevel(model, "max")).toBe("max");
   });
 
   it("keeps xhigh hidden for reasoning models without explicit extended support", () => {

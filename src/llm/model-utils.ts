@@ -90,14 +90,8 @@ function compatSupportsThinkingLevel<TApi extends Api>(
     return true;
   }
 
-  const effortLevel = level === "max" ? "xhigh" : level;
-  if (supportedEfforts.has(effortLevel)) {
+  if (supportedEfforts.has(level)) {
     return true;
-  }
-
-  if (level === "max") {
-    const mappedXHigh = effortMap?.xhigh;
-    return mappedXHigh !== null && mappedReasoningEffortIsSupported(mappedXHigh, supportedEfforts);
   }
 
   return false;
