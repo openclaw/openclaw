@@ -885,25 +885,45 @@ function captureDeliveredTranscriptMirror(params: {
   return () => (observedFinal ? deliveredMetadata : metadata);
 }
 
+// Confirms the final reply actually settled on the dispatcher chain.
+// sendFinalReply only enqueues; the visible send (e.g. Telegram sendVoice)
+// settles async and can fail later. Returns false when an async failure/cancel
+// is detected so callers gate delivery off real settlement, not the queue-only
+// return value.
+async function confirmDispatcherFinalDelivered(params: {
+  dispatcher: ReplyDispatcher;
+  before: { cancelled: number; failed: number };
+}): Promise<boolean> {
+  await params.dispatcher.waitForIdle();
+  const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
+  return !(after.cancelled > params.before.cancelled || after.failed > params.before.failed);
+}
+
+// Mirrors the delivered final reply to the transcript, but only after confirming
+// it settled. Returns false (and skips the mirror) when an async failure/cancel
+// is detected so callers gate delivery off real settlement.
 async function mirrorTranscriptAfterDispatcherDelivery(params: {
   dispatcher: ReplyDispatcher;
   before: { cancelled: number; failed: number };
   metadata: () => TranscriptMirror | undefined;
   cfg: OpenClawConfig;
-}): Promise<void> {
-  await params.dispatcher.waitForIdle();
-  const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
-  if (after.cancelled > params.before.cancelled || after.failed > params.before.failed) {
-    return;
+}): Promise<boolean> {
+  const settled = await confirmDispatcherFinalDelivered({
+    dispatcher: params.dispatcher,
+    before: params.before,
+  });
+  if (!settled) {
+    return false;
   }
   const metadata = params.metadata();
   if (!metadata) {
-    return;
+    return true;
   }
   await mirrorDeliveredReplyToTranscript({
     metadata,
     cfg: params.cfg,
   });
+  return true;
 }
 
 function runWithDispatchAbortSignal<T>(
@@ -2456,19 +2476,23 @@ export async function dispatchReplyFromConfig(
         metadata: transcriptMirror,
       });
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
-      if (queuedFinal) {
-        await mirrorTranscriptAfterDispatcherDelivery({
+      // sendFinalReply only enqueues; the visible send settles async and can fail.
+      // Gate deliveredFinal/deliveredMedia off confirmed settlement so a captioned
+      // final TTS that fails async still lets the block-text fallback run. queuedFinal
+      // stays queue-state for callers counting queued finals.
+      const deliveredFinal =
+        queuedFinal &&
+        (await mirrorTranscriptAfterDispatcherDelivery({
           dispatcher,
           before: finalOutcomeBefore,
           metadata: deliveredTranscriptMirror,
           cfg,
-        });
-      }
+        }));
       return {
         queuedFinal,
         routedFinalCount: 0,
-        deliveredMedia: payloadHasMedia && queuedFinal,
-        deliveredFinal: queuedFinal,
+        deliveredMedia: payloadHasMedia && deliveredFinal,
+        deliveredFinal,
       };
     };
 
@@ -3470,9 +3494,19 @@ export async function dispatchReplyFromConfig(
             } else {
               throwIfDispatchOperationAborted();
               markInboundDedupeReplayUnsafe();
+              const ttsOutcomeBefore = getDispatcherFinalOutcomeCounts(dispatcher);
               const didQueue = dispatcher.sendFinalReply(normalizedTtsPayload);
               queuedFinal = didQueue || queuedFinal;
-              ttsMediaDelivered = didQueue;
+              // sendFinalReply only enqueues; confirm the synthetic voice actually
+              // settled before suppressing the text-only fallback. An async failure
+              // must leave ttsMediaDelivered false so the block text still reaches
+              // the user.
+              ttsMediaDelivered =
+                didQueue &&
+                (await confirmDispatcherFinalDelivered({
+                  dispatcher,
+                  before: ttsOutcomeBefore,
+                }));
             }
           }
         } catch (err) {

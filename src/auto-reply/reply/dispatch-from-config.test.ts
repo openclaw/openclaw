@@ -643,9 +643,10 @@ beforeAll(async () => {
   } = await import("./reply-run-registry.js"));
 });
 
-function createDispatcher(): ReplyDispatcher {
+function createDispatcher(options?: { failFinalOnMedia?: boolean }): ReplyDispatcher {
   let beforeDeliver: ReplyDispatchBeforeDeliver | undefined;
   const beforeDeliverTasks: Promise<unknown>[] = [];
+  let failedFinal = 0;
   const runBeforeDeliver = (kind: "tool" | "block" | "final", payload: ReplyPayload): void => {
     if (!beforeDeliver) {
       return;
@@ -663,6 +664,16 @@ function createDispatcher(): ReplyDispatcher {
     }),
     sendFinalReply: vi.fn((payload) => {
       runBeforeDeliver("final", payload);
+      // Models a transport whose visible send settles (and fails) asynchronously:
+      // sendFinalReply enqueues successfully, but the media final fails later, so
+      // getFailedCounts().final only reflects it after waitForIdle resolves.
+      if (options?.failFinalOnMedia && payload.mediaUrl) {
+        beforeDeliverTasks.push(
+          Promise.resolve().then(() => {
+            failedFinal += 1;
+          }),
+        );
+      }
       return true;
     }),
     appendBeforeDeliver: vi.fn((hook) => {
@@ -678,7 +689,7 @@ function createDispatcher(): ReplyDispatcher {
       await Promise.all(beforeDeliverTasks);
     }),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: failedFinal })),
     markComplete: vi.fn(),
   };
 }
@@ -5175,15 +5186,14 @@ describe("dispatchReplyFromConfig", () => {
 
   it("delivers accumulated block text when captioned final TTS media send fails", async () => {
     setNoAbort();
-    // TTS succeeds (the final payload carries a voice mediaUrl) but the
-    // captioned voice note fails to send. The accumulated block text must
-    // still reach delivery so the reply content is not silently dropped.
+    // TTS succeeds (the final payload carries a voice mediaUrl) and sendFinalReply
+    // enqueues it, but the captioned voice note fails to send on the dispatcher
+    // chain asynchronously (getFailedCounts().final reports 1 only after
+    // waitForIdle resolves). The accumulated block text must still reach delivery
+    // so the reply content is not silently dropped.
     ttsMocks.state.synthesizeFinalAudio = true;
     channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
-    const dispatcher = createDispatcher();
-    (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mockImplementation(
-      (payload: ReplyPayload) => !payload.mediaUrl,
-    );
+    const dispatcher = createDispatcher({ failFinalOnMedia: true });
     const ctx = buildTestCtx({
       Provider: "telegram",
       Surface: "telegram",
@@ -5204,9 +5214,46 @@ describe("dispatchReplyFromConfig", () => {
     );
     // The captioned voice note was attempted with media...
     expect(finalPayloads.some((payload) => payload.mediaUrl)).toBe(true);
-    // ...and after it failed, the accumulated block text reached delivery.
+    // ...and after it failed async, the accumulated block text reached delivery.
     const textFallback = finalPayloads.find(
       (payload) => payload.text === "Block speech content." && !payload.mediaUrl,
+    );
+    expect(textFallback).toBeDefined();
+  });
+
+  it("delivers accumulated block text when synthesized final TTS voice fails async", async () => {
+    setNoAbort();
+    // No returned final reply: the synthesis sibling path queues a voice note from
+    // the accumulated (suppressed) block text via sendFinalReply. The enqueue
+    // succeeds but the voice fails async (getFailedCounts().final reports 1 only
+    // after waitForIdle resolves), so ttsMediaDelivered must stay false and the
+    // accumulated block text must still reach delivery as a text-only fallback.
+    ttsMocks.state.synthesizeFinalAudio = true;
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher({ failFinalOnMedia: true });
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:telegram:synth-media-fail",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Synth block speech." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const finalPayloads = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([payload]) => payload as ReplyPayload,
+    );
+    // The synthesized voice note was queued with media...
+    expect(finalPayloads.some((payload) => payload.mediaUrl)).toBe(true);
+    // ...and after it failed async, the accumulated block text was sent text-only.
+    const textFallback = finalPayloads.find(
+      (payload) => payload.text === "Synth block speech." && !payload.mediaUrl,
     );
     expect(textFallback).toBeDefined();
   });
