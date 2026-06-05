@@ -1,3 +1,4 @@
+/** Validates resolved secret values against expected value shapes. */
 import { isNonEmptyString, isRecord } from "./shared.js";
 
 /**

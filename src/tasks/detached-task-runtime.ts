@@ -1,3 +1,4 @@
+// Provides the runtime adapter for detached task execution.
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   DetachedTaskRecoveryAttemptParams,

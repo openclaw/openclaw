@@ -1,3 +1,4 @@
+// Registers and watches plugin channel runtime context values.
 import type {
   ChannelRuntimeContextKey,
   ChannelRuntimeSurface,

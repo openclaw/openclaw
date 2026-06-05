@@ -1,3 +1,4 @@
+// Normalizes inbound message metadata before it is exposed to reply prompts.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";

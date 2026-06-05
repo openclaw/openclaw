@@ -1,3 +1,4 @@
+// Resolves and classifies config paths for reads, writes, and metadata.
 import { isPlainObject } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 

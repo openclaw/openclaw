@@ -1,3 +1,4 @@
+// Normalizes music generation requests into provider-ready payloads.
 import {
   hasMediaNormalizationEntry,
   normalizeDurationToClosestMax,

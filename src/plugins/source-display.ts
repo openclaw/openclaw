@@ -1,3 +1,4 @@
+/** Formats plugin source paths for user-facing status output. */
 import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
 import { shortenHomeInString } from "../utils.js";

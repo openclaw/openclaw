@@ -1,3 +1,4 @@
+// Defines install-related Zod schema fragments for config parsing.
 import { z } from "zod";
 
 const InstallSourceSchema = z.union([

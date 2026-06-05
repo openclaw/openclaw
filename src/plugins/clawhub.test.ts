@@ -1,3 +1,4 @@
+/** Verifies ClawHub plugin spec parsing and install metadata handling. */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

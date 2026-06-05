@@ -1,3 +1,4 @@
+// Defines channel configuration types shared by channel plugins.
 import type { ContextVisibilityMode, GroupPolicy } from "./types.base.js";
 import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type {

@@ -1,3 +1,4 @@
+// Assertion helpers for auth token redaction and token shape tests.
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 

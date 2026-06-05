@@ -1,3 +1,4 @@
+// Resolves provider policy settings from config and plugin metadata.
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { resolveBundledProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import type { ModelProviderConfig, OpenClawConfig } from "./types.js";

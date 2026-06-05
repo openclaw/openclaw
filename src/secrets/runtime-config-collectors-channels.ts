@@ -1,3 +1,4 @@
+/** Collects channel contract secret assignments during runtime preparation. */
 import { getBootstrapChannelSecrets } from "../channels/plugins/bootstrap-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";

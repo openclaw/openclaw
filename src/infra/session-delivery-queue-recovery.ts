@@ -1,3 +1,4 @@
+// Recovers queued session deliveries after process crashes.
 import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,

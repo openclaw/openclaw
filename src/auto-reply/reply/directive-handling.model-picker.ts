@@ -1,3 +1,4 @@
+// Builds model picker choices and endpoint labels for model directives.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

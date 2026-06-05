@@ -1,3 +1,4 @@
+// Renders TUI overlays for help, sessions, status, and command UI.
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
 // Small adapter around pi-tui overlay focus behavior.

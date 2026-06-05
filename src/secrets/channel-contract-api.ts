@@ -1,3 +1,4 @@
+/** Loads channel secret contract APIs from bundled and external plugin artifacts. */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -200,6 +201,7 @@ function listChannelSecretContractRecords(params: {
 }
 
 /** Loads the first channel secret contract for a channel, preferring bundled metadata. */
+/** Loads a channel secret contract API for a channel id and current plugin origin policy. */
 export function loadChannelSecretContractApi(params: {
   channelId: string;
   config: OpenClawConfig;

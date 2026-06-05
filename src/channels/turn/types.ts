@@ -1,3 +1,4 @@
+// Type contracts for channel turn normalization, admission, dispatch, and delivery.
 import type { CommandTurnKind } from "../../auto-reply/command-turn-context.js";
 import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -380,6 +381,7 @@ export type AssembledChannelTurn = {
   delivery: ChannelEventDeliveryAdapter;
   replyPipeline?: ChannelTurnReplyPipelineOptions;
   dispatcherOptions?: ChannelTurnDispatcherOptions;
+  toolsAllow?: string[];
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
   record?: ChannelTurnRecordOptions;

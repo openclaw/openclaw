@@ -1,3 +1,4 @@
+// Launches the TUI process with resolved environment and arguments.
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";

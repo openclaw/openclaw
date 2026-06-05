@@ -1,3 +1,4 @@
+// Kitchen Sink Rpc Walk tests cover kitchen sink rpc walk script behavior.
 import { EventEmitter } from "node:events";
 import fs, {
   existsSync,
@@ -361,6 +362,23 @@ describe("kitchen-sink RPC gateway readiness logs", () => {
         {
           line: "[ERROR] late failure",
           lineNumber: 2002,
+        },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not allowlist dirty error lines that mention zero errors", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-zero-error-smuggle-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, "[ERROR] 0 errors reported but fatal state remained\n");
+
+      expect(findErrorLogFindings(logPath)).toEqual([
+        {
+          line: "[ERROR] 0 errors reported but fatal state remained",
+          lineNumber: 1,
         },
       ]);
     } finally {

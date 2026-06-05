@@ -1,3 +1,4 @@
+// Probes local ports and reports listener availability.
 import net from "node:net";
 
 /** Opens and closes a temporary listener to verify that a port can be bound. */

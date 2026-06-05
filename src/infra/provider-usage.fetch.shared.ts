@@ -1,3 +1,4 @@
+// Shared fetch and parsing helpers for provider usage endpoints.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { parseFiniteNumber as parseFiniteNumberish } from "./parse-finite-number.js";
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";

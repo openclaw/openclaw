@@ -1,3 +1,4 @@
+/** Resolves provider environment variable candidates and auth evidence from core/plugin metadata. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
@@ -310,6 +311,7 @@ function resolveManifestSetupProviderFallbackRefsFromSnapshot(
 }
 
 /** Resolves provider env-var candidates used by generic auth lookup. */
+/** Resolves provider auth env-var candidates from core fallbacks and plugin metadata. */
 export function resolveProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
@@ -436,6 +438,7 @@ export const testing = {
   },
 };
 
+/** Returns known env var candidates for a provider id or alias. */
 export function getProviderEnvVars(
   providerId: string,
   params?: ProviderEnvVarLookupParams,

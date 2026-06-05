@@ -1,3 +1,4 @@
+// Normalizes config version metadata and compatibility comparisons.
 import {
   comparePrereleaseIdentifiers,
   normalizeLegacyDotBetaVersion,

@@ -1,3 +1,4 @@
+// Registers music generation provider runtimes by normalized provider id.
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
