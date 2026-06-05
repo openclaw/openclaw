@@ -109,6 +109,18 @@ function legacyModelProviderConfig(provider: Record<string, unknown>): OpenClawC
   };
 }
 
+function createModelDefinition(id: string, input: Array<"text" | "image">) {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1,
+    maxTokens: 1,
+  };
+}
+
 function installSnapshot(
   config: OpenClawConfig,
   plugins: PluginManifestRecord[],
@@ -291,6 +303,64 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(["media-owner"]),
       }).image,
     ).toBe(false);
+  });
+
+  it("plans the image tool from bundled provider auth for an explicit workspace", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-plan-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const stateDir = path.join(tempRoot, "state");
+    const config: OpenClawConfig = {};
+
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(stateDir, { recursive: true });
+      setBundledPluginsDirOverrideForTest(path.join(process.cwd(), "extensions"));
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+      expect(
+        resolveOptionalMediaToolFactoryPlan({
+          config,
+          agentDir: "/tmp/openclaw-agent-main",
+          workspaceDir,
+          authStore: createAuthStore(["openai"]),
+        }).image,
+      ).toBe(true);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("plans the image tool from custom provider auth for an explicit workspace", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "acme/text-1" } } },
+      models: {
+        providers: {
+          acme: {
+            baseUrl: "https://example.com",
+            models: [
+              createModelDefinition("text-1", ["text"]),
+              createModelDefinition("vision-1", ["text", "image"]),
+            ],
+          },
+        },
+      },
+    };
+    installSnapshot(config, [
+      createPlugin({
+        id: "default-media",
+        contracts: { mediaUnderstandingProviders: ["default-media"] },
+        setupProviders: [{ id: "default-media", envVars: ["DEFAULT_MEDIA_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        agentDir: "/tmp/openclaw-agent-main",
+        workspaceDir: "/workspace/a",
+        authStore: createAuthStore(["acme"]),
+      }).image,
+    ).toBe(true);
   });
 
   it("plans the image tool from workspace manifest fallback without a current snapshot", async () => {
