@@ -486,6 +486,9 @@ export async function compactEmbeddedAgentSession(
                 compactedCount: -1,
                 tokenCount: result.result?.tokensAfter,
                 sessionFile: postCompactionSessionFile,
+                ...(typeof result.result?.summary === "string"
+                  ? { summary: result.result.summary }
+                  : {}),
               },
               afterHookCtx,
             );

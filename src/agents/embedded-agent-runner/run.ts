@@ -1427,6 +1427,9 @@ export async function runEmbeddedAgent(
                 compactedCount: -1,
                 tokenCount: compactResult.result?.tokensAfter,
                 sessionFile: compactResult.result?.sessionFile ?? activeSessionFile,
+                ...(typeof compactResult.result?.summary === "string"
+                  ? { summary: compactResult.result.summary }
+                  : {}),
               },
               resolveActiveHookContext(),
             );

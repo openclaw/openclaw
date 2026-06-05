@@ -2151,6 +2151,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       compactedCount: -1,
       tokenCount: 50,
       sessionFile: "/tmp/session.json",
+      summary: "engine-owned compaction",
     });
     expectRecordFields(mockCallArg(mockedGlobalHookRunner.runAfterCompaction, 0, 1), {
       sessionKey: "test-key",

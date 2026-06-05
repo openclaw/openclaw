@@ -176,6 +176,7 @@ async function runCompactionHooks(params: { sessionKey?: string; messageProvider
     tokensAfter: 10,
     compactedCount: 1,
     sessionFile: TEST_SESSION_FILE,
+    summary: "summary",
     summaryLength: "summary".length,
     tokensBefore: 120,
     firstKeptEntryId: "entry-1",
@@ -1060,6 +1061,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         tokenCount: 10,
         compactedCount: 1,
         sessionFile: "/tmp/session.jsonl",
+        summary: "summary",
       },
       expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
         sessionKey: "agent:main:session-1",
@@ -1633,6 +1635,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       compactedCount: -1,
       tokenCount: 50,
       sessionFile: TEST_SESSION_FILE,
+      summary: "engine-summary",
     });
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
       sessionKey: TEST_SESSION_KEY,

@@ -254,6 +254,23 @@ has imported the same plugin code.
 
 When a plugin appears installed but live chat traffic does not use it:
 
+- Run `openclaw gateway status --deep --require-rpc` and confirm the active
+  Gateway URL, profile, config path, and process are the ones you are editing.
+- Restart the live Gateway after plugin install/config/code changes. In wrapper
+  containers, PID 1 may only be a supervisor; restart or signal the child
+  `openclaw gateway run` process.
+- Use `openclaw plugins inspect <id> --json` to confirm hook registrations and
+  diagnostics. Non-bundled conversation hooks such as `llm_input`,
+  `llm_output`, `before_agent_finalize`, `agent_end`, and
+  `after_compaction.summary` need
+  `plugins.entries.<id>.hooks.allowConversationAccess=true`.
+- For model switching, prefer `before_model_resolve`. It runs before model
+  resolution for agent turns; `llm_output` only runs after a model attempt
+  produces assistant output.
+- For proof of the effective session model, use `openclaw sessions` or the
+  Gateway session/status surfaces and, when debugging provider payloads, start
+  the Gateway with `--raw-stream --raw-stream-path <path>`.
+
 ```bash
 openclaw gateway status --deep --require-rpc
 openclaw plugins inspect <plugin-id> --runtime --json

@@ -70,17 +70,6 @@ type AttemptParams = {
   authProfileId?: string;
 };
 
-type HookEvent = {
-  messageCount?: number;
-  compactedCount?: number;
-  tokenCount?: number;
-  sessionFile?: string;
-};
-
-type HookContext = {
-  sessionKey?: string;
-};
-
 function compactCallAt(index: number): CompactParams {
   // Timeout compaction tests inspect exact compactDirect params for routing,
   // prompt-cache, and token-budget context.
@@ -97,18 +86,6 @@ function attemptCallAt(index: number): AttemptParams {
     throw new Error(`expected embedded attempt call ${index + 1}`);
   }
   return call[0] as AttemptParams;
-}
-
-function hookCallAt(index: number, kind: "before" | "after"): [HookEvent, HookContext] {
-  const mock =
-    kind === "before"
-      ? mockedGlobalHookRunner.runBeforeCompaction
-      : mockedGlobalHookRunner.runAfterCompaction;
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected ${kind} compaction hook call ${index + 1}`);
-  }
-  return call as unknown as [HookEvent, HookContext];
 }
 
 describe("timeout-triggered compaction", () => {
@@ -514,17 +491,24 @@ describe("timeout-triggered compaction", () => {
 
     await runEmbeddedAgent(overflowBaseRunParams);
 
-    const [beforeEvent, beforeContext] = hookCallAt(0, "before");
-    expect(beforeEvent).toEqual({ messageCount: -1, sessionFile: "/tmp/session.json" });
-    expect(beforeContext.sessionKey).toBe("test-key");
-    const [afterEvent, afterContext] = hookCallAt(0, "after");
-    expect(afterEvent).toEqual({
-      messageCount: -1,
-      compactedCount: -1,
-      tokenCount: 70,
-      sessionFile: "/tmp/session.json",
-    });
-    expect(afterContext.sessionKey).toBe("test-key");
+    expect(mockedGlobalHookRunner.runBeforeCompaction).toHaveBeenCalledWith(
+      { messageCount: -1, sessionFile: "/tmp/session.json" },
+      expect.objectContaining({
+        sessionKey: "test-key",
+      }),
+    );
+    expect(mockedGlobalHookRunner.runAfterCompaction).toHaveBeenCalledWith(
+      {
+        messageCount: -1,
+        compactedCount: -1,
+        tokenCount: 70,
+        sessionFile: "/tmp/session.json",
+        summary: "engine-owned timeout compaction",
+      },
+      expect.objectContaining({
+        sessionKey: "test-key",
+      }),
+    );
     expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);
   });
 

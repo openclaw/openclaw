@@ -289,6 +289,18 @@ function getHooksForNameAndPlugin<K extends PluginHookName>(
   return getHooksForName(registry, hookName).filter((hook) => hook.pluginId === pluginId);
 }
 
+function eventForVoidHookHandler<K extends PluginHookName>(
+  hookName: K,
+  hook: PluginHookRegistration<K>,
+  event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+): Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0] {
+  if (hookName !== "after_compaction" || hook.receivesConversationContent === true) {
+    return event;
+  }
+  const { summary: _summary, ...metadataOnly } = event as PluginHookAfterCompactionEvent;
+  return metadataOnly as Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0];
+}
+
 /**
  * Create a hook runner for a specific registry.
  */
@@ -618,7 +630,10 @@ export function createHookRunner(
     const promises = hooks.map(async (hook) => {
       try {
         const promise = Promise.resolve(
-          (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(event, ctx),
+          (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(
+            eventForVoidHookHandler(hookName, hook, event),
+            ctx,
+          ),
         );
         const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
         if (timeoutMs) {
