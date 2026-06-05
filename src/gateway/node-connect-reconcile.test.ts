@@ -183,7 +183,7 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.registrationNodeId).toBe("custom-node-id");
     expect(requestPairing).toHaveBeenCalledWith(
       expect.objectContaining({
-        nodeId: "device-uuid",
+        nodeId: "custom-node-id",
         ownerDeviceId: "device-uuid",
       }),
     );
