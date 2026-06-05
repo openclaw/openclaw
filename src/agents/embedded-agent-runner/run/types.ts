@@ -1,3 +1,6 @@
+/**
+ * Shared result and attempt types for embedded-agent run internals.
+ */
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
@@ -74,6 +77,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  beforeAgentFinalizeRevisionAttempts?: number;
+  maxBeforeAgentFinalizeRevisions?: number;
 };
 
 export type EmbeddedRunAttemptResult = {
@@ -125,6 +130,7 @@ export type EmbeddedRunAttemptResult = {
   };
   codexAppServerFailure?: {
     kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
+    turnWatchTimeoutKind?: "progress" | "completion" | "terminal";
     transport: "stdio" | "websocket";
     threadId?: string;
     turnId?: string;
@@ -140,13 +146,21 @@ export type EmbeddedRunAttemptResult = {
   systemPromptReport?: SessionSystemPromptReport;
   finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
+  beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
-  toolMetas: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
+  toolMetas: Array<{
+    toolName: string;
+    meta?: string;
+    asyncStarted?: boolean;
+    asyncTaskRunId?: string;
+    asyncTaskId?: string;
+  }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
+  didDeliverSourceReplyViaMessageTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];

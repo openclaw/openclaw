@@ -1,3 +1,4 @@
+// Tests session restart command behavior and runtime reset handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
@@ -128,9 +129,6 @@ describe("handleRestartCommand", () => {
   });
 
   it("writes a routed restart sentinel before restarting from chat", async () => {
-    const { DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE } =
-      await import("../../infra/restart-sentinel.js");
-
     const result = await handleRestartCommand(restartCommandParams(), true);
 
     expect(result?.shouldContinue).toBe(false);
@@ -147,10 +145,7 @@ describe("handleRestartCommand", () => {
     });
     expect(sentinelPayload?.threadId).toBe("thread-1");
     expect(sentinelPayload?.message).toBe("/restart");
-    expect(sentinelPayload?.continuation).toEqual({
-      kind: "agentTurn",
-      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
-    });
+    expect(sentinelPayload?.continuation).toBeNull();
     expect(sentinelPayload?.doctorHint).toBe(
       "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
     );
@@ -179,11 +174,7 @@ describe("handleRestartCommand", () => {
       expect(sentinelPayload?.kind).toBe("restart");
       expect(sentinelPayload?.status).toBe("ok");
       expect(sentinelPayload?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
-      expect(sentinelPayload?.continuation).toEqual({
-        kind: "agentTurn",
-        message:
-          "The gateway restart completed successfully. Tell the user OpenClaw restarted successfully and continue any pending work.",
-      });
+      expect(sentinelPayload?.continuation).toBeNull();
     } finally {
       process.removeListener("SIGUSR1", handler);
     }

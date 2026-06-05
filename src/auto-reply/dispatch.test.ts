@@ -1,3 +1,4 @@
+/** Tests inbound dispatch hook composition, diagnostics, and dispatcher integration. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
@@ -141,10 +142,12 @@ describe("withReplyDispatcher", () => {
         order.push("waitForIdle");
       },
     } satisfies ReplyDispatcher;
-    hoisted.dispatchReplyFromConfigMock.mockImplementationOnce(async ({ dispatcher }) => {
-      dispatcher.sendFinalReply({ text: "ok" });
-      return { text: "ok" };
-    });
+    hoisted.dispatchReplyFromConfigMock.mockImplementationOnce(
+      async ({ dispatcher: dispatcherLocal }) => {
+        dispatcherLocal.sendFinalReply({ text: "ok" });
+        return { text: "ok" };
+      },
+    );
 
     await dispatchInboundMessage({
       ctx: buildTestCtx(),

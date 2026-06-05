@@ -1,3 +1,4 @@
+// Local skill loader reads skill definitions from local filesystem roots.
 import fs from "node:fs";
 import path from "node:path";
 import { openRootFileSync } from "../../infra/boundary-file-read.js";
@@ -10,6 +11,7 @@ type LoadedLocalSkill = {
   frontmatter: ParsedSkillFrontmatter;
 };
 
+// Read SKILL.md through the root boundary helper so symlinks cannot escape the skill root.
 function readSkillFileSync(params: {
   rootRealPath: string;
   filePath: string;
@@ -99,6 +101,7 @@ function listCandidateSkillDirs(dir: string): string[] {
   }
 }
 
+/** Loads skills from a local directory while turning read/parse failures into diagnostics. */
 export function loadSkillsFromDirSafe(params: { dir: string; source: string; maxBytes?: number }): {
   skills: Skill[];
   frontmatterByFilePath: ReadonlyMap<string, ParsedSkillFrontmatter>;

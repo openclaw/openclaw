@@ -1,3 +1,9 @@
+/**
+ * Browser action request normalization.
+ *
+ * Converts loosely typed route bodies into the closed BrowserActRequest union
+ * used by Playwright and Chrome MCP action executors.
+ */
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_CLICK_DELAY_MS,
@@ -16,7 +22,7 @@ import {
 import {
   readRouteInteger,
   readRouteNonNegativeInteger,
-  readRoutePositiveInteger,
+  readRouteTimerTimeoutMs,
 } from "./route-numeric.js";
 import { toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
 
@@ -39,6 +45,7 @@ function countBatchActions(actions: BrowserActRequest[]): number {
   return count;
 }
 
+/** Validate that nested batch actions cannot drift to a different target tab. */
 export function validateBatchTargetIds(
   actions: BrowserActRequest[],
   targetId: string,
@@ -76,10 +83,6 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
   return normalizeActRequest(value as Record<string, unknown>, { source: "batch" });
 }
 
-function readActionPositiveInteger(body: Record<string, unknown>, key: string): number | undefined {
-  return readRoutePositiveInteger(body[key], key);
-}
-
 function readActionNonNegativeInteger(
   body: Record<string, unknown>,
   key: string,
@@ -88,7 +91,7 @@ function readActionNonNegativeInteger(
 }
 
 function readActionTimeoutMs(body: Record<string, unknown>): number | undefined {
-  return readActionPositiveInteger(body, "timeoutMs");
+  return readRouteTimerTimeoutMs(body.timeoutMs);
 }
 
 function readBoundedActionDurationMs(
@@ -114,6 +117,7 @@ function readResizeDimension(body: Record<string, unknown>, key: "width" | "heig
   return value;
 }
 
+/** Normalize one model/client action payload into a BrowserActRequest. */
 export function normalizeActRequest(
   body: Record<string, unknown>,
   options?: { source?: "request" | "batch" },

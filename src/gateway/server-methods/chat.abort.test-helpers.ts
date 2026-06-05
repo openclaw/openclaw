@@ -1,3 +1,6 @@
+/**
+ * Shared helpers for chat abort gateway method tests.
+ */
 import { vi } from "vitest";
 import type { Mock } from "vitest";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
@@ -6,6 +9,8 @@ export function createActiveRun(
   sessionKey: string,
   params: {
     sessionId?: string;
+    agentId?: string;
+    controlUiVisible?: boolean;
     owner?: { connId?: string; deviceId?: string };
   } = {},
 ) {
@@ -14,8 +19,10 @@ export function createActiveRun(
     controller: new AbortController(),
     sessionId: params.sessionId ?? `${sessionKey}-session`,
     sessionKey,
+    agentId: params.agentId,
     startedAtMs: now,
     expiresAtMs: now + 30_000,
+    controlUiVisible: params.controlUiVisible,
     ownerConnId: params.owner?.connId,
     ownerDeviceId: params.owner?.deviceId,
   };
@@ -32,7 +39,9 @@ type ChatAbortTestContext = Record<string, unknown> & {
   bufferedAgentEvents: Map<string, unknown>;
   chatAbortedRuns: Map<string, number>;
   clearChatRunState: (runId: string) => void;
-  removeChatRun: (...args: unknown[]) => { sessionKey: string; clientRunId: string } | undefined;
+  removeChatRun: (
+    ...args: unknown[]
+  ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
   broadcast: (...args: unknown[]) => void;
   nodeSendToSession: (...args: unknown[]) => void;
@@ -59,6 +68,7 @@ export function createChatAbortContext(
       .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),
     clearChatRunState: (_runId: string) => {},
     agentRunSeq: new Map<string, number>(),
+    getRuntimeConfig: () => ({}),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
     logGateway: { warn: vi.fn() },
@@ -82,7 +92,7 @@ export function createChatAbortContext(
 export async function invokeChatAbortHandler(params: {
   handler: GatewayRequestHandler;
   context: ChatAbortTestContext;
-  request: { sessionKey: string; runId?: string };
+  request: { sessionKey: string; agentId?: string; runId?: string };
   client?: {
     connId?: string;
     connect?: {

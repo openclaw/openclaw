@@ -1,5 +1,12 @@
+/**
+ * Browser agent action hook routes.
+ *
+ * Handles file chooser and dialog interception for both Playwright-backed
+ * OpenClaw profiles and Chrome MCP existing-session profiles.
+ */
 import { formatErrorMessage } from "../../infra/errors.js";
 import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
+import { resolveExistingUploadPaths } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
@@ -9,8 +16,7 @@ import {
   withRouteTabContext,
 } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
-import { DEFAULT_UPLOAD_DIR, pathScope } from "./path-output.js";
-import { readRoutePositiveInteger } from "./route-numeric.js";
+import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import {
   asyncBrowserRoute,
@@ -20,6 +26,7 @@ import {
   toStringOrEmpty,
 } from "./utils.js";
 
+/** Register file chooser and dialog hook endpoints on the browser control server. */
 export function registerBrowserAgentActHookRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -35,7 +42,7 @@ export function registerBrowserAgentActHookRoutes(
       const paths = toStringArray(body.paths) ?? [];
       let timeoutMs: number | undefined;
       try {
-        timeoutMs = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       } catch (err) {
         return jsonError(res, 400, formatErrorMessage(err));
       }
@@ -49,14 +56,12 @@ export function registerBrowserAgentActHookRoutes(
         ctx,
         targetId,
         run: async ({ profileCtx, cdpUrl, tab }) => {
-          const uploadPathsResult = await pathScope(DEFAULT_UPLOAD_DIR, {
-            label: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-          }).existing(paths);
-          if (!uploadPathsResult.ok) {
-            res.status(400).json({ error: uploadPathsResult.error });
+          const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
+          if (!resolvedResult.ok) {
+            res.status(400).json({ error: resolvedResult.error });
             return;
           }
-          const resolvedPaths = uploadPathsResult.paths;
+          const resolvedPaths = resolvedResult.paths;
 
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             if (element) {
@@ -126,7 +131,7 @@ export function registerBrowserAgentActHookRoutes(
       const promptText = toStringOrEmpty(body.promptText) || undefined;
       let timeoutMs: number | undefined;
       try {
-        timeoutMs = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       } catch (err) {
         return jsonError(res, 400, formatErrorMessage(err));
       }
@@ -152,6 +157,8 @@ export function registerBrowserAgentActHookRoutes(
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,
               targetId: tab.targetId,
+              // Existing-session Chrome MCP has no dialog hook primitive. Patch
+              // one-shot window dialog functions in-page, then restore them.
               fn: `() => {
               const state = (window.__openclawDialogHook ??= {});
               if (!state.originals) {

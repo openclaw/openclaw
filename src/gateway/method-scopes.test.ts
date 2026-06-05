@@ -1,3 +1,6 @@
+/**
+ * Gateway method-scope policy tests.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -388,6 +391,37 @@ describe("core gateway method classification", () => {
       (method) => !isGatewayMethodClassified(method),
     );
     expect(unclassified).toStrictEqual([]);
+  });
+
+  it("exposes skill proposal methods through the core gateway registry", () => {
+    for (const method of ["skills.proposals.list", "skills.proposals.inspect"]) {
+      expect(listGatewayMethods()).toContain(method);
+      expect(coreGatewayHandlers).toHaveProperty(method);
+      expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.read"]);
+      expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
+        allowed: true,
+      });
+    }
+
+    for (const method of [
+      "skills.proposals.create",
+      "skills.proposals.update",
+      "skills.proposals.revise",
+      "skills.proposals.apply",
+      "skills.proposals.reject",
+      "skills.proposals.quarantine",
+    ]) {
+      expect(listGatewayMethods()).toContain(method);
+      expect(coreGatewayHandlers).toHaveProperty(method);
+      expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.admin"]);
+      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+        allowed: false,
+        missingScope: "operator.admin",
+      });
+      expect(authorizeOperatorScopesForMethod(method, ["operator.admin"])).toEqual({
+        allowed: true,
+      });
+    }
   });
 });
 

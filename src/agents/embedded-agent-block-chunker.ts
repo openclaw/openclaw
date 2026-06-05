@@ -1,5 +1,12 @@
-import type { FenceSpan } from "../markdown/fences.js";
-import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
+/**
+ * Splits streamed embedded-agent replies into Markdown-safe message chunks.
+ */
+import type { FenceSpan } from "../../packages/markdown-core/src/fences.js";
+import {
+  findFenceSpanAt,
+  isSafeFenceBreak,
+  parseFenceSpans,
+} from "../../packages/markdown-core/src/fences.js";
 
 export type BlockReplyChunking = {
   minChars: number;
@@ -112,6 +119,7 @@ export class EmbeddedBlockChunker {
     this.#chunking = chunking;
   }
 
+  /** Add streamed text to the pending chunk buffer. */
   append(text: string) {
     if (!text) {
       return;
@@ -119,18 +127,22 @@ export class EmbeddedBlockChunker {
     this.#buffer += text;
   }
 
+  /** Clear any buffered reply text without emitting it. */
   reset() {
     this.#buffer = "";
   }
 
+  /** Return the currently buffered text for tests and flush logic. */
   get bufferedText() {
     return this.#buffer;
   }
 
+  /** Return true when there is pending text to drain. */
   hasBuffered(): boolean {
     return this.#buffer.length > 0;
   }
 
+  /** Emit safe chunks according to size and Markdown fence constraints. */
   drain(params: { force: boolean; emit: (chunk: string) => void }) {
     // KNOWN: We cannot split inside fenced code blocks (Markdown breaks + UI glitches).
     // When forced (maxChars), we close + reopen the fence to keep Markdown valid.

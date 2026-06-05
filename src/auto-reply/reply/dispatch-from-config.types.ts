@@ -1,3 +1,4 @@
+// Shared type contracts for dispatch-from-config runtime execution.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GetReplyOptions, SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -10,6 +11,9 @@ export type DispatchFromConfigResult = {
   counts: Record<ReplyDispatchKind, number>;
   failedCounts?: Partial<Record<ReplyDispatchKind, number>>;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sendPolicyDenied?: boolean;
+  observedReplyDelivery?: boolean;
+  noVisibleReplyFallbackEligible?: boolean;
   beforeAgentRunBlocked?: boolean;
 };
 

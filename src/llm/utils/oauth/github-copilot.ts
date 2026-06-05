@@ -2,6 +2,7 @@
  * GitHub Copilot OAuth flow
  */
 
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   nonNegativeSecondsToSafeMilliseconds,
   positiveSecondsToSafeMilliseconds,
@@ -145,7 +146,9 @@ function formatCopilotRequestError(
 }
 
 function buildCopilotRequestSignal(options: CopilotRequestOptions): AbortSignal {
-  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? COPILOT_REQUEST_TIMEOUT_MS);
+  const timeoutSignal = AbortSignal.timeout(
+    resolveTimerTimeoutMs(options.timeoutMs, COPILOT_REQUEST_TIMEOUT_MS),
+  );
   if (!options.signal) {
     return timeoutSignal;
   }
@@ -158,7 +161,7 @@ async function fetchResponse(
   operation: string,
   options: CopilotRequestOptions = {},
 ): Promise<Response> {
-  const timeoutMs = options.timeoutMs ?? COPILOT_REQUEST_TIMEOUT_MS;
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, COPILOT_REQUEST_TIMEOUT_MS);
   try {
     return await fetch(url, {
       ...init,

@@ -1,12 +1,16 @@
+// Openai Image Auth Docker Client script supports OpenClaw repository automation.
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { isRequestBodyTooLargeError, readBody } from "./lib/mock-openai-http.mjs";
 
 const DIRECT_IMAGE_BYTES = Buffer.from("docker-direct-image");
 const CODEX_IMAGE_BYTES = Buffer.from("docker-codex-image");
 const DIRECT_TOKEN = "sk-openclaw-image-auth-e2e";
 const CODEX_TOKEN = "docker-codex-oauth-token";
 
-type RequestRecord = {
+export type RequestRecord = {
   method?: string;
   url?: string;
   authorization?: string;
@@ -19,18 +23,6 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
-}
-
-function readBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      body += chunk;
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
 }
 
 function writeJson(res: http.ServerResponse, status: number, body: unknown): void {
@@ -63,75 +55,86 @@ function writeCodexSse(res: http.ServerResponse): void {
   res.end("data: [DONE]\n\n");
 }
 
-async function startMockServer(records: RequestRecord[]): Promise<{
+export async function startMockServer(records: RequestRecord[]): Promise<{
   baseUrl: string;
   close: () => Promise<void>;
 }> {
-  const server = http.createServer(async (req, res) => {
-    try {
-      const body = await readBody(req);
-      records.push({
-        method: req.method,
-        url: req.url,
-        authorization: req.headers.authorization,
-        accept: req.headers.accept,
-        contentType: req.headers["content-type"],
-        body,
-      });
-
-      if (req.method === "POST" && req.url === "/v1/images/generations") {
-        assert(
-          req.headers.authorization === `Bearer ${DIRECT_TOKEN}`,
-          `direct image route used wrong auth: ${req.headers.authorization}`,
-        );
-        const parsed = JSON.parse(body) as { model?: string; prompt?: string; size?: string };
-        assert(parsed.model === "gpt-image-2", `direct route model mismatch: ${body}`);
-        assert(
-          parsed.prompt === "docker direct image auth",
-          `direct route prompt mismatch: ${body}`,
-        );
-        assert(parsed.size === "1024x1024", `direct route size mismatch: ${body}`);
-        writeJson(res, 200, {
-          data: [
-            {
-              b64_json: DIRECT_IMAGE_BYTES.toString("base64"),
-              revised_prompt: "docker direct revised prompt",
-            },
-          ],
+  const server = http.createServer((req, res) => {
+    void (async () => {
+      try {
+        let body: string;
+        try {
+          body = await readBody(req);
+        } catch (error) {
+          if (isRequestBodyTooLargeError(error)) {
+            writeJson(res, 413, { error: { message: error.message } });
+            return;
+          }
+          throw error;
+        }
+        records.push({
+          method: req.method,
+          url: req.url,
+          authorization: req.headers.authorization,
+          accept: req.headers.accept,
+          contentType: req.headers["content-type"],
+          body,
         });
-        return;
-      }
 
-      if (req.method === "POST" && req.url === "/backend-api/codex/responses") {
-        assert(
-          req.headers.authorization === `Bearer ${CODEX_TOKEN}`,
-          `codex image route used wrong auth: ${req.headers.authorization}`,
-        );
-        const parsed = JSON.parse(body) as {
-          tools?: Array<{ type?: string; model?: string; size?: string }>;
-          input?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
-        };
-        assert(
-          parsed.tools?.[0]?.type === "image_generation" &&
-            parsed.tools[0].model === "gpt-image-2" &&
-            parsed.tools[0].size === "1024x1024",
-          `codex image tool mismatch: ${body}`,
-        );
-        assert(
-          parsed.input?.[0]?.content?.some(
-            (entry) =>
-              entry.type === "input_text" && entry.text === "docker codex oauth image auth",
-          ),
-          `codex prompt missing: ${body}`,
-        );
-        writeCodexSse(res);
-        return;
-      }
+        if (req.method === "POST" && req.url === "/v1/images/generations") {
+          assert(
+            req.headers.authorization === `Bearer ${DIRECT_TOKEN}`,
+            `direct image route used wrong auth: ${req.headers.authorization}`,
+          );
+          const parsed = JSON.parse(body) as { model?: string; prompt?: string; size?: string };
+          assert(parsed.model === "gpt-image-2", `direct route model mismatch: ${body}`);
+          assert(
+            parsed.prompt === "docker direct image auth",
+            `direct route prompt mismatch: ${body}`,
+          );
+          assert(parsed.size === "1024x1024", `direct route size mismatch: ${body}`);
+          writeJson(res, 200, {
+            data: [
+              {
+                b64_json: DIRECT_IMAGE_BYTES.toString("base64"),
+                revised_prompt: "docker direct revised prompt",
+              },
+            ],
+          });
+          return;
+        }
 
-      writeJson(res, 404, { error: `unexpected ${req.method} ${req.url}` });
-    } catch (error) {
-      writeJson(res, 500, { error: String(error instanceof Error ? error.message : error) });
-    }
+        if (req.method === "POST" && req.url === "/backend-api/codex/responses") {
+          assert(
+            req.headers.authorization === `Bearer ${CODEX_TOKEN}`,
+            `codex image route used wrong auth: ${req.headers.authorization}`,
+          );
+          const parsed = JSON.parse(body) as {
+            tools?: Array<{ type?: string; model?: string; size?: string }>;
+            input?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+          };
+          assert(
+            parsed.tools?.[0]?.type === "image_generation" &&
+              parsed.tools[0].model === "gpt-image-2" &&
+              parsed.tools[0].size === "1024x1024",
+            `codex image tool mismatch: ${body}`,
+          );
+          assert(
+            parsed.input?.[0]?.content?.some(
+              (entry) =>
+                entry.type === "input_text" && entry.text === "docker codex oauth image auth",
+            ),
+            `codex prompt missing: ${body}`,
+          );
+          writeCodexSse(res);
+          return;
+        }
+
+        writeJson(res, 404, { error: `unexpected ${req.method} ${req.url}` });
+      } catch (error) {
+        writeJson(res, 500, { error: String(error instanceof Error ? error.message : error) });
+      }
+    })();
   });
 
   await new Promise<void>((resolve) => {
@@ -151,9 +154,9 @@ function createCodexOAuthStore() {
   return {
     version: 1,
     profiles: {
-      "openai-codex:default": {
+      "openai:chatgpt": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: CODEX_TOKEN,
         refresh: "docker-codex-refresh-token",
         expires: Date.now() + 60 * 60 * 1000,
@@ -162,7 +165,7 @@ function createCodexOAuthStore() {
   } as const;
 }
 
-async function main() {
+export async function main() {
   assert(
     process.env.OPENAI_API_KEY === DIRECT_TOKEN,
     "Docker lane must expose the direct OpenAI API key",
@@ -207,9 +210,9 @@ async function main() {
       cfg: {
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               baseUrl: `${mock.baseUrl}/backend-api/codex`,
-              api: "openai-codex-responses",
+              api: "openai-chatgpt-responses",
               request: { allowPrivateNetwork: true },
               models: [],
             },
@@ -244,4 +247,6 @@ async function main() {
   }
 }
 
-await main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}

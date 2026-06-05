@@ -1,3 +1,4 @@
+// Read-only session store loading parses JSON without repairing or writing the store.
 import fs from "node:fs";
 import { z } from "zod";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
@@ -8,6 +9,7 @@ const SessionStoreSchema = z.record(z.string(), z.unknown()) as z.ZodType<
   Record<string, SessionEntry | undefined>
 >;
 
+/** Reads a session store without mutating it and drops malformed entries. */
 export function readSessionStoreReadOnly(
   storePath: string,
 ): Record<string, SessionEntry | undefined> {

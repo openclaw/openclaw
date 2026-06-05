@@ -1,20 +1,30 @@
+// Assertions for release user-journey E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
+import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../bounded-response-text.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import { readTextFileTail } from "../text-file-utils.mjs";
 
-const command = process.argv[2];
-const CLICKCLACK_HTTP_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS,
-  5000,
-);
-const CLICKCLACK_HTTP_BODY_MAX_BYTES = readPositiveInt(
-  process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES,
-  1024 * 1024,
-);
+const SCAN_CHUNK_BYTES = 64 * 1024;
+const SCAN_CARRY_CHARS = 256;
+const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+
+function clickClackHttpTimeoutMs() {
+  return readPositiveInt(process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS, 5000);
+}
+
+function clickClackHttpBodyMaxBytes() {
+  return readPositiveInt(
+    process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES,
+    1024 * 1024,
+  );
+}
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -29,8 +39,43 @@ function readPositiveInt(raw, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function fileContainsText(file, needle) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return false;
+  }
+
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, stat.size));
+    let carry = "";
+    let offset = 0;
+    while (offset < stat.size) {
+      const bytesToRead = Math.min(buffer.length, stat.size - offset);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      offset += bytesRead;
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      if (text.includes(needle)) {
+        return true;
+      }
+      carry = text.slice(-Math.max(SCAN_CARRY_CHARS, needle.length - 1));
+    }
+    return false;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 async function withClickClackFixtureResponse(url, init, consume, options = {}) {
-  const timeoutMs = options.timeoutMs ?? CLICKCLACK_HTTP_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? clickClackHttpTimeoutMs();
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort();
@@ -46,49 +91,8 @@ async function withClickClackFixtureResponse(url, init, consume, options = {}) {
   }
 }
 
-function bodyTooLargeError(label, byteLimit) {
-  return Object.assign(new Error(`${label} response body exceeded ${byteLimit} bytes`), {
-    code: "ETOOBIG",
-  });
-}
-
-async function readBoundedResponseText(
-  response,
-  label,
-  byteLimit = CLICKCLACK_HTTP_BODY_MAX_BYTES,
-) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw bodyTooLargeError(label, byteLimit);
-    }
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let byteCount = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        return text + decoder.decode();
-      }
-      byteCount += value.byteLength;
-      if (byteCount > byteLimit) {
-        await reader.cancel().catch(() => {});
-        throw bodyTooLargeError(label, byteLimit);
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
-  }
+async function readBoundedResponseText(response, label, byteLimit = clickClackHttpBodyMaxBytes()) {
+  return await readBoundedResponseTextWithLimit(response, label, byteLimit);
 }
 
 async function readBoundedResponseJson(response, label) {
@@ -136,9 +140,7 @@ function writeConfig(cfg) {
 }
 
 function installRecords() {
-  const recordsPath = path.join(process.env.HOME ?? "", ".openclaw", "plugins", "installs.json");
-  const records = fs.existsSync(recordsPath) ? readJson(recordsPath) : {};
-  return records.installRecords ?? records.records ?? {};
+  return readPluginInstallRecords({ configPath: configPath() });
 }
 
 function assertOnboard() {
@@ -173,8 +175,10 @@ function assertAgentTurn() {
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  const raw = fs.readFileSync(file, "utf8");
-  assert(raw.includes(needle), `${file} did not contain ${needle}. Output: ${raw}`);
+  assert(
+    fileContainsText(file, needle),
+    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
+  );
 }
 
 function rememberPluginInstallPath() {
@@ -319,7 +323,7 @@ async function waitClickClackSocket() {
           ? await readBoundedResponseJson(response, "ClickClack fixture state")
           : undefined,
       {
-        timeoutMs: Math.min(CLICKCLACK_HTTP_TIMEOUT_MS, remainingMs),
+        timeoutMs: Math.min(clickClackHttpTimeoutMs(), remainingMs),
       },
     ).catch(() => undefined);
     if (state) {
@@ -327,7 +331,9 @@ async function waitClickClackSocket() {
         return;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`Timed out waiting for ClickClack websocket connection at ${baseUrl}`);
 }
@@ -353,7 +359,9 @@ async function waitClickClackReply() {
         return;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   const state = fs.existsSync(statePath) ? fs.readFileSync(statePath, "utf8") : "<missing>";
   throw new Error(`Timed out waiting for ClickClack reply marker ${marker}. State: ${state}`);
@@ -374,8 +382,20 @@ const commands = {
   "wait-clickclack-reply": waitClickClackReply,
 };
 
-const fn = commands[command];
-if (!fn) {
-  throw new Error(`unknown release-user-journey assertion command: ${command ?? "<missing>"}`);
+export async function runReleaseUserJourneyAssertion(command, args = []) {
+  const fn = commands[command];
+  if (!fn) {
+    throw new Error(`unknown release-user-journey assertion command: ${command ?? "<missing>"}`);
+  }
+  const previousArgv = process.argv;
+  process.argv = [previousArgv[0] ?? "node", fileURLToPath(import.meta.url), command, ...args];
+  try {
+    await fn();
+  } finally {
+    process.argv = previousArgv;
+  }
 }
-await fn();
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await runReleaseUserJourneyAssertion(process.argv[2], process.argv.slice(3));
+}

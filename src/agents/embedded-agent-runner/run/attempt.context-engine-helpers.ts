@@ -1,3 +1,6 @@
+/**
+ * Bridges attempt bootstrap/history data to context-engine prompt-cache helpers.
+ */
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { BootstrapMode } from "../../bootstrap-mode.js";
@@ -18,6 +21,12 @@ export type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unk
   contextFiles: TContextFile[];
 };
 
+/**
+ * Resolves bootstrap/context files for this attempt and reports whether the
+ * caller should persist a completed bootstrap marker. Continuation-skip mode
+ * intentionally suppresses reinjection after a full bootstrap turn has already
+ * been recorded for the session.
+ */
 export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFile>(params: {
   contextInjectionMode: "always" | "continuation-skip" | "never";
   bootstrapContextMode?: string;
@@ -39,6 +48,8 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     params.contextInjectionMode === "continuation-skip" &&
     params.bootstrapContextRunKind !== "heartbeat" &&
     (await params.hasCompletedBootstrapTurn(params.sessionFile));
+  // Continuation-skip and explicit never both produce an empty injection set,
+  // but only a clean full bootstrap later records a durable completion marker.
   const shouldSkipBootstrapInjection =
     params.contextInjectionMode === "never" || isContinuationTurn;
   const shouldRecordCompletedBootstrapTurn =
@@ -58,6 +69,10 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
   };
 }
 
+/**
+ * Builds the compact prompt-cache metadata stored on an attempt result. Empty
+ * inputs return undefined so callers do not serialize meaningless cache fields.
+ */
 export function buildContextEnginePromptCacheInfo(params: {
   retention?: "none" | "short" | "long";
   lastCallUsage?: NormalizedUsage;
@@ -79,6 +94,8 @@ export function buildContextEnginePromptCacheInfo(params: {
     promptCache.lastCallUsage = { ...params.lastCallUsage };
   }
   if (params.observation) {
+    // Copy only the stable, serializable observation fields into attempt
+    // results; runtime-only diagnostic objects stay out of persisted metadata.
     promptCache.observation = {
       broke: params.observation.broke,
       ...(typeof params.observation.previousCacheRead === "number"
@@ -103,6 +120,10 @@ export function buildContextEnginePromptCacheInfo(params: {
   return Object.keys(promptCache).length > 0 ? promptCache : undefined;
 }
 
+/**
+ * Finds the assistant message produced by the current attempt, ignoring
+ * historical messages that were present before prompt submission.
+ */
 export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
@@ -126,7 +147,11 @@ function parsePromptCacheTouchTimestamp(value: unknown): number | null {
   return null;
 }
 
-/** Resolve the effective prompt-cache touch timestamp for the current assistant turn. */
+/**
+ * Resolves the effective prompt-cache touch timestamp for the current assistant
+ * turn. Cache-read/write usage is required before an assistant timestamp can
+ * advance the touch time; otherwise the previous touch is carried forward.
+ */
 export function resolvePromptCacheTouchTimestamp(params: {
   lastCallUsage?: NormalizedUsage;
   assistantTimestamp?: unknown;
@@ -145,6 +170,11 @@ export function resolvePromptCacheTouchTimestamp(params: {
   );
 }
 
+/**
+ * Derives prompt-cache metadata from the loop transcript snapshot after a model
+ * attempt finishes. It combines the current attempt assistant usage with the
+ * carried-forward touch timestamp from earlier attempts.
+ */
 export function buildLoopPromptCacheInfo(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
@@ -155,6 +185,8 @@ export function buildLoopPromptCacheInfo(params: {
     messagesSnapshot: params.messagesSnapshot,
     prePromptMessageCount: params.prePromptMessageCount,
   });
+  // Normalize only the assistant produced by this attempt so older transcript
+  // usage does not masquerade as a fresh cache touch.
   const lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
 
   return buildContextEnginePromptCacheInfo({

@@ -1,3 +1,4 @@
+// Store session key tests cover session key normalization during disk writes.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -170,7 +171,7 @@ describe("session store key normalization", () => {
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(Object.keys(store)).toEqual([CANONICAL_KEY]);
     expect(store[CANONICAL_KEY]?.sessionId).toBe("canonical-session");
-    expect(store[CANONICAL_KEY]?.acp?.runtimeSessionName).toBe("runtime-1");
+    expect(store[CANONICAL_KEY]?.acp).toBeUndefined();
   });
 
   it("preserves updatedAt when recording inbound metadata for an existing session", async () => {

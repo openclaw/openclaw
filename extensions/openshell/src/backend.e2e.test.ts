@@ -1,3 +1,4 @@
+// Openshell tests cover backend plugin behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -270,7 +271,9 @@ HTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
         },
       };
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
 
   await runCommand({
@@ -322,7 +325,7 @@ async function runBackendExec(params: {
     env: {},
     usePty: false,
   });
-  let result: ExecResult | null = null;
+  let result: ExecResult | null | undefined;
   try {
     result = await runCommand({
       command: execSpec.argv[0] ?? "ssh",
@@ -372,7 +375,7 @@ describe("openshell sandbox backend e2e", () => {
       const scopeKey = `session:openshell-e2e-deny:${scopeSuffix}`;
       const allowSandboxName = `openclaw-policy-allow-${scopeSuffix}`;
       const gatewayPort = await allocatePort();
-      let hostPolicyServer: HostPolicyServer | null = null;
+      let hostPolicyServer: HostPolicyServer | null | undefined;
       const sandboxCfg = {
         mode: "all" as const,
         backend: "openshell" as const,

@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Openclaw Npm Release Check script supports OpenClaw repository automation.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -303,11 +304,17 @@ export function utcCalendarDayDistance(left: Date, right: Date): number {
 
 function positiveEnvInt(name: string, env: NodeJS.ProcessEnv, fallback: number): number {
   const raw = env[name]?.trim();
-  if (raw === undefined || raw === "" || !/^[0-9]+$/u.test(raw)) {
+  if (raw === undefined || raw === "") {
     return fallback;
   }
-  const value = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+  if (!/^[1-9]\d*$/u.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  return value;
 }
 
 export function resolveNpmReleaseCheckCommandTimeoutMs(
@@ -648,7 +655,7 @@ export function collectControlUiPackErrors(paths: Iterable<string>): string[] {
 
 function collectPackedTarballErrors(): string[] {
   const errors: string[] = [];
-  let stdout = "";
+  let stdout;
   try {
     stdout = runNpmCommand(["pack", "--json", "--dry-run", "--ignore-scripts"]);
   } catch (error) {

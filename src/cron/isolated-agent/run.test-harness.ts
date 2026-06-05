@@ -1,9 +1,11 @@
+// Isolated run test harness builds cron run inputs, mocks, and assertions.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
+// Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
   sessionId: string;
   updatedAt: number;
@@ -56,6 +58,7 @@ export const runEmbeddedAgentMock = createMock();
 export const runCliAgentMock = createMock();
 export const lookupContextTokensMock = createMock();
 export const getCliSessionIdMock = createMock();
+export const clearCliSessionMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
 export const logWarnMock = createMock();
@@ -283,6 +286,7 @@ vi.mock("./run-subagent-registry.runtime.js", () => ({
 }));
 
 vi.mock("../../agents/cli-runner.runtime.js", () => ({
+  clearCliSession: clearCliSessionMock,
   setCliSessionId: vi.fn(),
 }));
 
@@ -487,6 +491,7 @@ function resetRunExecutionMocks(): void {
   runEmbeddedAgentMock.mockReset();
   runEmbeddedAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
+  clearCliSessionMock.mockReset();
   getCliSessionIdMock.mockReturnValue(undefined);
   countActiveDescendantRunsMock.mockReset();
   countActiveDescendantRunsMock.mockReturnValue(0);

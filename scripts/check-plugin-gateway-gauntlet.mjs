@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from "node:child_process";
+// Runs plugin lifecycle and gateway QA gauntlet probes with timing metrics.
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import {
   parseNonNegativeInt,
   parsePositiveInt,
@@ -33,7 +35,11 @@ const DEFAULT_QA_PLUGIN_CHUNK_SIZE = 12;
 const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
-function parseArgs(argv) {
+/**
+ * Parses plugin gateway gauntlet CLI arguments and env defaults.
+ */
+export function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
     repoRoot: process.cwd(),
     outputDir: path.join(
@@ -68,10 +74,10 @@ function parseArgs(argv) {
   };
   const envIds = normalizeCsv(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
   options.pluginIds.push(...envIds);
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  parseArgv: for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     const readValue = () => {
-      const value = argv[index + 1];
+      const value = args[index + 1];
       if (!value) {
         throw new Error(`Missing value for ${arg}`);
       }
@@ -80,7 +86,7 @@ function parseArgs(argv) {
     };
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--repo-root":
         options.repoRoot = path.resolve(readValue());
         break;
@@ -224,10 +230,13 @@ function readOptionalNonNegativeIntEnv(name) {
   return raw ? parseNonNegativeInt(raw, name) : undefined;
 }
 
+/**
+ * Builds the command that prepares QA runtime artifacts before gauntlet probes.
+ */
 export function createGauntletPrebuildCommand(repoRoot) {
   return {
     command: process.execPath,
-    args: [path.join(repoRoot, "scripts", "build-all.mjs"), "cliStartup"],
+    args: [path.join(repoRoot, "scripts", "build-all.mjs"), "qaRuntime"],
   };
 }
 
@@ -253,6 +262,9 @@ function chunkArray(values, chunkSize) {
   return chunks;
 }
 
+/**
+ * Converts an output path to a repo-relative path, rejecting paths outside the repo.
+ */
 export function toRepoRelativePath(repoRoot, absolutePath) {
   const relativePath = path.relative(repoRoot, absolutePath);
   if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
@@ -301,6 +313,9 @@ function timeWrapperArgs(command, args) {
   return { command: "/usr/bin/time", args: ["-v", command, ...args], mode: "gnu" };
 }
 
+/**
+ * Parses `/usr/bin/time` output into wall, CPU, and RSS metrics.
+ */
 export function parseTimedMetrics(stderr, wallMs, mode) {
   let userSeconds = null;
   let systemSeconds = null;
@@ -372,57 +387,16 @@ function writeCommandLog(params) {
   return logPath;
 }
 
-export function runMeasuredCommand(params) {
-  const { command, args, mode } =
-    params.timeMode === "none"
-      ? { command: params.command, args: params.args, mode: "none" }
-      : timeWrapperArgs(params.command, params.args);
-  const started = performance.now();
-  const result = spawnSync(command, args, {
-    cwd: params.cwd,
-    env: params.env,
-    encoding: "utf8",
-    timeout: params.timeoutMs,
-    maxBuffer: params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES,
-    ...(mode === "none" ? (params.spawnOptions ?? {}) : {}),
-  });
-  const wallMs = performance.now() - started;
-  const spawnError = result.error
-    ? {
-        code: typeof result.error.code === "string" ? result.error.code : null,
-        message: result.error.message,
-      }
-    : null;
-  const status = result.status ?? (result.signal || spawnError ? 1 : 0);
-  const stdout = result.stdout ?? "";
-  const stderr = [
-    result.stderr ?? "",
-    spawnError ? `[spawn error] ${spawnError.code ?? "unknown"} ${spawnError.message}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-  const diagnosticFailure = detectCommandDiagnosticFailure(stdout, stderr);
-  const logPath = writeCommandLog({
-    logDir: params.logDir,
-    label: params.label,
-    command: [params.command, ...params.args],
-    stdout,
-    stderr,
-  });
-  return {
-    label: params.label,
-    phase: params.phase,
-    pluginId: params.pluginId ?? null,
-    status,
-    diagnosticFailure,
-    signal: result.signal ?? null,
-    timedOut: spawnError?.code === "ETIMEDOUT",
-    spawnError,
-    logPath,
-    ...parseTimedMetrics(stderr, wallMs, mode),
-  };
+/**
+ * Runs a measured command through the live process implementation.
+ */
+export async function runMeasuredCommand(params) {
+  return await runMeasuredCommandLive(params);
 }
 
+/**
+ * Runs one command with optional timing wrapper, bounded output, and log capture.
+ */
 export function runMeasuredCommandLive(params) {
   const { command, args, mode } =
     params.timeMode === "none"
@@ -604,24 +578,33 @@ export function runMeasuredCommandLive(params) {
       ]
         .filter(Boolean)
         .join("\n");
-      const diagnosticFailure = detectCommandDiagnosticFailure(stdout, finalStderr);
-      const logPath = writeCommandLog({
-        logDir: params.logDir,
-        label: params.label,
-        command: [params.command, ...params.args],
-        stdout,
-        stderr: finalStderr,
-      });
+      let logPath = null;
+      let logWriteError = null;
+      try {
+        logPath = writeCommandLog({
+          logDir: params.logDir,
+          label: params.label,
+          command: [params.command, ...params.args],
+          stdout,
+          stderr: finalStderr,
+        });
+      } catch (error) {
+        logWriteError = error instanceof Error ? error.message : String(error);
+      }
+      const outputDiagnosticFailure = detectCommandDiagnosticFailure(stdout, finalStderr);
+      const diagnosticFailure =
+        outputDiagnosticFailure ?? (logWriteError ? "command-log-write-failure" : null);
       resolve({
         label: params.label,
         phase: params.phase,
         pluginId: params.pluginId ?? null,
-        status: finalStatus,
+        status: logWriteError ? 1 : finalStatus,
         diagnosticFailure,
         signal: signal ?? null,
         timedOut,
         spawnError,
         logPath,
+        ...(logWriteError ? { logWriteError } : {}),
         ...parseTimedMetrics(finalStderr, wallMs, mode),
       });
     };
@@ -636,11 +619,32 @@ export function runMeasuredCommandLive(params) {
   });
 }
 
+/**
+ * Reports whether gauntlet result rows contain work beyond the prebuild step.
+ */
 export function hasGauntletWorkRows(rows) {
   return rows.some((row) => row.phase !== "prebuild");
 }
 
-function runPluginLifecycle(params) {
+function isPluginOwnedCliAlias(alias) {
+  return alias.kind === "runtime-slash" && alias.cliCommand === alias.name;
+}
+
+function buildSlashHelpProbe(params) {
+  const command = params.alias.cliCommand ?? params.alias.name;
+  return {
+    cwd: params.repoRoot,
+    env: params.env,
+    logDir: path.join(params.outputDir, "logs", "slash-help"),
+    ...openclawCommand(params.repoRoot, [command, "--help"]),
+    label: `${params.plugin.id}-slash-${params.alias.name}`,
+    phase: "slash:help",
+    pluginId: params.plugin.id,
+    timeoutMs: params.commandTimeoutMs,
+  };
+}
+
+async function runPluginLifecycle(params) {
   for (const plugin of params.plugins) {
     const commands = [
       {
@@ -648,15 +652,36 @@ function runPluginLifecycle(params) {
         args: ["install", plugin.id],
       },
       { phase: "inspect", args: ["inspect", plugin.id, "--json"] },
+      ...(params.skipSlashHelp
+        ? []
+        : plugin.cliCommandAliases
+            .filter(isPluginOwnedCliAlias)
+            .map((alias) => ({ phase: `slash-help:${alias.name}`, alias }))),
       { phase: "disable", args: ["disable", plugin.id] },
       ...(plugin.hasRequiredConfigFields ? [] : [{ phase: "enable", args: ["enable", plugin.id] }]),
       { phase: "doctor", args: ["doctor"] },
       { phase: "uninstall", args: ["uninstall", plugin.id, "--force"] },
     ];
-    for (const { phase, args } of commands) {
+    for (const { phase, args, alias } of commands) {
       process.stderr.write(`[plugin-gauntlet] ${plugin.id} ${phase}\n`);
+      if (alias) {
+        params.rows.push(
+          await runMeasuredCommand({
+            ...buildSlashHelpProbe({
+              repoRoot: params.repoRoot,
+              outputDir: params.outputDir,
+              env: params.env,
+              plugin,
+              alias,
+              commandTimeoutMs: params.commandTimeoutMs,
+            }),
+            label: `${plugin.id}-${phase}`,
+          }),
+        );
+        continue;
+      }
       params.rows.push(
-        runMeasuredCommand({
+        await runMeasuredCommand({
           cwd: params.repoRoot,
           env: params.env,
           logDir: path.join(params.outputDir, "logs", "lifecycle"),
@@ -671,28 +696,30 @@ function runPluginLifecycle(params) {
   }
 }
 
-function runSlashHelpProbes(params) {
+async function runSlashHelpProbes(params) {
   for (const plugin of params.plugins) {
-    for (const alias of plugin.cliCommandAliases) {
-      const command = alias.cliCommand ?? alias.name;
+    const aliases = params.includePluginOwnedCliAliases
+      ? plugin.cliCommandAliases
+      : plugin.cliCommandAliases.filter((entry) => !isPluginOwnedCliAlias(entry));
+    for (const alias of aliases) {
       process.stderr.write(`[plugin-gauntlet] ${plugin.id} slash-help /${alias.name}\n`);
       params.rows.push(
-        runMeasuredCommand({
-          cwd: params.repoRoot,
-          env: params.env,
-          logDir: path.join(params.outputDir, "logs", "slash-help"),
-          ...openclawCommand(params.repoRoot, [command, "--help"]),
-          label: `${plugin.id}-slash-${alias.name}`,
-          phase: "slash:help",
-          pluginId: plugin.id,
-          timeoutMs: params.commandTimeoutMs,
+        await runMeasuredCommand({
+          ...buildSlashHelpProbe({
+            repoRoot: params.repoRoot,
+            outputDir: params.outputDir,
+            env: params.env,
+            plugin,
+            alias,
+            commandTimeoutMs: params.commandTimeoutMs,
+          }),
         }),
       );
     }
   }
 }
 
-function runQaChunks(params) {
+async function runQaChunks(params) {
   const chunks = [
     ...(params.qaBaseline ? [{ label: "baseline", plugins: [] }] : []),
     ...chunkArray(params.plugins, params.qaPluginChunkSize).map((plugins, index) => ({
@@ -710,7 +737,7 @@ function runQaChunks(params) {
     process.stderr.write(
       `[plugin-gauntlet] qa chunk ${index + 1}/${chunks.length}: ${pluginIdLabel}\n`,
     );
-    const row = runMeasuredCommand({
+    const row = await runMeasuredCommand({
       cwd: params.repoRoot,
       env: params.env,
       logDir: path.join(params.outputDir, "logs", "qa-suite"),
@@ -731,19 +758,85 @@ function runQaChunks(params) {
       timeoutMs: params.qaTimeoutMs,
     });
     const summaryPath = path.join(outputDir, "qa-suite-summary.json");
-    const qaSummary = fs.existsSync(summaryPath)
-      ? JSON.parse(fs.readFileSync(summaryPath, "utf8"))
-      : null;
+    const qaSummaryResult = readQaSuiteSummary(summaryPath);
+    const qaDiagnosticFailure =
+      row.status === 0 && !row.timedOut ? qaSummaryResult.diagnosticFailure : null;
     params.rows.push({
       ...row,
       pluginId: pluginIdLabel,
-      ...(qaSummary?.metrics ? { qaMetrics: qaSummary.metrics } : {}),
+      qaSummaryPath: summaryPath,
+      ...(qaDiagnosticFailure ? { diagnosticFailure: qaDiagnosticFailure } : {}),
+      ...(qaSummaryResult.diagnosticDetail
+        ? { diagnosticDetail: qaSummaryResult.diagnosticDetail }
+        : {}),
+      ...(qaSummaryResult.summary?.metrics ? { qaMetrics: qaSummaryResult.summary.metrics } : {}),
     });
-    if (fs.existsSync(summaryPath)) {
-      summaries.push(qaSummary);
+    if (qaSummaryResult.summary) {
+      summaries.push(qaSummaryResult.summary);
     }
   }
   return summaries;
+}
+
+function readQaSuiteSummary(summaryPath) {
+  if (!fs.existsSync(summaryPath)) {
+    return {
+      diagnosticFailure: "qa-summary-missing",
+      diagnosticDetail: `expected QA suite summary at ${summaryPath}`,
+      summary: null,
+    };
+  }
+  try {
+    const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+    const invalidReason = validateQaSuiteSummary(summary);
+    if (invalidReason) {
+      return {
+        diagnosticFailure: "qa-summary-invalid",
+        diagnosticDetail: invalidReason,
+        summary: null,
+      };
+    }
+    if (summary.counts.failed > 0) {
+      return {
+        diagnosticFailure: "qa-summary-failed-scenarios",
+        diagnosticDetail: `QA suite reported ${summary.counts.failed} failed scenario(s)`,
+        summary,
+      };
+    }
+    return {
+      diagnosticFailure: null,
+      diagnosticDetail: null,
+      summary,
+    };
+  } catch (error) {
+    return {
+      diagnosticFailure: "qa-summary-invalid",
+      diagnosticDetail: error instanceof Error ? error.message : String(error),
+      summary: null,
+    };
+  }
+}
+
+function validateQaSuiteSummary(summary) {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return "QA suite summary must be a JSON object";
+  }
+  if (!Array.isArray(summary.scenarios)) {
+    return "QA suite summary missing scenarios array";
+  }
+  if (
+    !summary.counts ||
+    typeof summary.counts !== "object" ||
+    !Number.isFinite(summary.counts.total) ||
+    !Number.isFinite(summary.counts.passed) ||
+    !Number.isFinite(summary.counts.failed)
+  ) {
+    return "QA suite summary missing numeric counts";
+  }
+  if (!summary.run || typeof summary.run !== "object" || Array.isArray(summary.run)) {
+    return "QA suite summary missing run metadata";
+  }
+  return null;
 }
 
 async function main() {
@@ -788,29 +881,31 @@ async function main() {
       (row) => row.phase === "prebuild" && (row.status !== 0 || row.timedOut),
     );
     if (!prebuildFailed && !options.skipLifecycle) {
-      runPluginLifecycle({
+      await runPluginLifecycle({
         repoRoot,
         outputDir: options.outputDir,
         env: commandEnv,
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
+        skipSlashHelp: options.skipSlashHelp,
       });
     }
     if (!prebuildFailed && !options.skipSlashHelp) {
-      runSlashHelpProbes({
+      await runSlashHelpProbes({
         repoRoot,
         outputDir: options.outputDir,
         env: commandEnv,
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
+        includePluginOwnedCliAliases: options.skipLifecycle,
       });
     }
     const qaSummaries =
       options.skipQa || prebuildFailed
         ? []
-        : runQaChunks({
+        : await runQaChunks({
             repoRoot,
             outputDir: options.outputDir,
             env: commandEnv,
@@ -944,8 +1039,10 @@ async function main() {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    },
+  );
 }

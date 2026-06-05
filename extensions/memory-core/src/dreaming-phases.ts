@@ -1,3 +1,4 @@
+// Memory Core plugin module implements dreaming phases behavior.
 import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
@@ -909,7 +910,7 @@ async function collectSessionIngestionBatches(params: {
 
     const sessionScope = buildSessionScopeKey(file.agentId, file.absolutePath);
     const previousSeen = nextSeenMessages[sessionScope] ?? [];
-    let seenSet = new Set(previousSeen);
+    const seenSet = new Set(previousSeen);
     const newSeenHashes: string[] = [];
 
     const lines = entry.content.length > 0 ? entry.content.split("\n") : [];

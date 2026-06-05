@@ -1,3 +1,4 @@
+// Qqbot plugin module implements channel behavior.
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
 import {
   createMessageReceiptFromOutboundResults,
@@ -37,6 +38,14 @@ function loadGatewayModule(): Promise<typeof import("./bridge/gateway.js")> {
   return gatewayModulePromise;
 }
 
+let outboundMessagingModulePromise:
+  | Promise<typeof import("./engine/messaging/outbound.js")>
+  | undefined;
+function loadOutboundMessagingModule(): Promise<typeof import("./engine/messaging/outbound.js")> {
+  outboundMessagingModulePromise ??= import("./engine/messaging/outbound.js");
+  return outboundMessagingModulePromise;
+}
+
 function createQQBotSendReceipt(params: {
   messageId?: string;
   target: string;
@@ -69,7 +78,7 @@ async function sendQQBotText(params: {
   // platform adapter, etc.) have executed before engine code runs.
   await loadGatewayModule();
   const account = resolveQQBotAccount(params.cfg, params.accountId);
-  const { sendText } = await import("./engine/messaging/outbound.js");
+  const { sendText } = await loadOutboundMessagingModule();
   const result = await sendText({
     to: params.to,
     text: params.text,
@@ -100,7 +109,7 @@ async function sendQQBotMedia(params: {
   // Same guard as sendText — ensure adapters are registered.
   await loadGatewayModule();
   const account = resolveQQBotAccount(params.cfg, params.accountId);
-  const { sendMedia } = await import("./engine/messaging/outbound.js");
+  const { sendMedia } = await loadOutboundMessagingModule();
   const result = await sendMedia({
     to: params.to,
     text: params.text ?? "",

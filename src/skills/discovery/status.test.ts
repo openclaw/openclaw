@@ -1,3 +1,4 @@
+// Skill status tests cover discovery summaries for installed and workspace skills.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -246,7 +247,7 @@ describe("buildWorkspaceSkillStatus", () => {
     const mismatchedOs = process.platform === "darwin" ? "linux" : "darwin";
 
     const entry: SkillEntry = {
-      skill: createFixtureSkill({
+      skill: createCanonicalFixtureSkill({
         name: "os-scoped",
         description: "test",
         filePath: "/tmp/os-scoped",
@@ -313,7 +314,7 @@ describe("buildWorkspaceSkillStatus", () => {
   it("does not expose raw config values in config checks", () => {
     const secret = "discord-token-secret-abc"; // pragma: allowlist secret
     const entry: SkillEntry = {
-      skill: createFixtureSkill({
+      skill: createCanonicalFixtureSkill({
         name: "discord",
         description: "test",
         filePath: "/tmp/discord/SKILL.md",
@@ -339,14 +340,16 @@ describe("buildWorkspaceSkillStatus", () => {
 
     expect(JSON.stringify(report)).not.toContain(secret);
     const discord = report.skills.find((skill) => skill.name === "discord");
-    const check = discord?.configChecks.find((entry) => entry.path === "channels.discord.token");
+    const check = discord?.configChecks.find(
+      (entryLocal) => entryLocal.path === "channels.discord.token",
+    );
     expect(check).toEqual({ path: "channels.discord.token", satisfied: true });
     expect(check && "value" in check).toBe(false);
   });
 
   it("reports prompt and command visibility separately from eligibility", () => {
     const entry: SkillEntry = {
-      skill: createFixtureSkill({
+      skill: createCanonicalFixtureSkill({
         name: "background-only",
         description: "test",
         filePath: "/tmp/background-only/SKILL.md",
@@ -370,7 +373,7 @@ describe("buildWorkspaceSkillStatus", () => {
 
   it("uses default-visible exposure semantics when older entries omit exposure fields", () => {
     const entry: SkillEntry = {
-      skill: createFixtureSkill({
+      skill: createCanonicalFixtureSkill({
         name: "legacy-exposure",
         description: "test",
         filePath: "/tmp/legacy-exposure/SKILL.md",
@@ -393,7 +396,7 @@ describe("buildWorkspaceSkillStatus", () => {
 
   it("reports skills blocked by an agent skill filter", () => {
     const alpha: SkillEntry = {
-      skill: createFixtureSkill({
+      skill: createCanonicalFixtureSkill({
         name: "alpha",
         description: "test",
         filePath: "/tmp/alpha/SKILL.md",
@@ -403,7 +406,7 @@ describe("buildWorkspaceSkillStatus", () => {
       frontmatter: {},
     };
     const beta: SkillEntry = {
-      skill: createFixtureSkill({
+      skill: createCanonicalFixtureSkill({
         name: "beta",
         description: "test",
         filePath: "/tmp/beta/SKILL.md",
@@ -620,7 +623,7 @@ function createEntry(
 ): SkillEntry {
   const baseDir = params.baseDir ?? `/tmp/${name}`;
   return {
-    skill: createFixtureSkill({
+    skill: createCanonicalFixtureSkill({
       name,
       description: params.description ?? `${name} skill`,
       filePath: `${baseDir}/SKILL.md`,
@@ -686,14 +689,4 @@ async function writeClawHubStatusFixture(params: {
     )}\n`,
     "utf8",
   );
-}
-
-function createFixtureSkill(params: {
-  name: string;
-  description: string;
-  filePath: string;
-  baseDir: string;
-  source: string;
-}): SkillEntry["skill"] {
-  return createCanonicalFixtureSkill(params);
 }

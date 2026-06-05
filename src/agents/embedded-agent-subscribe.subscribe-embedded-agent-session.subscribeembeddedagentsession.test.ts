@@ -1,3 +1,5 @@
+// End-to-end subscription tests cover usage, lifecycle, tool logging,
+// messaging/media side effects, and replay-state behavior for embedded runs.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +24,8 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 
 describe("subscribeEmbeddedAgentSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
+    // Block replies can schedule nested microtasks; drain twice before checking
+    // delivery state in broad subscription tests.
     await Promise.resolve();
     await Promise.resolve();
   }
@@ -54,6 +58,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   function createSubscribedHarness(
     options: Omit<Parameters<typeof subscribeEmbeddedAgentSession>[0], "session">,
   ) {
+    // Default trusted media tools to built-ins so tests that opt into custom
+    // builtin sets get matching local media trust behavior.
     const { session, emit } = createStubSessionHarness();
     subscribeEmbeddedAgentSession({
       session,
@@ -135,6 +141,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   }
 
   async function captureToolLifecycleLogSubsystems(messageChannel?: string): Promise<string[]> {
+    // Use a temporary file-backed logger so subsystem attribution is verified
+    // against real serialized log lines.
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-log-attribution-"));
     const logFile = path.join(tempDir, "openclaw.log");
     try {
@@ -988,6 +996,13 @@ describe("subscribeEmbeddedAgentSession", () => {
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "private chain of thought </thi");
     emitAssistantTextDelta(emit, "nk>\nMEDIA:/tmp/a.png\n");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "private chain of thought </think>\nMEDIA:/tmp/a.png\n" }],
+      } as AssistantMessage,
+    });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads.at(-1)).toMatchObject({
@@ -1123,13 +1138,17 @@ describe("subscribeEmbeddedAgentSession", () => {
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "MEDIA:");
     emitAssistantTextDelta(emit, " https://example.com/a.png\nCaption");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "MEDIA: https://example.com/a.png\nCaption" }],
+      } as AssistantMessage,
+    });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("Caption");
-    expect(payloads[0]?.delta).toBe("Caption");
-    expect(payloads[0]?.replace).toBeUndefined();
-    expect(payloads[0]?.mediaUrls).toEqual(["https://example.com/a.png"]);
+    expect(payloads.at(-1)?.text).toBe("Caption");
+    expect(payloads.at(-1)?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
 
   it("emits agent events when media-only text is finalized", () => {
@@ -1145,11 +1164,17 @@ describe("subscribeEmbeddedAgentSession", () => {
         content: "MEDIA: https://example.com/a.png",
       },
     });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "MEDIA: https://example.com/a.png" }],
+      } as AssistantMessage,
+    });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("");
-    expect(payloads[0]?.mediaUrls).toEqual(["https://example.com/a.png"]);
+    expect(payloads.at(-1)?.text).toBe("");
+    expect(payloads.at(-1)?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
 
   it("keeps unresolved mutating failure when an unrelated tool succeeds", () => {

@@ -1,6 +1,8 @@
+// Assertions for kitchen-sink plugin E2E scenarios.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 
 const command = process.argv[2];
 const scratchRoot = process.env.KITCHEN_SINK_TMP_DIR || os.tmpdir();
@@ -108,7 +110,11 @@ function scanLogs() {
     /\blevel["']?\s*:\s*["']error["']/iu,
     /\[(?:error|ERROR)\]/u,
   ];
-  const allow = [/0 errors?/iu, /expected no diagnostics errors?/iu, /diagnostics errors?:\s*$/iu];
+  const allow = [
+    /^\s*0 errors?\s*$/iu,
+    /^\s*expected no diagnostics errors?\s*$/iu,
+    /^\s*diagnostics errors?:\s*$/iu,
+  ];
   const findings = [];
   let omittedFindings = false;
   for (const file of files) {
@@ -329,9 +335,7 @@ function assertCutoverPreinstalled() {
     throw new Error(`invalid kitchen-sink cutover preinstall spec: ${preinstallSpec}`);
   }
 
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = readJson(indexPath);
-  const record = (index.installRecords ?? index.records ?? {})[pluginId];
+  const record = readPluginInstallRecords()[pluginId];
   if (!record) {
     throw new Error(`missing kitchen-sink cutover preinstall record for ${pluginId}`);
   }
@@ -432,8 +436,8 @@ function assertInstalled() {
         "migration providers",
       ],
     };
-    for (const [field, [ids, label]] of Object.entries(pluginSurfaceIds)) {
-      expectIncludesAny(inspect.plugin?.[field], ids, label);
+    for (const [field, [ids, labelLocal]] of Object.entries(pluginSurfaceIds)) {
+      expectIncludesAny(inspect.plugin?.[field], ids, labelLocal);
     }
     expectMissing(inspect.plugin?.agentHarnessIds, "kitchen-sink-agent-harness", "agent harnesses");
     expectIncludes(inspect.services, "kitchen-sink-service", "services");
@@ -456,9 +460,7 @@ function assertInstalled() {
   }
   assertExpectedDiagnostics(surfaceMode, errorMessages);
 
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = readJson(indexPath);
-  const record = (index.installRecords ?? index.records ?? {})[pluginId];
+  const record = readPluginInstallRecords()[pluginId];
   if (!record) {
     throw new Error(`missing kitchen-sink install record for ${pluginId}`);
   }
@@ -513,9 +515,7 @@ function assertRemoved() {
     throw new Error(`kitchen-sink plugin still listed after uninstall: ${pluginId}`);
   }
 
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
-  const records = index.installRecords ?? index.records ?? {};
+  const records = readPluginInstallRecords();
   if (records[pluginId]) {
     throw new Error(`kitchen-sink install record still present after uninstall: ${pluginId}`);
   }

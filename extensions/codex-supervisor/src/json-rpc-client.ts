@@ -1,3 +1,7 @@
+/**
+ * JSON-RPC transports for Codex app-server connections over stdio proxies or
+ * websocket/unix-socket endpoints.
+ */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as net from "node:net";
@@ -28,6 +32,10 @@ function formatMalformedMessageError(error: unknown): Error {
   return new Error(`Malformed Codex app-server message: ${detail}`);
 }
 
+/**
+ * Produces denial responses for app-server approval requests the supervisor
+ * deliberately cannot grant.
+ */
 export function resolveSafeApprovalResult(method: string): Record<string, unknown> | undefined {
   if (method === "item/tool/call") {
     return {
@@ -121,6 +129,8 @@ abstract class BaseCodexJsonRpcConnection implements CodexJsonRpcConnection {
     const method = typeof message.method === "string" ? message.method : undefined;
     if (id !== undefined && method) {
       const result = resolveSafeApprovalResult(method);
+      // The supervisor is read/steer tooling, not a native approval delegate;
+      // unknown app-server requests fail closed with either a denial or -32601.
       this.sendRaw(
         JSON.stringify(
           result === undefined
@@ -264,6 +274,7 @@ function websocketMessageToString(data: WebSocket.RawData): string {
 class WebSocketCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
   private readonly ws: WebSocket;
   private readonly openPromise: Promise<void>;
+  private closing = false;
 
   constructor(endpoint: Extract<CodexSupervisorEndpoint, { transport: "websocket" }>) {
     super();
@@ -294,7 +305,11 @@ class WebSocketCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
       }
     });
     this.ws.once("error", (error) => this.fail(error));
-    this.ws.once("close", () => this.fail(new Error("Codex app-server websocket closed")));
+    this.ws.once("close", () => {
+      if (!this.closing) {
+        this.fail(new Error("Codex app-server websocket closed"));
+      }
+    });
   }
 
   async ready(): Promise<void> {
@@ -310,10 +325,34 @@ class WebSocketCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
   }
 
   async close(): Promise<void> {
-    this.ws.close();
+    this.closing = true;
+    this.fail(new Error("Codex app-server websocket closed"));
+    if (this.ws.readyState === WebSocket.CLOSED) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.ws.terminate();
+        resolve();
+      }, 1000);
+      this.ws.once("close", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      if (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN) {
+        this.ws.close();
+      } else {
+        clearTimeout(timeout);
+        resolve();
+      }
+    });
   }
 }
 
+/**
+ * Opens, initializes, and returns a JSON-RPC connection for one supervisor
+ * endpoint.
+ */
 export async function connectCodexAppServerEndpoint(
   endpoint: CodexSupervisorEndpoint,
 ): Promise<CodexJsonRpcConnection> {

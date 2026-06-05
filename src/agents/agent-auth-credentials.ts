@@ -1,8 +1,13 @@
+/** Converts auth-profile credentials into agent runtime credential maps. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { coerceSecretRef } from "../config/types.secrets.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles.js";
-import { normalizeProviderId } from "./provider-id.js";
 
+// Converts auth-profile credentials into the compact credential map consumed by
+// agent runtimes. Secret refs can be represented by markers without reading
+// secret values.
 type AgentApiKeyCredential = { type: "api_key"; key: string };
 type AgentOAuthCredential = {
   type: "oauth";
@@ -11,6 +16,7 @@ type AgentOAuthCredential = {
   expires: number;
 };
 
+/** Credential value shape consumed by agent runtimes after auth-profile normalization. */
 export type AgentCredential = AgentApiKeyCredential | AgentOAuthCredential;
 export type AgentCredentialMap = Record<string, AgentCredential>;
 
@@ -40,18 +46,19 @@ function convertAuthProfileCredentialToAgent(
   if (cred.type === "api_key") {
     const key = normalizeOptionalString(cred.key) ?? "";
     if (!key) {
+      // A configured secret ref proves the credential exists, but this converter
+      // must not resolve or leak the actual secret value.
       return hasConfiguredSecretRef(cred.keyRef) ? secretRefPlaceholder(options) : null;
     }
     return { type: "api_key", key };
   }
 
   if (cred.type === "token") {
-    if (
-      typeof cred.expires === "number" &&
-      Number.isFinite(cred.expires) &&
-      Date.now() >= cred.expires
-    ) {
-      return null;
+    if (cred.expires !== undefined) {
+      const expires = asDateTimestampMs(cred.expires);
+      if (expires === undefined || Date.now() >= expires) {
+        return null;
+      }
     }
     const token = normalizeOptionalString(cred.token) ?? "";
     if (!token) {
@@ -63,20 +70,22 @@ function convertAuthProfileCredentialToAgent(
   if (cred.type === "oauth") {
     const access = normalizeOptionalString(cred.access) ?? "";
     const refresh = normalizeOptionalString(cred.refresh) ?? "";
-    if (!access || !refresh || !Number.isFinite(cred.expires) || cred.expires <= 0) {
+    const expires = asDateTimestampMs(cred.expires);
+    if (!access || !refresh || expires === undefined || expires <= 0) {
       return null;
     }
     return {
       type: "oauth",
       access,
       refresh,
-      expires: cred.expires,
+      expires,
     };
   }
 
   return null;
 }
 
+/** Build one credential per normalized provider from an auth profile store. */
 export function resolveAgentCredentialMapFromStore(
   store: AuthProfileStore,
   options?: ResolveAgentCredentialMapOptions,
@@ -95,6 +104,7 @@ export function resolveAgentCredentialMapFromStore(
   return credentials;
 }
 
+/** Compare agent runtime credential values without broad object equality. */
 export function agentCredentialsEqual(a: AgentCredential | undefined, b: AgentCredential): boolean {
   if (!a || typeof a !== "object") {
     return false;

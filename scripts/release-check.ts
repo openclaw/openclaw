@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Release Check script supports OpenClaw repository automation.
 
 import { execFileSync } from "node:child_process";
 import {
@@ -91,6 +92,7 @@ const requiredPathGroups = [
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
+  "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
@@ -176,11 +178,17 @@ const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = resolve(
 
 function positiveEnvInt(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
-  if (raw === undefined || raw === "" || !/^[0-9]+$/u.test(raw)) {
+  if (raw === undefined || raw === "") {
     return fallback;
   }
-  const value = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+  if (!/^[1-9]\d*$/u.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  return value;
 }
 
 export function runReleaseCheckCommand(

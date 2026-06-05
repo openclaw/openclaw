@@ -22,6 +22,9 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 
+/**
+ * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(
   app: Application,
@@ -39,6 +42,9 @@ class MainViewModel(
   private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
   val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
 
+  /**
+   * Lazily starts NodeRuntime and preserves the current foreground bit across startup.
+   */
   private fun ensureRuntime(): NodeRuntime {
     runtimeRef.value?.let { return it }
     val runtime = nodeApp.ensureRuntime()
@@ -47,6 +53,9 @@ class MainViewModel(
     return runtime
   }
 
+  /**
+   * Adapts a runtime StateFlow to a stable ViewModel StateFlow before runtime startup.
+   */
   private fun <T> runtimeState(
     initial: T,
     selector: (NodeRuntime) -> StateFlow<T>,
@@ -139,6 +148,7 @@ class MainViewModel(
   val gatewayBootstrapToken: StateFlow<String> = prefs.gatewayBootstrapToken
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+  val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
   val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
@@ -185,6 +195,9 @@ class MainViewModel(
   val sms: SmsManager
     get() = ensureRuntime().sms
 
+  /**
+   * Attaches Activity-owned permission and lifecycle seams after runtime initialization.
+   */
   fun attachRuntimeUi(
     owner: LifecycleOwner,
     permissionRequester: PermissionRequester,
@@ -195,6 +208,9 @@ class MainViewModel(
     runtime.sms.attachPermissionRequester(permissionRequester)
   }
 
+  /**
+   * Starts runtime on foreground entry only after onboarding has completed.
+   */
   fun setForeground(value: Boolean) {
     foreground = value
     val runtime =
@@ -254,10 +270,12 @@ class MainViewModel(
     prefs.setGatewayPassword(value)
   }
 
+  /** Clears setup credentials through the runtime so active gateway sessions drop stale auth state. */
   fun resetGatewaySetupAuth() {
     ensureRuntime().resetGatewaySetupAuth()
   }
 
+  /** Marks onboarding complete and starts the runtime before UI observes connected-state flows. */
   fun setOnboardingCompleted(value: Boolean) {
     if (value) {
       ensureRuntime()
@@ -265,6 +283,7 @@ class MainViewModel(
     prefs.setOnboardingCompleted(value)
   }
 
+  /** Re-enters gateway setup after disconnecting and clearing one-time setup credentials. */
   fun pairNewGateway() {
     runtimeRef.value?.disconnect()
     resetGatewaySetupAuth()
@@ -272,12 +291,17 @@ class MainViewModel(
     prefs.setOnboardingCompleted(false)
   }
 
+  /** Acknowledges the one-shot request that opens onboarding at the gateway setup step. */
   fun clearGatewaySetupStartRequest() {
     _startOnboardingAtGatewaySetup.value = false
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
+  }
+
+  fun setInstalledAppsSharingEnabled(value: Boolean) {
+    ensureRuntime().setInstalledAppsSharingEnabled(value)
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
@@ -315,6 +339,7 @@ class MainViewModel(
     ensureRuntime().setVoiceScreenActive(active)
   }
 
+  /** Routes assistant intents into chat, either as a draft or queued auto-send prompt. */
   fun handleAssistantLaunch(request: AssistantLaunchRequest) {
     _requestedHomeDestination.value = HomeDestination.Chat
     if (request.autoSend) {

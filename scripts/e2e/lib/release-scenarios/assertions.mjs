@@ -1,10 +1,13 @@
+// Assertions for release scenario E2E packages and plugin state.
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
@@ -80,9 +83,41 @@ function authProfilesPath() {
   );
 }
 
+function authProfilesDatabasePath() {
+  return path.join(
+    process.env.HOME ?? "",
+    ".openclaw",
+    "agents",
+    "main",
+    "agent",
+    "openclaw-agent.sqlite",
+  );
+}
+
+function readAuthProfileStoreSqliteText() {
+  const dbPath = authProfilesDatabasePath();
+  if (!fs.existsSync(dbPath)) {
+    return "";
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
+      .get("primary");
+    return typeof row?.store_json === "string" ? row.store_json : "";
+  } catch {
+    return "";
+  } finally {
+    db?.close();
+  }
+}
+
 function readStateText() {
   const paths = [configPath(), authProfilesPath()].filter((file) => fs.existsSync(file));
-  return paths.map((file) => fs.readFileSync(file, "utf8")).join("\n");
+  return [...paths.map((file) => fs.readFileSync(file, "utf8")), readAuthProfileStoreSqliteText()]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function configureMockOpenAi() {
@@ -174,9 +209,7 @@ function assertPluginUninstalled() {
   const pluginId = process.argv[3];
   const cliRoot = process.argv[4];
   const cfg = readJson(configPath());
-  const recordsPath = path.join(process.env.HOME ?? "", ".openclaw", "plugins", "installs.json");
-  const records = fs.existsSync(recordsPath) ? readJson(recordsPath) : {};
-  const installRecords = records.installRecords ?? records.records ?? {};
+  const installRecords = readPluginInstallRecords({ configPath: configPath() });
   assert(!installRecords[pluginId], `install record still present for ${pluginId}`);
   assert(!cfg.plugins?.entries?.[pluginId], `plugin config entry still present for ${pluginId}`);
   const managedRoot = path.join(
@@ -188,7 +221,7 @@ function assertPluginUninstalled() {
   );
   assert(!fs.existsSync(managedRoot), `managed plugin directory still present: ${managedRoot}`);
   if (cliRoot) {
-    const list = JSON.stringify(records);
+    const list = JSON.stringify(installRecords);
     assert(!list.includes(cliRoot), `install records still mention CLI root ${cliRoot}`);
   }
 }

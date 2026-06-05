@@ -1,3 +1,4 @@
+// Discord tests cover channel actions plugin behavior.
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
@@ -356,20 +357,26 @@ describe("discordMessageActions", () => {
     expect(discovery?.schema).toBeUndefined();
   });
 
-  it.each(["read", "search"])("routes %s actions through gateway execution mode", (action) => {
-    expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
-      "gateway",
-    );
-  });
-
-  it.each(["send", "upload-file", "edit", "delete", "react", "pin", "poll"])(
-    "routes %s actions through local execution mode",
+  it.each(["read", "search", "edit", "delete", "react", "pin", "poll", "channel-info"])(
+    "routes %s actions through gateway execution mode",
     (action) => {
       expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
-        "local",
+        "gateway",
       );
     },
   );
+
+  it.each([
+    "send",
+    "upload-file",
+    "thread-reply",
+    "sticker",
+    "emoji-upload",
+    "sticker-upload",
+    "event-create",
+  ])("keeps %s on local execution mode", (action) => {
+    expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe("local");
+  });
 
   it("extracts send targets for message and thread reply actions", () => {
     expect(

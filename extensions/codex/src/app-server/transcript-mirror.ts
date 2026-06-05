@@ -1,3 +1,4 @@
+// Codex plugin module implements transcript mirror behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import {
@@ -358,6 +359,7 @@ export async function mirrorCodexAppServerTranscript(params: {
     emitSessionTranscriptUpdate({
       sessionFile: params.sessionFile,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       message: update.message,
       messageId: update.messageId,
       messageSeq: update.messageSeq,

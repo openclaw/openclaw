@@ -1,7 +1,12 @@
+/**
+ * Routes Codex app-server plugin approval prompts through OpenClaw's gateway
+ * approval tool and maps gateway decisions back to Codex outcomes.
+ */
 import {
   callGatewayTool,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
 
 const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_PLUGIN_APPROVAL_TITLE_LENGTH = 80;
@@ -9,6 +14,7 @@ const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 256;
 
 type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
+/** Normalized Codex app-server approval outcome after a gateway decision. */
 export type AppServerApprovalOutcome =
   | "approved-once"
   | "approved-session"
@@ -26,6 +32,7 @@ type ApprovalWaitResult = {
   decision?: ExecApprovalDecision | null;
 };
 
+/** Starts a two-phase plugin approval request through the OpenClaw gateway. */
 export async function requestPluginApproval(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   title: string;
@@ -37,7 +44,7 @@ export async function requestPluginApproval(params: {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   return callGatewayTool(
     "plugin.approval.request",
-    { timeoutMs: timeoutMs + 10_000 },
+    { timeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs) },
     {
       pluginId: "openclaw-codex-app-server",
       title: truncateForGateway(params.title, MAX_PLUGIN_APPROVAL_TITLE_LENGTH),
@@ -58,6 +65,7 @@ export async function requestPluginApproval(params: {
   ) as Promise<ApprovalRequestResult | undefined>;
 }
 
+/** Detects the gateway's explicit null-decision marker for unavailable approvals. */
 export function approvalRequestExplicitlyUnavailable(result: unknown): boolean {
   if (result === null || result === undefined || typeof result !== "object") {
     return false;
@@ -71,6 +79,7 @@ export function approvalRequestExplicitlyUnavailable(result: unknown): boolean {
   return descriptor !== undefined && "value" in descriptor && descriptor.value === null;
 }
 
+/** Waits for the gateway's final approval decision, respecting turn aborts. */
 export async function waitForPluginApprovalDecision(params: {
   approvalId: string;
   signal?: AbortSignal;
@@ -78,7 +87,7 @@ export async function waitForPluginApprovalDecision(params: {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   const waitPromise: Promise<ApprovalWaitResult | undefined> = callGatewayTool(
     "plugin.approval.waitDecision",
-    { timeoutMs: timeoutMs + 10_000 },
+    { timeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs) },
     { id: params.approvalId },
   );
   if (!params.signal) {
@@ -87,10 +96,10 @@ export async function waitForPluginApprovalDecision(params: {
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     if (params.signal!.aborted) {
-      reject(params.signal!.reason);
+      reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
       return;
     }
-    onAbort = () => reject(params.signal!.reason);
+    onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
@@ -102,6 +111,7 @@ export async function waitForPluginApprovalDecision(params: {
   }
 }
 
+/** Converts a gateway exec approval decision into the app-server approval outcome enum. */
 export function mapExecDecisionToOutcome(
   decision: ExecApprovalDecision | null | undefined,
 ): AppServerApprovalOutcome {
@@ -119,4 +129,18 @@ export function mapExecDecisionToOutcome(
 
 function truncateForGateway(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

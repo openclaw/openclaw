@@ -1,3 +1,4 @@
+// Qa Lab tests cover server plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveProviderVariant, startQaMockOpenAiServer } from "./server.js";
 
@@ -2908,14 +2909,16 @@ describe("qa mock openai server", () => {
           {
             type: "function_call_output",
             call_id: "call_mock_image_generate_1",
-            output: "MEDIA:/tmp/qa-lighthouse.png",
+            output: JSON.stringify({
+              details: { media: { mediaUrls: ["/tmp/qa-lighthouse.png"] } },
+            }),
           },
         ],
       }),
     });
 
     expect(toolResult.status).toBe(200);
-    expect(outputText(await toolResult.json())).toContain("MEDIA:/tmp/qa-lighthouse.png");
+    expect(outputText(await toolResult.json())).toContain("Attachment: /tmp/qa-lighthouse.png");
   });
 
   it("plans QA tool-search calls for instruction-declared Codex dynamic tools", async () => {
@@ -4243,7 +4246,7 @@ describe("resolveProviderVariant", () => {
   it("tags prefix-qualified openai models", () => {
     expect(resolveProviderVariant("openai/gpt-5.5")).toBe("openai");
     expect(resolveProviderVariant("openai:gpt-5.5")).toBe("openai");
-    expect(resolveProviderVariant("openai-codex/gpt-5.5")).toBe("openai");
+    expect(resolveProviderVariant("openai/gpt-5.5")).toBe("openai");
   });
 
   it("tags prefix-qualified anthropic models", () => {

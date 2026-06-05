@@ -1,3 +1,4 @@
+/** Tests command registry definitions, native specs, aliases, and argument menus. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   pinActivePluginChannelRegistry,
@@ -681,12 +682,12 @@ describe("commands registry args", () => {
           name: "level",
           description: "level",
           type: "string",
-          choices: ({ provider, model, catalog, command, arg }) => {
+          choices: ({ provider, model, catalog, command: commandLocal, arg }) => {
             seen = {
               provider,
               model,
               catalogLength: catalog?.length,
-              commandKey: command.key,
+              commandKey: commandLocal.key,
               argName: arg.name,
             };
             return ["low", "high"];

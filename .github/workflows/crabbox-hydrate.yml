@@ -32,11 +32,11 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   PNPM_CONFIG_CHILD_CONCURRENCY: "1"
-  PNPM_CONFIG_MODULES_DIR: "/tmp/openclaw-pnpm-node-modules"
+  PNPM_CONFIG_MODULES_DIR: "/var/tmp/openclaw-pnpm/node_modules"
   PNPM_CONFIG_NETWORK_CONCURRENCY: "1"
-  PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"
+  PNPM_CONFIG_STORE_DIR: "/var/cache/crabbox/pnpm/store"
   PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"
-  PNPM_CONFIG_VIRTUAL_STORE_DIR: "/tmp/openclaw-pnpm-virtual-store"
+  PNPM_CONFIG_VIRTUAL_STORE_DIR: "/var/tmp/openclaw-pnpm/virtual-store"
 
 jobs:
   hydrate:
@@ -120,9 +120,31 @@ jobs:
           append_pnpm_option_arg PNPM_CONFIG_MODULES_DIR modules-dir
           append_pnpm_option_arg PNPM_CONFIG_NETWORK_CONCURRENCY network-concurrency
           append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
+          require_safe_writable_dir() {
+            local dir="$1"
+            if [ -L "$dir" ] || [ ! -d "$dir" ] || [ ! -w "$dir" ]; then
+              echo "::error::Refusing unsafe pnpm directory: $dir"
+              exit 1
+            fi
+          }
+          prepare_crabbox_pnpm_dirs() {
+            local volatile_root="/var/tmp/openclaw-pnpm"
+            case "${PNPM_CONFIG_MODULES_DIR:?}" in "$volatile_root"/*) ;; *) echo "::error::PNPM_CONFIG_MODULES_DIR must stay under $volatile_root"; exit 1 ;; esac
+            case "${PNPM_CONFIG_VIRTUAL_STORE_DIR:?}" in "$volatile_root"/*) ;; *) echo "::error::PNPM_CONFIG_VIRTUAL_STORE_DIR must stay under $volatile_root"; exit 1 ;; esac
+            rm -rf -- "$volatile_root"
+            mkdir -p "$volatile_root" "$PNPM_CONFIG_STORE_DIR"
+            require_safe_writable_dir "$volatile_root"
+            require_safe_writable_dir "$PNPM_CONFIG_STORE_DIR"
+            mkdir -p "$PNPM_CONFIG_MODULES_DIR" "$PNPM_CONFIG_VIRTUAL_STORE_DIR"
+          }
+          prepare_crabbox_pnpm_dirs
+          if [ -L node_modules ] && [ "$(readlink node_modules)" = "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
+            rm -f node_modules
+          fi
           if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
             mkdir -p "$PNPM_CONFIG_MODULES_DIR"
             ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
+            export NODE_PATH="$PNPM_CONFIG_MODULES_DIR${NODE_PATH:+:$NODE_PATH}"
           fi
           pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
           if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
@@ -356,9 +378,10 @@ jobs:
           $env:XDG_CACHE_HOME = Join-Path $cacheRoot "cache"
           $env:COREPACK_HOME = Join-Path $env:XDG_CACHE_HOME "corepack"
           $env:PNPM_HOME = Join-Path $cacheRoot "pnpm-home"
-          $env:PNPM_CONFIG_STORE_DIR = Join-Path $cacheRoot "openclaw-pnpm-store"
-          $env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"
-          $env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $workspace "node_modules\.pnpm"
+          $pnpmCacheRoot = Join-Path $cacheRoot "openclaw-pnpm"
+          $env:PNPM_CONFIG_STORE_DIR = Join-Path $pnpmCacheRoot "store"
+          $env:PNPM_CONFIG_MODULES_DIR = Join-Path $pnpmCacheRoot "node_modules"
+          $env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $pnpmCacheRoot "virtual-store"
           $env:PNPM_CONFIG_CHILD_CONCURRENCY = "4"
           $env:PNPM_CONFIG_NETWORK_CONCURRENCY = "8"
           $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"
@@ -430,6 +453,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+          $workspaceNodeModules = Join-Path $workspace "node_modules"
+          if (Test-Path $workspaceNodeModules) {
+            $workspaceNodeModulesItem = Get-Item $workspaceNodeModules -Force
+            if (($workspaceNodeModulesItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+              $nodeModulesChildren = @(Get-ChildItem -LiteralPath $workspaceNodeModules -Force)
+              $hasOnlyPnpmWorkspaceState = $nodeModulesChildren.Count -eq 1 -and $nodeModulesChildren[0].Name -eq ".pnpm-workspace-state-v1.json"
+              if ($nodeModulesChildren.Count -ne 0 -and -not $hasOnlyPnpmWorkspaceState) {
+                throw "workspace node_modules exists and is not a link: $workspaceNodeModules"
+              }
+              foreach ($nodeModulesChild in $nodeModulesChildren) {
+                Remove-Item -LiteralPath $nodeModulesChild.FullName -Force
+              }
+              Remove-Item -LiteralPath $workspaceNodeModules -Force
+              New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR | Out-Null
+            }
+          } else {
+            New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR | Out-Null
+          }
+
           $corepackShimDir = Join-Path $nodeBin "node_modules\corepack\shims"
           if (Test-Path $corepackShimDir) {
             $env:PNPM_HOME = $corepackShimDir

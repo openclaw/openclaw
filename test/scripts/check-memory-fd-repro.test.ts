@@ -1,8 +1,14 @@
+// Check Memory Fd Repro tests cover check memory fd repro script behavior.
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_READY_OUTPUT_MAX_CHARS,
+  MEMORY_SEARCH_PROBE_QUERY,
   MEMORY_SEARCH_RESPONSE_MAX_BYTES,
+  classifyMemorySearchInvokeResponse,
   hasChildExited,
   parseArgs,
   readBoundedResponseText,
@@ -11,6 +17,7 @@ import {
   stopGatewayWithRuntime,
   updateGatewayReadyOutputState,
   waitForGatewayReady,
+  writeConfig,
 } from "../../scripts/check-memory-fd-repro.mjs";
 
 function withEnv<T>(env: Record<string, string | undefined>, callback: () => T): T {
@@ -105,6 +112,125 @@ describe("check-memory-fd-repro", () => {
     });
   });
 
+  it("stops parsing options after the argument terminator", () => {
+    expect(parseArgs(["--files", "20", "--", "--files", "99"])).toMatchObject({
+      fileCount: 20,
+    });
+
+    expect(
+      withEnv({ OPENCLAW_MEMORY_FD_REPRO_FILES: "17" }, () => parseArgs(["--", "--unknown"])),
+    ).toMatchObject({
+      fileCount: 17,
+    });
+  });
+
+  it("accepts the leading package-manager argument separator", () => {
+    expect(parseArgs(["--", "--files", "20", "--allow-non-darwin"])).toMatchObject({
+      allowNonDarwin: true,
+      fileCount: 20,
+    });
+  });
+
+  it("uses a fast matching probe query instead of a no-hit stress query", () => {
+    expect(MEMORY_SEARCH_PROBE_QUERY).toBe("Top-level memory file");
+    expect(MEMORY_SEARCH_PROBE_QUERY).not.toContain("nomatch");
+  });
+
+  it("writes an offline FTS-only memory search config for repro indexing", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-fd-config-"));
+    try {
+      const homeDir = path.join(root, "home");
+      const workspaceDir = path.join(root, "workspace");
+      const configPath = writeConfig({
+        homeDir,
+        workspaceDir,
+        port: 12345,
+        token: "test-token",
+      });
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      const memorySearch = config.agents.defaults.memorySearch;
+
+      expect(memorySearch).toMatchObject({
+        provider: "none",
+        model: "",
+        store: {
+          path: path.join(homeDir, ".openclaw", "memory", "main.sqlite"),
+          vector: { enabled: false },
+        },
+        sync: {
+          onSearch: false,
+          onSessionStart: false,
+          watch: true,
+        },
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts an available memory_search tool payload", () => {
+    const result = classifyMemorySearchInvokeResponse({
+      httpOk: true,
+      status: 200,
+      bodyText: JSON.stringify({
+        ok: true,
+        result: {
+          content: [{ type: "text", text: JSON.stringify({ results: [] }) }],
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      gatewayOk: true,
+      resultCount: 0,
+    });
+  });
+
+  it("rejects disabled memory_search tool payloads", () => {
+    const result = classifyMemorySearchInvokeResponse({
+      httpOk: true,
+      status: 200,
+      bodyText: JSON.stringify({
+        ok: true,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                results: [],
+                disabled: true,
+                unavailable: true,
+                error: 'No API key found for provider "openai".',
+              }),
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      gatewayOk: true,
+      toolDisabled: true,
+      toolUnavailable: true,
+      toolError: 'No API key found for provider "openai".',
+    });
+  });
+
+  it("rejects gateway success envelopes without memory_search details", () => {
+    const result = classifyMemorySearchInvokeResponse({
+      httpOk: true,
+      status: 200,
+      bodyText: JSON.stringify({ ok: true, result: { content: [] } }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "memory_search result payload missing or invalid",
+    });
+  });
+
   it("treats signaled gateway children as exited", () => {
     expect(hasChildExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
     expect(hasChildExited({ exitCode: 0, signalCode: null })).toBe(true);
@@ -139,6 +265,31 @@ describe("check-memory-fd-repro", () => {
     expect(child.kill).not.toHaveBeenCalled();
     expect(findGatewayPidFn).toHaveBeenCalledWith(9);
     expect(killProcess).not.toHaveBeenCalled();
+  });
+
+  it("force-kills a gateway child that survives listener cleanup", async () => {
+    const child = {
+      exitCode: null,
+      kill: vi.fn(),
+      signalCode: null,
+    };
+    const findGatewayPidFn = vi.fn().mockReturnValueOnce(1234).mockReturnValue(null);
+    const killProcess = vi.fn();
+
+    await expect(
+      stopGatewayWithRuntime({
+        child,
+        childExitPolls: 0,
+        findGatewayPidFn,
+        killProcess,
+        listenerSettleDelayMs: 0,
+        port: 9,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGINT");
+    expect(killProcess).toHaveBeenCalledWith(1234, "SIGTERM");
+    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
   });
 
   it("bounds gateway readiness output while keeping newest logs", () => {

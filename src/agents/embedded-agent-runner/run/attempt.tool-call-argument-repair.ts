@@ -1,3 +1,6 @@
+/**
+ * Repairs malformed tool-call arguments in embedded-agent stream results.
+ */
 import { extractBalancedJsonPrefix } from "../../../shared/balanced-json.js";
 import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
@@ -20,7 +23,7 @@ const TOOLCALL_REPAIR_ALLOWED_LEADING_RE = /^[a-z0-9\s"'`.:/_\\-]+$/i;
 const TOOLCALL_REPAIR_ALLOWED_TRAILING_RE = /^[^\s{}[\]":,\\]{1,3}$/;
 const TOOLCALL_REPAIR_RESPONSES_APIS = new Set([
   "azure-openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
 ]);
 const TOOLCALL_REPAIR_SMART_QUOTES = new Set(["\u201c", "\u201d", "\u201e", "\u201f"]);
 const MAX_TOOLCALL_REPAIR_MEMBER_KEY_CHARS = 96;

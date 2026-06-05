@@ -1,3 +1,4 @@
+// Discord plugin module implements send.permissions behavior.
 import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import { resolveDiscordRest } from "./client.js";
@@ -64,16 +65,16 @@ function resolveMemberGuildPermissionBits(params: {
   guild: Pick<APIGuild, "id" | "roles">;
   member: Pick<APIGuildMember, "roles">;
 }) {
-  const rolesById = new Map<string, APIRole>(
+  const rolesByIdLocal = new Map<string, APIRole>(
     (params.guild.roles ?? []).map((role) => [role.id, role]),
   );
-  const everyoneRole = rolesById.get(params.guild.id);
+  const everyoneRole = rolesByIdLocal.get(params.guild.id);
   let permissions = 0n;
   if (everyoneRole?.permissions) {
     permissions = addPermissionBits(permissions, everyoneRole.permissions);
   }
   for (const roleId of params.member.roles ?? []) {
-    const role = rolesById.get(roleId);
+    const role = rolesByIdLocal.get(roleId);
     if (role?.permissions) {
       permissions = addPermissionBits(permissions, role.permissions);
     }

@@ -1,13 +1,16 @@
+// Doctor warnings and repairs for legacy OpenAI Codex model/provider routing.
 import fs from "node:fs";
+import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured-model-refs";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import { resolveConfiguredProviderFallback } from "../../../agents/configured-provider-fallback.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-ref-shared.js";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
-import { openAIProviderUsesCodexRuntimeByDefault } from "../../../agents/openai-codex-routing.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
-import { AGENT_MODEL_CONFIG_KEYS } from "../../../config/model-refs.js";
+import { openAIProviderUsesCodexRuntimeByDefault } from "../../../agents/openai-routing.js";
 import { loadSessionStore, updateSessionStore } from "../../../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -15,8 +18,6 @@ import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shar
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { detectWindowsSpawnCommandInlineArgs } from "../../../plugin-sdk/windows-spawn.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
-import { asOptionalRecord as asMutableRecord } from "../../../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString as normalizeString } from "../../../shared/string-coerce.js";
 
 type CodexRouteHit = {
   path: string;
@@ -43,10 +44,21 @@ type DisabledCodexPluginRouteHit = {
   modelRef: string;
   canonicalModel: string;
 };
+export type DisabledCodexPluginRouteIssue = {
+  /** Config path that selects a model requiring the Codex plugin runtime. */
+  path: string;
+  /** Original model reference from config. */
+  modelRef: string;
+  /** Canonical OpenAI model reference that should remain after migration. */
+  canonicalModel: string;
+  /** True when global/plugin allow policy blocks auto-enabling the Codex plugin. */
+  blockedOutsideEntry: boolean;
+};
 type SharedDefaultCompactionOverrideConsumers = Record<CompactionOverrideKey, boolean>;
 
 type MutableRecord = Record<string, unknown>;
 const COMPACTION_OVERRIDE_KEYS: readonly CompactionOverrideKey[] = ["model", "provider"];
+const AGENT_MEDIA_MODEL_CONFIG_KEYS = ["imageGenerationModel", "videoGenerationModel"] as const;
 const LOSSLESS_CONTEXT_ENGINE_ID = "lossless-claw";
 type SessionRouteRepairResult = {
   changed: boolean;
@@ -82,6 +94,15 @@ function readLegacyDefaultsRuntime(defaults: unknown): AgentRuntimePolicyConfig 
 
 function isOpenAICodexModelRef(model: string | undefined): model is string {
   return normalizeString(model)?.startsWith("openai-codex/") === true;
+}
+
+function isOpenAICodexAuthProfileRef(profile: unknown): boolean {
+  return normalizeString(profile)?.startsWith("openai-codex:") === true;
+}
+
+function isProviderlessModelRef(model: unknown): model is string {
+  const normalized = normalizeString(model);
+  return Boolean(normalized && !normalized.includes("/"));
 }
 
 function toCanonicalOpenAIModelRef(model: string): string | undefined {
@@ -142,12 +163,14 @@ function collectStringModelSlot(params: {
   if (!model || !isOpenAICodexModelRef(model)) {
     return false;
   }
-  return !!recordCodexModelHit({
-    hits: params.hits,
-    path: params.path,
-    model,
-    runtime: params.runtime,
-  });
+  return Boolean(
+    recordCodexModelHit({
+      hits: params.hits,
+      path: params.path,
+      model,
+      runtime: params.runtime,
+    }),
+  );
 }
 
 function collectModelConfigSlot(params: {
@@ -868,6 +891,13 @@ function collectAgentModelRefs(params: {
       runtime: key === "model" ? params.runtime : undefined,
     });
   }
+  for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
+    collectModelConfigSlot({
+      hits: params.hits,
+      path: `${params.path}.${key}`,
+      value: agent[key],
+    });
+  }
   collectStringModelSlot({
     hits: params.hits,
     path: `${params.path}.heartbeat.model`,
@@ -1007,7 +1037,7 @@ function collectAgentRuntimeModelRefs(params: {
 }): Array<{ path: string; modelRef: string }> {
   const refs: Array<{ path: string; modelRef: string }> = [];
   const agent = asMutableRecord(params.agent);
-  if (agent && Object.prototype.hasOwnProperty.call(agent, "model")) {
+  if (agent && Object.hasOwn(agent, "model")) {
     collectModelConfigRefs({
       refs,
       path: `${params.path}.model`,
@@ -1161,6 +1191,19 @@ function collectDisabledCodexPluginRouteHits(cfg: OpenClawConfig): DisabledCodex
     hits.push({ path: ref.path, modelRef: ref.modelRef, canonicalModel });
   }
   return hits;
+}
+
+/** Find Codex-routed model refs that require the Codex plugin while it is disabled. */
+export function collectDisabledCodexPluginRouteIssues(
+  cfg: OpenClawConfig,
+): DisabledCodexPluginRouteIssue[] {
+  const blockedOutsideEntry = codexPluginIsBlockedOutsideEntry(cfg);
+  return collectDisabledCodexPluginRouteHits(cfg).map((hit) => ({
+    path: hit.path,
+    modelRef: hit.modelRef,
+    canonicalModel: hit.canonicalModel,
+    blockedOutsideEntry,
+  }));
 }
 
 function enableCodexPluginForRequiredRoutes(params: {
@@ -1706,6 +1749,14 @@ function rewriteAgentModelRefs(params: {
     key: "model",
     path: `${params.path}.compaction.memoryFlush.model`,
   });
+  for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
+    rewriteModelConfigSlot({
+      hits: params.hits,
+      container: agent,
+      key,
+      path: `${params.path}.${key}`,
+    });
+  }
   if (params.rewriteModelsMap) {
     const start = params.hits.length;
     rewriteModelsMap({
@@ -2665,6 +2716,7 @@ function collectCodexAppServerCommandWarnings(cfg: OpenClawConfig): string[] {
   ];
 }
 
+/** Collect doctor warnings for legacy Codex model refs, runtime pins, and compaction overrides. */
 export function collectCodexRouteWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -2765,6 +2817,7 @@ export function collectCodexRouteWarnings(params: {
   return warnings;
 }
 
+/** Rewrite legacy Codex config routes to OpenAI refs and explicit runtime policy when allowed. */
 export function maybeRepairCodexRoutes(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -2837,7 +2890,6 @@ function rewriteSessionModelPair(params: {
     typeof params.entry[params.modelKey] === "string" ? params.entry[params.modelKey] : undefined;
   if (provider === "openai-codex") {
     params.entry[params.providerKey] = "openai";
-    changed = true;
     if (model) {
       const modelId = toOpenAIModelId(model);
       if (modelId) {
@@ -2870,18 +2922,46 @@ function clearStaleCodexFallbackNotice(entry: SessionEntry): boolean {
 }
 
 function clearStaleSessionRuntimePins(entry: SessionEntry): boolean {
+  const harnessRuntime = normalizeRuntimeString(entry.agentHarnessId);
+  const overrideRuntime = normalizeRuntimeString(entry.agentRuntimeOverride);
   let changed = false;
-  if (entry.agentHarnessId !== undefined) {
+  if (entry.agentHarnessId !== undefined && harnessRuntime !== "openclaw") {
     delete entry.agentHarnessId;
     changed = true;
   }
-  if (entry.agentRuntimeOverride !== undefined) {
+  if (entry.agentRuntimeOverride !== undefined && overrideRuntime !== "openclaw") {
     delete entry.agentRuntimeOverride;
     changed = true;
   }
   return changed;
 }
 
+function repairProviderlessCodexSessionOverride(entry: SessionEntry): boolean {
+  if (
+    !isProviderlessModelRef(entry.modelOverride) ||
+    !isOpenAICodexAuthProfileRef(entry.authProfileOverride) ||
+    entry.authProfileOverrideSource !== "auto" ||
+    entry.modelOverrideSource !== "auto" ||
+    normalizeString(entry.providerOverride)
+  ) {
+    return false;
+  }
+
+  entry.providerOverride = "openai";
+  if (entry.model !== undefined || entry.modelProvider !== undefined) {
+    delete entry.model;
+    delete entry.modelProvider;
+  }
+  if (entry.contextTokens !== undefined) {
+    delete entry.contextTokens;
+  }
+  if (entry.contextBudgetStatus !== undefined) {
+    delete entry.contextBudgetStatus;
+  }
+  return true;
+}
+
+/** Rewrite stale Codex model/provider/session runtime fields inside one session store object. */
 export function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
   now?: number;
@@ -2902,7 +2982,9 @@ export function repairCodexSessionStoreRoutes(params: {
       providerKey: "providerOverride",
       modelKey: "modelOverride",
     });
-    const changedModelRoute = changedRuntimeModelRoute || changedOverrideModelRoute;
+    const changedProviderlessOverride = repairProviderlessCodexSessionOverride(entry);
+    const changedModelRoute =
+      changedRuntimeModelRoute || changedOverrideModelRoute || changedProviderlessOverride;
     const changedFallbackNotice = clearStaleCodexFallbackNotice(entry);
     const changedRuntimePins =
       changedModelRoute || changedFallbackNotice ? clearStaleSessionRuntimePins(entry) : false;
@@ -2928,12 +3010,18 @@ function scanCodexSessionStoreRoutes(store: Record<string, SessionEntry>): strin
       normalizeString(entry.providerOverride) === "openai-codex" ||
       isOpenAICodexModelRef(entry.model) ||
       isOpenAICodexModelRef(entry.modelOverride) ||
+      (isProviderlessModelRef(entry.modelOverride) &&
+        isOpenAICodexAuthProfileRef(entry.authProfileOverride) &&
+        entry.authProfileOverrideSource === "auto" &&
+        entry.modelOverrideSource === "auto" &&
+        !normalizeString(entry.providerOverride)) ||
       isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) ||
       isOpenAICodexModelRef(entry.fallbackNoticeActiveModel);
     return hasLegacyRoute ? [sessionKey] : [];
   });
 }
 
+/** Scan or repair all configured agent session stores that still contain legacy Codex routes. */
 export async function maybeRepairCodexSessionRoutes(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

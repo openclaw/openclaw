@@ -1,10 +1,15 @@
+// Qa Lab tests cover slack live plugin behavior.
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testing, runSlackQaLive } from "./slack-live.runtime.js";
 
 describe("Slack live QA runtime helpers", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("resolves env credential payloads", () => {
     expect(
       testing.resolveSlackQaRuntimeEnv({
@@ -250,6 +255,20 @@ describe("Slack live QA runtime helpers", () => {
         },
       }),
     ).toBe(3_500);
+  });
+
+  it("resolves Slack readiness timeout from the shared transport env", () => {
+    expect(testing.resolveSlackQaReadyTimeoutMs({})).toBe(45_000);
+    expect(
+      testing.resolveSlackQaReadyTimeoutMs({
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000",
+      }),
+    ).toBe(180_000);
+    expect(
+      testing.resolveSlackQaReadyTimeoutMs({
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
+      }),
+    ).toBe(45_000);
   });
 
   it("allows live approval resolve RPCs to take longer than the generic gateway probe timeout", async () => {

@@ -1,12 +1,13 @@
-import type { Command } from "commander";
-import type { CronJob } from "../../cron/types.js";
-import { sanitizeAgentId } from "../../routing/session-key.js";
-import { defaultRuntime } from "../../runtime.js";
+// Cron status/list/add command registration and create-payload normalization.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { theme } from "../../terminal/theme.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { Command } from "commander";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { CronJob } from "../../cron/types.js";
+import { sanitizeAgentId } from "../../routing/session-key.js";
+import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
@@ -173,6 +174,7 @@ export function registerCronAddCommand(cron: Command) {
             }
 
             const payload = (() => {
+              // Main-session jobs use system events; isolated/current/session jobs use messages.
               const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
               const optionMessage = normalizeOptionalString(opts.message);
               const positionalMessage = normalizeOptionalString(messageArg);

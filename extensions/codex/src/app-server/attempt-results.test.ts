@@ -1,3 +1,4 @@
+// Codex tests cover attempt results plugin behavior.
 import type { EmbeddedRunAttemptResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
@@ -88,6 +89,28 @@ describe("Codex app-server attempt results", () => {
         "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
       replayInvalid: true,
       livenessState: "abandoned",
+    });
+    expect(
+      buildCodexAppServerPromptTimeoutOutcome({
+        result: createResult({
+          assistantTexts: ["I am changing the data model now..."],
+        }),
+        turnCompletionIdleTimedOut: true,
+      }),
+    ).toEqual({
+      message:
+        "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.",
+    });
+    expect(
+      buildCodexAppServerPromptTimeoutOutcome({
+        result: createResult({
+          toolMetas: [{ toolName: "exec" }],
+        }),
+        turnCompletionIdleTimedOut: true,
+      }),
+    ).toEqual({
+      message:
+        "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.",
     });
   });
 

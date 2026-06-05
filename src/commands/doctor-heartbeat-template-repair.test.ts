@@ -1,3 +1,4 @@
+// Doctor heartbeat template repair tests cover migration and repair of heartbeat prompt templates.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   note: vi.fn(),
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 
@@ -208,6 +209,8 @@ Add short tasks below the comments only when you want the agent to check somethi
 
     await expect(fs.readFile(heartbeatPath, "utf-8")).resolves.toBe(
       `${[
+        "<!-- Heartbeat template; comments-only content prevents scheduled heartbeat API calls. -->",
+        "",
         "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
         "",
         "# Add tasks below when you want the agent to check something periodically.",

@@ -1,3 +1,6 @@
+/**
+ * Tests talk realtime relay event forwarding and connection cleanup.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   setActiveEmbeddedRun,
@@ -40,6 +43,22 @@ describe("talk realtime gateway relay", () => {
       }),
     };
   }
+
+  it("rejects session creation when relay expiry would exceed Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    expect(() =>
+      createTalkRealtimeRelaySession({
+        context: {} as never,
+        connId: "conn-1",
+        provider: createIdleRelayProvider(),
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+      }),
+    ).toThrow("Realtime relay session expiry is outside the supported Date range");
+  });
 
   function createAbortableRelayRunFixture(provider = createIdleRelayProvider()) {
     const abortController = new AbortController();

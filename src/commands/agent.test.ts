@@ -1,3 +1,4 @@
+// Agent command tests cover local agent runs, session routing, and command runtime behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
@@ -64,6 +65,14 @@ vi.mock("../agents/auth-profiles/store.js", () => {
 vi.mock("../agents/command/session-store.runtime.js", () => {
   return {
     updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
+  };
+});
+
+vi.mock("../agents/command/cli-compaction.js", () => {
+  return {
+    runCliTurnCompactionLifecycle: vi.fn(
+      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+    ),
   };
 });
 
@@ -577,6 +586,7 @@ describe("agentCommand", () => {
           messageChannel: "telegram",
           deliver: true,
           allowModelOverride: false,
+          sessionEffects: "internal",
         },
         runtime,
         { sendMessageTelegram },
@@ -846,7 +856,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("uses default fallback list for auto session model overrides", async () => {
+  it("probes the configured primary first for origin-backed auto session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       writeSessionStoreSeed(store, {
@@ -856,6 +866,8 @@ describe("agentCommand", () => {
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-6",
           modelOverrideSource: "auto",
+          modelOverrideFallbackOriginProvider: "openai",
+          modelOverrideFallbackOriginModel: "gpt-4.1-mini",
         },
       });
 
@@ -898,9 +910,65 @@ describe("agentCommand", () => {
         .mocked(runEmbeddedAgent)
         .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
       expect(attempts).toEqual([
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "openai", model: "gpt-4.1-mini" },
         { provider: "openai", model: "gpt-5.4" },
       ]);
+    });
+  });
+
+  it("clears legacy auto session model overrides without origin metadata", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-legacy-auto-override.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:legacy-auto": {
+          sessionId: "session-legacy-auto",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-6",
+          modelOverrideSource: "auto",
+        },
+      });
+
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.4"],
+        },
+        models: {
+          "anthropic/claude-opus-4-6": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.4": {},
+        },
+      });
+
+      mockModelCatalogOnce([
+        { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+      ]);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:legacy-auto",
+        },
+        runtime,
+      );
+
+      const attempts = vi
+        .mocked(runEmbeddedAgent)
+        .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
+      expect(attempts).toEqual([{ provider: "openai", model: "gpt-4.1-mini" }]);
+
+      const cleared = readSessionStore<{
+        providerOverride?: string;
+        modelOverride?: string;
+        modelOverrideSource?: string;
+      }>(store);
+      const entry = cleared["agent:main:subagent:legacy-auto"];
+      expect(entry?.providerOverride).toBeUndefined();
+      expect(entry?.modelOverride).toBeUndefined();
+      expect(entry?.modelOverrideSource).toBeUndefined();
     });
   });
 
@@ -1209,6 +1277,7 @@ describe("agentCommand", () => {
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:global");
+      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
     });
   });
 

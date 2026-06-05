@@ -1,3 +1,5 @@
+// Chat directive tag tests cover reply directive metadata, transcript mirrors,
+// current-message reply routing, and dispatched payload ordering.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +17,7 @@ import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -54,6 +57,7 @@ const mockState = vi.hoisted(() => ({
     };
   }>,
   dispatchError: null as Error | null,
+  dispatchWait: null as Promise<void> | null,
   dispatchErrorAfterAgentRunStart: null as Error | null,
   dispatchErrorAfterDelivery: null as Error | null,
   triggerAgentRunStart: false,
@@ -62,6 +66,7 @@ const mockState = vi.hoisted(() => ({
   onAfterAgentRunStart: null as (() => void) | null,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
+  loadSessionEntryCalls: [] as Array<{ rawKey: string; opts?: { agentId?: string } }>,
   lastDispatchCtx: undefined as MsgContext | undefined,
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
@@ -129,28 +134,32 @@ vi.mock("../session-utils.js", async () => {
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...original,
-    loadSessionEntry: (rawKey: string) => ({
-      ...(typeof mockState.sessionEntry.canonicalKey === "string"
-        ? { canonicalKey: mockState.sessionEntry.canonicalKey }
-        : {}),
-      cfg: {
-        ...mockState.config,
-        session: {
-          ...(mockState.config.session as Record<string, unknown> | undefined),
-          mainKey: mockState.mainSessionKey,
-        },
-      },
-      storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
-      entry: {
+    loadSessionEntry: (rawKey: string, opts?: { agentId?: string }) => {
+      mockState.loadSessionEntryCalls.push({ rawKey, opts });
+      const canonicalKey =
+        typeof mockState.sessionEntry.canonicalKey === "string"
+          ? mockState.sessionEntry.canonicalKey
+          : rawKey || "main";
+      const entry = {
         sessionId: mockState.sessionId,
         sessionFile: mockState.transcriptPath,
         ...mockState.sessionEntry,
-      },
-      canonicalKey:
-        typeof mockState.sessionEntry.canonicalKey === "string"
-          ? mockState.sessionEntry.canonicalKey
-          : rawKey || "main",
-    }),
+      };
+      return {
+        ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
+        cfg: {
+          ...mockState.config,
+          session: {
+            ...(mockState.config.session as Record<string, unknown> | undefined),
+            mainKey: mockState.mainSessionKey,
+          },
+        },
+        storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+        store: { [canonicalKey]: entry },
+        entry,
+        canonicalKey,
+      };
+    },
   };
 });
 
@@ -220,6 +229,9 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         : recorder?.message;
       if (mockState.dispatchError) {
         throw mockState.dispatchError;
+      }
+      if (mockState.dispatchWait) {
+        await mockState.dispatchWait;
       }
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
@@ -419,6 +431,14 @@ function createTranscriptFixture(prefix: string) {
   );
   mockState.transcriptPath = transcriptPath;
   return dir;
+}
+
+async function withTranscriptFixtureState(
+  prefix: string,
+  run: (fixtureDir: string) => Promise<void>,
+): Promise<void> {
+  const fixtureDir = createTranscriptFixture(prefix);
+  await withEnvAsync({ OPENCLAW_STATE_DIR: fixtureDir }, async () => await run(fixtureDir));
 }
 
 async function appendSourceReplyMirrorEntry(params: {
@@ -638,6 +658,7 @@ function createChatContext(): Pick<
   | "dedupe"
   | "loadGatewayModelCatalog"
   | "registerToolEventRecipient"
+  | "getRuntimeConfig"
   | "logGateway"
 > {
   return {
@@ -671,6 +692,14 @@ function createChatContext(): Pick<
           input: ["text", "image"],
         },
       ],
+    getRuntimeConfig: () =>
+      ({
+        ...mockState.config,
+        session: {
+          ...(mockState.config.session as Record<string, unknown> | undefined),
+          mainKey: mockState.mainSessionKey,
+        },
+      }) as never,
     registerToolEventRecipient: vi.fn(),
     logGateway: {
       warn: vi.fn(),
@@ -759,6 +788,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.finalPayload = null;
     mockState.dispatchedReplies = [];
     mockState.dispatchError = null;
+    mockState.dispatchWait = null;
     mockState.dispatchErrorAfterAgentRunStart = null;
     mockState.dispatchErrorAfterDelivery = null;
     mockState.mainSessionKey = "main";
@@ -768,6 +798,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.onAfterAgentRunStart = null;
     mockState.agentRunId = "run-agent-1";
     mockState.sessionEntry = {};
+    mockState.loadSessionEntryCalls = [];
     mockState.lastDispatchCtx = undefined;
     mockState.lastDispatchImages = undefined;
     mockState.lastDispatchImageOrder = undefined;
@@ -855,6 +886,210 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(register).toHaveBeenCalledWith("run-current", "conn-1");
     expect(register).toHaveBeenCalledWith("run-same-session", "conn-1");
     expect(register).not.toHaveBeenCalledWith("run-other-session", "conn-1");
+  });
+
+  it("registers default global tool-event recipients for unscoped global sends", async () => {
+    createTranscriptFixture("openclaw-chat-send-global-tool-events-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.finalText = "ok";
+    mockState.triggerAgentRunStart = true;
+    mockState.agentRunId = "run-current-global";
+    const respond = vi.fn();
+    const context = createChatContext();
+    context.chatAbortControllers.set("run-default-global", {
+      controller: new AbortController(),
+      sessionId: "sess-default-global",
+      sessionKey: "global",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 10_000,
+    });
+    context.chatAbortControllers.set("run-work-global", {
+      controller: new AbortController(),
+      sessionId: "sess-work-global",
+      sessionKey: "global",
+      agentId: "work",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 10_000,
+    });
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "global",
+      idempotencyKey: "idem-global-tool-events",
+      client: {
+        connId: "conn-global",
+        connect: { caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS] },
+      },
+      expectBroadcast: false,
+    });
+
+    const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    expect(register).toHaveBeenCalledWith("run-current-global", "conn-global");
+    expect(register).toHaveBeenCalledWith("run-default-global", "conn-global");
+    expect(register).not.toHaveBeenCalledWith("run-work-global", "conn-global");
+  });
+
+  it("registers selected global alias tool-event recipients against the canonical run key", async () => {
+    createTranscriptFixture("openclaw-chat-send-global-alias-tool-events-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    mockState.finalText = "ok";
+    mockState.triggerAgentRunStart = true;
+    mockState.agentRunId = "run-current-work-global";
+    const respond = vi.fn();
+    const context = createChatContext();
+    context.chatAbortControllers.set("run-default-global", {
+      controller: new AbortController(),
+      sessionId: "sess-default-global",
+      sessionKey: "global",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 10_000,
+    });
+    context.chatAbortControllers.set("run-work-global", {
+      controller: new AbortController(),
+      sessionId: "sess-work-global",
+      sessionKey: "global",
+      agentId: "work",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 10_000,
+    });
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:work:main",
+      idempotencyKey: "idem-global-alias-tool-events",
+      client: {
+        connId: "conn-work",
+        connect: { caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS] },
+      },
+      expectBroadcast: false,
+    });
+
+    const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    expect(register).toHaveBeenCalledWith("run-current-work-global", "conn-work");
+    expect(register).toHaveBeenCalledWith("run-work-global", "conn-work");
+    expect(register).not.toHaveBeenCalledWith("run-default-global", "conn-work");
+  });
+
+  it("scopes selected-agent global aliases before loading chat session state", async () => {
+    createTranscriptFixture("openclaw-chat-send-global-alias-load-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:work:main",
+      idempotencyKey: "idem-global-alias-load",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.loadSessionEntryCalls[0]).toEqual({
+      rawKey: "agent:work:main",
+      opts: { agentId: "work" },
+    });
+  });
+
+  it("accepts selected-agent global main aliases before loading chat session state", async () => {
+    createTranscriptFixture("openclaw-chat-send-global-main-alias-load-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "main",
+      requestParams: { agentId: "work" },
+      idempotencyKey: "idem-global-main-alias-load",
+      expectBroadcast: false,
+    });
+
+    const [ok] = lastRespondCall(respond) ?? [];
+    expect(ok).toBe(true);
+    expect(mockState.lastDispatchCtx).toMatchObject({
+      SessionKey: "global",
+      AgentId: "work",
+    });
+    expect(mockState.loadSessionEntryCalls[0]).toEqual({
+      rawKey: "main",
+      opts: { agentId: "work" },
+    });
+  });
+
+  it("registers selected-agent global aliases under the canonical abort key", async () => {
+    createTranscriptFixture("openclaw-chat-send-global-alias-abort-key-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    let releaseDispatch: (() => void) | undefined;
+    mockState.dispatchWait = new Promise((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const pending = runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:work:main",
+      idempotencyKey: "idem-global-alias-abort-key",
+      waitFor: "none",
+    });
+
+    await waitForAssertion(() => {
+      expect(context.chatAbortControllers.get("idem-global-alias-abort-key")).toMatchObject({
+        sessionKey: "global",
+        agentId: "work",
+      });
+    });
+    releaseDispatch?.();
+    await pending;
+  });
+
+  it("scopes chat history global aliases before loading session state", async () => {
+    createTranscriptFixture("openclaw-chat-history-global-alias-load-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    const respond = vi.fn();
+    const context = createChatContext();
+    mockState.loadSessionEntryCalls = [];
+
+    await chatHandlers["chat.history"]({
+      params: { sessionKey: "agent:work:main" },
+      respond: respond as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(mockState.loadSessionEntryCalls).toContainEqual({
+      rawKey: "agent:work:main",
+      opts: { agentId: "work" },
+    });
   });
 
   it("does not register tool-event recipients without tool-events capability", async () => {
@@ -1159,666 +1394,611 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("does not duplicate media-bearing internal-ui source replies in the transcript", async () => {
-    const fixtureDir = createTranscriptFixture("openclaw-chat-send-agent-source-reply-media-");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = fixtureDir;
-    const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-    const savedImagePath = path.join(fixtureDir, "source-reply.png");
-    fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
-    const mirrorIdempotencyKey = "idem-agent-source-reply-media:internal-source-reply:0";
-    await appendSourceReplyMirrorEntry({
-      idempotencyKey: mirrorIdempotencyKey,
-      text: "Codex source reply with media",
-    });
-    mockState.triggerAgentRunStart = true;
-    const sourceReply = setReplyPayloadMetadata(
-      {
-        text: "Codex source reply with media",
-        mediaUrls: [mediaUrl],
-      },
-      {
-        sourceReplyTranscriptMirror: {
-          sessionKey: "main",
-          text: "Codex source reply with media",
-          mediaUrls: [mediaUrl],
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-agent-source-reply-media-",
+      async (fixtureDir) => {
+        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const savedImagePath = path.join(fixtureDir, "source-reply.png");
+        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        const mirrorIdempotencyKey = "idem-agent-source-reply-media:internal-source-reply:0";
+        await appendSourceReplyMirrorEntry({
           idempotencyKey: mirrorIdempotencyKey,
-        },
-      },
-    );
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: sourceReply,
-      },
-    ];
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    try {
-      const broadcast = await runNonStreamingChatSend({
-        context,
-        respond,
-        idempotencyKey: "idem-agent-source-reply-media",
-        message: "hello from codex",
-      });
-
-      expect(broadcast).toMatchObject({
-        runId: "idem-agent-source-reply-media",
-        sessionKey: "main",
-        state: "final",
-      });
-      expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply with media");
-      const broadcastContent = getMessageContent(broadcast);
-      expect(String(broadcastContent[1]?.url)).toContain("/api/chat/media/outgoing/");
-      expect(String(broadcastContent[1]?.openUrl)).toContain("/api/chat/media/outgoing/");
-      const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
-        (update) =>
-          typeof update.message === "object" &&
-          update.message !== null &&
-          (update.message as { role?: unknown }).role === "assistant",
-      );
-      expect(assistantUpdates).toStrictEqual([]);
-      const assistantEntries = await readActiveAssistantTranscriptMessages();
-      expect(assistantEntries).toHaveLength(1);
-      expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
-      expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-      expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
-    } finally {
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
-  });
-
-  it("backs source reply media with an equivalent deduped delivery mirror", async () => {
-    const fixtureDir = createTranscriptFixture("openclaw-chat-send-agent-source-reply-deduped-");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = fixtureDir;
-    const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-    const savedImagePath = path.join(fixtureDir, "source-reply-deduped.png");
-    fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
-    const mirrorIdempotencyKey = "idem-agent-source-reply-deduped:internal-source-reply:0";
-    await appendSourceReplyMirrorEntry({
-      text: resolveMirroredTranscriptText({ mediaUrls: [mediaUrl] }) ?? "media",
-    });
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: setReplyPayloadMetadata(
+          text: "Codex source reply with media",
+        });
+        mockState.triggerAgentRunStart = true;
+        const sourceReply = setReplyPayloadMetadata(
           {
+            text: "Codex source reply with media",
             mediaUrls: [mediaUrl],
           },
           {
             sourceReplyTranscriptMirror: {
               sessionKey: "main",
+              text: "Codex source reply with media",
               mediaUrls: [mediaUrl],
               idempotencyKey: mirrorIdempotencyKey,
             },
           },
-        ),
+        );
+        mockState.dispatchedReplies = [
+          {
+            kind: "final",
+            payload: sourceReply,
+          },
+        ];
+        const respond = vi.fn();
+        const context = createChatContext();
+
+        const broadcast = await runNonStreamingChatSend({
+          context,
+          respond,
+          idempotencyKey: "idem-agent-source-reply-media",
+          message: "hello from codex",
+        });
+
+        expect(broadcast).toMatchObject({
+          runId: "idem-agent-source-reply-media",
+          sessionKey: "main",
+          state: "final",
+        });
+        expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply with media");
+        const broadcastContent = getMessageContent(broadcast);
+        expect(String(broadcastContent[1]?.url)).toContain("/api/chat/media/outgoing/");
+        expect(String(broadcastContent[1]?.openUrl)).toContain("/api/chat/media/outgoing/");
+        const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+          (update) =>
+            typeof update.message === "object" &&
+            update.message !== null &&
+            (update.message as { role?: unknown }).role === "assistant",
+        );
+        expect(assistantUpdates).toStrictEqual([]);
+        const assistantEntries = await readActiveAssistantTranscriptMessages();
+        expect(assistantEntries).toHaveLength(1);
+        expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
+        expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
+        expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
       },
-    ];
-    const respond = vi.fn();
-    const context = createChatContext();
+    );
+  });
 
-    try {
-      const broadcast = await runNonStreamingChatSend({
-        context,
-        respond,
-        idempotencyKey: "idem-agent-source-reply-deduped",
-        message: "hello from codex",
-      });
+  it("backs source reply media with an equivalent deduped delivery mirror", async () => {
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-agent-source-reply-deduped-",
+      async (fixtureDir) => {
+        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const savedImagePath = path.join(fixtureDir, "source-reply-deduped.png");
+        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        const mirrorIdempotencyKey = "idem-agent-source-reply-deduped:internal-source-reply:0";
+        await appendSourceReplyMirrorEntry({
+          text: resolveMirroredTranscriptText({ mediaUrls: [mediaUrl] }) ?? "media",
+        });
+        mockState.triggerAgentRunStart = true;
+        mockState.dispatchedReplies = [
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                mediaUrls: [mediaUrl],
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  mediaUrls: [mediaUrl],
+                  idempotencyKey: mirrorIdempotencyKey,
+                },
+              },
+            ),
+          },
+        ];
+        const respond = vi.fn();
+        const context = createChatContext();
 
-      const broadcastContent = getMessageContent(broadcast);
-      expect(broadcastContent.filter((block) => block.type === "image")).toHaveLength(1);
-      expect(JSON.stringify(broadcastContent)).toContain("/api/chat/media/outgoing/");
-      const assistantEntries = await readActiveAssistantTranscriptMessages();
-      expect(assistantEntries).toHaveLength(1);
-      expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
-      expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-      expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
-    } finally {
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
+        const broadcast = await runNonStreamingChatSend({
+          context,
+          respond,
+          idempotencyKey: "idem-agent-source-reply-deduped",
+          message: "hello from codex",
+        });
+
+        const broadcastContent = getMessageContent(broadcast);
+        expect(broadcastContent.filter((block) => block.type === "image")).toHaveLength(1);
+        expect(JSON.stringify(broadcastContent)).toContain("/api/chat/media/outgoing/");
+        const assistantEntries = await readActiveAssistantTranscriptMessages();
+        expect(assistantEntries).toHaveLength(1);
+        expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
+        expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
+        expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
+      },
+    );
   });
 
   it("updates each media-bearing source reply mirror independently", async () => {
-    const fixtureDir = createTranscriptFixture("openclaw-chat-send-agent-source-reply-multi-");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = fixtureDir;
-    const firstMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-    const secondMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-    const firstSavedImagePath = path.join(fixtureDir, "source-reply-1.png");
-    const secondSavedImagePath = path.join(fixtureDir, "source-reply-2.png");
-    fs.writeFileSync(firstSavedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    fs.writeFileSync(secondSavedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    mockState.savedMediaResults = [
-      { path: firstSavedImagePath, contentType: "image/png" },
-      { path: secondSavedImagePath, contentType: "image/png" },
-    ];
-    const firstMirrorKey = "idem-agent-source-reply-multi:internal-source-reply:0";
-    const secondMirrorKey = "idem-agent-source-reply-multi:internal-source-reply:1";
-    await appendSourceReplyMirrorEntry({
-      idempotencyKey: firstMirrorKey,
-      text: "First source reply",
-    });
-    await appendSourceReplyMirrorEntry({
-      idempotencyKey: secondMirrorKey,
-      text: "Second source reply",
-    });
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: setReplyPayloadMetadata(
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-agent-source-reply-multi-",
+      async (fixtureDir) => {
+        const firstMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const secondMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const firstSavedImagePath = path.join(fixtureDir, "source-reply-1.png");
+        const secondSavedImagePath = path.join(fixtureDir, "source-reply-2.png");
+        fs.writeFileSync(firstSavedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        fs.writeFileSync(secondSavedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        mockState.savedMediaResults = [
+          { path: firstSavedImagePath, contentType: "image/png" },
+          { path: secondSavedImagePath, contentType: "image/png" },
+        ];
+        const firstMirrorKey = "idem-agent-source-reply-multi:internal-source-reply:0";
+        const secondMirrorKey = "idem-agent-source-reply-multi:internal-source-reply:1";
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: firstMirrorKey,
+          text: "First source reply",
+        });
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: secondMirrorKey,
+          text: "Second source reply",
+        });
+        mockState.triggerAgentRunStart = true;
+        mockState.dispatchedReplies = [
           {
-            text: "First source reply",
-            mediaUrls: [firstMediaUrl],
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "First source reply",
+                mediaUrls: [firstMediaUrl],
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  text: "First source reply",
+                  mediaUrls: [firstMediaUrl],
+                  idempotencyKey: firstMirrorKey,
+                },
+              },
+            ),
           },
           {
-            sourceReplyTranscriptMirror: {
-              sessionKey: "main",
-              text: "First source reply",
-              mediaUrls: [firstMediaUrl],
-              idempotencyKey: firstMirrorKey,
-            },
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "Second source reply",
+                mediaUrls: [secondMediaUrl],
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  text: "Second source reply",
+                  mediaUrls: [secondMediaUrl],
+                  idempotencyKey: secondMirrorKey,
+                },
+              },
+            ),
           },
-        ),
-      },
-      {
-        kind: "final",
-        payload: setReplyPayloadMetadata(
-          {
-            text: "Second source reply",
-            mediaUrls: [secondMediaUrl],
-          },
-          {
-            sourceReplyTranscriptMirror: {
-              sessionKey: "main",
-              text: "Second source reply",
-              mediaUrls: [secondMediaUrl],
-              idempotencyKey: secondMirrorKey,
-            },
-          },
-        ),
-      },
-    ];
-    const respond = vi.fn();
-    const context = createChatContext();
+        ];
+        const respond = vi.fn();
+        const context = createChatContext();
 
-    try {
-      const broadcast = await runNonStreamingChatSend({
-        context,
-        respond,
-        idempotencyKey: "idem-agent-source-reply-multi",
-        message: "hello from codex",
-      });
+        const broadcast = await runNonStreamingChatSend({
+          context,
+          respond,
+          idempotencyKey: "idem-agent-source-reply-multi",
+          message: "hello from codex",
+        });
 
-      const broadcastContent = getMessageContent(broadcast);
-      expect(broadcastContent.filter((block) => block.type === "image")).toHaveLength(2);
-      expect(mockState.savedMediaCalls).toHaveLength(2);
-      const assistantEntries = await readActiveAssistantTranscriptMessages();
-      expect(assistantEntries.map((entry) => entry.idempotencyKey)).toStrictEqual([
-        firstMirrorKey,
-        secondMirrorKey,
-      ]);
-      expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-      expect(JSON.stringify(assistantEntries[1])).toContain("/api/chat/media/outgoing/");
-      expect(JSON.stringify(assistantEntries[0])).not.toContain(firstMediaUrl);
-      expect(JSON.stringify(assistantEntries[1])).not.toContain(secondMediaUrl);
-    } finally {
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
+        const broadcastContent = getMessageContent(broadcast);
+        expect(broadcastContent.filter((block) => block.type === "image")).toHaveLength(2);
+        expect(mockState.savedMediaCalls).toHaveLength(2);
+        const assistantEntries = await readActiveAssistantTranscriptMessages();
+        expect(assistantEntries.map((entry) => entry.idempotencyKey)).toStrictEqual([
+          firstMirrorKey,
+          secondMirrorKey,
+        ]);
+        expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
+        expect(JSON.stringify(assistantEntries[1])).toContain("/api/chat/media/outgoing/");
+        expect(JSON.stringify(assistantEntries[0])).not.toContain(firstMediaUrl);
+        expect(JSON.stringify(assistantEntries[1])).not.toContain(secondMediaUrl);
+      },
+    );
   });
 
   it("keeps backed media source replies when a sibling mirror is missing", async () => {
-    const fixtureDir = createTranscriptFixture("openclaw-chat-send-agent-source-reply-partial-");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = fixtureDir;
-    const firstMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-    const secondMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-    const firstSavedImagePath = path.join(fixtureDir, "source-reply-backed.png");
-    const secondSavedImagePath = path.join(fixtureDir, "source-reply-missing.png");
-    fs.writeFileSync(firstSavedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    fs.writeFileSync(secondSavedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    mockState.savedMediaResults = [
-      { path: firstSavedImagePath, contentType: "image/png" },
-      { path: secondSavedImagePath, contentType: "image/png" },
-    ];
-    const backedMirrorKey = "idem-agent-source-reply-partial:internal-source-reply:0";
-    const missingMirrorKey = "idem-agent-source-reply-partial:internal-source-reply:1";
-    await appendSourceReplyMirrorEntry({
-      idempotencyKey: backedMirrorKey,
-      text: "Backed source reply",
-    });
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: setReplyPayloadMetadata(
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-agent-source-reply-partial-",
+      async (fixtureDir) => {
+        const firstMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const secondMediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const firstSavedImagePath = path.join(fixtureDir, "source-reply-backed.png");
+        const secondSavedImagePath = path.join(fixtureDir, "source-reply-missing.png");
+        fs.writeFileSync(firstSavedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        fs.writeFileSync(secondSavedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        mockState.savedMediaResults = [
+          { path: firstSavedImagePath, contentType: "image/png" },
+          { path: secondSavedImagePath, contentType: "image/png" },
+        ];
+        const backedMirrorKey = "idem-agent-source-reply-partial:internal-source-reply:0";
+        const missingMirrorKey = "idem-agent-source-reply-partial:internal-source-reply:1";
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: backedMirrorKey,
+          text: "Backed source reply",
+        });
+        mockState.triggerAgentRunStart = true;
+        mockState.dispatchedReplies = [
           {
-            text: "Backed source reply",
-            mediaUrls: [firstMediaUrl],
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "Backed source reply",
+                mediaUrls: [firstMediaUrl],
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  text: "Backed source reply",
+                  mediaUrls: [firstMediaUrl],
+                  idempotencyKey: backedMirrorKey,
+                },
+              },
+            ),
           },
           {
-            sourceReplyTranscriptMirror: {
-              sessionKey: "main",
-              text: "Backed source reply",
-              mediaUrls: [firstMediaUrl],
-              idempotencyKey: backedMirrorKey,
-            },
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "Missing mirror source reply",
+                mediaUrls: [secondMediaUrl],
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  text: "Missing mirror source reply",
+                  mediaUrls: [secondMediaUrl],
+                  idempotencyKey: missingMirrorKey,
+                },
+              },
+            ),
           },
-        ),
-      },
-      {
-        kind: "final",
-        payload: setReplyPayloadMetadata(
-          {
-            text: "Missing mirror source reply",
-            mediaUrls: [secondMediaUrl],
-          },
-          {
-            sourceReplyTranscriptMirror: {
-              sessionKey: "main",
-              text: "Missing mirror source reply",
-              mediaUrls: [secondMediaUrl],
-              idempotencyKey: missingMirrorKey,
-            },
-          },
-        ),
-      },
-    ];
-    const respond = vi.fn();
-    const context = createChatContext();
+        ];
+        const respond = vi.fn();
+        const context = createChatContext();
 
-    try {
-      const broadcast = await runNonStreamingChatSend({
-        context,
-        respond,
-        idempotencyKey: "idem-agent-source-reply-partial",
-        message: "hello from codex",
-      });
+        const broadcast = await runNonStreamingChatSend({
+          context,
+          respond,
+          idempotencyKey: "idem-agent-source-reply-partial",
+          message: "hello from codex",
+        });
 
-      const broadcastContent = getMessageContent(broadcast);
-      expect(broadcastContent.filter((block) => block.type === "image")).toHaveLength(1);
-      expect(extractFirstTextBlock(broadcast)).toBe("Backed source reply");
-      expect(String(broadcastContent[1]?.url)).toContain("/api/chat/media/outgoing/");
-      const assistantEntries = await readActiveAssistantTranscriptMessages();
-      expect(assistantEntries).toHaveLength(1);
-      expect(assistantEntries[0]?.idempotencyKey).toBe(backedMirrorKey);
-      expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-      expect(JSON.stringify(assistantEntries[0])).not.toContain(firstMediaUrl);
-      expect(JSON.stringify(broadcastContent)).not.toContain(secondMediaUrl);
-    } finally {
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
+        const broadcastContent = getMessageContent(broadcast);
+        expect(broadcastContent.filter((block) => block.type === "image")).toHaveLength(1);
+        expect(extractFirstTextBlock(broadcast)).toBe("Backed source reply");
+        expect(String(broadcastContent[1]?.url)).toContain("/api/chat/media/outgoing/");
+        const assistantEntries = await readActiveAssistantTranscriptMessages();
+        expect(assistantEntries).toHaveLength(1);
+        expect(assistantEntries[0]?.idempotencyKey).toBe(backedMirrorKey);
+        expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
+        expect(JSON.stringify(assistantEntries[0])).not.toContain(firstMediaUrl);
+        expect(JSON.stringify(broadcastContent)).not.toContain(secondMediaUrl);
+      },
+    );
   });
 
   it("keeps media source replies when followed by text-only source reply mirrors", async () => {
-    const fixtureDir = createTranscriptFixture("openclaw-chat-send-agent-source-reply-text-tail-");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = fixtureDir;
-    const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-    const savedImagePath = path.join(fixtureDir, "source-reply-text-tail.png");
-    fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
-    const mediaMirrorKey = "idem-agent-source-reply-text-tail:internal-source-reply:0";
-    const textMirrorKey = "idem-agent-source-reply-text-tail:internal-source-reply:1";
-    await appendSourceReplyMirrorEntry({
-      idempotencyKey: mediaMirrorKey,
-      text: "Media source reply",
-    });
-    await appendSourceReplyMirrorEntry({
-      idempotencyKey: textMirrorKey,
-      text: "Text-only source reply",
-    });
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: setReplyPayloadMetadata(
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-agent-source-reply-text-tail-",
+      async (fixtureDir) => {
+        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const savedImagePath = path.join(fixtureDir, "source-reply-text-tail.png");
+        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        const mediaMirrorKey = "idem-agent-source-reply-text-tail:internal-source-reply:0";
+        const textMirrorKey = "idem-agent-source-reply-text-tail:internal-source-reply:1";
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: mediaMirrorKey,
+          text: "Media source reply",
+        });
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: textMirrorKey,
+          text: "Text-only source reply",
+        });
+        mockState.triggerAgentRunStart = true;
+        mockState.dispatchedReplies = [
           {
-            text: "Media source reply",
-            mediaUrls: [mediaUrl],
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "Media source reply",
+                mediaUrls: [mediaUrl],
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  text: "Media source reply",
+                  mediaUrls: [mediaUrl],
+                  idempotencyKey: mediaMirrorKey,
+                },
+              },
+            ),
           },
           {
-            sourceReplyTranscriptMirror: {
-              sessionKey: "main",
-              text: "Media source reply",
-              mediaUrls: [mediaUrl],
-              idempotencyKey: mediaMirrorKey,
-            },
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "Text-only source reply",
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  text: "Text-only source reply",
+                  idempotencyKey: textMirrorKey,
+                },
+              },
+            ),
           },
-        ),
-      },
-      {
-        kind: "final",
-        payload: setReplyPayloadMetadata(
-          {
-            text: "Text-only source reply",
-          },
-          {
-            sourceReplyTranscriptMirror: {
-              sessionKey: "main",
-              text: "Text-only source reply",
-              idempotencyKey: textMirrorKey,
-            },
-          },
-        ),
-      },
-    ];
-    const respond = vi.fn();
-    const context = createChatContext();
+        ];
+        const respond = vi.fn();
+        const context = createChatContext();
 
-    try {
-      const broadcast = await runNonStreamingChatSend({
-        context,
-        respond,
-        idempotencyKey: "idem-agent-source-reply-text-tail",
-        message: "hello from codex",
-      });
+        const broadcast = await runNonStreamingChatSend({
+          context,
+          respond,
+          idempotencyKey: "idem-agent-source-reply-text-tail",
+          message: "hello from codex",
+        });
 
-      const broadcastContent = getMessageContent(broadcast);
-      expect(broadcastContent.filter((block) => block.type === "image")).toHaveLength(1);
-      expect(mockState.savedMediaCalls).toHaveLength(1);
-      const assistantEntries = await readActiveAssistantTranscriptMessages();
-      expect(assistantEntries.map((entry) => entry.idempotencyKey)).toStrictEqual([
-        mediaMirrorKey,
-        textMirrorKey,
-      ]);
-      expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
-      expect(JSON.stringify(assistantEntries[1])).toContain("Text-only source reply");
-    } finally {
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
+        const broadcastContent = getMessageContent(broadcast);
+        expect(broadcastContent.filter((block) => block.type === "image")).toHaveLength(1);
+        expect(mockState.savedMediaCalls).toHaveLength(1);
+        const assistantEntries = await readActiveAssistantTranscriptMessages();
+        expect(assistantEntries.map((entry) => entry.idempotencyKey)).toStrictEqual([
+          mediaMirrorKey,
+          textMirrorKey,
+        ]);
+        expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
+        expect(JSON.stringify(assistantEntries[1])).toContain("Text-only source reply");
+      },
+    );
   });
 
   it("does not rewrite unrelated assistant messages with colliding source reply keys", async () => {
-    const fixtureDir = createTranscriptFixture("openclaw-chat-send-agent-source-reply-collision-");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = fixtureDir;
-    const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-    const savedImagePath = path.join(fixtureDir, "source-reply-collision.png");
-    fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
-    const collidingMirrorKey = "idem-agent-source-reply-collision:internal-source-reply:0";
-    await appendSourceReplyMirrorEntry({
-      idempotencyKey: collidingMirrorKey,
-      text: "Existing assistant content",
-      model: "gateway-injected",
-    });
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: setReplyPayloadMetadata(
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-agent-source-reply-collision-",
+      async (fixtureDir) => {
+        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const savedImagePath = path.join(fixtureDir, "source-reply-collision.png");
+        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        const collidingMirrorKey = "idem-agent-source-reply-collision:internal-source-reply:0";
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: collidingMirrorKey,
+          text: "Existing assistant content",
+          model: "gateway-injected",
+        });
+        mockState.triggerAgentRunStart = true;
+        mockState.dispatchedReplies = [
           {
-            text: "Source reply with media",
-            mediaUrls: [mediaUrl],
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "Source reply with media",
+                mediaUrls: [mediaUrl],
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  text: "Source reply with media",
+                  mediaUrls: [mediaUrl],
+                  idempotencyKey: collidingMirrorKey,
+                },
+              },
+            ),
           },
-          {
-            sourceReplyTranscriptMirror: {
-              sessionKey: "main",
-              text: "Source reply with media",
-              mediaUrls: [mediaUrl],
-              idempotencyKey: collidingMirrorKey,
-            },
-          },
-        ),
+        ];
+        const respond = vi.fn();
+        const context = createChatContext();
+
+        const broadcast = await runNonStreamingChatSend({
+          context,
+          respond,
+          idempotencyKey: "idem-agent-source-reply-collision",
+          message: "hello from codex",
+        });
+
+        expect(JSON.stringify(getMessageContent(broadcast))).not.toContain(
+          "/api/chat/media/outgoing/",
+        );
+        const assistantEntries = await readActiveAssistantTranscriptMessages();
+        expect(assistantEntries).toHaveLength(1);
+        expect(assistantEntries[0]?.content).toStrictEqual([
+          { type: "text", text: "Existing assistant content" },
+        ]);
+        expect(assistantEntries[0]?.model).toBe("gateway-injected");
       },
-    ];
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    try {
-      const broadcast = await runNonStreamingChatSend({
-        context,
-        respond,
-        idempotencyKey: "idem-agent-source-reply-collision",
-        message: "hello from codex",
-      });
-
-      expect(JSON.stringify(getMessageContent(broadcast))).not.toContain(
-        "/api/chat/media/outgoing/",
-      );
-      const assistantEntries = await readActiveAssistantTranscriptMessages();
-      expect(assistantEntries).toHaveLength(1);
-      expect(assistantEntries[0]?.content).toStrictEqual([
-        { type: "text", text: "Existing assistant content" },
-      ]);
-      expect(assistantEntries[0]?.model).toBe("gateway-injected");
-    } finally {
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
+    );
   });
 
   it("does not expose raw media refs when an unbacked source reply has no text", async () => {
-    const fixtureDir = createTranscriptFixture("openclaw-chat-send-agent-source-reply-media-only-");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = fixtureDir;
-    const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-    const savedImagePath = path.join(fixtureDir, "source-reply-media-only.png");
-    fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
-    const missingMirrorKey = "idem-agent-source-reply-media-only:internal-source-reply:0";
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: setReplyPayloadMetadata(
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-agent-source-reply-media-only-",
+      async (fixtureDir) => {
+        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const savedImagePath = path.join(fixtureDir, "source-reply-media-only.png");
+        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        const missingMirrorKey = "idem-agent-source-reply-media-only:internal-source-reply:0";
+        mockState.triggerAgentRunStart = true;
+        mockState.dispatchedReplies = [
           {
-            mediaUrls: [mediaUrl],
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                mediaUrls: [mediaUrl],
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  mediaUrls: [mediaUrl],
+                  idempotencyKey: missingMirrorKey,
+                },
+              },
+            ),
           },
-          {
-            sourceReplyTranscriptMirror: {
-              sessionKey: "main",
-              mediaUrls: [mediaUrl],
-              idempotencyKey: missingMirrorKey,
-            },
-          },
-        ),
+        ];
+        const respond = vi.fn();
+        const context = createChatContext();
+
+        const broadcast = await runNonStreamingChatSend({
+          context,
+          respond,
+          idempotencyKey: "idem-agent-source-reply-media-only",
+          message: "hello from codex",
+        });
+
+        expect(extractFirstTextBlock(broadcast)).toBe("Media reply could not be displayed.");
+        const broadcastJson = JSON.stringify(broadcast);
+        expect(broadcastJson).not.toContain("MEDIA:");
+        expect(broadcastJson).not.toContain(mediaUrl);
+        expect(broadcastJson).not.toContain("/api/chat/media/outgoing/");
+        expect(await readActiveAssistantTranscriptMessages()).toStrictEqual([]);
       },
-    ];
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    try {
-      const broadcast = await runNonStreamingChatSend({
-        context,
-        respond,
-        idempotencyKey: "idem-agent-source-reply-media-only",
-        message: "hello from codex",
-      });
-
-      expect(extractFirstTextBlock(broadcast)).toBe("Media reply could not be displayed.");
-      const broadcastJson = JSON.stringify(broadcast);
-      expect(broadcastJson).not.toContain("MEDIA:");
-      expect(broadcastJson).not.toContain(mediaUrl);
-      expect(broadcastJson).not.toContain("/api/chat/media/outgoing/");
-      expect(await readActiveAssistantTranscriptMessages()).toStrictEqual([]);
-    } finally {
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
+    );
   });
 
   it("keeps a placeholder for unbacked media-only source reply siblings", async () => {
-    const fixtureDir = createTranscriptFixture(
+    await withTranscriptFixtureState(
       "openclaw-chat-send-agent-source-reply-media-only-sibling-",
+      async (fixtureDir) => {
+        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const savedImagePath = path.join(fixtureDir, "source-reply-media-only-sibling.png");
+        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        const textMirrorKey = "idem-agent-source-reply-media-only-sibling:internal-source-reply:0";
+        const missingMirrorKey =
+          "idem-agent-source-reply-media-only-sibling:internal-source-reply:1";
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: textMirrorKey,
+          text: "Text source reply",
+        });
+        mockState.triggerAgentRunStart = true;
+        mockState.dispatchedReplies = [
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "Text source reply",
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  text: "Text source reply",
+                  idempotencyKey: textMirrorKey,
+                },
+              },
+            ),
+          },
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                mediaUrls: [mediaUrl],
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  mediaUrls: [mediaUrl],
+                  idempotencyKey: missingMirrorKey,
+                },
+              },
+            ),
+          },
+        ];
+        const respond = vi.fn();
+        const context = createChatContext();
+
+        const broadcast = await runNonStreamingChatSend({
+          context,
+          respond,
+          idempotencyKey: "idem-agent-source-reply-media-only-sibling",
+          message: "hello from codex",
+        });
+
+        const broadcastContent = getMessageContent(broadcast);
+        expect(broadcastContent).toContainEqual({ type: "text", text: "Text source reply" });
+        expect(broadcastContent).toContainEqual({
+          type: "text",
+          text: "Media reply could not be displayed.",
+        });
+        const broadcastJson = JSON.stringify(broadcast);
+        expect(broadcastJson).not.toContain("MEDIA:");
+        expect(broadcastJson).not.toContain(mediaUrl);
+        expect(broadcastJson).not.toContain("/api/chat/media/outgoing/");
+      },
     );
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = fixtureDir;
-    const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-    const savedImagePath = path.join(fixtureDir, "source-reply-media-only-sibling.png");
-    fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
-    const textMirrorKey = "idem-agent-source-reply-media-only-sibling:internal-source-reply:0";
-    const missingMirrorKey = "idem-agent-source-reply-media-only-sibling:internal-source-reply:1";
-    await appendSourceReplyMirrorEntry({
-      idempotencyKey: textMirrorKey,
-      text: "Text source reply",
-    });
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: setReplyPayloadMetadata(
-          {
-            text: "Text source reply",
-          },
-          {
-            sourceReplyTranscriptMirror: {
-              sessionKey: "main",
-              text: "Text source reply",
-              idempotencyKey: textMirrorKey,
-            },
-          },
-        ),
-      },
-      {
-        kind: "final",
-        payload: setReplyPayloadMetadata(
-          {
-            mediaUrls: [mediaUrl],
-          },
-          {
-            sourceReplyTranscriptMirror: {
-              sessionKey: "main",
-              mediaUrls: [mediaUrl],
-              idempotencyKey: missingMirrorKey,
-            },
-          },
-        ),
-      },
-    ];
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    try {
-      const broadcast = await runNonStreamingChatSend({
-        context,
-        respond,
-        idempotencyKey: "idem-agent-source-reply-media-only-sibling",
-        message: "hello from codex",
-      });
-
-      const broadcastContent = getMessageContent(broadcast);
-      expect(broadcastContent).toContainEqual({ type: "text", text: "Text source reply" });
-      expect(broadcastContent).toContainEqual({
-        type: "text",
-        text: "Media reply could not be displayed.",
-      });
-      const broadcastJson = JSON.stringify(broadcast);
-      expect(broadcastJson).not.toContain("MEDIA:");
-      expect(broadcastJson).not.toContain(mediaUrl);
-      expect(broadcastJson).not.toContain("/api/chat/media/outgoing/");
-    } finally {
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
   });
 
   it("does not rewrite source reply mirrors when later transcript entries would be replayed", async () => {
-    const fixtureDir = createTranscriptFixture("openclaw-chat-send-agent-source-reply-later-");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = fixtureDir;
-    const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-    const savedImagePath = path.join(fixtureDir, "source-reply-later.png");
-    fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
-    mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
-    const mirrorKey = "idem-agent-source-reply-later:internal-source-reply:0";
-    await appendSourceReplyMirrorEntry({
-      idempotencyKey: mirrorKey,
-      text: "Source reply with media",
-    });
-    await appendSourceReplyMirrorEntry({
-      idempotencyKey: "later-assistant-entry",
-      text: "Later assistant content",
-      model: "gateway-injected",
-    });
-    mockState.triggerAgentRunStart = true;
-    mockState.dispatchedReplies = [
-      {
-        kind: "final",
-        payload: setReplyPayloadMetadata(
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-agent-source-reply-later-",
+      async (fixtureDir) => {
+        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const savedImagePath = path.join(fixtureDir, "source-reply-later.png");
+        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        const mirrorKey = "idem-agent-source-reply-later:internal-source-reply:0";
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: mirrorKey,
+          text: "Source reply with media",
+        });
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: "later-assistant-entry",
+          text: "Later assistant content",
+          model: "gateway-injected",
+        });
+        mockState.triggerAgentRunStart = true;
+        mockState.dispatchedReplies = [
           {
-            text: "Source reply with media",
-            mediaUrls: [mediaUrl],
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "Source reply with media",
+                mediaUrls: [mediaUrl],
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  text: "Source reply with media",
+                  mediaUrls: [mediaUrl],
+                  idempotencyKey: mirrorKey,
+                },
+              },
+            ),
           },
-          {
-            sourceReplyTranscriptMirror: {
-              sessionKey: "main",
-              text: "Source reply with media",
-              mediaUrls: [mediaUrl],
-              idempotencyKey: mirrorKey,
-            },
-          },
-        ),
+        ];
+        const respond = vi.fn();
+        const context = createChatContext();
+
+        const broadcast = await runNonStreamingChatSend({
+          context,
+          respond,
+          idempotencyKey: "idem-agent-source-reply-later",
+          message: "hello from codex",
+        });
+
+        expect(JSON.stringify(getMessageContent(broadcast))).not.toContain(
+          "/api/chat/media/outgoing/",
+        );
+        const assistantEntries = await readActiveAssistantTranscriptMessages();
+        expect(assistantEntries.map((entry) => entry.idempotencyKey)).toStrictEqual([
+          mirrorKey,
+          "later-assistant-entry",
+        ]);
+        expect(assistantEntries[0]?.content).toStrictEqual([
+          { type: "text", text: "Source reply with media" },
+        ]);
+        expect(assistantEntries[1]?.content).toStrictEqual([
+          { type: "text", text: "Later assistant content" },
+        ]);
       },
-    ];
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    try {
-      const broadcast = await runNonStreamingChatSend({
-        context,
-        respond,
-        idempotencyKey: "idem-agent-source-reply-later",
-        message: "hello from codex",
-      });
-
-      expect(JSON.stringify(getMessageContent(broadcast))).not.toContain(
-        "/api/chat/media/outgoing/",
-      );
-      const assistantEntries = await readActiveAssistantTranscriptMessages();
-      expect(assistantEntries.map((entry) => entry.idempotencyKey)).toStrictEqual([
-        mirrorKey,
-        "later-assistant-entry",
-      ]);
-      expect(assistantEntries[0]?.content).toStrictEqual([
-        { type: "text", text: "Source reply with media" },
-      ]);
-      expect(assistantEntries[1]?.content).toStrictEqual([
-        { type: "text", text: "Later assistant content" },
-      ]);
-    } finally {
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
+    );
   });
 
   it("does not broadcast an error terminal after an internal-ui source reply final", async () => {
@@ -2146,6 +2326,46 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(nodeSend?.[0]).toBe("agent:main:canon");
     expect(nodeSend?.[1]).toBe("chat");
     expect(nodeSend?.[2].sessionKey).toBe("agent:main:canon");
+  });
+
+  it("chat.inject scopes selected-agent global sessions before appending", async () => {
+    createTranscriptFixture("openclaw-chat-inject-selected-global-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await chatHandlers["chat.inject"]({
+      params: {
+        sessionKey: "main",
+        agentId: "work",
+        message: "hello selected global",
+      },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const response = lastRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+    expect(mockState.loadSessionEntryCalls[0]).toEqual({
+      rawKey: "main",
+      opts: { agentId: "work" },
+    });
+    const broadcastPayload = lastBroadcastPayload(context);
+    expect(broadcastPayload).toMatchObject({
+      sessionKey: "global",
+      agentId: "work",
+      state: "final",
+    });
+    const nodeSend = lastNodeSendCall(context);
+    expect(nodeSend?.[0]).toBe("agent:work:global");
+    expect(nodeSend?.[2]).toMatchObject({ sessionKey: "global", agentId: "work" });
   });
 
   it("chat.send non-streaming final strips external untrusted wrapper metadata from final payload text", async () => {
@@ -4719,9 +4939,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("falls back to gateway user persistence when successful runtime persistence fails", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-success-runtime-persist-failed-");
     mockState.triggerAgentRunStart = true;
-    mockState.runtimeUserMessagePersistencePending = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("runtime prompt mirror failed")), 0),
-    );
+    mockState.runtimeUserMessagePersistencePending = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("runtime prompt mirror failed")), 0);
+    });
     mockState.finalPayload = { text: "agent still answered" };
     const respond = vi.fn();
     const context = createChatContext();

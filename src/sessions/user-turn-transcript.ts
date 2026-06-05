@@ -1,7 +1,8 @@
+// User turn transcript helpers extract user-turn text from session transcripts.
 import path from "node:path";
+import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
-import { mimeTypeFromFilePath } from "../media/mime.js";
 import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
@@ -9,6 +10,8 @@ import {
 } from "./input-provenance.js";
 import { emitSessionTranscriptUpdate } from "./transcript-events.js";
 
+// User-turn transcript helpers persist the selected prompt/media as a user
+// message before or during runtime execution, preserving provenance/idempotency.
 type TranscriptAppendConfig = Parameters<typeof appendSessionTranscriptMessage>[0]["config"];
 
 type UserTurnSessionEntry = {
@@ -165,6 +168,8 @@ function normalizeTranscriptText(value: string | null | undefined): string {
 
 const CHANNEL_MEDIA_PLACEHOLDER_PATTERN = /^<media:[a-z0-9_-]+>(?:\s+\([^)]*\))?$/i;
 
+// Select text for persisted user turns. Channel-generated media placeholders
+// are dropped only when structured media is present, keeping plain text intact.
 export function resolvePersistedUserTurnText(
   value: string | null | undefined,
   options: ResolvePersistedUserTurnTextOptions = {},
@@ -193,12 +198,12 @@ function normalizeMediaEntryForTranscript(media: PersistedUserTurnMediaInput):
       type: string;
     }
   | undefined {
-  const path = normalizeOptionalText(media.path) ?? normalizeOptionalText(media.url);
-  if (!path) {
+  const pathLocal = normalizeOptionalText(media.path) ?? normalizeOptionalText(media.url);
+  if (!pathLocal) {
     return undefined;
   }
   return {
-    path,
+    path: pathLocal,
     type: mediaTypeForTranscript(media),
   };
 }
@@ -214,6 +219,8 @@ function normalizeOptionalTextArray(
 const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
 
 function resolveTranscriptMediaPath(pathValue: string, workspaceDir: string | undefined): string {
+  // Relative staged media paths are anchored to the media workspace; absolute
+  // paths and URL-like refs are already stable transcript references.
   if (!workspaceDir || path.isAbsolute(pathValue) || URL_LIKE_MEDIA_PATH_PATTERN.test(pathValue)) {
     return pathValue;
   }
@@ -323,6 +330,8 @@ function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
   return marker !== undefined;
 }
 
+// Runtime messages may lack transcript metadata because channel adapters prepare
+// display text separately. Merge only safe user messages, never block markers.
 export function mergePreparedUserTurnMessageForRuntime(params: {
   runtimeMessage: AgentMessage;
   preparedMessage?: PersistedUserTurnMessage;
@@ -410,6 +419,7 @@ export async function appendUserTurnTranscriptMessage(
         emitSessionTranscriptUpdate({
           sessionFile: params.transcriptPath,
           ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.agentId ? { agentId: params.agentId } : {}),
           message: appended.message,
           messageId: appended.messageId,
         });
@@ -426,6 +436,8 @@ export async function appendUserTurnTranscriptMessage(
   };
 }
 
+// Store-backed persistence resolves the current session transcript file lazily
+// so callers can pass a session entry/store without knowing the final path.
 export async function persistUserTurnTranscript(
   params: PersistUserTurnTranscriptParams,
 ): Promise<UserTurnTranscriptPersistResult | undefined> {
@@ -556,6 +568,8 @@ export function createUserTurnTranscriptRecorder(
       return undefined;
     }
     if (options.waitForRuntime) {
+      // Approved persistence waits for runtime-owned writes first to avoid
+      // duplicate user turns when the harness already persisted the message.
       await waitForRuntimePersistence();
       if (persisted) {
         return persistedResult;

@@ -1,3 +1,4 @@
+// Video Generation Providers.Live.Test.Ts tests cover video generation providers plugin behavior.
 import {
   resolveApiKeyForProvider,
   resolveDefaultAgentDir,
@@ -401,7 +402,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
     requireProfileKeys: REQUIRE_PROFILE_KEYS,
     hasLiveKeys,
   });
-  let authLabel = "unresolved";
+  let authLabel;
   try {
     const auth = await resolveApiKeyForProvider({
       provider: testCase.providerId,
@@ -436,7 +437,6 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
   });
   const liveSize = testCase.providerId === "openai" ? "1280x720" : undefined;
   const logPrefix = `[live:video-generation] provider=${testCase.providerId} model=${providerModel}`;
-  let generatedVideo: LiveGeneratedVideo | null = null;
 
   const generateAttempt = await runLiveVideoAttempt({
     authLabel,
@@ -464,7 +464,7 @@ async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<voi
     expectLiveVideoCasePassed(summaryParams);
     return;
   }
-  generatedVideo = generateAttempt.video;
+  const generatedVideo = generateAttempt.video;
 
   if (!RUN_FULL_VIDEO_MODES) {
     expectLiveVideoCasePassed(summaryParams);

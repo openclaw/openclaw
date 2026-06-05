@@ -1,3 +1,5 @@
+// Gateway tool restart tests cover the sentinel handoff that lets an agent
+// resume private work after the gateway process restarts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
@@ -137,12 +139,15 @@ describe("gateway tool restart continuation", () => {
     expect(parameters.properties?.timeoutMs).toMatchObject({ type: "integer", minimum: 1 });
   });
 
-  it("instructs agents to use continuationMessage when a restart still needs a reply", async () => {
+  it("instructs agents to use continuationMessage for internal post-restart work", async () => {
     const tool = createGatewayTool();
 
-    expect(tool.description).toContain("still owe the user a reply");
+    expect(tool.description).toContain("post-restart work must continue internally");
+    expect(tool.description).toContain(
+      "visible follow-up from that turn must use the message tool",
+    );
     expect(tool.description).toContain("continuationMessage");
-    expect(tool.description).toContain("do not write restart sentinel files directly");
+    expect(tool.description).toContain("Do not write restart sentinel files directly");
   });
 
   it("writes an agentTurn continuation into the restart sentinel", async () => {
@@ -160,6 +165,8 @@ describe("gateway tool restart continuation", () => {
     });
 
     expect(writeRestartSentinelMock).not.toHaveBeenCalled();
+    // The sentinel is emitted by the restart scheduler hook, so failed restart
+    // delivery can still clean up a prepared file before the process exits.
     await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
 
     const payload = requireRestartSentinelPayload();
@@ -228,15 +235,15 @@ describe("gateway tool restart continuation", () => {
 
     await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
 
+    // Older model-facing arguments should not reintroduce system-event
+    // continuations; visible replies still go through the message tool.
     expect(requireRestartSentinelPayload().continuation).toEqual({
       kind: "agentTurn",
       message: "Reply after restart",
     });
   });
 
-  it("defaults session-scoped restarts to a success continuation", async () => {
-    const { DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE } =
-      await import("../../infra/restart-sentinel.js");
+  it("does not infer a continuation for session-scoped restarts", async () => {
     const tool = createGatewayTool({
       agentSessionKey: "agent:main:main",
       config: {},
@@ -252,10 +259,7 @@ describe("gateway tool restart continuation", () => {
 
     const payload = requireRestartSentinelPayload();
     expect(payload.sessionKey).toBe("agent:main:main");
-    expect(payload.continuation).toEqual({
-      kind: "agentTurn",
-      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
-    });
+    expect(payload.continuation).toBeNull();
   });
 
   it("removes the prepared sentinel when restart emission is rejected", async () => {

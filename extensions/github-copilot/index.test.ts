@@ -1,10 +1,13 @@
+// Github Copilot tests cover index plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  saveAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { MAX_DATE_TIMESTAMP_MS, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawConfig,
   OpenClawPluginApi,
@@ -51,7 +54,8 @@ const tempDirs: string[] = [];
 type RegisteredMemoryEmbeddingProvider = Parameters<
   OpenClawPluginApi["registerMemoryEmbeddingProvider"]
 >[0];
-type GithubCopilotTestProvider = {
+type RegisteredProvider = Parameters<OpenClawPluginApi["registerProvider"]>[0];
+type GithubCopilotTestProvider = RegisteredProvider & {
   auth: Array<{
     run: (ctx: unknown) => Promise<ProviderAuthResult | null>;
     runNonInteractive: (ctx: unknown) => Promise<OpenClawConfig | null>;
@@ -59,6 +63,7 @@ type GithubCopilotTestProvider = {
   catalog: {
     run: (ctx: unknown) => Promise<ProviderCatalogResult>;
   };
+  resolveThinkingProfile: NonNullable<RegisteredProvider["resolveThinkingProfile"]>;
 };
 type GithubCopilotTestModelCatalogProvider = {
   liveCatalog: (ctx: unknown) => Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>;
@@ -83,8 +88,21 @@ async function createAgentDir() {
   return dir;
 }
 
-function registerProviderForTest() {
-  return registerProviderWithPluginConfig({});
+function writeExistingCopilotTokenProfile(agentDir: string) {
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: {
+        "github-copilot:github": {
+          type: "token",
+          provider: "github-copilot",
+          token: "existing-token",
+        },
+      },
+    },
+    agentDir,
+    { filterExternalAuthProfiles: false, syncExternalCli: false },
+  );
 }
 
 function requireFirstMockArg<T>(
@@ -184,6 +202,18 @@ describe("github-copilot plugin", () => {
     expect(mocks.resolveCopilotApiToken).not.toHaveBeenCalled();
   });
 
+  it("exposes xhigh thinking for catalog-supported Copilot reasoning efforts", () => {
+    const provider = registerProviderWithPluginConfig({});
+
+    const profile = provider.resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "claude-opus-4.7-1m-internal",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+    });
+
+    expect(profile?.levels.map((level) => level.id)).toContain("xhigh");
+  });
+
   it("uses live plugin config to re-enable discovery after startup disable", async () => {
     mocks.resolveCopilotApiToken.mockResolvedValueOnce({
       token: "copilot_api_token",
@@ -262,19 +292,7 @@ describe("github-copilot plugin", () => {
     const provider = registerProviderWithPluginConfig({});
     const method = provider.auth[0];
     const agentDir = await createAgentDir();
-    await fs.writeFile(
-      path.join(agentDir, "auth-profiles.json"),
-      JSON.stringify({
-        version: 1,
-        profiles: {
-          "github-copilot:github": {
-            type: "token",
-            provider: "github-copilot",
-            token: "existing-token",
-          },
-        },
-      }),
-    );
+    writeExistingCopilotTokenProfile(agentDir);
     const prompter = {
       confirm: vi.fn(async () => false),
       note: vi.fn(),
@@ -319,19 +337,7 @@ describe("github-copilot plugin", () => {
     const provider = registerProviderWithPluginConfig({});
     const method = provider.auth[0];
     const agentDir = await createAgentDir();
-    await fs.writeFile(
-      path.join(agentDir, "auth-profiles.json"),
-      JSON.stringify({
-        version: 1,
-        profiles: {
-          "github-copilot:github": {
-            type: "token",
-            provider: "github-copilot",
-            token: "existing-token",
-          },
-        },
-      }),
-    );
+    writeExistingCopilotTokenProfile(agentDir);
     const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
       const target =
         typeof input === "string"
@@ -433,6 +439,79 @@ describe("github-copilot plugin", () => {
     );
     expect(showCode).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects GitHub device code expiries outside the Date timestamp range before polling", async () => {
+    const release = vi.fn(async () => {});
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => ({
+      response: new Response(
+        '{"device_code":"device-code-stub","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":1,"interval":0}',
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+      finalUrl: "https://github.com/login/device/code",
+      release,
+    }));
+
+    const showCode = vi.fn();
+    try {
+      await expect(runGitHubCopilotDeviceFlow({ showCode })).rejects.toThrow(
+        "GitHub device code response missing fields",
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(showCode).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds oversized GitHub device polling intervals before waiting", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => {});
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      let accessTokenPolls = 0;
+      setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => {
+        if (params.url === "https://github.com/login/device/code") {
+          return {
+            response: new Response(
+              '{"device_code":"device-code-stub","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":3000010,"interval":3000000}',
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+            finalUrl: params.url,
+            release,
+          };
+        }
+        accessTokenPolls += 1;
+        return {
+          response: new Response(
+            JSON.stringify(
+              accessTokenPolls === 1
+                ? { error: "authorization_pending" }
+                : { access_token: "refreshed-token", token_type: "bearer" },
+            ),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+          finalUrl: params.url,
+          release,
+        };
+      });
+
+      const flow = runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) });
+      await vi.waitFor(() =>
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS),
+      );
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+      expect(accessTokenPolls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(3_000_000_000 - MAX_TIMER_TIMEOUT_MS);
+      await expect(flow).resolves.toEqual({
+        status: "authorized",
+        accessToken: "refreshed-token",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stores GitHub Copilot token from non-interactive onboarding", async () => {
@@ -618,19 +697,7 @@ describe("github-copilot plugin", () => {
     const method = provider.auth[0];
     const agentDir = await createAgentDir();
     const runtime = { error: vi.fn(), exit: vi.fn() };
-    await fs.writeFile(
-      path.join(agentDir, "auth-profiles.json"),
-      JSON.stringify({
-        version: 1,
-        profiles: {
-          "github-copilot:github": {
-            type: "token",
-            provider: "github-copilot",
-            token: "existing-token",
-          },
-        },
-      }),
-    );
+    writeExistingCopilotTokenProfile(agentDir);
 
     const result = await method.runNonInteractive({
       authChoice: "github-copilot",

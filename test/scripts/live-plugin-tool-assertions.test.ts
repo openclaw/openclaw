@@ -1,3 +1,4 @@
+// Live Plugin Tool Assertions tests cover live plugin tool assertions script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -5,6 +6,14 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/live-plugin-tool/assertions.mjs";
+const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
+
+function nodeOptionsWithoutExperimentalWarnings(extra?: string): string {
+  const current = [process.env.NODE_OPTIONS, extra].filter(Boolean).join(" ");
+  return current.includes(DISABLE_EXPERIMENTAL_WARNING)
+    ? current
+    : [current, DISABLE_EXPERIMENTAL_WARNING].filter(Boolean).join(" ");
+}
 
 function writeJson(filePath: string, value: unknown) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -32,6 +41,7 @@ function runAssertionCommand(command: string, root: string, env: Record<string, 
       SEED: "live plugin slug",
       TOOL_NAME: "e2e_slug_probe",
       ...env,
+      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(env.NODE_OPTIONS),
     },
   });
 }

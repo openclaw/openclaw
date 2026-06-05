@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements agentic parity report behavior.
 import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
@@ -259,7 +260,7 @@ function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParit
     scenario.codexTokens > 0
       ? undefined
       : `${scenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
-  ].filter((entry): entry is string => !!entry);
+  ].filter((entry): entry is string => Boolean(entry));
   if (missing.length === 0) {
     return undefined;
   }

@@ -1,3 +1,6 @@
+/**
+ * Recovers sensitive stop reasons by wrapping provider stream functions.
+ */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import type { StreamFn } from "../../runtime/index.js";
@@ -111,6 +114,9 @@ function wrapStreamHandleUnhandledStopReason(
             if (!normalizedMessage) {
               throw err;
             }
+            // The provider stream failed before yielding a terminal event. Emit a
+            // synthetic error event once so callers still receive a normal stream
+            // shape and iterator completion.
             emittedSyntheticTerminal = true;
             return {
               done: false as const,
@@ -135,6 +141,11 @@ function wrapStreamHandleUnhandledStopReason(
   return stream;
 }
 
+/**
+ * Wraps provider streams so raw "Unhandled stop reason" failures are rewritten
+ * into stable error messages. Recovery covers synchronous creation failures,
+ * async stream creation failures, iterator errors, and `result()` errors.
+ */
 export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
     try {
@@ -142,7 +153,7 @@ export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamF
       if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
         return Promise.resolve(maybeStream).then(
           (stream) => wrapStreamHandleUnhandledStopReason(model, stream),
-          (err) => {
+          (err: unknown) => {
             const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
             if (!normalizedMessage) {
               throw err;

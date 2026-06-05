@@ -138,7 +138,9 @@ final class NodeAppModel {
     var homeCanvasRevision: Int = 0
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
+    var gatewaySetupRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
+    private var pendingGatewaySetupLink: GatewayConnectDeepLink?
     private(set) var pendingExecApprovalPrompt: ExecApprovalPrompt?
     private(set) var pendingExecApprovalPromptResolving: Bool = false
     private(set) var pendingExecApprovalPromptErrorText: String?
@@ -171,7 +173,6 @@ final class NodeAppModel {
     private let remindersService: any RemindersServicing
     private let motionService: any MotionServicing
     private let watchMessagingService: any WatchMessagingServicing
-    var lastAutoA2uiURL: String?
     private var pttVoiceWakeSuspended = false
     private var talkVoiceWakeSuspended = false
     private var backgroundVoiceWakeSuspended = false
@@ -1033,24 +1034,18 @@ final class NodeAppModel {
                 OpenClawCanvasPresentParams()
             let url = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if url.isEmpty {
-                self.screen.showDefaultCanvas()
+                self.screen.presentDefaultCanvas()
             } else {
-                let trustedA2UIURL = await self.resolveA2UIHostURL()
-                self.screen.navigate(
-                    to: url,
-                    trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(url))
+                self.screen.present(urlString: url)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.hide.rawValue:
-            self.screen.showDefaultCanvas()
+            self.screen.hideCanvas()
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.navigate.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
             let trimmedURL = params.url.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trustedA2UIURL = await self.resolveA2UIHostURL()
-            self.screen.navigate(
-                to: trimmedURL,
-                trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(trimmedURL))
+            self.screen.present(urlString: trimmedURL)
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.evalJS.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasEvalParams.self, from: req.paramsJSON)
@@ -1093,20 +1088,13 @@ final class NodeAppModel {
             switch await self.ensureA2UIReadyWithCapabilityRefresh(timeoutMs: 5000) {
             case .ready:
                 break
-            case .hostNotConfigured:
-                return BridgeInvokeResponse(
-                    id: req.id,
-                    ok: false,
-                    error: OpenClawNodeError(
-                        code: .unavailable,
-                        message: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host"))
             case .hostUnavailable:
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
                     error: OpenClawNodeError(
                         code: .unavailable,
-                        message: "A2UI_HOST_UNAVAILABLE: A2UI host not reachable"))
+                        message: "A2UI_HOST_UNAVAILABLE: bundled A2UI host not reachable"))
             }
             let json = try await self.screen.eval(javaScript: """
             (() => {
@@ -1136,20 +1124,13 @@ final class NodeAppModel {
             switch await self.ensureA2UIReadyWithCapabilityRefresh(timeoutMs: 5000) {
             case .ready:
                 break
-            case .hostNotConfigured:
-                return BridgeInvokeResponse(
-                    id: req.id,
-                    ok: false,
-                    error: OpenClawNodeError(
-                        code: .unavailable,
-                        message: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host"))
             case .hostUnavailable:
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
                     error: OpenClawNodeError(
                         code: .unavailable,
-                        message: "A2UI_HOST_UNAVAILABLE: A2UI host not reachable"))
+                        message: "A2UI_HOST_UNAVAILABLE: bundled A2UI host not reachable"))
             }
 
             let messagesJSON = try OpenClawCanvasA2UIJSONL.encodeMessagesJSONArray(messages)
@@ -1956,6 +1937,15 @@ extension NodeAppModel {
             password: cfg.password,
             connectOptions: cfg.nodeOptions,
             forceReconnect: forceReconnect)
+    }
+
+    func resetGatewaySessionsForForcedReconnect() async {
+        self.nodeGatewayTask?.cancel()
+        self.nodeGatewayTask = nil
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
+        await self.operatorGateway.disconnect()
+        await self.nodeGateway.disconnect()
     }
 
     func disconnectGateway() {
@@ -4134,9 +4124,21 @@ extension NodeAppModel {
         switch route {
         case let .agent(link):
             await self.handleAgentDeepLink(link, originalURL: url)
-        case .gateway, .dashboard:
+        case let .gateway(link):
+            self.stageGatewaySetupLink(link)
+        case .dashboard:
             break
         }
+    }
+
+    func stageGatewaySetupLink(_ link: GatewayConnectDeepLink) {
+        self.pendingGatewaySetupLink = link
+        self.gatewaySetupRequestID &+= 1
+    }
+
+    func consumePendingGatewaySetupLink() -> GatewayConnectDeepLink? {
+        defer { self.pendingGatewaySetupLink = nil }
+        return self.pendingGatewaySetupLink
     }
 
     private func handleAgentDeepLink(_ link: AgentDeepLink, originalURL: URL) async {
@@ -4562,6 +4564,10 @@ extension NodeAppModel {
         in config: GatewayConnectConfig?) -> GatewayConnectConfig?
     {
         self.clearingBootstrapToken(in: config)
+    }
+
+    func _test_hasGatewayLoopTasks() -> (node: Bool, operator: Bool) {
+        (self.nodeGatewayTask != nil, self.operatorGatewayTask != nil)
     }
 
     func _test_handleSuccessfulBootstrapGatewayOnboarding() async {

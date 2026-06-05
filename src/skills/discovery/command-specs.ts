@@ -1,10 +1,11 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
+// Skill command spec helpers expose skill-provided commands to model/tool surfaces.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
 import {
   filterWorkspaceSkillEntriesWithOptions,
@@ -12,6 +13,7 @@ import {
 } from "../loading/workspace.js";
 import type { SkillEligibilityContext, SkillCommandSpec, SkillEntry } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
+import { filterUserInvocableSkillEntries } from "./skill-index.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
@@ -19,6 +21,7 @@ const SKILL_COMMAND_MAX_LENGTH = 32;
 const SKILL_COMMAND_FALLBACK = "skill";
 const SKILL_COMMAND_DESCRIPTION_MAX_LENGTH = 100;
 
+// De-duplicate noisy skill command diagnostics across large workspace scans.
 function debugSkillCommandOnce(
   messageKey: string,
   message: string,
@@ -70,6 +73,7 @@ function resolveUniqueSkillCommandName(base: string, used: Set<string>): string 
   return `${base.slice(0, Math.max(1, SKILL_COMMAND_MAX_LENGTH - 2))}_x`;
 }
 
+/** Builds user-invocable slash command specs for visible workspace skills. */
 export function buildWorkspaceSkillCommandSpecs(
   workspaceDir: string,
   opts?: {
@@ -98,7 +102,7 @@ export function buildWorkspaceSkillCommandSpecs(
         skillFilter: effectiveSkillFilter,
         eligibility: opts?.eligibility,
       });
-  const userInvocable = eligible.filter((entry) => entry.invocation?.userInvocable !== false);
+  const userInvocable = filterUserInvocableSkillEntries(eligible);
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(normalizeLowercaseStringOrEmpty(reserved));

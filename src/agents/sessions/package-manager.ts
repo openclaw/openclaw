@@ -1,3 +1,8 @@
+/**
+ * Session package/resource manager.
+ *
+ * Resolves extension, skill, prompt, and theme sources from npm, git, local paths, and project manifests.
+ */
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -951,9 +956,7 @@ export class DefaultPackageManager implements PackageManager {
           this.addResource(accumulator.extensions, resolved, metadata, true);
         }
       }
-    } catch {
-      return;
-    }
+    } catch {}
   }
 
   private parseSource(source: string): ParsedSource {

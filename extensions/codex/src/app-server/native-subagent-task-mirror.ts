@@ -1,3 +1,7 @@
+/**
+ * Mirrors Codex native subagent thread lifecycle events into OpenClaw task
+ * runtime rows so parent sessions can observe child progress.
+ */
 import type { AgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX } from "./native-subagent-task-ids.js";
 import type {
@@ -13,11 +17,13 @@ import type {
 } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
+/** Minimal task-runtime surface needed to mirror native subagent lifecycle. */
 export type TaskLifecycleRuntime = Pick<
   AgentHarnessTaskRuntime,
-  "createRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
+  "tryCreateRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
 >;
 
+/** Stable parent/session context used while mirroring native subagent tasks. */
 export type CodexNativeSubagentTaskMirrorParams = {
   parentThreadId: string;
   requesterSessionKey?: string;
@@ -25,8 +31,10 @@ export type CodexNativeSubagentTaskMirrorParams = {
   now?: () => number;
 };
 
+/** Projects Codex thread and collab-agent notifications into task lifecycle updates. */
 export class CodexNativeSubagentTaskMirror {
   private readonly mirroredThreadIds = new Set<string>();
+  private readonly failedMirrorThreadIds = new Set<string>();
   private readonly terminalRunIds = new Set<string>();
   private readonly now: () => number;
 
@@ -81,7 +89,7 @@ export class CodexNativeSubagentTaskMirror {
       trimOptional(thread.preview) ??
       `Codex native subagent${label === "Codex subagent" ? "" : ` ${label}`}`;
     const createdAt = secondsToMillis(thread.createdAt) ?? this.now();
-    this.runtime.createRunningTaskRun({
+    const taskRecord = this.runtime.tryCreateRunningTaskRun({
       sourceId: runId,
       agentId: this.params.agentId,
       runId,
@@ -94,6 +102,13 @@ export class CodexNativeSubagentTaskMirror {
       lastEventAt: this.now(),
       progressSummary: "Codex native subagent started.",
     });
+    if (!taskRecord) {
+      this.mirroredThreadIds.delete(threadId);
+      this.failedMirrorThreadIds.add(threadId);
+      return;
+    }
+    this.failedMirrorThreadIds.delete(threadId);
+    this.terminalRunIds.delete(runId);
     this.applyStatus(threadId, thread.status);
   }
 
@@ -106,6 +121,9 @@ export class CodexNativeSubagentTaskMirror {
   }
 
   private applyStatus(threadId: string, status: CodexThreadStatus | null | undefined): void {
+    if (!this.mirroredThreadIds.has(threadId) && this.failedMirrorThreadIds.has(threadId)) {
+      return;
+    }
     const statusType = status?.type;
     if (!statusType) {
       return;
@@ -219,7 +237,7 @@ export class CodexNativeSubagentTaskMirror {
     const prompt = trimOptional(readString(item, "prompt"));
     const runId = codexNativeSubagentRunId(normalizedThreadId);
     const createdAt = this.now();
-    this.runtime.createRunningTaskRun({
+    const taskRecord = this.runtime.tryCreateRunningTaskRun({
       sourceId: runId,
       agentId: this.params.agentId,
       runId,
@@ -232,6 +250,13 @@ export class CodexNativeSubagentTaskMirror {
       lastEventAt: createdAt,
       progressSummary: "Codex native subagent spawned.",
     });
+    if (!taskRecord) {
+      this.mirroredThreadIds.delete(normalizedThreadId);
+      this.failedMirrorThreadIds.add(normalizedThreadId);
+      return;
+    }
+    this.failedMirrorThreadIds.delete(normalizedThreadId);
+    this.terminalRunIds.delete(runId);
   }
 
   private applyCollabAgentStatus(
@@ -239,6 +264,9 @@ export class CodexNativeSubagentTaskMirror {
     status: string | undefined,
     message: string | null | undefined,
   ): void {
+    if (!this.mirroredThreadIds.has(threadId) && this.failedMirrorThreadIds.has(threadId)) {
+      return;
+    }
     const normalizedStatus = normalizeAgentStateStatus(status);
     if (!normalizedStatus) {
       return;
@@ -301,10 +329,12 @@ export class CodexNativeSubagentTaskMirror {
   }
 }
 
+/** Converts a Codex child thread id into the OpenClaw task-runtime run id. */
 export function codexNativeSubagentRunId(threadId: string): string {
   return `${CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX}${threadId.trim()}`;
 }
 
+/** Reads a subagent thread-spawn source only when it belongs to the expected parent thread. */
 export function readSubagentThreadSpawnSource(
   source: CodexSessionSource | null | undefined,
   parentThreadId: string,

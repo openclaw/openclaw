@@ -1,9 +1,13 @@
+// Classifies changed files into CI lanes and release metadata scopes.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
+const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
+const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
 
 const DOCS_PATH_RE = /^(?:docs\/|README\.md$|AGENTS\.md$|.*\.mdx?$)/u;
 const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
@@ -21,6 +25,9 @@ const TEST_PATH_RE =
   /(?:^|\/)(?:test|__tests__)\/|(?:\.|\/)(?:test|spec|e2e|browser\.test)\.[cm]?[jt]sx?$/u;
 const PUBLIC_EXTENSION_CONTRACT_RE =
   /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/sync-plugin-sdk-exports\.mjs$|scripts\/generate-plugin-sdk-api-baseline\.ts$)/u;
+/**
+ * Files whose changes are treated as release metadata only.
+ */
 export const RELEASE_METADATA_PATHS = new Set([
   "CHANGELOG.md",
   "apps/android/app/build.gradle.kts",
@@ -46,6 +53,9 @@ export const RELEASE_METADATA_PATHS = new Set([
  * }} ChangedLaneResult
  */
 
+/**
+ * Normalizes a changed file path into repo-relative POSIX form.
+ */
 export function normalizeChangedPath(inputPath) {
   return String(inputPath ?? "")
     .trim()
@@ -53,6 +63,9 @@ export function normalizeChangedPath(inputPath) {
     .replace(/^\.\/+/u, "");
 }
 
+/**
+ * Creates the default changed-lanes result object.
+ */
 export function createEmptyChangedLanes() {
   return {
     core: false,
@@ -72,6 +85,9 @@ export function createEmptyChangedLanes() {
  * @param {string[]} changedPaths
  * @param {{ packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null }} [options]
  * @returns {ChangedLaneResult}
+ */
+/**
+ * Classifies a list of changed paths into docs, app, extension, core, and tooling lanes.
  */
 export function detectChangedLanes(changedPaths, options = {}) {
   const paths = [...new Set(changedPaths.map(normalizeChangedPath).filter(Boolean))]
@@ -211,13 +227,24 @@ export function detectChangedLanes(changedPaths, options = {}) {
 }
 
 /**
- * @param {{ paths: string[]; base: string; head?: string; staged?: boolean }} params
+ * @param {{ paths: string[]; base: string; head?: string; staged?: boolean; mergeHeadFirstParent?: boolean }} params
  * @returns {ChangedLaneResult}
  */
+/**
+ * Classifies changed paths with optional package.json before/after contents.
+ */
 export function detectChangedLanesForPaths(params) {
+  const base = params.staged
+    ? params.base
+    : resolveMergeHeadDiffBase({
+        base: params.base,
+        head: params.head ?? "HEAD",
+        maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+        preferFirstParent: params.mergeHeadFirstParent === true,
+      });
   const packageJsonChangeKind = params.paths.includes("package.json")
     ? classifyPackageJsonChangeFromGit({
-        base: params.base,
+        base,
         head: params.head,
         staged: params.staged,
       })
@@ -226,28 +253,57 @@ export function detectChangedLanesForPaths(params) {
 }
 
 /**
- * @param {{ base: string; head?: string; includeWorktree?: boolean; cwd?: string }} params
+ * @param {{ base: string; head?: string; includeWorktree?: boolean; cwd?: string; mergeHeadFirstParent?: boolean }} params
  * @returns {string[]}
  */
+/**
+ * Lists changed paths from git for a base/head comparison.
+ */
 export function listChangedPathsFromGit(params) {
-  const base = params.base;
   const head = params.head ?? "HEAD";
   const cwd = params.cwd ?? process.cwd();
+  const base = resolveMergeHeadDiffBase({
+    base: params.base,
+    head,
+    cwd,
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+    preferFirstParent: params.mergeHeadFirstParent === true,
+  });
   if (!base) {
     return [];
   }
-  const rangePaths = runGitNameOnlyDiff([`${base}...${head}`], cwd);
+  let rangePaths;
+  let noMergeBase = false;
+  try {
+    rangePaths = runGitNameOnlyDiff([`${base}...${head}`], cwd);
+  } catch (error) {
+    if (!isGitNoMergeBaseError(error)) {
+      throw error;
+    }
+    noMergeBase = true;
+    rangePaths = runGitNameOnlyDiff([`${base}..${head}`], cwd);
+  }
   if (params.includeWorktree === false) {
     return rangePaths;
   }
-  return [
-    ...new Set([
-      ...rangePaths,
-      ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd),
-      ...runGitNameOnlyDiff(["--diff-filter=ACMRD"], cwd),
-      ...runGitLsFiles(["--others", "--exclude-standard"], cwd),
-    ]),
-  ].toSorted((left, right) => left.localeCompare(right));
+  const worktreePaths = [
+    ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd),
+    ...runGitNameOnlyDiff(["--diff-filter=ACMRD"], cwd),
+    ...runGitLsFiles(["--others", "--exclude-standard"], cwd),
+  ];
+  // Raw Crabbox syncs can have unrelated synthetic refs; prefer the synced
+  // worktree delta instead of turning that into an accidental whole-repo gate.
+  if (
+    noMergeBase &&
+    process.env[RAW_SYNC_CHANGED_LANES_ENV] === "1" &&
+    worktreePaths.length > 0 &&
+    rangePaths.length > IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS
+  ) {
+    rangePaths = [];
+  }
+  return [...new Set([...rangePaths, ...worktreePaths])].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 function runGitNameOnlyDiff(extraArgs, cwd = process.cwd()) {
@@ -260,6 +316,17 @@ function runGitNameOnlyDiff(extraArgs, cwd = process.cwd()) {
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
 
+function isGitNoMergeBaseError(error) {
+  const text = [
+    error?.message,
+    error?.stderr?.toString?.("utf8"),
+    Array.isArray(error?.output)
+      ? error.output.map((value) => value?.toString?.("utf8")).join("\n")
+      : "",
+  ].join("\n");
+  return text.includes("no merge base");
+}
+
 function runGitLsFiles(extraArgs, cwd = process.cwd()) {
   const output = execFileSync("git", ["ls-files", ...extraArgs], {
     cwd,
@@ -270,8 +337,12 @@ function runGitLsFiles(extraArgs, cwd = process.cwd()) {
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
 
-export function listStagedChangedPaths() {
+/**
+ * Lists staged changed paths for pre-commit checks.
+ */
+export function listStagedChangedPaths(cwd = process.cwd()) {
   const output = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"], {
+    cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
@@ -279,6 +350,9 @@ export function listStagedChangedPaths() {
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
 
+/**
+ * Classifies package.json script-only changes from git content.
+ */
 export function classifyPackageJsonChangeFromGit(params) {
   try {
     const { before, after } = readPackageJsonBeforeAfter(params);
@@ -291,6 +365,9 @@ export function classifyPackageJsonChangeFromGit(params) {
   }
 }
 
+/**
+ * Checks whether package scripts changed only live Docker script entries.
+ */
 export function isLiveDockerPackageScriptOnlyChange(before, after) {
   const beforePackage = JSON.parse(before);
   const afterPackage = JSON.parse(after);
@@ -305,6 +382,9 @@ export function isLiveDockerPackageScriptOnlyChange(before, after) {
   );
 }
 
+/**
+ * Checks whether package.json changes are limited to scripts.
+ */
 export function isPackageScriptOnlyChange(before, after) {
   const beforePackage = JSON.parse(before);
   const afterPackage = JSON.parse(after);
@@ -358,7 +438,7 @@ function extractLiveDockerPackageScripts(packageJson) {
 }
 
 function stripLiveDockerPackageScripts(packageJson) {
-  const clone = JSON.parse(JSON.stringify(packageJson));
+  const clone = structuredClone(packageJson);
   const scripts = clone.scripts;
   if (!scripts || typeof scripts !== "object" || Array.isArray(scripts)) {
     return clone;
@@ -377,7 +457,7 @@ function extractPackageScripts(packageJson) {
 }
 
 function stripPackageScripts(packageJson) {
-  const clone = JSON.parse(JSON.stringify(packageJson));
+  const clone = structuredClone(packageJson);
   delete clone.scripts;
   return clone;
 }
@@ -395,6 +475,9 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
+/**
+ * Writes changed-lane booleans to the GitHub Actions output file.
+ */
 export function writeChangedLaneGitHubOutput(result, outputPath = process.env.GITHUB_OUTPUT) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
@@ -419,6 +502,7 @@ function parseArgs(argv) {
     base: "origin/main",
     head: "HEAD",
     staged: false,
+    mergeHeadFirstParent: false,
     json: false,
     githubOutput: false,
     help: false,
@@ -431,6 +515,7 @@ function parseArgs(argv) {
       stringFlag("--base", "base"),
       stringFlag("--head", "head"),
       booleanFlag("--staged", "staged"),
+      booleanFlag("--merge-head-first-parent", "mergeHeadFirstParent"),
       booleanFlag("--json", "json"),
       booleanFlag("--github-output", "githubOutput"),
       booleanFlag("--help", "help"),
@@ -504,12 +589,17 @@ if (isDirectRun()) {
       ? args.paths
       : args.staged
         ? listStagedChangedPaths()
-        : listChangedPathsFromGit({ base: args.base, head: args.head });
+        : listChangedPathsFromGit({
+            base: args.base,
+            head: args.head,
+            mergeHeadFirstParent: args.mergeHeadFirstParent,
+          });
   const result = detectChangedLanesForPaths({
     paths,
     base: args.base,
     head: args.head,
     staged: args.staged,
+    mergeHeadFirstParent: args.mergeHeadFirstParent,
   });
   if (args.githubOutput) {
     writeChangedLaneGitHubOutput(result);

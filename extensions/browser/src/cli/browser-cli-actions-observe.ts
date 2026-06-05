@@ -1,7 +1,11 @@
+/**
+ * Browser CLI observation commands for console, PDF, and response bodies.
+ */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runCommandWithRuntime } from "../core-api.js";
 import {
+  BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerOption,
   type BrowserParentOpts,
@@ -15,6 +19,7 @@ function runBrowserObserve(action: () => Promise<void>) {
   });
 }
 
+/** Registers Browser commands that observe current page state without direct input. */
 export function registerBrowserActionObserveCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -23,7 +28,7 @@ export function registerBrowserActionObserveCommands(
     .command("console")
     .description("Get recent console messages")
     .option("--level <level>", "Filter by level (error, warn, info)")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -52,7 +57,7 @@ export function registerBrowserActionObserveCommands(
   browser
     .command("pdf")
     .description("Save page as PDF")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -79,7 +84,7 @@ export function registerBrowserActionObserveCommands(
     .command("responsebody")
     .description("Wait for a network response and return its body")
     .argument("<url>", "URL (exact, substring, or glob like **/api)")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the response (default: 20000)",

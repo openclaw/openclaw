@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 
+// Profiles peak RSS for built bundled plugin entrypoints and emits a JSON
+// report suitable for extension memory budget review.
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ensureExtensionMemoryBuild } from "./ensure-extension-memory-build.mjs";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import { formatErrorMessage } from "./lib/error-format.mjs";
 
 const DEFAULT_CONCURRENCY = 6;
@@ -52,7 +55,11 @@ function parsePositiveInt(raw, flagName) {
   return parsed;
 }
 
-function parseArgs(argv) {
+/**
+ * Parses extension memory profiler options after pnpm's optional separator.
+ */
+export function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
     extensions: [],
     concurrency: DEFAULT_CONCURRENCY,
@@ -63,14 +70,14 @@ function parseArgs(argv) {
     skipCombined: false,
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  parseArgv: for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--extension":
       case "-e": {
-        const next = argv[index + 1];
+        const next = args[index + 1];
         if (!next) {
           throw new Error(`${arg} requires a value`);
         }
@@ -79,23 +86,23 @@ function parseArgs(argv) {
         break;
       }
       case "--concurrency":
-        options.concurrency = parsePositiveInt(argv[index + 1], arg);
+        options.concurrency = parsePositiveInt(args[index + 1], arg);
         index += 1;
         break;
       case "--timeout-ms":
-        options.timeoutMs = parsePositiveInt(argv[index + 1], arg);
+        options.timeoutMs = parsePositiveInt(args[index + 1], arg);
         index += 1;
         break;
       case "--combined-timeout-ms":
-        options.combinedTimeoutMs = parsePositiveInt(argv[index + 1], arg);
+        options.combinedTimeoutMs = parsePositiveInt(args[index + 1], arg);
         index += 1;
         break;
       case "--top":
-        options.top = parsePositiveInt(argv[index + 1], arg);
+        options.top = parsePositiveInt(args[index + 1], arg);
         index += 1;
         break;
       case "--json": {
-        const next = argv[index + 1];
+        const next = args[index + 1];
         if (!next) {
           throw new Error(`${arg} requires a value`);
         }
@@ -169,6 +176,9 @@ function summarizeStderr(stderr, lines = 8, maxChars = STDERR_PREVIEW_MAX_CHARS)
   )}`;
 }
 
+/**
+ * Runs one import scenario in a child process and captures bounded output plus RSS.
+ */
 export async function runCase({
   repoRoot,
   env,

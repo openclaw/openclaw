@@ -1,3 +1,4 @@
+// Gateway Client tests cover client.watchdog behavior.
 import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -5,6 +6,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { GatewayClient, resolveGatewayClientConnectChallengeTimeoutMs } from "./client.js";
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+  MAX_SAFE_TIMEOUT_DELAY_MS,
   MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
   MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
 } from "./timeouts.js";
@@ -81,13 +83,17 @@ describe("GatewayClient", () => {
       for (const client of wss.clients) {
         client.terminate();
       }
-      await new Promise<void>((resolve) => wss?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.close(() => resolve());
+      });
       wss = null;
     }
     if (httpsServer) {
       httpsServer.closeAllConnections?.();
       httpsServer.closeIdleConnections?.();
-      await new Promise<void>((resolve) => httpsServer?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        httpsServer?.close(() => resolve());
+      });
       httpsServer = null;
     }
   });
@@ -247,6 +253,39 @@ describe("GatewayClient", () => {
 
       await vi.advanceTimersByTimeAsync(35);
       expect(close).toHaveBeenCalledWith(4000, "tick timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("clamps oversized tick watchdog intervals before scheduling", () => {
+    vi.useFakeTimers();
+    try {
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const client = new GatewayClient({
+        tickWatchMinIntervalMs: 5,
+      });
+      Object.assign(
+        client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number },
+        {
+          ws: {
+            readyState: WebSocket.OPEN,
+            send: vi.fn(),
+            close: vi.fn(),
+          },
+          tickIntervalMs: Number.MAX_SAFE_INTEGER,
+          lastTick: Date.now(),
+        },
+      );
+
+      (
+        client as unknown as {
+          startTickWatch: () => void;
+        }
+      ).startTickWatch();
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+      client.stop();
     } finally {
       vi.useRealTimers();
     }
@@ -415,6 +454,33 @@ describe("GatewayClient", () => {
       await expect(requestPromise).rejects.toThrow("gateway client stopped");
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  test("clamps oversized stopAndWait timeouts before scheduling", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({});
+      const ws = {
+        readyState: WebSocket.OPEN,
+        close: vi.fn(),
+        terminate: vi.fn(),
+      };
+      (client as unknown as { ws: unknown }).ws = ws;
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      const stopPromise = client.stopAndWait({ timeoutMs: Number.MAX_SAFE_INTEGER });
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ws.terminate).not.toHaveBeenCalled();
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+
+      await vi.advanceTimersByTimeAsync(249);
+      await expect(stopPromise).resolves.toBeUndefined();
+      expect(ws.terminate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
     }
   });
 

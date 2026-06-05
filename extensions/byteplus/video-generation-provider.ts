@@ -1,3 +1,6 @@
+/**
+ * BytePlus Seedance video generation provider implementation.
+ */
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -193,8 +196,6 @@ async function pollBytePlusTask(params: {
         throw new Error(
           readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed",
         );
-      case "queued":
-      case "running":
       default:
         await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
         break;
@@ -229,6 +230,7 @@ async function downloadBytePlusVideo(params: {
   };
 }
 
+/** Builds the BytePlus video generation provider registered by the plugin. */
 export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "byteplus",

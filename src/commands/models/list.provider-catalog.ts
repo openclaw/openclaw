@@ -1,9 +1,11 @@
+/** Provider plugin catalog loading for model-list output. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store.js";
 import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "../../agents/models-config.providers.secrets.js";
-import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -28,7 +30,6 @@ import {
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
-import { sortUniqueStrings } from "../../shared/string-normalization.js";
 
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const SELF_HOSTED_DISCOVERY_PROVIDER_IDS = new Set(["lmstudio", "ollama", "sglang", "vllm"]);
@@ -106,6 +107,7 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
   return disabledPluginIds.length > 0 ? [] : undefined;
 }
 
+/** Resolves plugin ids that can provide catalog rows for a provider filter. */
 export async function resolveProviderCatalogPluginIdsForFilter(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -124,6 +126,8 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
     registryIndex: params.metadataSnapshot?.index ?? params.registryIndex,
   });
   if (installedIndexPluginIds) {
+    // Installed registry metadata is process-stable and knows disabled plugins,
+    // so it wins over broader manifest/contract alias fallbacks.
     return installedIndexPluginIds;
   }
   const manifestPluginIds = resolveOwningPluginIdsForProviderRef({
@@ -144,6 +148,7 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
   return undefined;
 }
 
+/** Returns true when a provider filter can be satisfied by a static bundled catalog. */
 export async function hasProviderStaticCatalogForFilter(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -212,6 +217,7 @@ function modelFromProviderCatalog(params: {
   } as Model;
 }
 
+/** Loads model rows from provider static/runtime catalog hooks for model-list output. */
 export async function loadProviderCatalogModelsForList(params: {
   cfg: OpenClawConfig;
   agentDir: string;

@@ -1,3 +1,4 @@
+// Matrix tests cover index plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { MatrixConfig, MatrixStreamingMode } from "../../types.js";
@@ -64,7 +65,7 @@ const hoisted = vi.hoisted(() => {
   });
   const createMatrixRoomMessageHandler = vi.fn(() => vi.fn());
   const createDirectRoomTracker = vi.fn(
-    (clientForTest: unknown, _opts?: DirectRoomTrackerOptions) => ({
+    (_clientForTest: unknown, _opts?: DirectRoomTrackerOptions) => ({
       isDirectMessage: vi.fn(async () => false),
     }),
   );
@@ -198,28 +199,20 @@ vi.mock("../../runtime-api.js", () => {
       wildcardKey: string;
     }) => {
       for (const key of keys) {
-        if (Object.prototype.hasOwnProperty.call(entries, key)) {
+        if (Object.hasOwn(entries, key)) {
           return {
             entry: entries[key],
             key,
-            wildcardEntry: Object.prototype.hasOwnProperty.call(entries, wildcardKey)
-              ? entries[wildcardKey]
-              : undefined,
-            wildcardKey: Object.prototype.hasOwnProperty.call(entries, wildcardKey)
-              ? wildcardKey
-              : undefined,
+            wildcardEntry: Object.hasOwn(entries, wildcardKey) ? entries[wildcardKey] : undefined,
+            wildcardKey: Object.hasOwn(entries, wildcardKey) ? wildcardKey : undefined,
           };
         }
       }
       return {
         entry: undefined,
         key: undefined,
-        wildcardEntry: Object.prototype.hasOwnProperty.call(entries, wildcardKey)
-          ? entries[wildcardKey]
-          : undefined,
-        wildcardKey: Object.prototype.hasOwnProperty.call(entries, wildcardKey)
-          ? wildcardKey
-          : undefined,
+        wildcardEntry: Object.hasOwn(entries, wildcardKey) ? entries[wildcardKey] : undefined,
+        wildcardKey: Object.hasOwn(entries, wildcardKey) ? wildcardKey : undefined,
       };
     },
     resolveDefaultGroupPolicy: () => "allowlist",

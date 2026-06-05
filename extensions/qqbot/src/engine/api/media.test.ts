@@ -1,3 +1,4 @@
+// Qqbot tests cover media plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MediaFileType, type UploadMediaResponse } from "../types.js";
 import { MAX_UPLOAD_SIZE } from "../utils/file-utils.js";
@@ -107,8 +108,8 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
         MAX_UPLOAD_SIZE,
         { chunkTimeoutMs: 10_000 },
       );
-      expect(tokenManager.getAccessToken).toHaveBeenCalledWith("app-id", "client-secret");
-      expect(client.request).toHaveBeenCalledWith(
+      expect(tokenManager["getAccessToken"]).toHaveBeenCalledWith("app-id", "client-secret");
+      expect(client["request"]).toHaveBeenCalledWith(
         "token-1",
         "POST",
         expect.any(String),
@@ -166,8 +167,8 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       await rejection;
       expect(readResponseWithLimitMock).not.toHaveBeenCalled();
-      expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
-      expect(client.request).not.toHaveBeenCalled();
+      expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
+      expect(client["request"]).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -229,8 +230,8 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(result).toEqual({ file_uuid: "", file_info: "cached-file-info", ttl: 0 });
     expect(cache.computeHash).toHaveBeenCalledWith(MEDIA_BASE64);
     expect(cache.get).toHaveBeenCalledWith("hash-1", "c2c", "user-openid", MediaFileType.IMAGE);
-    expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
+    expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
+    expect(client["request"]).not.toHaveBeenCalled();
   });
 
   it("does not reuse cached FILE uploads when the requested filename differs", async () => {
@@ -257,7 +258,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(cache.computeHash).not.toHaveBeenCalled();
     expect(cache.get).not.toHaveBeenCalled();
     expect(cache.set).not.toHaveBeenCalled();
-    expect(client.request).toHaveBeenCalledWith(
+    expect(client["request"]).toHaveBeenCalledWith(
       "token-1",
       "POST",
       expect.any(String),
@@ -285,8 +286,8 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     ).rejects.toThrow("Direct-upload media URL must be a valid URL");
 
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-    expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
+    expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
+    expect(client["request"]).not.toHaveBeenCalled();
   });
 
   it("rejects non-HTTP direct-upload URLs before downloading media or calling the QQ API", async () => {
@@ -305,8 +306,8 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     ).rejects.toThrow("Direct-upload media URL must use HTTP or HTTPS");
 
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-    expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
+    expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
+    expect(client["request"]).not.toHaveBeenCalled();
   });
 
   it.each(["127.0.0.1", "169.254.169.254", "10.0.0.1", "192.168.1.1"])(
@@ -328,8 +329,8 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       ).rejects.toThrow("Blocked hostname");
 
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-      expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
-      expect(client.request).not.toHaveBeenCalled();
+      expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
+      expect(client["request"]).not.toHaveBeenCalled();
     },
   );
 
@@ -352,8 +353,8 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       ),
     ).rejects.toThrow("resolves to private");
 
-    expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
+    expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
+    expect(client["request"]).not.toHaveBeenCalled();
   });
 
   it("rejects literal RFC 2544 special-use URL hosts through the guarded download", async () => {
@@ -373,8 +374,8 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     ).rejects.toThrow("Blocked hostname");
 
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-    expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
+    expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
+    expect(client["request"]).not.toHaveBeenCalled();
   });
 
   it("keeps public literal IP URLs on the default SSRF policy", async () => {
@@ -407,7 +408,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     );
 
     expectGuardedDownload("https://cdn.example.com/assets/photo.png");
-    expect(client.request).toHaveBeenCalledWith(
+    expect(client["request"]).toHaveBeenCalledWith(
       "token-1",
       "POST",
       expect.any(String),
@@ -416,7 +417,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       }),
       expect.any(Object),
     );
-    expect(client.request).not.toHaveBeenCalledWith(
+    expect(client["request"]).not.toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
       expect.any(String),
@@ -442,7 +443,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       ),
     ).rejects.toThrow("Direct-upload media URL returned HTTP 404");
 
-    expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
+    expect(tokenManager["getAccessToken"]).not.toHaveBeenCalled();
+    expect(client["request"]).not.toHaveBeenCalled();
   });
 });

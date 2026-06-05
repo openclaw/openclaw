@@ -1,3 +1,4 @@
+// Feishu tests cover comment handler plugin behavior.
 import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -409,7 +410,6 @@ describe("handleFeishuCommentEvent", () => {
         "```",
         "",
         "Ask the bot owner to approve with:",
-        "openclaw pairing approve feishu TESTCODE",
         "```",
         "openclaw pairing approve feishu TESTCODE",
         "```",

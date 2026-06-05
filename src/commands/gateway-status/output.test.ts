@@ -1,3 +1,4 @@
+// Gateway-status output tests cover warning construction plus text and JSON rendering.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -11,9 +12,10 @@ vi.mock("../../runtime.js", () => ({
   writeRuntimeJson: (...args: unknown[]) => mocks.writeRuntimeJson(...args),
 }));
 
-vi.mock("../../terminal/theme.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../terminal/theme.js")>("../../terminal/theme.js");
+vi.mock("../../../packages/terminal-core/src/theme.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../packages/terminal-core/src/theme.js")
+  >("../../../packages/terminal-core/src/theme.js");
   return {
     ...actual,
     colorize: (_rich: boolean, _theme: unknown, text: string) => text,

@@ -1,3 +1,4 @@
+// Doctor repair flow tests cover repair plan output and repair execution.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
@@ -25,13 +26,13 @@ describe("runDoctorHealthRepairs", () => {
       id: "test/run-repairable",
       kind: "core",
       description: "run repairable",
-      async run(ctx, scope) {
-        runModes.push(ctx.mode);
+      async run(ctxItem, scope) {
+        runModes.push(ctxItem.mode);
         if (scope !== undefined) {
           scopes.push(scope);
         }
         const findings =
-          ctx.cfg.gateway?.mode === "local"
+          ctxItem.cfg.gateway?.mode === "local"
             ? []
             : [
                 {
@@ -41,12 +42,12 @@ describe("runDoctorHealthRepairs", () => {
                   path: "gateway.mode",
                 },
               ];
-        if (!ctx.repair || findings.length === 0) {
+        if (!ctxItem.repair || findings.length === 0) {
           return { findings };
         }
         return {
           findings,
-          config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
+          config: { ...ctxItem.cfg, gateway: { ...ctxItem.cfg.gateway, mode: "local" } },
           changes: ["Set gateway.mode to local."],
         };
       },
@@ -71,11 +72,11 @@ describe("runDoctorHealthRepairs", () => {
         id: "test/repairable",
         kind: "core",
         description: "repairable",
-        async detect(ctx, scope) {
+        async detect(ctxCandidate, scope) {
           if (scope !== undefined) {
             scopes.push(scope);
           }
-          return ctx.cfg.gateway?.mode === "local"
+          return ctxCandidate.cfg.gateway?.mode === "local"
             ? []
             : [
                 {
@@ -86,9 +87,9 @@ describe("runDoctorHealthRepairs", () => {
                 },
               ];
         },
-        async repair(ctx) {
+        async repair(ctxEntry) {
           return {
-            config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
+            config: { ...ctxEntry.cfg, gateway: { ...ctxEntry.cfg.gateway, mode: "local" } },
             changes: ["Set gateway.mode to local."],
           };
         },
@@ -314,9 +315,9 @@ describe("runDoctorHealthRepairs", () => {
         id: "test/dry-run",
         kind: "core",
         description: "dry run",
-        async detect(ctx) {
+        async detect(ctxResult) {
           detectCalls++;
-          return ctx.cfg.gateway?.mode === "local"
+          return ctxResult.cfg.gateway?.mode === "local"
             ? []
             : [
                 {
@@ -327,10 +328,10 @@ describe("runDoctorHealthRepairs", () => {
                 },
               ];
         },
-        async repair(ctx) {
-          repairContexts.push(ctx);
+        async repair(ctxValue) {
+          repairContexts.push(ctxValue);
           return {
-            config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
+            config: { ...ctxValue.cfg, gateway: { ...ctxValue.cfg.gateway, mode: "local" } },
             changes: ["Would set gateway.mode to local."],
             diffs: [
               {
@@ -386,12 +387,12 @@ describe("runDoctorHealthRepairs", () => {
             },
           ];
         },
-        async repair(ctx) {
-          repairContexts.push(ctx);
+        async repair(ctxLocal) {
+          repairContexts.push(ctxLocal);
           return {
             changes: ["Would set gateway.mode to local."],
             diffs:
-              ctx.diff === true
+              ctxLocal.diff === true
                 ? [
                     {
                       kind: "config",

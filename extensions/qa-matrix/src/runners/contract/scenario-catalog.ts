@@ -1,10 +1,11 @@
-import { type QaProviderModeInput } from "../../run-config.js";
+// Qa Matrix plugin module implements scenario catalog behavior.
+import type { QaProviderModeInput } from "../../run-config.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "../../shared/live-transport-scenarios.js";
-import { type MatrixQaConfigOverrides } from "../../substrate/config.js";
+import type { MatrixQaConfigOverrides } from "../../substrate/config.js";
 import {
   buildDefaultMatrixQaTopologySpec,
   findMatrixQaProvisionedRoom,

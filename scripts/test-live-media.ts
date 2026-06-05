@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Test Live Media script supports OpenClaw repository automation.
 
 import type { ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
@@ -420,7 +421,7 @@ export async function runCli(argv: string[]): Promise<number> {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   runCli(process.argv.slice(2))
     .then((code) => process.exit(code))
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exit(1);
     });

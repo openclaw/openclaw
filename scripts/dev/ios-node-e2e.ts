@@ -1,3 +1,4 @@
+// Ios Node E2E script supports OpenClaw repository automation.
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
@@ -145,7 +146,9 @@ async function main() {
     const waitSeconds = Number.parseInt(getArg("--wait-seconds") ?? "25", 10);
     const deadline = Date.now() + Math.max(1, waitSeconds) * 1000;
     while (!node && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => {
+        setTimeout(r, 1000);
+      });
       const res = await request("node.list").catch(() => null);
       if (!res?.ok) {
         continue;
@@ -228,7 +231,7 @@ async function main() {
         idempotencyKey: randomUUID(),
       },
       (t.timeoutMs ?? 12_000) + 2_000,
-    ).catch((err) => {
+    ).catch((err: unknown) => {
       results.push({ id: t.id, ok: false, error: formatErr(err) });
       return null;
     });

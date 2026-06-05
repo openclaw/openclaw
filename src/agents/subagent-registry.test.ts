@@ -1,3 +1,5 @@
+// Subagent registry tests cover run state, completion capture, archive cleanup,
+// persistence, lifecycle hooks, and orphan recovery scheduling.
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -59,6 +61,8 @@ function findRecordCallArg(
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
+  // Cleanup assertions need ENOENT proof; fs.access success means the artifact
+  // directory survived when lifecycle cleanup should have removed it.
   try {
     await fs.access(targetPath);
   } catch (error) {
@@ -2043,6 +2047,58 @@ describe("subagent registry seam flow", () => {
       .find((entry) => entry.runId === "run-blocked-wait");
     expect(run?.endedReason).toBe("subagent-error");
     expect(run?.outcome?.status).toBe("error");
+  });
+
+  it("announces provider hard timeout wait snapshots as timeouts despite blocked metadata", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return {
+          status: "error",
+          startedAt: 100,
+          endedAt: 250,
+          livenessState: "blocked",
+          timeoutPhase: "provider",
+          providerStarted: true,
+          error: "model timed out",
+        };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-blocked-hard-timeout-wait",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "provider timeout wait",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    const announceParams = expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "hard timeout wait announce"),
+      { childRunId: "run-blocked-hard-timeout-wait" },
+      "hard timeout wait announce params",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 250,
+        elapsedMs: 150,
+      },
+      "hard timeout wait announce outcome",
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-blocked-hard-timeout-wait");
+    expect(run?.endedReason).toBe("subagent-complete");
+    expect(run?.outcome?.status).toBe("timeout");
   });
 
   it("announces aborted agent.wait snapshots as killed subagent failures", async () => {

@@ -1,3 +1,4 @@
+// Walks the kitchen-sink gateway RPC scenario for E2E smoke coverage.
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -33,6 +34,10 @@ const FETCH_BODY_MAX_BYTES = readPositiveInt(
   1024 * 1024,
 );
 const MAX_RSS_MIB = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB, 2048);
+const MAX_COMMAND_RSS_MIB = readPositiveInt(
+  process.env.OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB,
+  8192,
+);
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
 const OUTPUT_CAPTURE_CHARS = readPositiveInt(
@@ -43,6 +48,7 @@ const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
 const LOG_TAIL_BYTES = 256 * 1024;
+const POSIX_PROCESS_SNAPSHOT_ARGS = ["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="];
 const ERROR_LOG_DENY_PATTERNS = [
   /\buncaught exception\b/iu,
   /\bunhandled rejection\b/iu,
@@ -52,12 +58,35 @@ const ERROR_LOG_DENY_PATTERNS = [
   /\[(?:error|ERROR)\]/u,
 ];
 const ERROR_LOG_ALLOW_PATTERNS = [
-  /0 errors?/iu,
-  /expected no diagnostics errors?/iu,
-  /diagnostics errors?:\s*$/iu,
+  /^\s*0 errors?\s*$/iu,
+  /^\s*expected no diagnostics errors?\s*$/iu,
+  /^\s*diagnostics errors?:\s*$/iu,
 ];
 
 let callGatewayModulePromise;
+
+function usage() {
+  return `Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs
+
+Runs the external Kitchen Sink plugin RPC walk against a built OpenClaw entry.
+
+Environment:
+  OPENCLAW_ENTRY                         Built OpenClaw entrypoint. Defaults to dist/index.mjs or dist/index.js.
+  OPENCLAW_KITCHEN_SINK_NPM_SPEC         Plugin package spec. Default: npm:@openclaw/kitchen-sink@latest.
+  OPENCLAW_KITCHEN_SINK_PLUGIN_ID        Plugin id. Default: openclaw-kitchen-sink-fixture.
+  OPENCLAW_KITCHEN_SINK_RPC_READY_MS     Gateway readiness timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS   OpenClaw command timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS   Plugin install timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_CALL_MS      RPC call timeout.
+  OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB      Gateway RSS ceiling.
+  OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB  Install/CLI command RSS ceiling.
+  OPENCLAW_KITCHEN_SINK_KEEP_TMP=1       Preserve the isolated temp home.
+`;
+}
+
+export function shouldPrintHelp(argv) {
+  return argv.some((arg) => arg === "--help" || arg === "-h");
+}
 
 export function readPositiveInt(raw, fallback) {
   const text = String(raw || "").trim();
@@ -127,6 +156,11 @@ export async function cleanupKitchenSinkEnv(root, options = {}) {
       const message = lastError instanceof Error ? lastError.message : String(lastError);
       console.error(`Kitchen Sink RPC temp root cleanup failed; preserved ${root}: ${message}`);
     }
+    if (options.throwOnFailure) {
+      throw new Error(`failed to remove Kitchen Sink RPC temp root: ${root}`, {
+        cause: lastError,
+      });
+    }
     return false;
   }
   return true;
@@ -159,16 +193,65 @@ function formatCapturedOutput(label, buffer) {
 
 export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const { timeoutKillGraceMs = 2000, timeoutMs = COMMAND_TIMEOUT_MS, ...spawnOptions } = options;
+    const {
+      resourceLabel,
+      resourceSampleIntervalMs = 1000,
+      resourceSampleOptions,
+      resourceSamples,
+      sampleProcessImpl = sampleProcess,
+      timeoutKillGraceMs = 2000,
+      timeoutMs = COMMAND_TIMEOUT_MS,
+      ...spawnOptions
+    } = options;
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       ...spawnOptions,
       detached: spawnOptions.detached ?? process.platform !== "win32",
     });
+    const startedAt = Date.now();
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     let timedOut = false;
     let forceKillTimer;
+    let sampleTimer;
+    let resourceSampleInFlight = null;
+    const commandLabel = resourceLabel ?? [command, ...args.slice(0, 2)].join(" ");
+    const shouldSampleResources = Array.isArray(resourceSamples);
+    const collectResourceSample = () => {
+      if (!shouldSampleResources || !child.pid) {
+        return null;
+      }
+      resourceSampleInFlight ??= Promise.resolve()
+        .then(() => sampleProcessImpl(child.pid, resourceSampleOptions ?? {}))
+        .then((sample) => {
+          if (sample) {
+            resourceSamples.push({
+              ...sample,
+              elapsedMs: Date.now() - startedAt,
+              label: commandLabel,
+            });
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          resourceSampleInFlight = null;
+        });
+      return resourceSampleInFlight;
+    };
+    const stopResourceSampling = async () => {
+      clearInterval(sampleTimer);
+      await resourceSampleInFlight?.catch(() => {});
+    };
+    if (shouldSampleResources) {
+      void collectResourceSample();
+      sampleTimer = setInterval(
+        () => {
+          void collectResourceSample();
+        },
+        Math.max(100, resourceSampleIntervalMs),
+      );
+      sampleTimer.unref?.();
+    }
     const timer = setTimeout(() => {
       timedOut = true;
       signalProcessGroup(child, "SIGTERM");
@@ -184,35 +267,39 @@ export function runCommand(command, args, options = {}) {
     child.on("error", (error) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
-      reject(error);
+      void stopResourceSampling().finally(() =>
+        reject(toLintErrorObject(error, "Command failed before exit")),
+      );
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
-      if (status === 0) {
-        resolve({
-          stdout: stdout.text,
-          stderr: stderr.text,
-          stdoutTruncatedChars: stdout.truncatedChars,
-          stderrTruncatedChars: stderr.truncatedChars,
-        });
-        return;
-      }
-      const detail = [
-        formatCapturedOutput("stdout", stdout),
-        formatCapturedOutput("stderr", stderr),
-      ]
-        .filter(Boolean)
-        .join("\n")
-        .trim();
-      const failure = timedOut
-        ? `timed out after ${timeoutMs}ms`
-        : `failed with ${signal || status}`;
-      reject(
-        new Error(
-          `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
-        ),
-      );
+      void stopResourceSampling().then(() => {
+        if (!timedOut && status === 0) {
+          resolve({
+            stdout: stdout.text,
+            stderr: stderr.text,
+            stdoutTruncatedChars: stdout.truncatedChars,
+            stderrTruncatedChars: stderr.truncatedChars,
+          });
+          return;
+        }
+        const detail = [
+          formatCapturedOutput("stdout", stdout),
+          formatCapturedOutput("stderr", stderr),
+        ]
+          .filter(Boolean)
+          .join("\n")
+          .trim();
+        const failure = timedOut
+          ? `timed out after ${timeoutMs}ms`
+          : `failed with ${signal || status}`;
+        reject(
+          new Error(
+            `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
+          ),
+        );
+      });
     });
   });
 }
@@ -240,6 +327,10 @@ async function runOpenClaw(runner, args, env, options = {}) {
   return runCommand(command.command, command.args, {
     ...command.options,
     env,
+    resourceLabel: options.resourceLabel,
+    resourceSampleIntervalMs: options.resourceSampleIntervalMs,
+    resourceSampleOptions: options.resourceSampleOptions,
+    resourceSamples: options.resourceSamples,
     timeoutMs: options.timeoutMs ?? COMMAND_TIMEOUT_MS,
   });
 }
@@ -324,11 +415,27 @@ function findBalancedJsonObjectEnd(text, startIndex) {
   return -1;
 }
 
-function unwrapRpcPayload(raw) {
+function hasOwnPayloadField(raw, field) {
+  return (
+    ((typeof raw === "object" && raw !== null) || typeof raw === "function") &&
+    Object.hasOwn(raw, field)
+  );
+}
+
+export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
     throw new Error(`gateway RPC failed: ${JSON.stringify(raw.error ?? raw)}`);
   }
-  return raw?.result ?? raw?.payload ?? raw?.data ?? raw;
+  if (hasOwnPayloadField(raw, "result")) {
+    return raw.result;
+  }
+  if (hasOwnPayloadField(raw, "payload")) {
+    return raw.payload;
+  }
+  if (hasOwnPayloadField(raw, "data")) {
+    return raw.data;
+  }
+  return raw;
 }
 
 async function rpcCall(method, params, options) {
@@ -386,9 +493,17 @@ async function rpcCallViaCli(method, params, options) {
       JSON.stringify(params ?? {}),
     ],
     options.env,
-    { timeoutMs: RPC_TIMEOUT_MS + 30000 },
+    createRpcCliRunOptions(method, options),
   );
   return parseJsonOutput(stdout);
+}
+
+export function createRpcCliRunOptions(method, options = {}) {
+  return {
+    ...options.commandResourceOptions,
+    resourceLabel: `gateway call ${method}`,
+    timeoutMs: RPC_TIMEOUT_MS + 30000,
+  };
 }
 
 export function findDistCallGatewayModuleFiles(cwd = process.cwd()) {
@@ -427,7 +542,10 @@ async function retryRpcCall(method, params, options) {
       await delay(500);
     }
   }
-  throw lastError ?? new Error(`gateway RPC ${method} timed out before retry`);
+  throw toLintErrorObject(
+    lastError ?? new Error(`gateway RPC ${method} timed out before retry`),
+    "Non-Error thrown",
+  );
 }
 
 function isRetryableGatewayCallError(error) {
@@ -466,6 +584,7 @@ export async function fetchJson(url, options = {}) {
   const attempts = Math.max(1, options.attempts ?? 3);
   const timeoutMs = Math.max(1, options.timeoutMs ?? FETCH_TIMEOUT_MS);
   const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? FETCH_BODY_MAX_BYTES);
+  const externalSignal = options.signal;
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
@@ -473,6 +592,26 @@ export async function fetchJson(url, options = {}) {
       code: "ETIMEDOUT",
     });
     let timeout;
+    let removeExternalAbort = () => {};
+    const abortPromise = externalSignal
+      ? new Promise((_, reject) => {
+          const abortError = () =>
+            externalSignal.reason instanceof Error
+              ? externalSignal.reason
+              : new Error("fetch aborted");
+          const onAbort = () => {
+            const error = abortError();
+            controller.abort(error);
+            reject(new Error(error.message, { cause: error }));
+          };
+          if (externalSignal.aborted) {
+            onAbort();
+            return;
+          }
+          externalSignal.addEventListener("abort", onAbort, { once: true });
+          removeExternalAbort = () => externalSignal.removeEventListener("abort", onAbort);
+        })
+      : null;
     const timeoutPromise = new Promise((_, reject) => {
       timeout = setTimeout(() => {
         controller.abort(timeoutError);
@@ -484,10 +623,12 @@ export async function fetchJson(url, options = {}) {
       const response = await Promise.race([
         (options.fetchImpl ?? fetch)(url, { signal: controller.signal }),
         timeoutPromise,
+        ...(abortPromise ? [abortPromise] : []),
       ]);
       const text = await Promise.race([
         readBoundedResponseText(response, maxBodyBytes),
         timeoutPromise,
+        ...(abortPromise ? [abortPromise] : []),
       ]);
       let body = null;
       try {
@@ -503,18 +644,32 @@ export async function fetchJson(url, options = {}) {
       }
       await delay(options.retryDelayMs ?? 250);
     } finally {
+      removeExternalAbort();
       if (timeout) {
         clearTimeout(timeout);
       }
     }
   }
-  throw lastError ?? new Error(`fetch ${url} failed`);
+  throw toLintErrorObject(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
 }
 
 export async function readBoundedResponseText(response, byteLimit = FETCH_BODY_MAX_BYTES) {
+  const contentLength = response.headers?.get?.("content-length");
+  if (contentLength) {
+    const parsedContentLength = Number(contentLength);
+    if (Number.isFinite(parsedContentLength) && parsedContentLength > byteLimit) {
+      await response.body?.cancel?.().catch(() => undefined);
+      throw createFetchBodyTooLargeError(byteLimit);
+    }
+  }
+
   const reader = response.body?.getReader?.();
   if (!reader) {
-    return await response.text();
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > byteLimit) {
+      throw createFetchBodyTooLargeError(byteLimit);
+    }
+    return text;
   }
   const chunks = [];
   let totalBytes = 0;
@@ -527,13 +682,17 @@ export async function readBoundedResponseText(response, byteLimit = FETCH_BODY_M
     totalBytes += chunk.byteLength;
     if (totalBytes > byteLimit) {
       await reader.cancel().catch(() => undefined);
-      throw Object.assign(new Error(`fetch response body exceeded ${byteLimit} bytes`), {
-        code: "ETOOBIG",
-      });
+      throw createFetchBodyTooLargeError(byteLimit);
     }
     chunks.push(chunk);
   }
   return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
+
+function createFetchBodyTooLargeError(byteLimit) {
+  return Object.assign(new Error(`fetch response body exceeded ${byteLimit} bytes`), {
+    code: "ETOOBIG",
+  });
 }
 
 function configureKitchenSink(env, port) {
@@ -619,17 +778,23 @@ export async function stopGateway(child, options = {}) {
   }
   const teardownGraceMs = Math.max(0, options.teardownGraceMs ?? GATEWAY_TEARDOWN_GRACE_MS);
   const killGraceMs = Math.max(0, options.killGraceMs ?? GATEWAY_TEARDOWN_KILL_GRACE_MS);
-  const exited = new Promise((resolve) => child.once("exit", resolve));
+  const exited = new Promise((resolve) => {
+    child.once("exit", resolve);
+  });
   const waitForExit = async (ms) =>
     hasChildExited(child)
       ? true
       : await Promise.race([exited.then(() => true), delay(ms).then(() => false)]);
 
-  signalGateway(child, "SIGTERM");
+  if (!signalGateway(child, "SIGTERM")) {
+    return;
+  }
   if (await waitForExit(teardownGraceMs)) {
     return;
   }
-  signalGateway(child, "SIGKILL");
+  if (!signalGateway(child, "SIGKILL")) {
+    return;
+  }
   if (await waitForExit(killGraceMs)) {
     return;
   }
@@ -638,6 +803,15 @@ export async function stopGateway(child, options = {}) {
 
 export function hasChildExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
+}
+
+function createChildExitPromise(child) {
+  if (!child || typeof child.once !== "function") {
+    return null;
+  }
+  return new Promise((resolve) => {
+    child.once("exit", () => resolve());
+  });
 }
 
 function releaseUnsettledGatewayChild(child) {
@@ -651,10 +825,21 @@ function signalGateway(child, signal) {
   if (process.platform !== "win32" && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
-      return;
-    } catch {}
+      return true;
+    } catch (error) {
+      if (error?.code === "ESRCH") {
+        return false;
+      }
+    }
   }
-  child.kill(signal);
+  try {
+    return child.kill(signal) !== false;
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw error;
+    }
+    return false;
+  }
 }
 
 export function createGatewayReadyLogScanner(logPath, marker = "[gateway] ready") {
@@ -714,19 +899,44 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
   const timeoutMs = Math.max(1, options.timeoutMs ?? READY_TIMEOUT_MS);
   const pollDelayMs = Math.max(1, options.pollDelayMs ?? 250);
   const logReportedReady = createGatewayReadyLogScanner(logPath);
+  const childExit = createChildExitPromise(child);
   const exitedBeforeReadyError = () =>
     new Error(`gateway exited before ready\n${tailFile(logPath)}`);
   if (hasChildExited(child)) {
     throw exitedBeforeReadyError();
   }
   while (Date.now() - started < timeoutMs) {
+    const remainingMs = Math.max(1, timeoutMs - (Date.now() - started));
     if (hasChildExited(child)) {
       throw exitedBeforeReadyError();
     }
+    const probeAbort = new AbortController();
+    const readyzProbe = (async () => {
+      try {
+        const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`, {
+          attempts: 1,
+          fetchImpl: options.fetchImpl,
+          signal: probeAbort.signal,
+          timeoutMs: Math.min(FETCH_TIMEOUT_MS, remainingMs),
+        });
+        return { kind: "readyz", readyz };
+      } catch (error) {
+        return { kind: "error", error };
+      }
+    })();
+    const outcome = await Promise.race([
+      readyzProbe,
+      ...(childExit ? [childExit.then(() => ({ kind: "child-exit" }))] : []),
+    ]);
+    if (outcome.kind === "child-exit") {
+      probeAbort.abort(exitedBeforeReadyError());
+      throw exitedBeforeReadyError();
+    }
     try {
-      const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`, {
-        fetchImpl: options.fetchImpl,
-      });
+      if (outcome.kind === "error") {
+        throw outcome.error;
+      }
+      const readyz = outcome.readyz;
       if (readyz.ok) {
         return;
       }
@@ -737,7 +947,8 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
     if (logReportedReady()) {
       lastError = `${lastError}; gateway log reported ready before HTTP readiness`;
     }
-    await delay(pollDelayMs);
+    const nextDelayMs = Math.min(pollDelayMs, Math.max(1, timeoutMs - (Date.now() - started)));
+    await delay(nextDelayMs);
   }
   if (hasChildExited(child)) {
     throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);
@@ -781,7 +992,7 @@ export function extractPluginCommandNames(payload) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function extractToolEntries(payload) {
+export function extractToolEntries(payload) {
   return (Array.isArray(payload?.groups) ? payload.groups : []).flatMap((group) =>
     Array.isArray(group?.tools) ? group.tools : [],
   );
@@ -804,6 +1015,29 @@ function assertIncludesAll(actual, expected, label) {
   }
 }
 
+export function assertExpectedKitchenSinkToolEntries(
+  entries,
+  label,
+  { requirePluginProvenance = false } = {},
+) {
+  const ids = entries.map((entry) => entry?.id).filter(isNonEmptyString);
+  assertIncludesAll(ids, EXPECTED_TOOLS, label);
+  if (requirePluginProvenance) {
+    const wrongProvenance = entries
+      .filter((entry) => EXPECTED_TOOLS.includes(entry?.id))
+      .filter((entry) => entry.source !== "plugin" || entry.pluginId !== PLUGIN_ID)
+      .map((entry) => ({
+        id: entry?.id,
+        pluginId: entry?.pluginId,
+        source: entry?.source,
+      }));
+    if (wrongProvenance.length > 0) {
+      throw new Error(`${label} plugin provenance mismatch: ${JSON.stringify(wrongProvenance)}`);
+    }
+  }
+  return ids;
+}
+
 function assertChannelAccountRunning(payload) {
   const accounts = Array.isArray(payload?.channelAccounts?.[CHANNEL_ID])
     ? payload.channelAccounts[CHANNEL_ID]
@@ -815,13 +1049,27 @@ function assertChannelAccountRunning(payload) {
   return account;
 }
 
-function assertToolInvokeResult(payload) {
+export function assertKitchenSinkSearchInvokeResult(payload) {
   if (payload?.ok !== true || payload?.source !== "plugin") {
-    throw new Error(`Kitchen Sink tool invoke failed: ${JSON.stringify(payload)}`);
+    throw new Error(`Kitchen Sink search tool invoke failed: ${JSON.stringify(payload)}`);
   }
   const text = JSON.stringify(payload.output ?? payload);
   if (!text.includes("Kitchen Sink image fixture")) {
-    throw new Error(`Kitchen Sink tool output missed expected fixture: ${text.slice(0, 1000)}`);
+    throw new Error(
+      `Kitchen Sink search tool output missed expected fixture: ${text.slice(0, 1000)}`,
+    );
+  }
+}
+
+export function assertKitchenSinkTextInvokeResult(payload) {
+  if (payload?.ok !== true || payload?.source !== "plugin") {
+    throw new Error(`Kitchen Sink text tool invoke failed: ${JSON.stringify(payload)}`);
+  }
+  const text = JSON.stringify(payload.output ?? payload);
+  if (!text.includes("tool:kitchen_sink_text") || !text.includes("Kitchen Sink")) {
+    throw new Error(
+      `Kitchen Sink text tool output missed expected fixture: ${text.slice(0, 1000)}`,
+    );
   }
 }
 
@@ -914,7 +1162,7 @@ async function samplePosixProcessWithDescendants(pid, run) {
     return null;
   }
   try {
-    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
+    const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
     const rows = parsePosixProcessRows(stdout);
@@ -934,7 +1182,7 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     return null;
   }
   try {
-    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
+    const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
     const rows = parsePosixProcessRows(stdout);
@@ -1084,7 +1332,9 @@ async function sampleWindowsPidWithTasklist(pid, run) {
     if (!line) {
       return null;
     }
-    const [, processIdRaw, , , memoryRaw] = parseTasklistCsvLine(line);
+    const tasklistFields = parseTasklistCsvLine(line);
+    const processIdRaw = tasklistFields[1];
+    const memoryRaw = tasklistFields[4];
     const processId = Number.parseInt(processIdRaw ?? "", 10);
     const memoryKiB = Number.parseInt((memoryRaw ?? "").replace(/[^\d]/gu, ""), 10);
     if (!Number.isFinite(memoryKiB)) {
@@ -1192,18 +1442,35 @@ async function sampleWindowsProcess(pid, run, commandLineNeedles = []) {
   return null;
 }
 
-export function assertResourceCeiling(sample) {
+function assertProcessResourceCeiling(sample, { label, maxRssMiB, requireSample = true }) {
   if (!sample) {
-    throw new Error("gateway RSS sample was not captured");
+    if (requireSample) {
+      throw new Error(`${label} RSS sample was not captured`);
+    }
+    return;
   }
-  if (sample.rssMiB > MAX_RSS_MIB) {
-    throw new Error(`gateway RSS exceeded ${MAX_RSS_MIB} MiB: ${sample.rssMiB} MiB`);
+  if (sample.rssMiB > maxRssMiB) {
+    throw new Error(`${label} RSS exceeded ${maxRssMiB} MiB: ${sample.rssMiB} MiB`);
   }
-  if ((sample.aggregateRssMiB ?? sample.rssMiB) > MAX_RSS_MIB) {
+  if ((sample.aggregateRssMiB ?? sample.rssMiB) > maxRssMiB) {
     throw new Error(
-      `gateway aggregate RSS exceeded ${MAX_RSS_MIB} MiB: ${sample.aggregateRssMiB} MiB`,
+      `${label} aggregate RSS exceeded ${maxRssMiB} MiB: ${sample.aggregateRssMiB} MiB`,
     );
   }
+}
+
+export function assertResourceCeiling(sample) {
+  assertProcessResourceCeiling(sample, {
+    label: "gateway",
+    maxRssMiB: MAX_RSS_MIB,
+  });
+}
+
+export function assertCommandResourceCeiling(sample) {
+  assertProcessResourceCeiling(sample, {
+    label: "command",
+    maxRssMiB: MAX_COMMAND_RSS_MIB,
+  });
 }
 
 export function findErrorLogFindings(logPath) {
@@ -1329,20 +1596,35 @@ export async function main() {
   let child;
 
   const processSamples = [];
+  const commandSamples = [];
+  const commandResourceOptions = {
+    resourceSampleIntervalMs: 500,
+    resourceSamples: commandSamples,
+  };
   let sampleInFlight = null;
   let sampleTimer;
   try {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
     await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, {
+      ...commandResourceOptions,
+      resourceLabel: "plugins install",
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     runner = resolveOpenClawRunner();
     console.log(`Kitchen Sink RPC runtime runner: ${runner.label}`);
     configureKitchenSink(env, port);
-    await runOpenClaw(runner, ["plugins", "enable", PLUGIN_ID], env, { timeoutMs: 60000 });
+    await runOpenClaw(runner, ["plugins", "enable", PLUGIN_ID], env, {
+      ...commandResourceOptions,
+      resourceLabel: "plugins enable",
+      timeoutMs: 60000,
+    });
     const inspect = parseJsonOutput(
-      (await runOpenClaw(runner, ["plugins", "inspect", PLUGIN_ID, "--runtime", "--json"], env))
-        .stdout,
+      (
+        await runOpenClaw(runner, ["plugins", "inspect", PLUGIN_ID, "--runtime", "--json"], env, {
+          ...commandResourceOptions,
+          resourceLabel: "plugins inspect",
+        })
+      ).stdout,
     );
     if (inspect?.plugin?.status !== "loaded") {
       throw new Error(`Kitchen Sink plugin did not inspect as loaded: ${JSON.stringify(inspect)}`);
@@ -1355,6 +1637,7 @@ export async function main() {
     assertIncludesAny(inspectProviders, EXPECTED_PROVIDERS, "plugins inspect providers");
 
     child = await startGateway(runner, port, env, logPath);
+    const rpcOptions = { commandResourceOptions, env, port, runner };
     const sampleGateway = async () => {
       const gatewayCommandLineNeedles = ["gateway", "--port", String(port)];
       const processSampleOptions = runner.pnpm
@@ -1394,19 +1677,19 @@ export async function main() {
       throw new Error(`/readyz did not report ready: ${JSON.stringify(readyz)}`);
     }
 
-    await retryRpcCall("health", {}, { runner, port, env });
-    await retryRpcCall("status", {}, { runner, port, env });
+    await retryRpcCall("health", {}, rpcOptions);
+    await retryRpcCall("status", {}, rpcOptions);
     const channelStatus = await retryRpcCall(
       "channels.status",
       { probe: true, timeoutMs: 10000 },
-      { runner, port, env },
+      rpcOptions,
     );
     const channelAccount = assertChannelAccountRunning(channelStatus);
 
     const commands = await retryRpcCall(
       "commands.list",
       { agentId: "main", scope: "text" },
-      { runner, port, env },
+      rpcOptions,
     );
     const commandNames = extractPluginCommandNames(commands);
     assertIncludesAll(commandNames, EXPECTED_COMMANDS, "commands.list plugin commands");
@@ -1414,30 +1697,31 @@ export async function main() {
     const catalog = await retryRpcCall(
       "tools.catalog",
       { agentId: "main", includePlugins: true },
-      { runner, port, env },
+      rpcOptions,
     );
     const catalogTools = extractToolEntries(catalog);
-    const catalogToolIds = catalogTools.map((entry) => entry?.id).filter(isNonEmptyString);
-    assertIncludesAny(catalogToolIds, EXPECTED_TOOLS, "tools.catalog plugin tools");
-    const pluginTool = catalogTools.find((entry) => EXPECTED_TOOLS.includes(entry?.id));
-    if (pluginTool?.source !== "plugin" || pluginTool?.pluginId !== PLUGIN_ID) {
-      throw new Error(`tools.catalog plugin provenance missing: ${JSON.stringify(pluginTool)}`);
-    }
+    const catalogToolIds = assertExpectedKitchenSinkToolEntries(
+      catalogTools,
+      "tools.catalog plugin tools",
+      { requirePluginProvenance: true },
+    );
 
     const createdSession = await retryRpcCall(
       "sessions.create",
       { key: SESSION_KEY, agentId: "main", label: "kitchen-sink-rpc" },
-      { runner, port, env },
+      rpcOptions,
     );
     const effective = await retryRpcCall(
       "tools.effective",
       { sessionKey: createdSession.key, agentId: "main" },
-      { runner, port, env },
+      rpcOptions,
     );
-    const effectiveToolIds = extractToolEntries(effective).map((entry) => entry?.id);
-    assertIncludesAny(effectiveToolIds, EXPECTED_TOOLS, "tools.effective plugin tools");
+    assertExpectedKitchenSinkToolEntries(
+      extractToolEntries(effective),
+      "tools.effective plugin tools",
+    );
 
-    const invoked = await retryRpcCall(
+    const searchInvoked = await retryRpcCall(
       "tools.invoke",
       {
         name: "kitchen_sink_search",
@@ -1446,28 +1730,43 @@ export async function main() {
         agentId: "main",
         idempotencyKey: "kitchen-sink-rpc-search",
       },
-      { runner, port, env },
+      rpcOptions,
     );
-    assertToolInvokeResult(invoked);
+    assertKitchenSinkSearchInvokeResult(searchInvoked);
 
-    const ttsProviders = await retryRpcCall("tts.providers", {}, { runner, port, env });
-    const ttsStatus = await retryRpcCall("tts.status", {}, { runner, port, env });
+    const textInvoked = await retryRpcCall(
+      "tools.invoke",
+      {
+        name: "kitchen_sink_text",
+        args: { prompt: "explain kitchen sink rpc walk" },
+        sessionKey: createdSession.key,
+        agentId: "main",
+        idempotencyKey: "kitchen-sink-rpc-text",
+      },
+      rpcOptions,
+    );
+    assertKitchenSinkTextInvokeResult(textInvoked);
+
+    const ttsProviders = await retryRpcCall("tts.providers", {}, rpcOptions);
+    const ttsStatus = await retryRpcCall("tts.status", {}, rpcOptions);
     assertIncludesAny(extractProviderIds(ttsProviders), EXPECTED_SPEECH_PROVIDERS, "tts.providers");
     assertIncludesAny(extractProviderIds(ttsStatus), EXPECTED_SPEECH_PROVIDERS, "tts.status");
 
-    const uiDescriptors = await retryRpcCall("plugins.uiDescriptors", {}, { runner, port, env });
+    const uiDescriptors = await retryRpcCall("plugins.uiDescriptors", {}, rpcOptions);
     if (!uiDescriptors || typeof uiDescriptors !== "object") {
       throw new Error(
         `plugins.uiDescriptors returned invalid payload: ${JSON.stringify(uiDescriptors)}`,
       );
     }
-    const stability = await retryRpcCall("diagnostics.stability", {}, { runner, port, env });
+    const stability = await retryRpcCall("diagnostics.stability", {}, rpcOptions);
     assertDiagnosticStabilityClean(stability);
     await sampleInFlight?.catch(() => {});
     const finalSample = await sampleGateway();
     assertResourceCeiling(finalSample);
     const peakSample = summarizeProcessSamples(processSamples);
+    const commandPeakSample = summarizeProcessSamples(commandSamples);
     assertResourceCeiling(peakSample);
+    assertCommandResourceCeiling(commandPeakSample);
     assertNoErrorLogs(logPath);
 
     console.log(
@@ -1478,6 +1777,7 @@ export async function main() {
           commands: commandNames,
           catalogTools: catalogToolIds.filter((id) => EXPECTED_TOOLS.includes(id)),
           channelAccount,
+          commandPeakSample,
           initialSample,
           finalSample,
           peakSample,
@@ -1497,7 +1797,7 @@ export async function main() {
     }
     await stopGateway(child);
     if (!failed && !keepTmp) {
-      await cleanupKitchenSinkEnv(root);
+      await cleanupKitchenSinkEnv(root, { throwOnFailure: true });
     } else if (failed || keepTmp) {
       console.error(`Kitchen Sink RPC temp root preserved: ${root}`);
     }
@@ -1505,5 +1805,23 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main();
+  if (shouldPrintHelp(process.argv.slice(2))) {
+    process.stdout.write(usage());
+  } else {
+    await main();
+  }
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

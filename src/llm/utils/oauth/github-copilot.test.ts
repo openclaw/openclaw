@@ -1,3 +1,5 @@
+// GitHub Copilot OAuth tests cover device flow polling and timeout behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { refreshGitHubCopilotToken, testing } from "./github-copilot.js";
 
@@ -92,6 +94,16 @@ describe("GitHub Copilot OAuth model policy", () => {
 
     await expect(testing.startDeviceFlow("github.com", { timeoutMs: 5 })).rejects.toThrow(
       "GitHub Copilot device code request timed out after 5ms",
+    );
+  });
+
+  it("caps oversized request timeouts before creating abort signals", async () => {
+    stubHangingFetch(MAX_TIMER_TIMEOUT_MS);
+
+    await expect(
+      testing.startDeviceFlow("github.com", { timeoutMs: Number.MAX_SAFE_INTEGER }),
+    ).rejects.toThrow(
+      `GitHub Copilot device code request timed out after ${MAX_TIMER_TIMEOUT_MS}ms`,
     );
   });
 

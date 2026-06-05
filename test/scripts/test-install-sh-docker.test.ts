@@ -1,3 +1,4 @@
+// Test Install Sh Docker tests cover test install sh docker script behavior.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
@@ -61,14 +62,45 @@ function runNonrootNodePreflight(version: string, options: { sqlite?: boolean } 
   }
 }
 
-describe("test-install-sh-docker", () => {
-  it("defaults local Apple Silicon smoke runs to native arm64 while keeping CI on amd64", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
+function runDefaultSmokePlatform(env: Record<string, string>, hostArch: string): string {
+  const script = readFileSync(SCRIPT_PATH, "utf8");
+  const match = script.match(
+    /(resolve_default_smoke_platform\(\) \{[\s\S]*?\n\})\n\nprint_pack_audit/u,
+  );
+  if (!match) {
+    throw new Error("resolve_default_smoke_platform was not found");
+  }
+  const result = spawnSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `${match[1]}\nuname() { if [[ "\${1:-}" == "-m" ]]; then printf "%s" "$FAKE_UNAME_ARCH"; else command uname "$@"; fi; }\nresolve_default_smoke_platform`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        HOME: "/tmp",
+        PATH: process.env.PATH ?? "",
+        FAKE_UNAME_ARCH: hostArch,
+        ...env,
+      },
+    },
+  );
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
+  return result.stdout;
+}
 
-    expect(script).toContain("resolve_default_smoke_platform");
-    expect(script).toContain('printf "linux/amd64"');
-    expect(script).toContain('[[ "$host_os" == "Darwin" && "$host_arch" == "arm64" ]]');
-    expect(script).toContain('printf "linux/arm64"');
+describe("test-install-sh-docker", () => {
+  it("defaults ARM hosts to native arm64 while keeping x64 CI on amd64", () => {
+    expect(runDefaultSmokePlatform({ CI: "true" }, "aarch64")).toBe("linux/arm64");
+    expect(runDefaultSmokePlatform({ GITHUB_ACTIONS: "true" }, "x86_64")).toBe("linux/amd64");
+    expect(runDefaultSmokePlatform({}, "arm64")).toBe("linux/arm64");
+    expect(
+      runDefaultSmokePlatform({ OPENCLAW_INSTALL_SMOKE_PLATFORM: "linux/s390x" }, "x86_64"),
+    ).toBe("linux/s390x");
   });
 
   it("supports npm update package specs without a separate expected-version env", () => {
@@ -320,6 +352,16 @@ describe("test-install-sh-docker", () => {
     expect(runner).toContain("run_installer_for_package_spec");
     expect(runner).toContain('bash -c "curl -fsSL \\"\\$1\\" | bash -s --');
     expect(runner).not.toContain('npm_install_global "install latest release tarball"');
+  });
+
+  it("uses public npm latest as the non-root installer expectation", () => {
+    const wrapper = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(wrapper).toContain(
+      'public_latest_version="$(quiet_npm view "$PACKAGE_NAME" version 2>/dev/null || true)"',
+    );
+    expect(wrapper).toContain('LATEST_VERSION="$public_latest_version"');
+    expect(wrapper).toContain('-e OPENCLAW_INSTALL_EXPECT_VERSION="$LATEST_VERSION"');
   });
 });
 

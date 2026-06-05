@@ -1,11 +1,14 @@
+/**
+ * Coordinates embedded-attempt session ownership, takeover, and prompt locks.
+ */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
-import { normalizeStringEntries } from "../../../shared/string-normalization.js";
-import { isSessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
+import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { resolveEmbeddedSessionFileKey } from "../session-file-key.js";
 
@@ -377,7 +380,9 @@ function waitForSessionFileOwnerRelease(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   if (params.signal?.aborted) {
-    return Promise.reject(abortOwnerWaitReason(params.signal));
+    return Promise.reject(
+      toLintErrorObject(abortOwnerWaitReason(params.signal), "Non-Error rejection"),
+    );
   }
   return new Promise<void>((resolve, reject) => {
     const waiter: SessionFileOwnerWaiter = {
@@ -400,7 +405,7 @@ function waitForSessionFileOwnerRelease(params: {
     };
     waiter.reject = (error) => {
       cleanup();
-      reject(error);
+      reject(toLintErrorObject(error, "Non-Error rejection"));
     };
     if (params.timeoutMs !== undefined && Number.isFinite(params.timeoutMs)) {
       waiter.timer = setTimeout(
@@ -516,7 +521,7 @@ function isTrustedSessionFileState(
   fingerprint: SessionFileFingerprint,
 ): boolean {
   const trusted = trustedSessionFileStates.get(sessionFileKey);
-  return !!trusted && sameSessionFileFingerprint(trusted.fingerprint, fingerprint);
+  return trusted !== undefined && sameSessionFileFingerprint(trusted.fingerprint, fingerprint);
 }
 
 async function readSessionFileFingerprint(sessionFile: string): Promise<SessionFileFingerprint> {
@@ -651,7 +656,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     try {
       return { lock: await acquireLock(), owned: true };
     } catch (err) {
-      if (isSessionWriteLockTimeoutError(err)) {
+      if (isSessionWriteLockAcquireError(err)) {
         takeoverDetected = true;
       }
       throw err;
@@ -799,17 +804,23 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
       const lock = heldLock;
       heldLock = undefined;
-      const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-      const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
-      const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
-      fenceFingerprint = fingerprint;
-      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-      fenceGeneration =
-        ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
-          ? ownedWrite.generation
-          : (trustedGeneration ?? fenceGeneration);
-      fenceActive = true;
-      await lock.release();
+      // Clearing `heldLock` transfers release ownership to this block. Fence reads can
+      // throw after that transfer; release the underlying file lock anyway so later
+      // turns do not wait for the maxHoldMs watchdog.
+      try {
+        const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+        const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
+        const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
+        fenceFingerprint = fingerprint;
+        fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+        fenceGeneration =
+          ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
+            ? ownedWrite.generation
+            : (trustedGeneration ?? fenceGeneration);
+        fenceActive = true;
+      } finally {
+        await lock.release();
+      }
     } finally {
       finishHeldLockDrain(drainOwner);
     }
@@ -865,7 +876,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     try {
       return await acquireLock();
     } catch (err) {
-      if (isSessionWriteLockTimeoutError(err)) {
+      if (isSessionWriteLockAcquireError(err)) {
         takeoverDetected = true;
         return undefined;
       }
@@ -1043,4 +1054,18 @@ export function installPromptSubmissionLockRelease(params: {
   };
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }
