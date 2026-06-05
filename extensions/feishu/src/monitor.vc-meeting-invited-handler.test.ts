@@ -267,7 +267,7 @@ const vcEvent = {
 describe("resolveVcMeetingInvitedTurn", () => {
   it("builds a deterministic synthetic turn from the real event fields", () => {
     expect(resolveVcMeetingInvitedTurn(vcEvent)).toEqual({
-      messageId: "vc-invited:event:evt_vc_123",
+      syntheticMessageId: "vc-invited:event:evt_vc_123",
       meetingNo: "123456789",
       topic: "Weekly sync",
       inviteTime: "1712345678",

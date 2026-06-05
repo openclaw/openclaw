@@ -46,7 +46,7 @@ type ResolvedVcInviter = {
 };
 
 type VcMeetingInvitedTurn = {
-  messageId: string;
+  syntheticMessageId: string;
   meetingNo: string;
   topic?: string;
   inviteTime?: string;
@@ -98,13 +98,13 @@ export function resolveVcMeetingInvitedTurn(
   const inviteTime = pickString(event.invite_time);
   const callId = pickString(event.call_id);
   const topic = pickString(event.meeting?.topic);
-  const messageId = eventId
+  const syntheticMessageId = eventId
     ? `vc-invited:event:${eventId}`
     : `vc-invited:${meetingNo}:${inviteTime ?? uuid()}`;
   const prompt = buildJoinPrompt({ meetingNo, callId });
 
   return {
-    messageId,
+    syntheticMessageId,
     meetingNo,
     inviter,
     prompt,
@@ -229,7 +229,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
     }
   }
 
-  const bodyForAgent = `[message_id: ${params.turn.messageId}]\n${params.turn.inviter.name ?? params.turn.inviter.senderId}: ${params.turn.prompt}`;
+  const bodyForAgent = `[message_id: ${params.turn.syntheticMessageId}]\n${params.turn.inviter.name ?? params.turn.inviter.senderId}: ${params.turn.prompt}`;
   const timestamp = parseInviteTimestamp(params.turn.inviteTime);
   const target = params.turn.inviter.openId ?? params.turn.inviter.senderId;
   const replyTarget = `user:${target}`;
@@ -250,7 +250,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
     SenderId: params.turn.inviter.senderId,
     Provider: "feishu",
     Surface: "feishu-vc-meeting-invited",
-    MessageSid: params.turn.messageId,
+    MessageSid: params.turn.syntheticMessageId,
     Timestamp: timestamp,
     WasMentioned: true,
     CommandAuthorized: false,
@@ -279,7 +279,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
     raw: params.turn,
     adapter: {
       ingest: () => ({
-        id: params.turn.messageId,
+        id: params.turn.syntheticMessageId,
         timestamp,
         rawText: params.turn.prompt,
         textForAgent: bodyForAgent,
@@ -339,16 +339,16 @@ export function createFeishuVcMeetingInvitedHandler(params: {
         return;
       }
       const claim = await claimUnprocessedFeishuMessage({
-        messageId: turn.messageId,
+        messageId: turn.syntheticMessageId,
         namespace: accountId,
         log,
       });
       if (claim === "duplicate") {
-        log(`feishu[${accountId}]: dropping duplicate vc meeting event ${turn.messageId}`);
+        log(`feishu[${accountId}]: dropping duplicate vc meeting event ${turn.syntheticMessageId}`);
         return;
       }
       if (claim === "inflight") {
-        log(`feishu[${accountId}]: dropping in-flight vc meeting event ${turn.messageId}`);
+        log(`feishu[${accountId}]: dropping in-flight vc meeting event ${turn.syntheticMessageId}`);
         return;
       }
       const promise = dispatchVcMeetingInvitedTurn({
@@ -359,14 +359,14 @@ export function createFeishuVcMeetingInvitedHandler(params: {
         turn,
       })
         .then(async () => {
-          await recordProcessedFeishuMessage(turn.messageId, accountId, log);
+          await recordProcessedFeishuMessage(turn.syntheticMessageId, accountId, log);
         })
         .catch(async (err: unknown) => {
-          await forgetProcessedFeishuMessage(turn.messageId, accountId, log);
+          await forgetProcessedFeishuMessage(turn.syntheticMessageId, accountId, log);
           throw err;
         })
         .finally(() => {
-          releaseFeishuMessageProcessing(turn.messageId, accountId);
+          releaseFeishuMessageProcessing(turn.syntheticMessageId, accountId);
         });
       if (fireAndForget) {
         promise.catch((err: unknown) => {
