@@ -300,7 +300,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   }
 
   let transcriptMarkerUpdatedAt: number | undefined;
-  const result = await runWithOwnedSessionTranscriptWriteLock(
+  const result = await runWithOwnedSessionTranscriptWriteLock<SessionTranscriptAppendResult>(
     { sessionFile, sessionKey: resolved.normalizedKey },
     async () => {
       const explicitIdempotencyKey =
