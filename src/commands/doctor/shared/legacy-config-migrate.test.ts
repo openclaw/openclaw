@@ -90,16 +90,63 @@ describe("legacy memory search config migrate", () => {
         {
           id: "gpt-5.5",
           name: "GPT-5.5",
-          api: "openai-chatgpt-responses",
         },
       ],
     });
     expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
     expect(res.changes).toEqual([
       'Moved models.providers.openai-codex.api "openai-codex-responses" → "openai-chatgpt-responses".',
-      'Moved models.providers.openai-codex.models[0].api "openai-codex-responses" → "openai-chatgpt-responses".',
       "Moved models.providers.openai-codex → models.providers.openai.",
     ]);
+  });
+
+  it("excludes transport/runtime fields from legacy openai-codex model entries when moving to canonical provider", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          "openai-codex": {
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                contextWindow: 200_000,
+                contextTokens: 100_000,
+                maxTokens: 16_384,
+                // Transport/runtime fields that must NOT be migrated:
+                baseUrl: "https://chatgpt.com/backend-api/codex",
+                api: "openai-codex-responses",
+                headers: { Authorization: "Bearer test" },
+                auth: { token: "sk-test" },
+                params: { temperature: 0.7 },
+                compat: { thinkingFormat: "enabled" },
+                request: { maxRetries: 3 },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const openai = res.config?.models?.providers?.openai;
+    expect(openai).toBeDefined();
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+
+    const model = openai!.models![0];
+    expect(model.id).toBe("gpt-5.5");
+    expect(model.name).toBe("GPT-5.5");
+    // Context metadata preserved
+    expect(model.contextWindow).toBe(200_000);
+    expect(model.contextTokens).toBe(100_000);
+    expect(model.maxTokens).toBe(16_384);
+    // Transport/runtime fields excluded
+    expect(model).not.toHaveProperty("baseUrl");
+    expect(model).not.toHaveProperty("api");
+    expect(model).not.toHaveProperty("headers");
+    expect(model).not.toHaveProperty("auth");
+    expect(model).not.toHaveProperty("params");
+    expect(model).not.toHaveProperty("compat");
+    expect(model).not.toHaveProperty("request");
   });
 
   it("records removal when canonical OpenAI provider already exists", () => {

@@ -947,40 +947,22 @@ function normalizeLegacyOpenAIResponsesApi(
     changed = true;
   }
 
-  if (Array.isArray(provider.models)) {
-    let modelsChanged = false;
-    const nextModels = provider.models.map((model, index) => {
-      const modelRecord = getRecord(model);
-      if (!modelRecord || modelRecord.api !== LEGACY_OPENAI_CODEX_RESPONSES_API) {
-        return model;
-      }
-      modelsChanged = true;
-      changes.push(
-        `Moved models.providers.${providerId}.models[${index}].api "${LEGACY_OPENAI_CODEX_RESPONSES_API}" → "${OPENAI_CHATGPT_RESPONSES_API}".`,
-      );
-      return {
-        ...modelRecord,
-        api: OPENAI_CHATGPT_RESPONSES_API,
-      };
-    });
-    if (modelsChanged) {
-      next.models = nextModels;
-      changed = true;
-    }
-  }
-
   return { value: next, changed };
 }
 
 // ModelDefinitionConfig context-window metadata to preserve from legacy codex model entries.
 const CONTEXT_METADATA_FIELDS = ["contextWindow", "contextTokens", "maxTokens"] as const;
 
+// Safe fields to carry from a legacy openai-codex model entry when creating a new canonical model entry.
+// Transport/runtime fields (baseUrl, api, headers, auth, params, compat, request) must not be copied.
+const LEGACY_MODEL_SAFE_FIELDS = ["id", "name", ...CONTEXT_METADATA_FIELDS] as const;
+
 /**
  * Merge legacy openai-codex model entries into the canonical openai provider,
  * preserving context-window metadata.
  *
  * Three cases:
- *  1. Model absent from openai.models → copy the entire legacy entry.
+ *  1. Model absent from openai.models → copy safe fields only.
  *  2. Model exists without context metadata → merge missing fields.
  *  3. Model already has explicit context metadata → leave it unchanged.
  */
@@ -1013,8 +995,15 @@ function migrateLegacyContextMetadata(
     const existingIndex = modelIdLookup.get(modelId);
 
     if (existingIndex === undefined) {
-      // Case 1: Model not in openai.models — copy the entire legacy entry as-is
-      openaiModels.push({ ...codexRecord });
+      // Case 1: Model not in openai.models — copy only safe fields (no transport/runtime metadata)
+      const safe: Record<string, unknown> = {};
+      for (const field of LEGACY_MODEL_SAFE_FIELDS) {
+        const val = codexRecord[field];
+        if (val !== undefined) {
+          safe[field as string] = val;
+        }
+      }
+      openaiModels.push(safe);
       changed = true;
       changes.push(
         `Copied models.providers.openai-codex.models[].${modelId} → models.providers.openai.models[].${modelId}.`,
@@ -1076,7 +1065,24 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
     }
 
     if (!hasCanonicalOpenAIProvider(providers)) {
-      providers[OPENAI_PROVIDER_ID] = normalized.value;
+      // Strip each model entry to only safe context metadata fields; transport/runtime fields
+      // (baseUrl, api, headers, auth, params, compat, request) must not be copied.
+      const sanitized = { ...normalized.value };
+      if (Array.isArray(sanitized.models)) {
+        sanitized.models = sanitized.models.map((model) => {
+          const record = getRecord(model);
+          if (!record) return {};
+          const safe: Record<string, unknown> = {};
+          for (const field of LEGACY_MODEL_SAFE_FIELDS) {
+            const val = record[field];
+            if (val !== undefined) {
+              safe[field as string] = val;
+            }
+          }
+          return safe;
+        });
+      }
+      providers[OPENAI_PROVIDER_ID] = sanitized;
       changes.push(
         `Moved models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} → models.providers.${OPENAI_PROVIDER_ID}.`,
       );

@@ -228,3 +228,119 @@ describe("stale contextWindow migration", () => {
     expect(changes).toHaveLength(0);
   });
 });
+
+describe("legacy codex context metadata migration", () => {
+  const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS.find(
+    (m) => m.id === "models.providers.openai-codex->models.providers.openai",
+  );
+
+  it("copies model with contextTokens when canonical openai provider has empty models", () => {
+    const changes: string[] = [];
+    const raw = {
+      models: {
+        providers: {
+          openai: {
+            models: [],
+          },
+          "openai-codex": {
+            models: [
+              { id: "gpt-5.5", contextTokens: 200_000, contextWindow: 200_000, maxTokens: 8_192 },
+            ],
+          },
+        },
+      },
+    };
+
+    migration!.apply(raw, changes);
+
+    const openaiProvider = (raw.models!.providers as Record<string, unknown>).openai as Record<
+      string,
+      unknown
+    >;
+    const openaiModels = Array.isArray(openaiProvider.models) ? openaiProvider.models : [];
+    expect(openaiModels).toHaveLength(1);
+    expect(openaiModels[0]).toMatchObject({
+      id: "gpt-5.5",
+      contextTokens: 200_000,
+      contextWindow: 200_000,
+      maxTokens: 8_192,
+    });
+    expect(changes.filter((c) => c.includes("Copied"))).toHaveLength(1);
+  });
+
+  it("merges missing contextTokens into existing canonical model entry", () => {
+    const changes: string[] = [];
+    const raw = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", maxTokens: 8_192 }],
+          },
+          "openai-codex": {
+            models: [{ id: "gpt-5.5", contextTokens: 200_000, contextWindow: 200_000 }],
+          },
+        },
+      },
+    };
+
+    migration!.apply(raw, changes);
+
+    const openaiProvider = (raw.models!.providers as Record<string, unknown>).openai as Record<
+      string,
+      unknown
+    >;
+    const openaiModels = openaiProvider.models as Record<string, unknown>[];
+    expect(openaiModels).toHaveLength(1);
+    expect(openaiModels[0].contextTokens).toBe(200_000);
+    expect(openaiModels[0].contextWindow).toBe(200_000);
+    expect(changes).toHaveLength(2);
+    expect(changes.some((c) => c.startsWith("Merged"))).toBe(true);
+  });
+
+  it("does not overwrite explicit context metadata on canonical model", () => {
+    const changes: string[] = [];
+    const raw = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              { id: "gpt-5.5", contextTokens: 128_000, contextWindow: 128_000, maxTokens: 8_192 },
+            ],
+          },
+          "openai-codex": {
+            models: [{ id: "gpt-5.5", contextTokens: 200_000, contextWindow: 200_000 }],
+          },
+        },
+      },
+    };
+
+    migration!.apply(raw, changes);
+
+    const openaiProvider = (raw.models!.providers as Record<string, unknown>).openai as Record<
+      string,
+      unknown
+    >;
+    const openaiModels = openaiProvider.models as Record<string, unknown>[];
+    expect(openaiModels[0].contextTokens).toBe(128_000);
+    expect(openaiModels[0].contextWindow).toBe(128_000);
+    expect(changes.filter((c) => c.includes("openai-codex"))).toHaveLength(1);
+    expect(changes[changes.length - 1]).toContain("Removed");
+  });
+
+  it("handles no openai-codex provider gracefully", () => {
+    const changes: string[] = [];
+    const raw = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", contextTokens: 128_000 }],
+          },
+        },
+      },
+    };
+
+    migration!.apply(raw, changes);
+
+    expect(changes).toHaveLength(0);
+  });
+});
