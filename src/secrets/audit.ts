@@ -109,6 +109,7 @@ type AuditCollector = {
   findings: SecretsAuditFinding[];
   refAssignments: RefAssignment[];
   configProviderRefPaths: Map<string, string[]>;
+  providerEnvRefMarkers: Map<string, Set<string>>;
   authProviderState: Map<string, ProviderAuthState>;
   filesScanned: Set<string>;
 };
@@ -131,6 +132,23 @@ function collectProviderRefPath(
     return;
   }
   collector.configProviderRefPaths.set(key, [configPath]);
+}
+
+function trackProviderEnvRefMarker(
+  collector: AuditCollector,
+  providerId: string | undefined,
+  ref: SecretRef,
+): void {
+  if (!providerId || ref.source !== "env" || !isNonEmptyString(ref.id)) {
+    return;
+  }
+  const key = normalizeProviderId(providerId);
+  let markers = collector.providerEnvRefMarkers.get(key);
+  if (!markers) {
+    markers = new Set<string>();
+    collector.providerEnvRefMarkers.set(key, markers);
+  }
+  markers.add(ref.id.trim());
 }
 
 function trackAuthProviderState(
@@ -208,6 +226,7 @@ function collectConfigSecrets(params: {
       if (target.entry.trackProviderShadowing && target.providerId) {
         collectProviderRefPath(params.collector, target.providerId, target.path);
       }
+      trackProviderEnvRefMarker(params.collector, target.providerId, ref);
       continue;
     }
 
@@ -265,6 +284,7 @@ function collectAuthStoreSecrets(params: {
           expected: "string",
           provider: entry.provider,
         });
+        trackProviderEnvRefMarker(params.collector, entry.provider, ref);
         trackAuthProviderState(params.collector, entry.provider, entry.kind);
       }
       if (authoredValueRef) {
@@ -381,7 +401,11 @@ function collectModelsJsonSecrets(params: {
           provider: providerId,
         });
       }
-    } else if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
+    } else if (
+      isNonEmptyString(apiKey) &&
+      !isNonSecretApiKeyMarker(apiKey) &&
+      !isCurrentProviderEnvRefMarker(params.collector, providerId, apiKey)
+    ) {
       addFinding(params.collector, {
         code: "PLAINTEXT_FOUND",
         severity: "warn",
@@ -429,6 +453,15 @@ function collectModelsJsonSecrets(params: {
       });
     }
   }
+}
+
+function isCurrentProviderEnvRefMarker(
+  collector: AuditCollector,
+  providerId: string,
+  value: string,
+): boolean {
+  const markers = collector.providerEnvRefMarkers.get(normalizeProviderId(providerId));
+  return markers?.has(value.trim()) ?? false;
 }
 
 async function collectUnresolvedRefFindings(params: {
@@ -630,6 +663,7 @@ export async function runSecretsAudit(
     findings: [],
     refAssignments: [],
     configProviderRefPaths: new Map(),
+    providerEnvRefMarkers: new Map(),
     authProviderState: new Map(),
     filesScanned: new Set([configPath]),
   };

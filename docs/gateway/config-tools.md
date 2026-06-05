@@ -515,7 +515,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - Merge precedence for matching provider IDs:
       - Non-empty agent `models.json` `baseUrl` values win.
       - Non-empty agent `apiKey` values win only when that provider is not SecretRef-managed in current config/auth-profile context.
-      - SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs) instead of persisting resolved secrets.
+      - SecretRef-managed provider `apiKey` values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs) instead of persisting resolved secrets.
       - SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs).
       - Empty or missing agent `apiKey`/`baseUrl` fall back to `models.providers` in config.
       - Matching model `contextWindow`/`maxTokens` use the higher value between explicit config and implicit catalog values.

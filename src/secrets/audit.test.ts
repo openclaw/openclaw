@@ -518,6 +518,102 @@ describe("secrets audit", () => {
     });
   });
 
+  it("does not flag stale bare env apiKey markers for current SecretRef-managed providers", async () => {
+    await fs.writeFile(fixture.envPath, "", "utf8");
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          tensorix: {
+            baseUrl: "https://api.tensorix.ai/v1",
+            api: "openai-completions",
+            models: [{ id: "tensorix/deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro" }],
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "tensorix:default": {
+          type: "api_key",
+          provider: "tensorix",
+          keyRef: { source: "env", provider: "default", id: "TENSORIX_API_KEY" },
+        },
+      },
+    });
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        tensorix: {
+          baseUrl: "https://api.tensorix.ai/v1",
+          api: "openai-completions",
+          apiKey: "TENSORIX_API_KEY",
+          models: [{ id: "tensorix/deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({
+      env: {
+        ...fixture.env,
+        TENSORIX_API_KEY: "env-tensorix-key", // pragma: allowlist secret
+      },
+    });
+
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.tensorix.apiKey",
+      present: false,
+    });
+    expect(report.summary.plaintextCount).toBe(0);
+  });
+
+  it("still flags stale bare env apiKey markers that do not match current provider refs", async () => {
+    await fs.writeFile(fixture.envPath, "", "utf8");
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          tensorix: {
+            baseUrl: "https://api.tensorix.ai/v1",
+            api: "openai-completions",
+            models: [{ id: "tensorix/deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro" }],
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "tensorix:default": {
+          type: "api_key",
+          provider: "tensorix",
+          keyRef: { source: "env", provider: "default", id: "TENSORIX_API_KEY" },
+        },
+      },
+    });
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        tensorix: {
+          baseUrl: "https://api.tensorix.ai/v1",
+          api: "openai-completions",
+          apiKey: "OTHER_TENSORIX_API_KEY",
+          models: [{ id: "tensorix/deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({
+      env: {
+        ...fixture.env,
+        TENSORIX_API_KEY: "env-tensorix-key", // pragma: allowlist secret
+      },
+    });
+
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.tensorix.apiKey",
+    });
+  });
+
   it("does not flag models.json header marker values as plaintext", async () => {
     await writeModelsProvider({
       headers: {
