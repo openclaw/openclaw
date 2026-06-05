@@ -217,6 +217,32 @@ describe("secrets handlers", () => {
     });
   });
 
+  it("handles undefined commandName without crashing", async () => {
+    const handlers = createHandlers();
+    const respond = vi.fn();
+    await invokeSecretsResolve({
+      handlers,
+      respond,
+      commandName: undefined,
+      targetIds: ["talk.providers.*.apiKey"],
+    });
+    // Should not crash; validator or guard catches it cleanly.
+    expectRespondError(respond, { code: "INVALID_REQUEST" });
+  });
+
+  it("handles undefined targetIds without crashing", async () => {
+    const handlers = createHandlers();
+    const respond = vi.fn();
+    await invokeSecretsResolve({
+      handlers,
+      respond,
+      commandName: "message send",
+      targetIds: undefined,
+    });
+    // Should not crash; validator or guard catches it cleanly.
+    expectRespondError(respond, { code: "INVALID_REQUEST" });
+  });
+
   it("rejects unknown secrets.resolve target ids", async () => {
     const resolveSecrets = vi.fn();
     const handlers = createHandlers({ resolveSecrets });

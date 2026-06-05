@@ -97,7 +97,8 @@ export function createSecretsHandlers(params: {
         );
         return;
       }
-      const commandName = requestParams.commandName.trim();
+      const commandName =
+        typeof requestParams.commandName === "string" ? requestParams.commandName.trim() : "";
       if (!commandName) {
         respond(
           false,
@@ -106,8 +107,8 @@ export function createSecretsHandlers(params: {
         );
         return;
       }
-      const targetIds = requestParams.targetIds
-        .map((entry) => entry.trim())
+      const targetIds = (Array.isArray(requestParams.targetIds) ? requestParams.targetIds : [])
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
         .filter((entry) => entry.length > 0);
       // Normalize allow/force/optional path lists before resolving so secrets
       // code receives policy paths, not UI whitespace artifacts.
