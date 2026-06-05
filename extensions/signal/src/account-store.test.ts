@@ -98,6 +98,30 @@ describe("signal-cli account store", () => {
     );
   });
 
+  it("does not choose an ambiguous UUID when multiple account rows match", async () => {
+    const readFile = vi.fn(async () =>
+      JSON.stringify({
+        accounts: [
+          {
+            number: "+15550001111",
+            uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          },
+          {
+            number: "+1 (555) 000-1111",
+            uuid: "123e4567-e89b-12d3-a456-426614174000",
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      discoverSignalAccountUuid({
+        account: "+15550001111",
+        readFile: readFile as typeof import("node:fs/promises").readFile,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("ignores missing or malformed account stores", async () => {
     await expect(
       discoverSignalAccountUuid({

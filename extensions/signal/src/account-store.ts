@@ -74,12 +74,18 @@ export async function discoverSignalAccountUuid(params: {
     const raw = await readFile(resolveSignalCliAccountsPath(params.configPath), "utf8");
     const parsed = JSON.parse(raw) as SignalCliAccountStore;
     const normalizedAccount = normalizeE164(account);
-    const match = parsed.accounts?.find((entry) => {
+    const matchingUuids = new Set<string>();
+    for (const entry of parsed.accounts ?? []) {
       const number = entry?.number?.trim();
-      return number ? normalizeE164(number) === normalizedAccount : false;
-    });
-    const uuid = match?.uuid?.trim();
-    return uuid && normalizeSignalUuidForCompare(uuid) ? uuid : undefined;
+      if (!number || normalizeE164(number) !== normalizedAccount) {
+        continue;
+      }
+      const uuid = entry?.uuid?.trim();
+      if (uuid && normalizeSignalUuidForCompare(uuid)) {
+        matchingUuids.add(uuid);
+      }
+    }
+    return matchingUuids.size === 1 ? [...matchingUuids][0] : undefined;
   } catch {
     return undefined;
   }

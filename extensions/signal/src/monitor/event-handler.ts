@@ -174,10 +174,20 @@ function resolveSelfReplyEchoText(dataMessage: SignalDataMessage | null): string
   if (!firstAttachment) {
     return undefined;
   }
-  return resolveSignalSelfReplyMediaEchoText({
+  const mediaEchoText = resolveSignalSelfReplyMediaEchoText({
     contentType: firstAttachment.contentType,
     size: firstAttachment.size,
   });
+  if (mediaEchoText) {
+    return mediaEchoText;
+  }
+  if ((dataMessage?.attachments?.length ?? 0) > 1) {
+    return formatAttachmentSummaryPlaceholder(
+      dataMessage?.attachments?.map((attachment) => attachment.contentType) ?? [],
+    );
+  }
+  const kind = kindFromMime(firstAttachment.contentType ?? undefined);
+  return kind ? `<media:${kind}>` : "<media:attachment>";
 }
 
 function resolveEditedSelfReplyEchoId(params: {
@@ -1231,8 +1241,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const editedSelfEchoId = resolvedMessage.isEdit
       ? resolveEditedSelfReplyEchoId({
           timestamp: resolvedEnvelope.timestamp ?? undefined,
-          text: bodyText,
+          text: resolveSelfReplyEchoText(dataMessage),
         })
+      : undefined;
+    const editedSelfEchoText = resolvedMessage.isEdit
+      ? resolveSelfReplyEchoText(dataMessage)
       : undefined;
     await inboundDebouncer.enqueue({
       senderName,
@@ -1260,7 +1273,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         noteToSelfDirectMessage && "syncMessage" in resolvedEnvelope
           ? [
               resolvedMessage.isEdit
-                ? { messageId: editedSelfEchoId, text: bodyText }
+                ? { messageId: editedSelfEchoId, text: editedSelfEchoText ?? bodyText }
                 : { messageId, timestamp: resolvedEnvelope.timestamp ?? undefined, text: bodyText },
             ]
           : undefined,

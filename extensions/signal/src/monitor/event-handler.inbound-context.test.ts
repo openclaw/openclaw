@@ -1219,6 +1219,60 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
   });
 
+  it("uses canonical attachment text for edited note-to-self replay keys", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550001111",
+        ingressMode: "note-to-self",
+        ignoreAttachments: false,
+        fetchAttachment: async ({ attachment }) => ({
+          path: `/tmp/${String(attachment.id)}.dat`,
+          contentType: "image/jpeg",
+        }),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        timestamp: 1700000000109,
+        syncMessage: {
+          sentMessage: {
+            destinationNumber: "+15550001111",
+            timestamp: 1700000000109,
+            editMessage: {
+              dataMessage: {
+                attachments: [{ id: "edited-self-image", contentType: "image/jpeg" }],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.RawBody).toBe("<media:image>");
+    expect(hasSignalSelfReplyEchoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: expect.stringMatching(/^edit:1700000000109:/),
+        timestamp: undefined,
+        text: "<media:image>",
+      }),
+    );
+    expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: expect.stringMatching(/^edit:1700000000109:/),
+        timestamp: undefined,
+        text: "<media:image>",
+      }),
+    );
+  });
+
   it("drops sent sync transcripts addressed to other Signal users", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
