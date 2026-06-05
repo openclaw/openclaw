@@ -18,7 +18,8 @@ export async function resolveCronChannelOutputPolicy(channel: string | undefined
 }> {
   const channelId = normalizeOptionalLowercaseString(channel);
   if (!channelId) {
-    return { preferFinalAssistantVisibleText: false };
+    // No channel means no structured delivery; final assistant text is the only output.
+    return { preferFinalAssistantVisibleText: true };
   }
   const { getChannelPlugin } = await loadChannelPluginRuntime();
   return {

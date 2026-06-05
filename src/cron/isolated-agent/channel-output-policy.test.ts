@@ -36,6 +36,13 @@ describe("cron channel output policy", () => {
     channelPluginMocks.getChannelPlugin.mockClear();
   });
 
+  it("prefers final assistant text when no channel is resolved", async () => {
+    await expect(resolveCronChannelOutputPolicy(undefined)).resolves.toEqual({
+      preferFinalAssistantVisibleText: true,
+    });
+    expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
+  });
+
   it("reads final visible text preference from the channel plugin", async () => {
     await expect(resolveCronChannelOutputPolicy("topicchat")).resolves.toEqual({
       preferFinalAssistantVisibleText: true,
