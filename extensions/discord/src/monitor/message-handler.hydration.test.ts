@@ -1,6 +1,6 @@
 // Discord tests cover message handler.hydration plugin behavior.
 import { MessageReferenceType, MessageType } from "discord-api-types/v10";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Message } from "../internal/discord.js";
 import {
   createFakeRestClient,
@@ -166,6 +166,50 @@ describe("hydrateDiscordMessageIfNeeded", () => {
 
     expect(rest.calls).toHaveLength(1);
     expect(hydrated.referencedMessage?.content).toBe("the replied-to message");
+  });
+
+  it("keeps the original reply message when hydration fetch fails", async () => {
+    const client = createInternalTestClient();
+    const rest = createFakeRestClient();
+    rest.get = vi.fn(async () => {
+      throw Object.assign(new Error("Missing Access"), { status: 403 });
+    });
+    const message = new Message(client, {
+      id: "m1",
+      channel_id: "c1",
+      content: "what did this mean?",
+      attachments: [],
+      embeds: [],
+      mentions: [],
+      mention_roles: [],
+      mention_everyone: false,
+      timestamp: new Date().toISOString(),
+      author: {
+        id: "u1",
+        username: "alice",
+        global_name: null,
+        discriminator: "0",
+        avatar: null,
+      },
+      message_reference: {
+        type: MessageReferenceType.Default,
+        message_id: "m0",
+        channel_id: "c1",
+      },
+      type: MessageType.Reply,
+      tts: false,
+      pinned: false,
+    });
+
+    const hydrated = await hydrateDiscordMessageIfNeeded({
+      client: { rest },
+      message,
+      messageChannelId: "c1",
+    });
+
+    expect(rest.get).toHaveBeenCalledOnce();
+    expect(hydrated).toBe(message);
+    expect(hydrated.referencedMessage).toBeNull();
   });
 
   it("does not hydrate known-deleted or forwarded references", async () => {
