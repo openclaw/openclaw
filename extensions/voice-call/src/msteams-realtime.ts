@@ -1,0 +1,498 @@
+/**
+ * Microsoft Teams realtime voice bridge.
+ *
+ * When `realtime.enabled` is set for the msteams provider, a Teams call is wired
+ * directly to a speech-to-speech realtime model (e.g. OpenAI / Azure OpenAI
+ * Realtime) instead of the STT -> agent -> TTS pipeline. This is the low-latency
+ * path: the model listens, thinks, and speaks in one streaming session.
+ *
+ * Audio crosses the existing msteams WebSocket as PCM 16 kHz, 16-bit mono. The
+ * realtime model speaks PCM 16-bit mono at 24 kHz, so we resample on both legs:
+ *   caller  16 kHz -> 24 kHz -> model
+ *   model   24 kHz -> 16 kHz -> caller
+ * The Windows worker reframes the downlink PCM into 20 ms / 640-byte frames, so
+ * we can forward arbitrary-length chunks as a single `audio.frame`.
+ *
+ * The model owns conversation/VAD/turn-taking and answers small talk directly.
+ * For anything that needs work (lookups, actions, tools) it calls
+ * `openclaw_agent_consult`, which runs the full OpenClaw agent and returns a
+ * speakable result; a short "working on it" filler covers longer agent runs.
+ */
+
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  buildRealtimeVoiceAgentConsultWorkingResponse,
+  consultRealtimeVoiceAgent,
+  createRealtimeVoiceBridgeSession,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  resamplePcm,
+  resolveRealtimeVoiceAgentConsultToolsAllow,
+  type RealtimeVoiceAgentConsultToolPolicy,
+  type RealtimeVoiceAgentConsultTranscriptEntry,
+  type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceProviderConfig,
+  type RealtimeVoiceProviderPlugin,
+  type RealtimeVoiceTool,
+  type RealtimeVoiceToolCallEvent,
+} from "openclaw/plugin-sdk/realtime-voice";
+import type { VoiceCallConfig } from "./config.js";
+import type { CoreAgentDeps } from "./core-bridge.js";
+import type { MsteamsLogger, MsteamsSession } from "./msteams-media-stream.js";
+import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
+import { resolveVoiceResponseModel } from "./response-model.js";
+
+/** Teams bridge wire format. */
+const MSTEAMS_SAMPLE_RATE_HZ = 16_000;
+/** OpenAI/Azure realtime PCM format. */
+const REALTIME_SAMPLE_RATE_HZ = 24_000;
+/** Cap the consult transcript context so it cannot grow without bound on long calls. */
+const MAX_TRANSCRIPT_ENTRIES = 40;
+
+const MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT = [
+  "You are the configured OpenClaw agent receiving delegated requests from a live Microsoft Teams voice call.",
+  "Act on behalf of the caller using the normal available tools when the caller asks you to do work.",
+  "Prioritize completing the caller's request and returning a fast, speakable result over exhaustive investigation.",
+  "Do not print secret values or dump environment variables; only check whether required configuration is present.",
+  "Be accurate, brief, and speakable.",
+].join(" ");
+
+/** Tool the realtime model calls to hand a long-running task to the background agent. */
+const MSTEAMS_AGENT_TASK_TOOL_NAME = "openclaw_agent_task";
+const MSTEAMS_AGENT_TASK_TOOL: RealtimeVoiceTool = {
+  type: "function",
+  name: MSTEAMS_AGENT_TASK_TOOL_NAME,
+  description:
+    "Hand a long-running task to the OpenClaw agent to complete in the background. " +
+    "Use this for work that may take more than a few seconds (multi-step actions, lengthy research). " +
+    "After calling it, tell the caller you are on it and will message them on Microsoft Teams when it is done. " +
+    "Do NOT use this for quick questions or lookups — use openclaw_agent_consult and answer in-line for those.",
+  parameters: {
+    type: "object",
+    properties: {
+      task: {
+        type: "string",
+        description:
+          "The task to perform, described in full so the background agent can complete it unattended.",
+      },
+    },
+    required: ["task"],
+  },
+};
+
+/** Spoken acknowledgement returned to the model when a background task is accepted. */
+const MSTEAMS_ASYNC_TASK_ACK = {
+  text: "Got it — I'm on it and I'll message you on Microsoft Teams when it's done.",
+};
+
+/**
+ * Returned to the model when the agent is asked to act but recording is not yet
+ * active. The agent must not process/persist call audio before Graph
+ * `updateRecordingStatus` (Media Access API), so consult + task are refused.
+ */
+const MSTEAMS_RECORDING_BLOCKED = {
+  text: "I can't act on that yet — call recording isn't active. Please make sure recording is on and ask again.",
+};
+
+function readArgString(args: unknown, key: string): string | undefined {
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    const value = (args as Record<string, unknown>)[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+export interface MsteamsRealtimeDeps {
+  provider: RealtimeVoiceProviderPlugin;
+  providerConfig: RealtimeVoiceProviderConfig;
+  cfg?: OpenClawConfig;
+  /** System instructions for the realtime model. */
+  instructions?: string;
+  /** Instruction used to open the call (model speaks first). Empty/undefined = silent join. */
+  greetingInstructions?: string;
+  /** Realtime tools exposed to the model (e.g. openclaw_agent_consult). */
+  tools?: RealtimeVoiceTool[];
+  /** Inbound-call policy applied before bridging (mirrors the streaming path). */
+  inboundPolicy?: "disabled" | "allowlist" | "pairing" | "open";
+  /** Allowlist of caller ids honored when inboundPolicy is "allowlist"/"pairing". */
+  allowFrom?: string[];
+  /**
+   * Require active Teams recording status before the agent may process or persist
+   * call audio (the consult tool and the background task). Default true. Mirrors
+   * the streaming path's `msteams.requireRecordingStatus` (Media Access API).
+   */
+  requireRecordingStatus?: boolean;
+
+  // --- openclaw_agent_consult wiring (the agent actually does the work) ---
+  /** Host agent runtime used to run the OpenClaw agent behind the consult tool. */
+  agentRuntime?: CoreAgentDeps;
+  /** Full voice config (for agentId, realtime.{toolPolicy,fastContext,consult*}, responseTimeoutMs). */
+  voiceConfig?: VoiceCallConfig;
+  /** Consult tool policy; controls which agent tools the consult run may use. */
+  toolPolicy?: RealtimeVoiceAgentConsultToolPolicy;
+
+  /**
+   * Suppress caller-leg input while assistant audio is playing (self-echo guard).
+   * OFF by default: Teams delivers remote-participant audio (not our own playback),
+   * and gating input would also defeat the model's barge-in detection.
+   */
+  suppressInputDuringPlayback?: boolean;
+
+  logger?: MsteamsLogger;
+}
+
+/** A single Teams call bridged to the realtime model. */
+export interface MsteamsRealtimeCall {
+  /** Forward one inbound PCM 16 kHz frame from the caller into the model. */
+  pushAudio(pcm16k: Buffer): void;
+  /** Update Teams recording status (gates the consult tool + background task). */
+  setRecordingActive(active: boolean): void;
+  /** Tear down the realtime session. */
+  close(): void;
+}
+
+/**
+ * Create and connect a realtime bridge for one Teams call. Inbound caller audio
+ * is fed via {@link MsteamsRealtimeCall.pushAudio}; model audio is sent back over
+ * the provided {@link MsteamsSession} as `audio.frame` messages, and barge-in is
+ * surfaced as `assistant.cancel` so the worker flushes its playback queue.
+ */
+export function createMsteamsRealtimeCall(params: {
+  session: MsteamsSession;
+  deps: MsteamsRealtimeDeps;
+}): MsteamsRealtimeCall {
+  const { session, deps } = params;
+  const { logger } = deps;
+  const callId = session.callId;
+
+  let outboundSeq = 0;
+  let outboundTimestampMs = 0;
+  let turnId = 0;
+  let closed = false;
+  /** Last time we sent assistant audio to the caller (self-echo gate). */
+  let lastOutputAt = 0;
+  /**
+   * Teams recording status. Gates the consult tool + background task so the agent
+   * never processes or persists call audio before Graph `updateRecordingStatus`
+   * is active (Media Access API). Seeded from `session.start`, updated by
+   * `recording.status` via {@link MsteamsRealtimeCall.setRecordingActive}.
+   */
+  let recordingActive = session.recordingStatus === "active";
+  /** Whether the recording-status gate is enforced (default true). */
+  const requireRecordingStatus = deps.requireRecordingStatus !== false;
+  /** True when the agent must NOT process/persist call audio yet. */
+  const recordingGateBlocks = (): boolean => requireRecordingStatus && !recordingActive;
+
+  /** Rolling consult context built from the model's final transcripts. */
+  const transcript: RealtimeVoiceAgentConsultTranscriptEntry[] = [];
+
+  function recordTranscript(role: "user" | "assistant", text: string): void {
+    // Media Access API: never retain media-derived transcript text before Teams
+    // recording status is active. Otherwise pre-recording turns would sit in the
+    // buffer and be sent to the agent once consult/task run after recording flips
+    // active. Dropping here keeps the consult context recording-active-only.
+    if (recordingGateBlocks()) {
+      return;
+    }
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return;
+    }
+    // Coalesce consecutive fragments from the same speaker so one spoken turn is
+    // a single context entry (avoids feeding the agent half-sentences).
+    const last = transcript.at(-1);
+    if (last && last.role === role) {
+      last.text = `${last.text} ${trimmed}`.trim();
+    } else {
+      transcript.push({ role, text: trimmed });
+    }
+    if (transcript.length > MAX_TRANSCRIPT_ENTRIES) {
+      transcript.splice(0, transcript.length - MAX_TRANSCRIPT_ENTRIES);
+    }
+  }
+
+  const consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy =
+    deps.toolPolicy ?? deps.voiceConfig?.realtime.toolPolicy ?? "none";
+  // Async background tasks deliver their result via the agent's `message` tool,
+  // which is only available under the "owner" tool policy.
+  const asyncTasksEnabled =
+    Boolean(deps.agentRuntime && deps.voiceConfig && deps.cfg) && consultToolPolicy === "owner";
+  const bridgeTools = asyncTasksEnabled
+    ? [...(deps.tools ?? []), MSTEAMS_AGENT_TASK_TOOL]
+    : deps.tools;
+
+  const realtime = createRealtimeVoiceBridgeSession({
+    provider: deps.provider,
+    cfg: deps.cfg,
+    providerConfig: deps.providerConfig,
+    audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+    instructions: deps.instructions,
+    initialGreetingInstructions: deps.greetingInstructions,
+    triggerGreetingOnReady: Boolean(deps.greetingInstructions),
+    autoRespondToAudio: true,
+    interruptResponseOnInputAudio: true,
+    tools: bridgeTools,
+    audioSink: {
+      isOpen: () => !closed,
+      sendAudio: (pcm24k: Buffer) => {
+        if (closed || pcm24k.length === 0) {
+          return;
+        }
+        lastOutputAt = Date.now();
+        const pcm16k = resamplePcm(pcm24k, REALTIME_SAMPLE_RATE_HZ, MSTEAMS_SAMPLE_RATE_HZ);
+        session.send({
+          type: "audio.frame",
+          seq: outboundSeq,
+          timestampMs: outboundTimestampMs,
+          payloadBase64: pcm16k.toString("base64"),
+        });
+        outboundSeq += 1;
+        // 16-bit mono: 2 bytes/sample.
+        outboundTimestampMs += Math.round((pcm16k.length / 2 / MSTEAMS_SAMPLE_RATE_HZ) * 1000);
+      },
+      clearAudio: () => {
+        // Barge-in: the model truncated its turn — tell the worker to flush the
+        // audio it has already queued for playback so the caller isn't talked over.
+        turnId += 1;
+        session.send({ type: "assistant.cancel", turnId });
+      },
+    },
+    onTranscript: (role, text, isFinal) => {
+      if (isFinal) {
+        recordTranscript(role, text);
+      }
+    },
+    onToolCall: (event, rtSession) => {
+      if (event.name === MSTEAMS_AGENT_TASK_TOOL_NAME) {
+        handleAsyncTask(event, rtSession);
+        return;
+      }
+      void handleToolCall(event, rtSession);
+    },
+    onError: (error) => {
+      logger?.warn(`MsteamsRealtime: bridge error — ${error.message}`);
+    },
+    onClose: () => {
+      closed = true;
+    },
+  });
+
+  /** Run the OpenClaw agent for an openclaw_agent_consult call and speak the result. */
+  async function handleToolCall(
+    event: RealtimeVoiceToolCallEvent,
+    rtSession: RealtimeVoiceBridgeSession,
+  ): Promise<void> {
+    if (event.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+      return;
+    }
+    // Media Access API: refuse to run the agent on call audio until recording is active.
+    if (recordingGateBlocks()) {
+      logger?.debug?.(`MsteamsRealtime: consult refused for ${callId} — recording not active`);
+      rtSession.submitToolResult(event.callId, MSTEAMS_RECORDING_BLOCKED);
+      return;
+    }
+    const { agentRuntime, voiceConfig, cfg } = deps;
+    if (!agentRuntime || !voiceConfig || !cfg) {
+      rtSession.submitToolResult(event.callId, {
+        text: "The assistant agent is not available right now.",
+      });
+      return;
+    }
+
+    const agentId = voiceConfig.agentId ?? "main";
+    const sessionKey = `agent:${agentId}:subagent:msteams:${callId}`;
+    const toolPolicy = deps.toolPolicy ?? voiceConfig.realtime.toolPolicy;
+
+    try {
+      // Fast path: answer from memory/session context without a full agent run.
+      const fastContext = await resolveRealtimeFastContextConsult({
+        cfg,
+        agentId,
+        sessionKey,
+        config: voiceConfig.realtime.fastContext,
+        args: event.args,
+        logger: { debug: (message) => logger?.debug?.(message) },
+      });
+      if (fastContext.handled) {
+        rtSession.submitToolResult(event.callId, fastContext.result);
+        return;
+      }
+
+      // Slower path: a full agent run. Emit a "working on it" filler first (if the
+      // provider supports tool-result continuation) so the caller is not left in
+      // silence while the agent works.
+      if (rtSession.bridge?.supportsToolResultContinuation) {
+        rtSession.submitToolResult(
+          event.callId,
+          buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
+          { willContinue: true },
+        );
+      }
+
+      const { provider: agentProvider, model } = resolveVoiceResponseModel({
+        voiceConfig,
+        agentRuntime,
+      });
+      const thinkLevel =
+        voiceConfig.realtime.consultThinkingLevel ??
+        agentRuntime.resolveThinkingDefault({ cfg, provider: agentProvider, model });
+
+      const result = await consultRealtimeVoiceAgent({
+        cfg,
+        agentRuntime,
+        logger: { warn: (message) => logger?.warn(message) },
+        agentId,
+        sessionKey,
+        messageProvider: "voice",
+        lane: "voice",
+        runIdPrefix: `voice-realtime-consult:${callId}`,
+        args: event.args,
+        transcript: [...transcript],
+        surface: "a live Microsoft Teams call",
+        userLabel: "Caller",
+        assistantLabel: "Agent",
+        questionSourceLabel: "caller",
+        provider: agentProvider,
+        model,
+        thinkLevel,
+        fastMode: voiceConfig.realtime.consultFastMode,
+        timeoutMs: voiceConfig.responseTimeoutMs,
+        toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(toolPolicy),
+        extraSystemPrompt: MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT,
+      });
+      rtSession.submitToolResult(event.callId, result);
+    } catch (err) {
+      logger?.warn(
+        `MsteamsRealtime: consult failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
+      );
+      rtSession.submitToolResult(event.callId, {
+        text: "Sorry, I ran into a problem while working on that.",
+      });
+    }
+  }
+
+  /**
+   * A long task: acknowledge on the call immediately, then run the OpenClaw agent
+   * in the background. The call can end while it works; the agent delivers the
+   * result to the caller's Teams chat via the `message` tool when done.
+   */
+  function handleAsyncTask(
+    event: RealtimeVoiceToolCallEvent,
+    rtSession: RealtimeVoiceBridgeSession,
+  ): void {
+    // Media Access API: a background task processes + persists call audio and
+    // delivers it to Teams chat, so it must not start before recording is active.
+    if (recordingGateBlocks()) {
+      logger?.debug?.(`MsteamsRealtime: task refused for ${callId} — recording not active`);
+      rtSession.submitToolResult(event.callId, MSTEAMS_RECORDING_BLOCKED);
+      return;
+    }
+    const task = readArgString(event.args, "task") ?? readArgString(event.args, "question");
+    // Ack immediately so the model speaks the "I'll message you" line and the
+    // call is free to continue or hang up.
+    rtSession.submitToolResult(event.callId, MSTEAMS_ASYNC_TASK_ACK);
+    if (!task) {
+      return;
+    }
+    // Detached: not awaited and not cancelled on call teardown.
+    void runAsyncTask(task);
+  }
+
+  async function runAsyncTask(task: string): Promise<void> {
+    const { agentRuntime, voiceConfig, cfg } = deps;
+    if (!agentRuntime || !voiceConfig || !cfg) {
+      return;
+    }
+    const aadId = session.caller.aadId ?? undefined;
+    const deliveryTarget = aadId ? `user:${aadId}` : undefined;
+    const agentId = voiceConfig.agentId ?? "main";
+    const sessionKey = `agent:${agentId}:subagent:msteams:${callId}`;
+
+    const deliveryInstruction = deliveryTarget
+      ? `This task was delegated from a live Microsoft Teams voice call and now runs in the background; the caller is no longer waiting on the line. Complete the task, then deliver the final result to the caller by calling the message tool exactly once with action "send", channel "msteams", target "${deliveryTarget}". Keep the delivered message concise.`
+      : "This task was delegated from a Microsoft Teams voice call and runs in the background; deliver the final result to the caller when complete.";
+
+    try {
+      const { provider: agentProvider, model } = resolveVoiceResponseModel({
+        voiceConfig,
+        agentRuntime,
+      });
+      const thinkLevel =
+        voiceConfig.realtime.consultThinkingLevel ??
+        agentRuntime.resolveThinkingDefault({ cfg, provider: agentProvider, model });
+
+      await consultRealtimeVoiceAgent({
+        cfg,
+        agentRuntime,
+        logger: { warn: (message) => logger?.warn(message) },
+        agentId,
+        sessionKey,
+        messageProvider: "voice",
+        lane: "voice",
+        runIdPrefix: `voice-realtime-task:${callId}`,
+        args: { question: task },
+        transcript: [...transcript],
+        surface: "a Microsoft Teams voice call (background task)",
+        userLabel: "Caller",
+        assistantLabel: "Agent",
+        questionSourceLabel: "caller",
+        provider: agentProvider,
+        model,
+        thinkLevel,
+        fastMode: false,
+        toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(consultToolPolicy),
+        extraSystemPrompt: `${MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT} ${deliveryInstruction}`,
+      });
+      logger?.debug?.(`MsteamsRealtime: background task complete for ${callId}`);
+    } catch (err) {
+      logger?.warn(
+        `MsteamsRealtime: background task failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  void realtime.connect().catch((err: unknown) => {
+    logger?.error(
+      `MsteamsRealtime: connect failed — ${err instanceof Error ? err.message : String(err)}`,
+    );
+    // The model never came up; close the Teams session so the worker hangs up
+    // cleanly instead of leaving the caller in silence.
+    closed = true;
+    try {
+      session.close("realtime-unavailable");
+    } catch {
+      // best-effort teardown
+    }
+  });
+
+  return {
+    pushAudio: (pcm16k: Buffer) => {
+      if (closed || pcm16k.length === 0) {
+        return;
+      }
+      // Optional self-echo guard: drop caller-leg audio that arrives within a short
+      // window of our own playback. OFF by default (would also suppress barge-in).
+      if (deps.suppressInputDuringPlayback && Date.now() - lastOutputAt < 200) {
+        return;
+      }
+      const pcm24k = resamplePcm(pcm16k, MSTEAMS_SAMPLE_RATE_HZ, REALTIME_SAMPLE_RATE_HZ);
+      realtime.sendAudio(pcm24k);
+    },
+    setRecordingActive: (active: boolean) => {
+      recordingActive = active;
+    },
+    close: () => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      try {
+        realtime.close();
+      } catch {
+        // best-effort teardown
+      }
+    },
+  };
+}

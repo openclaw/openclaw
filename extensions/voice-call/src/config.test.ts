@@ -260,7 +260,7 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.errors).not.toContain(
-        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "msteams" when realtime.enabled is true',
       );
     });
 
@@ -273,7 +273,7 @@ describe("validateProviderConfig", () => {
 
       expect(result.valid).toBe(false);
       expect(result.errors).toContain(
-        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "msteams" when realtime.enabled is true',
       );
     });
   });
