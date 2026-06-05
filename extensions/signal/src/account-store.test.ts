@@ -9,12 +9,24 @@ import {
 
 describe("signal-cli account store", () => {
   const originalXdgDataHome = process.env.XDG_DATA_HOME;
+  const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  const originalSignalCliConfig = process.env.SIGNAL_CLI_CONFIG;
 
   afterEach(() => {
     if (originalXdgDataHome === undefined) {
       delete process.env.XDG_DATA_HOME;
     } else {
       process.env.XDG_DATA_HOME = originalXdgDataHome;
+    }
+    if (originalXdgConfigHome === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+    }
+    if (originalSignalCliConfig === undefined) {
+      delete process.env.SIGNAL_CLI_CONFIG;
+    } else {
+      process.env.SIGNAL_CLI_CONFIG = originalSignalCliConfig;
     }
   });
 
@@ -94,6 +106,39 @@ describe("signal-cli account store", () => {
     ).resolves.toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     expect(readFile).toHaveBeenCalledWith(
       path.join("/tmp/signal-cli", "data", "accounts.json"),
+      "utf8",
+    );
+  });
+
+  it("discovers the UUID from signal-cli config dataDir", async () => {
+    process.env.SIGNAL_CLI_CONFIG = "/tmp/signal-cli-config.json";
+    const readFile = vi.fn(async (filePath: string | URL) => {
+      if (String(filePath) === "/tmp/signal-cli-config.json") {
+        return JSON.stringify({ dataDir: "/tmp/signal-cli-data" });
+      }
+      if (String(filePath) === path.join("/tmp/signal-cli-data", "data", "accounts.json")) {
+        return JSON.stringify({
+          accounts: [
+            {
+              number: "+15550001111",
+              uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            },
+          ],
+        });
+      }
+      throw new Error(`unexpected path ${String(filePath)}`);
+    });
+
+    await expect(
+      discoverSignalAccountUuid({
+        account: "+15550001111",
+        readFile: readFile as typeof import("node:fs/promises").readFile,
+      }),
+    ).resolves.toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    expect(readFile).toHaveBeenCalledWith("/etc/signal-cli/config.json", "utf8");
+    expect(readFile).toHaveBeenCalledWith("/tmp/signal-cli-config.json", "utf8");
+    expect(readFile).toHaveBeenCalledWith(
+      path.join("/tmp/signal-cli-data", "data", "accounts.json"),
       "utf8",
     );
   });

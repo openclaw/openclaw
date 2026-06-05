@@ -11,6 +11,10 @@ type SignalCliAccountStore = {
   }>;
 };
 
+type SignalCliGlobalConfig = {
+  dataDir?: string | null;
+};
+
 function expandHome(raw: string): string {
   if (raw === "~") {
     return os.homedir();
@@ -30,6 +34,40 @@ export function resolveSignalCliAccountsPath(configPath?: string | null): string
         "signal-cli",
       );
   return path.join(base, "data", "accounts.json");
+}
+
+function resolveSignalCliGlobalConfigPaths(): string[] {
+  const paths = ["/etc/signal-cli/config.json"];
+  const envConfig = process.env.SIGNAL_CLI_CONFIG?.trim();
+  if (envConfig) {
+    paths.push(expandHome(envConfig));
+    return paths;
+  }
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
+  paths.push(
+    xdgConfigHome
+      ? path.join(expandHome(xdgConfigHome), "signal-cli", "config.json")
+      : path.join(os.homedir(), ".config", "signal-cli", "config.json"),
+  );
+  return paths;
+}
+
+async function resolveSignalCliConfiguredDataDir(params: {
+  readFile: typeof fs.readFile;
+}): Promise<string | undefined> {
+  const merged: SignalCliGlobalConfig = {};
+  for (const configPath of resolveSignalCliGlobalConfigPaths()) {
+    try {
+      const parsed = JSON.parse(await params.readFile(configPath, "utf8")) as SignalCliGlobalConfig;
+      if (typeof parsed.dataDir === "string") {
+        merged.dataDir = parsed.dataDir;
+      }
+    } catch {
+      continue;
+    }
+  }
+  const dataDir = merged.dataDir?.trim();
+  return dataDir ? expandHome(dataDir) : undefined;
 }
 
 function normalizeSignalAccountForCompare(account?: string | null): string | undefined {
@@ -71,7 +109,15 @@ export async function discoverSignalAccountUuid(params: {
   }
   const readFile = params.readFile ?? fs.readFile;
   try {
-    const raw = await readFile(resolveSignalCliAccountsPath(params.configPath), "utf8");
+    const configuredDataDir = params.configPath
+      ? undefined
+      : await resolveSignalCliConfiguredDataDir({ readFile });
+    const raw = await readFile(
+      configuredDataDir
+        ? path.join(configuredDataDir, "data", "accounts.json")
+        : resolveSignalCliAccountsPath(params.configPath),
+      "utf8",
+    );
     const parsed = JSON.parse(raw) as SignalCliAccountStore;
     const normalizedAccount = normalizeE164(account);
     const matchingUuids = new Set<string>();
