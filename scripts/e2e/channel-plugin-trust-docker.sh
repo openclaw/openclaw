@@ -39,8 +39,8 @@ Outputs:
   failure and leaves the failing command output in the container log.
 
 Examples:
-  pnpm test:docker:channel-plugin-trust
-  OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:channel-plugin-trust
+  bash scripts/e2e/channel-plugin-trust-docker.sh
+  OPENCLAW_CHANNEL_PLUGIN_TRUST_E2E_SKIP_BUILD=1 bash scripts/e2e/channel-plugin-trust-docker.sh
 EOF
 }
 
