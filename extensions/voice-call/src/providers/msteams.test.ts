@@ -292,6 +292,30 @@ describe("MsteamsProvider (audio loop wiring)", () => {
     ws.close();
   });
 
+  it("keys the call on a per-call-unique caller id when the Teams aadId is absent", async () => {
+    const { port, manager } = await setup();
+    const callId = "teams-no-aad";
+    const { ws } = await connect(port, callId);
+
+    ws.send(
+      JSON.stringify({
+        type: "session.start",
+        callId,
+        threadId: "thread-no-aad",
+        caller: { displayName: "Anon" }, // no aadId
+        recordingStatus: "active",
+      }),
+    );
+
+    await waitFor(() => manager.getCallByProviderCallId(callId) !== undefined);
+    const record = manager.getCallByProviderCallId(callId);
+    // Not the shared literal "teams" (which would collide every anonymous
+    // caller into one session); a per-call value preserves caller separation.
+    expect(record?.from).toBe(`teams:${callId}`);
+
+    ws.close();
+  });
+
   it("generates a reply on final transcript by composing generateVoiceResponse + manager.speak", async () => {
     generateVoiceResponseMock.mockResolvedValue({ text: "Sure, happy to help." });
     const { port, captured, manager } = await setup();

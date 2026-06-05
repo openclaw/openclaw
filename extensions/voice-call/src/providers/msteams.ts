@@ -218,6 +218,12 @@ export class MsteamsProvider implements VoiceCallProvider {
 
   private handleSessionStart(session: MsteamsSession): void {
     const providerCallId = session.callId;
+    // Caller identity drives both the inbound-policy check and the session key
+    // (per-phone memory). Prefer the Teams AAD object id; when it is absent fall
+    // back to a per-call-unique value rather than a shared literal so distinct
+    // anonymous callers never collide into one session (cross-caller memory
+    // bleed) or match an allowlist as a generic caller.
+    const from = session.caller.aadId ?? `teams:${providerCallId}`;
 
     // Realtime mode: bridge the call straight to the speech-to-speech model.
     // It does not route through CallManager, so the inbound-call policy is
@@ -229,7 +235,6 @@ export class MsteamsProvider implements VoiceCallProvider {
         );
         return;
       }
-      const from = session.caller.aadId ?? "teams";
       if (
         !isInboundCallAllowed(this.realtimeDeps.inboundPolicy, this.realtimeDeps.allowFrom, from)
       ) {
@@ -259,7 +264,6 @@ export class MsteamsProvider implements VoiceCallProvider {
       return;
     }
 
-    const from = session.caller.aadId ?? "teams";
     const to = this.responseRuntime?.voiceConfig.fromNumber ?? "msteams";
 
     // Register the call with the manager. `call.initiated` creates the record

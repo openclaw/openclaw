@@ -269,6 +269,73 @@ describe("MsteamsMediaStream", () => {
     expect(endInfo?.reason).toBe("call-ended");
   });
 
+  it("fires onSessionEnd when a started session's socket closes abruptly", async () => {
+    const port = randomPort();
+    const ends: Array<{ callId: string; reason: string }> = [];
+    let started = false;
+    server = await startServer({
+      port,
+      onSessionStart: () => {
+        started = true;
+      },
+      onSessionEnd: (info) => ends.push(info),
+    });
+
+    const callId = "call-drop";
+    const ws = openAuthed(port, callId);
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    ws.send(
+      JSON.stringify({ type: "session.start", callId, threadId: "t", caller: { aadId: "a" } }),
+    );
+    await waitFor(() => started);
+
+    ws.close(); // abrupt close — no session.end frame
+
+    await waitFor(() => ends.length > 0);
+    expect(ends).toEqual([{ callId, reason: "socket-closed" }]);
+  });
+
+  it("does not double-fire onSessionEnd when the socket closes after session.end", async () => {
+    const port = randomPort();
+    const ends: Array<{ callId: string; reason: string }> = [];
+    server = await startServer({ port, onSessionEnd: (info) => ends.push(info) });
+
+    const callId = "call-end-once";
+    const ws = openAuthed(port, callId);
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    ws.send(
+      JSON.stringify({ type: "session.start", callId, threadId: "t", caller: { aadId: "a" } }),
+    );
+    ws.send(JSON.stringify({ type: "session.end", reason: "call-ended" }));
+
+    await waitFor(() => ends.length > 0);
+    // The server closes the socket after session.end; let the close event run.
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    expect(ends).toEqual([{ callId, reason: "call-ended" }]);
+  });
+
+  it("does not fire onSessionEnd when the socket closes before session.start", async () => {
+    const port = randomPort();
+    const ends: Array<{ callId: string; reason: string }> = [];
+    server = await startServer({ port, onSessionEnd: (info) => ends.push(info) });
+
+    const ws = openAuthed(port, "call-prestart");
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    ws.close(); // close before any session.start
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    expect(ends).toHaveLength(0);
+  });
+
   it("drops the connection when an inbound frame exceeds the payload cap", async () => {
     const port = randomPort();
     let frames = 0;
