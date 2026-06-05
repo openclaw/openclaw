@@ -309,6 +309,20 @@ export const icons = {
       <path d="M14 10l3 2-3 2" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
+  panelRightClose: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M15 3v18" stroke-linecap="round" />
+      <path d="M8 10l3 2-3 2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
+  panelRightOpen: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M15 3v18" stroke-linecap="round" />
+      <path d="M10 10l-3 2 3 2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
   chevronDown: html`
     <svg viewBox="0 0 24 24">
       <path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />

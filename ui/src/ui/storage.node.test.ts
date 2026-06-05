@@ -146,6 +146,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       recentSessionsCollapsed: false,
+      workspaceCollapsed: false,
       borderRadius: 50,
       textScale: 100,
       sessionsByGateway: {
@@ -258,6 +259,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 220,
       navGroupsCollapsed: {},
+      workspaceCollapsed: false,
       borderRadius: 50,
     });
     const settings = loadSettings();
@@ -277,6 +279,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       recentSessionsCollapsed: false,
+      workspaceCollapsed: false,
       borderRadius: 50,
       textScale: 100,
       sessionsByGateway: {
@@ -333,6 +336,7 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 220,
       navGroupsCollapsed: {},
       recentSessionsCollapsed: false,
+      workspaceCollapsed: false,
       borderRadius: 50,
       textScale: 100,
     });

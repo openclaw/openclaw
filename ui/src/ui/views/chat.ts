@@ -189,8 +189,10 @@ export type ChatProps = {
     loading: boolean;
     error: string | null;
     activeName: string | null;
+    collapsed: boolean;
     onRefresh: () => void;
     onOpenFile: (name: string) => void;
+    onCollapseToggle: () => void;
   };
 };
 
@@ -1011,68 +1013,89 @@ function renderWorkspaceFileRail(
   if (!workspaceFiles) {
     return nothing;
   }
+  const collapsed = workspaceFiles.collapsed;
   const files = workspaceFiles.list?.files ?? [];
   return html`
-    <aside class="chat-workspace-rail" aria-label="Workspace files">
+    <aside
+      class="chat-workspace-rail ${collapsed ? "chat-workspace-rail--collapsed" : ""}"
+      aria-label="Workspace files"
+    >
       <div class="chat-workspace-rail__header">
         <div class="chat-workspace-rail__title">
           <span class="chat-workspace-rail__eyebrow">Workspace</span>
           <strong>Files</strong>
         </div>
-        <button
-          class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
-          type="button"
-          title="Refresh files"
-          aria-label="Refresh files"
-          ?disabled=${workspaceFiles.loading}
-          @click=${workspaceFiles.onRefresh}
-        >
-          ${icons.refresh}
-        </button>
+        <div class="chat-workspace-rail__header-actions">
+          <button
+            class="btn btn--ghost btn--sm chat-workspace-rail__toggle"
+            type="button"
+            title=${collapsed ? "Show workspace files" : "Hide workspace files"}
+            aria-label=${collapsed ? "Show workspace files" : "Hide workspace files"}
+            @click=${workspaceFiles.onCollapseToggle}
+          >
+            ${collapsed ? icons.panelRightOpen : icons.panelRightClose}
+          </button>
+          <button
+            class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
+            type="button"
+            title="Refresh files"
+            aria-label="Refresh files"
+            ?disabled=${workspaceFiles.loading}
+            @click=${workspaceFiles.onRefresh}
+          >
+            ${icons.refresh}
+          </button>
+        </div>
       </div>
-      ${workspaceFiles.list?.workspace
-        ? html`<div class="chat-workspace-rail__path" title=${workspaceFiles.list.workspace}>
-            ${workspaceFiles.list.workspace}
-          </div>`
-        : nothing}
-      ${workspaceFiles.error
-        ? html`<div class="chat-workspace-rail__state chat-workspace-rail__state--error">
-            ${workspaceFiles.error}
-          </div>`
-        : workspaceFiles.loading && files.length === 0
-          ? html`<div class="chat-workspace-rail__state">Loading files...</div>`
-          : files.length === 0
-            ? html`<div class="chat-workspace-rail__state">No workspace files</div>`
-            : html`
-                <div class="chat-workspace-rail__list" role="list">
-                  ${files.map((file) => {
-                    const size = formatWorkspaceFileSize(file);
-                    const isActive = file.name === workspaceFiles.activeName;
-                    return html`
-                      <button
-                        class="chat-workspace-rail__file ${isActive
-                          ? "chat-workspace-rail__file--active"
-                          : ""}"
-                        type="button"
-                        role="listitem"
-                        title=${file.path || file.name}
-                        @click=${() => workspaceFiles.onOpenFile(file.name)}
-                      >
-                        <span class="chat-workspace-rail__file-icon">${icons.fileText}</span>
-                        <span class="chat-workspace-rail__file-main">
-                          <span class="chat-workspace-rail__file-name">${file.name}</span>
-                          ${size
-                            ? html`<span class="chat-workspace-rail__file-meta">${size}</span>`
-                            : nothing}
-                        </span>
-                        ${file.missing
-                          ? html`<span class="chat-workspace-rail__file-badge">Missing</span>`
-                          : nothing}
-                      </button>
-                    `;
-                  })}
-                </div>
-              `}
+      ${collapsed
+        ? nothing
+        : html`
+            ${workspaceFiles.list?.workspace
+              ? html`<div class="chat-workspace-rail__path" title=${workspaceFiles.list.workspace}>
+                  ${workspaceFiles.list.workspace}
+                </div>`
+              : nothing}
+            ${workspaceFiles.error
+              ? html`<div class="chat-workspace-rail__state chat-workspace-rail__state--error">
+                  ${workspaceFiles.error}
+                </div>`
+              : workspaceFiles.loading && files.length === 0
+                ? html`<div class="chat-workspace-rail__state">Loading files...</div>`
+                : files.length === 0
+                  ? html`<div class="chat-workspace-rail__state">No workspace files</div>`
+                  : html`
+                      <div class="chat-workspace-rail__list" role="list">
+                        ${files.map((file) => {
+                          const size = formatWorkspaceFileSize(file);
+                          const isActive = file.name === workspaceFiles.activeName;
+                          return html`
+                            <button
+                              class="chat-workspace-rail__file ${isActive
+                                ? "chat-workspace-rail__file--active"
+                                : ""}"
+                              type="button"
+                              role="listitem"
+                              title=${file.path || file.name}
+                              @click=${() => workspaceFiles.onOpenFile(file.name)}
+                            >
+                              <span class="chat-workspace-rail__file-icon">${icons.fileText}</span>
+                              <span class="chat-workspace-rail__file-main">
+                                <span class="chat-workspace-rail__file-name">${file.name}</span>
+                                ${size
+                                  ? html`<span class="chat-workspace-rail__file-meta"
+                                      >${size}</span
+                                    >`
+                                  : nothing}
+                              </span>
+                              ${file.missing
+                                ? html`<span class="chat-workspace-rail__file-badge">Missing</span>`
+                                : nothing}
+                            </button>
+                          `;
+                        })}
+                      </div>
+                    `}
+          `}
     </aside>
   `;
 }
@@ -1997,7 +2020,11 @@ export function renderChat(props: ChatProps) {
         : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
-      <div class="chat-workbench">
+      <div
+        class="chat-workbench${props.workspaceFiles?.collapsed
+          ? " chat-workbench--rail-collapsed"
+          : ""}"
+      >
         <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
           <div
             class="chat-main"
