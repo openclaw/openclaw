@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements channel actions behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   listWhatsAppAccountIds,
   resolveWhatsAppAccount,
@@ -61,9 +62,12 @@ export function resolveWhatsAppAgentReactionGuidance(params: {
 
 export function requiresWhatsAppTrustedRequesterSender(params: {
   action: ChannelMessageActionName;
-  toolContext?: { currentChannelProvider?: string | null };
+  toolContext?: { currentChannelProvider?: string | null; requesterSourceProvider?: string | null };
 }): boolean {
-  return params.action === "react" && params.toolContext?.currentChannelProvider === "whatsapp";
+  const requesterSourceProvider = normalizeOptionalString(
+    params.toolContext?.requesterSourceProvider ?? params.toolContext?.currentChannelProvider,
+  )?.toLowerCase();
+  return params.action === "react" && requesterSourceProvider === "whatsapp";
 }
 
 export function describeWhatsAppMessageActions(params: {

@@ -155,6 +155,24 @@ describe("whatsapp channel action helpers", () => {
         toolContext: { currentChannelProvider: "telegram" },
       }),
     ).toBe(false);
+    expect(
+      requiresWhatsAppTrustedRequesterSender({
+        action: "react",
+        toolContext: {
+          currentChannelProvider: "whatsapp",
+          requesterSourceProvider: "telegram",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      requiresWhatsAppTrustedRequesterSender({
+        action: "react",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          requesterSourceProvider: "whatsapp",
+        },
+      }),
+    ).toBe(true);
     expect(requiresWhatsAppTrustedRequesterSender({ action: "react" })).toBe(false);
   });
 
