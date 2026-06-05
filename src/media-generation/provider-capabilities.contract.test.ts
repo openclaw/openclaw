@@ -29,6 +29,7 @@ const EXPECTED_BUNDLED_MUSIC_PROVIDER_PLUGIN_IDS = [
 ] as const;
 
 const EXPECTED_BUNDLED_VIDEO_PROVIDER_IDS_BY_PLUGIN: Record<string, readonly string[]> = {
+  google: ["google", "google-vertex"],
   minimax: ["minimax", "minimax-portal"],
 };
 
