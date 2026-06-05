@@ -1,5 +1,5 @@
 // Reset preservation keeps user-selected model/auth overrides while dropping automatic fallbacks.
-import { hasSessionAutoModelFallbackProvenance } from "./model-override-provenance.js";
+import { hasSessionRecoveredAutoModelOverrideProvenance } from "./model-override-provenance.js";
 import type { SessionEntry } from "./types.js";
 
 export type ResetPreservedSelectionState = Pick<
@@ -33,7 +33,8 @@ export function resolveResetPreservedSelection(params: {
 
   const preserved: Partial<ResetPreservedSelectionState> = {};
   const recoveredAutoFallbackOverride =
-    entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
+    entry.modelOverrideSource === undefined &&
+    hasSessionRecoveredAutoModelOverrideProvenance(entry);
   // Missing source on older entries means "user" unless fallback provenance proves the runtime
   // created the override automatically.
   const preserveLegacyUserModelOverride =
