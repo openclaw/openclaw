@@ -627,7 +627,6 @@ API key auth, and dynamic model resolution.
       | 10 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
       | 11 | `prepareDynamicModel` | Async metadata fetch before resolving |
       | 12 | `normalizeResolvedModel` | Transport rewrites before the runner |
-      | 13 | `contributeResolvedModelCompat` | Compat flags for vendor models behind another compatible transport |
       | 14 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
       | 15 | `resolveToolSchemaCacheKey` | Provider-owned cache key for `normalizeToolSchemas` results |
       | 16 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
