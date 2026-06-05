@@ -1499,12 +1499,11 @@ async function migrateLegacyInstalledPluginIndex(params: {
       }
     }
     if (merged.conflicts.length > 0) {
-      return {
-        changes,
-        warnings: [
-          `Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: ${merged.conflicts.join(", ")}`,
-        ],
-      };
+      warnings.push(
+        `Archived plugin install index after detecting conflicting plugin install metadata for: ${merged.conflicts.join(", ")}`,
+      );
+      archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
+      return { changes, warnings };
     }
   }
 

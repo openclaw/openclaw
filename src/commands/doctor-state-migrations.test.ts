@@ -1,4 +1,3 @@
-// Doctor state migration tests cover legacy state moves, archive markers, and repair behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1511,18 +1510,35 @@ describe("doctor legacy state migrations", () => {
     current: InstalledPluginInstallRecordInfo;
     legacy: InstalledPluginInstallRecordInfo;
   }>) {
-    it(`keeps legacy plugin install index when same-version npm records ${fixture.label}`, async () => {
+    it(`archives legacy plugin install index and warns (once) when same-version npm records ${fixture.label}`, async () => {
       const root = await makeTempRoot();
       await writeExistingPluginInstallIndex(root, { demo: fixture.current });
       const sourcePath = writeLegacyPluginInstallIndex(root, { demo: fixture.legacy });
 
       const result = await runLegacyStateMigrationsForRoot(root);
 
+      // The conflict warning is emitted once, then the legacy file is archived so it
+      // cannot trigger the same warning on subsequent gateway startups (fixes #90213).
       expect(result.warnings).toStrictEqual([
-        "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: demo",
+        "Archived plugin install index after detecting conflicting plugin install metadata for: demo",
       ]);
-      expect(fs.existsSync(sourcePath)).toBe(true);
-      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    });
+
+    it(`does not re-emit plugin install conflict warning on subsequent runs when ${fixture.label}`, async () => {
+      const root = await makeTempRoot();
+      await writeExistingPluginInstallIndex(root, { demo: fixture.current });
+      const sourcePath = writeLegacyPluginInstallIndex(root, { demo: fixture.legacy });
+
+      // First run: archives the legacy file and emits the warning once.
+      const first = await runLegacyStateMigrationsForRoot(root);
+      expect(first.warnings).toHaveLength(1);
+      expect(fs.existsSync(sourcePath)).toBe(false);
+
+      // Second run: no legacy file exists, so migration is skipped entirely — no repeated warning.
+      const second = await runLegacyStateMigrationsForRoot(root);
+      expect(second.warnings).toHaveLength(0);
     });
   }
 
