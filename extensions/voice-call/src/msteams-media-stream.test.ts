@@ -316,7 +316,9 @@ describe("MsteamsMediaStream", () => {
 
     await waitFor(() => ends.length > 0);
     // The server closes the socket after session.end; let the close event run.
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
     expect(ends).toEqual([{ callId, reason: "call-ended" }]);
   });
 
@@ -332,7 +334,9 @@ describe("MsteamsMediaStream", () => {
     });
     ws.close(); // close before any session.start
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
     expect(ends).toHaveLength(0);
   });
 
