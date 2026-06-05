@@ -1,7 +1,7 @@
 {
   "id": "voice-call",
   "name": "Voice Call",
-  "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
+  "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls, and Microsoft Teams voice.",
   "commandAliases": [{ "name": "voicecall" }],
   "activation": {
     "onStartup": true,
