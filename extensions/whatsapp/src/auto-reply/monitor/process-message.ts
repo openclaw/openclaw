@@ -1,4 +1,6 @@
 // Whatsapp plugin module implements process message behavior.
+import { spawnSync } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import {
   logAckFailure,
   removeAckReactionHandleAfterReply,
@@ -72,6 +74,159 @@ import {
   createWhatsAppStatusReactionController,
   type StatusReactionController,
 } from "./status-reaction.js";
+
+const VOROZHYLA_OWNER_E164 = "+2975666192";
+const VOROZHYLA_ACTION_ROUTER = "/Users/amigolive/.openclaw/workspace/vorozhyla-action";
+const VOROZHYLA_SERVICE_ROUTER =
+  "/Users/amigolive/.openclaw/workspace/scripts/vorozhyla-incoming-router.py";
+const VOROZHYLA_PERSONAL_ROUTER =
+  "/Users/amigolive/.openclaw/workspace/scripts/vorozhyla-personal-router.py";
+const VOROZHYLA_PAUSED_CONTACTS =
+  "/Users/amigolive/.openclaw/workspace/vorozhyla/state/paused_contacts.json";
+const VOROZHYLA_INTERCEPT_LOG =
+  "/Users/amigolive/.openclaw/workspace/vorozhyla/logs/whatsapp-intercept.log";
+
+function vorozhylaNormalizeE164(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const cleaned = raw.replace(/[^\d+]/g, "");
+  if (cleaned.startsWith("+")) return cleaned;
+  if (cleaned.startsWith("297")) return `+${cleaned}`;
+  if (/^\d+$/.test(cleaned)) return `+297${cleaned}`;
+  return cleaned;
+}
+
+function vorozhylaLog(action: string, data: Record<string, unknown>): void {
+  try {
+    mkdirSync("/Users/amigolive/.openclaw/workspace/vorozhyla/logs", { recursive: true });
+    appendFileSync(
+      VOROZHYLA_INTERCEPT_LOG,
+      `${JSON.stringify({ time: new Date().toISOString(), action, data })}\n`,
+    );
+  } catch {
+    // Never break WhatsApp because logging failed.
+  }
+}
+
+function vorozhylaReadPausedContacts(): Record<string, unknown> {
+  try {
+    if (!existsSync(VOROZHYLA_PAUSED_CONTACTS)) return {};
+    const parsed = JSON.parse(readFileSync(VOROZHYLA_PAUSED_CONTACTS, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function vorozhylaMessageBody(msg: unknown): string {
+  const body = (msg as { body?: unknown })?.body;
+  return typeof body === "string" ? body.trim() : "";
+}
+
+function vorozhylaShouldRunOwnerAction(body: string): boolean {
+  const clean = body.trim();
+  // "Vorozhyla, ..." — any owner command; router exits 3 if no action matched so AI still runs
+  if (/^vorozhyla\s*[,:\-]?\s*\S+/i.test(clean)) return true;
+  // PostNews pipeline — must never fall through to normal AI conversation
+  if (/\bpost\s*news\b/i.test(clean)) return true;
+  // Approval replies for pending PostNews
+  if (/^(publish|approve|approved|publiceer|publica|confirm)$/i.test(clean)) return true;
+  // URL-based news commands: /news https://... or news https://...
+  if (/(^|\s)(\/bash\s+news|\/news|news)\s+https?:\/\//i.test(clean)) return true;
+  return false;
+}
+
+async function maybeHandleVorozhylaWhatsAppIntercept(params: {
+  msg: WebInboundMsg;
+}): Promise<boolean> {
+  const senderIdentity = getSenderIdentity(params.msg);
+  const senderE164 = vorozhylaNormalizeE164(
+    senderIdentity.e164 ??
+      params.msg.senderE164 ??
+      (params.msg as { sender?: { e164?: string } }).sender?.e164,
+  );
+  const body = vorozhylaMessageBody(params.msg);
+
+  if (senderE164 === VOROZHYLA_OWNER_E164 && vorozhylaShouldRunOwnerAction(body)) {
+    const result = spawnSync(VOROZHYLA_ACTION_ROUTER, [body], {
+      encoding: "utf8",
+      timeout: 25_000,
+      maxBuffer: 1024 * 1024,
+    });
+
+    const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+
+    // Exit code 3 means: no safe action matched. In that case, continue normal AI processing.
+    if (result.status === 3) {
+      vorozhylaLog("owner_action_no_match_continue", { senderE164, body });
+      return false;
+    }
+
+    const replyText = output || `Vorozhyla action completed.`;
+    vorozhylaLog("owner_action_executed", {
+      senderE164,
+      body,
+      status: result.status,
+      signal: result.signal,
+      output: replyText.slice(0, 500),
+    });
+
+    await params.msg.reply(replyText.slice(0, 3500));
+    return true;
+  }
+
+  if (senderE164 && senderE164 !== VOROZHYLA_OWNER_E164) {
+    const paused = vorozhylaReadPausedContacts();
+
+    if (Object.prototype.hasOwnProperty.call(paused, senderE164)) {
+      const personalResult = spawnSync(VOROZHYLA_PERSONAL_ROUTER, ["record", senderE164, body], {
+        encoding: "utf8",
+        timeout: 25_000,
+        maxBuffer: 1024 * 1024,
+      });
+
+      vorozhylaLog("paused_contact_blocked", {
+        senderE164,
+        body: body.slice(0, 500),
+        personalStatus: personalResult.status,
+        personalOutput: `${personalResult.stdout ?? ""}${personalResult.stderr ?? ""}`
+          .trim()
+          .slice(0, 300),
+      });
+      return true;
+    }
+
+    const leadResult = spawnSync(VOROZHYLA_SERVICE_ROUTER, [senderE164, body], {
+      encoding: "utf8",
+      timeout: 25_000,
+      maxBuffer: 1024 * 1024,
+    });
+
+    const leadOutput = `${leadResult.stdout ?? ""}${leadResult.stderr ?? ""}`.trim();
+
+    if (leadOutput.startsWith("__BLOCK__")) {
+      vorozhylaLog("public_non_lead_blocked", {
+        senderE164,
+        body: body.slice(0, 500),
+      });
+      return true;
+    }
+
+    if (leadOutput && !leadOutput.startsWith("__PASS__")) {
+      vorozhylaLog("public_auto_reply", {
+        senderE164,
+        body: body.slice(0, 500),
+        status: leadResult.status,
+        output: leadOutput.slice(0, 500),
+      });
+
+      await params.msg.reply(leadOutput.slice(0, 3500));
+      return true;
+    }
+  }
+
+  return false;
+}
 
 const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
   maxConcurrency: 8,
@@ -219,6 +374,10 @@ export async function processMessage(params: {
    * - undefined (omitted) → caller did not attempt preflight; run internal STT as normal */
   preflightAudioTranscript?: string | null;
 }) {
+  if (await maybeHandleVorozhylaWhatsAppIntercept({ msg: params.msg })) {
+    return;
+  }
+
   const conversationId = params.msg.conversationId ?? params.msg.from;
   const self = getSelfIdentity(params.msg);
   const inboundPolicy = resolveWhatsAppInboundPolicy({
