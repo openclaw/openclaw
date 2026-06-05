@@ -15,6 +15,7 @@ import type {
 } from "../embedded-agent-messaging.types.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
+import type { EmbeddedRunStageSummary } from "./run/attempt-stage-timing.js";
 
 export type EmbeddedAgentMeta = {
   sessionId: string;
@@ -139,6 +140,7 @@ export type EmbeddedRunFailureSignal = {
 
 export type EmbeddedAgentRunMeta = {
   durationMs: number;
+  prepStages?: EmbeddedRunStageSummary;
   agentMeta?: EmbeddedAgentMeta;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;

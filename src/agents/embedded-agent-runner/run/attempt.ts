@@ -791,8 +791,16 @@ export async function runEmbeddedAttempt(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
   );
   const prepStages = createEmbeddedRunStageTracker();
-  const emitPrepStageSummary = (phase: string) => {
-    const summary = prepStages.snapshot();
+  let frozenPrepStagesSnapshot: ReturnType<typeof prepStages.snapshot> | undefined;
+  const freezePrepStageSummary = () => {
+    frozenPrepStagesSnapshot ??= prepStages.snapshot();
+    return frozenPrepStagesSnapshot;
+  };
+  const getPrepStageSummary = () => frozenPrepStagesSnapshot ?? prepStages.snapshot();
+  const emitPrepStageSummary = (
+    phase: string,
+    summary: ReturnType<typeof prepStages.snapshot> = prepStages.snapshot(),
+  ) => {
     const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
     if (!shouldWarn && !log.isEnabled("trace")) {
       return;
@@ -2628,7 +2636,7 @@ export async function runEmbeddedAttempt(
         );
       }
       prepStages.mark("stream-setup");
-      emitPrepStageSummary("stream-ready");
+      emitPrepStageSummary("stream-ready", freezePrepStageSummary());
 
       const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
       const promptCacheToolNames = collectPromptCacheToolNames(
@@ -4766,6 +4774,7 @@ export async function runEmbeddedAttempt(
               success: !aborted && !promptError,
               error: promptError ? formatErrorMessage(promptError) : undefined,
               durationMs: Date.now() - promptStartedAt,
+              prepStages: getPrepStageSummary(),
             },
             ctx: {
               runId: params.runId,
@@ -5127,6 +5136,7 @@ export async function runEmbeddedAttempt(
         bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
         systemPromptReport,
+        prepStages: getPrepStageSummary(),
         finalPromptText,
         messagesSnapshot,
         ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
