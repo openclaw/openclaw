@@ -401,12 +401,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
       | undefined;
     expect(dispatchArgs?.dispatcher).toBe(replyDispatcherMocks.dispatcher);
     expect(dispatchArgs?.replyOptions).toEqual({ sourceReplyDeliveryMode: "automatic" });
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(mockCallArg(sendMessageFeishuMock, "sendMessageFeishu")).toMatchObject({
-      to: "user:ou_inviter_1",
-      accountId: "default",
-      text: "已收到会议邀请，正在加入会议 123456789。",
-    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 
   it("sends a pairing challenge to the inviter when pairing mode blocks dispatch", async () => {

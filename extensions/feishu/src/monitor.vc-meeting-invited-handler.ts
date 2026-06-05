@@ -121,27 +121,6 @@ function parseInviteTimestamp(value: string | undefined): number {
   return parsed < 10_000_000_000 ? parsed * 1000 : parsed;
 }
 
-async function sendVcInviteAcceptedReply(params: {
-  cfg: ClawdbotConfig;
-  accountId: string;
-  turn: VcMeetingInvitedTurn;
-  log: (message: string) => void;
-}): Promise<void> {
-  const target = params.turn.inviter.openId ?? params.turn.inviter.senderId;
-  try {
-    await sendMessageFeishu({
-      cfg: params.cfg,
-      to: `user:${target}`,
-      text: `已收到会议邀请，正在加入会议 ${params.turn.meetingNo}。`,
-      accountId: params.accountId,
-    });
-  } catch (err) {
-    params.log(
-      `feishu[${params.accountId}]: vc meeting accepted reply failed for ${target}: ${String(err)}`,
-    );
-  }
-}
-
 async function dispatchVcMeetingInvitedTurn(params: {
   cfg: ClawdbotConfig;
   accountId: string;
@@ -209,13 +188,6 @@ async function dispatchVcMeetingInvitedTurn(params: {
     }
     return;
   }
-
-  await sendVcInviteAcceptedReply({
-    cfg: params.cfg,
-    accountId: account.accountId,
-    turn: params.turn,
-    log,
-  });
 
   let effectiveCfg = params.cfg;
   let route = core.channel.routing.resolveAgentRoute({
