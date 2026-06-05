@@ -1,4 +1,5 @@
 // Signal plugin module implements event handler behavior.
+import crypto from "node:crypto";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
@@ -179,6 +180,21 @@ function resolveSelfReplyEchoText(dataMessage: SignalDataMessage | null): string
   });
 }
 
+function resolveEditedSelfReplyEchoId(params: {
+  timestamp?: number;
+  text?: string;
+}): string | undefined {
+  if (typeof params.timestamp !== "number" || !Number.isFinite(params.timestamp)) {
+    return undefined;
+  }
+  const text = params.text?.trim();
+  if (!text) {
+    return undefined;
+  }
+  const textHash = crypto.createHash("sha256").update(text).digest("base64url").slice(0, 32);
+  return `edit:${params.timestamp}:${textHash}`;
+}
+
 function resolveNoteToSelfDataMessage(params: {
   envelope: SignalEnvelope;
   isOwnMessage: boolean;
@@ -283,10 +299,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           ? dataMessage.timestamp
           : undefined;
     const echoText = resolveSelfReplyEchoText(dataMessage);
+    const editedEchoId = options?.ignorePrimaryId
+      ? resolveEditedSelfReplyEchoId({ timestamp, text: echoText })
+      : undefined;
     return await hasSignalSelfReplyEcho({
       accountId: deps.accountId,
       accountIdentity: deps.accountUuid ?? deps.account,
-      messageId: !options?.ignorePrimaryId && timestamp != null ? String(timestamp) : undefined,
+      messageId:
+        editedEchoId ??
+        (!options?.ignorePrimaryId && timestamp != null ? String(timestamp) : undefined),
       timestamp: options?.ignorePrimaryId ? undefined : timestamp,
       text: echoText,
       includeTextWithPrimary: true,
@@ -1207,6 +1228,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       typeof resolvedEnvelope.timestamp === "number"
         ? String(resolvedEnvelope.timestamp)
         : undefined;
+    const editedSelfEchoId = resolvedMessage.isEdit
+      ? resolveEditedSelfReplyEchoId({
+          timestamp: resolvedEnvelope.timestamp ?? undefined,
+          text: bodyText,
+        })
+      : undefined;
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
@@ -1233,7 +1260,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         noteToSelfDirectMessage && "syncMessage" in resolvedEnvelope
           ? [
               resolvedMessage.isEdit
-                ? { text: bodyText }
+                ? { messageId: editedSelfEchoId, text: bodyText }
                 : { messageId, timestamp: resolvedEnvelope.timestamp ?? undefined, text: bodyText },
             ]
           : undefined,

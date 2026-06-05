@@ -1205,14 +1205,14 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.RawBody).toBe("edited self prompt after original");
     expect(hasSignalSelfReplyEchoMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        messageId: undefined,
+        messageId: expect.stringMatching(/^edit:1700000000108:/),
         timestamp: undefined,
         text: "edited self prompt after original",
       }),
     );
     expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        messageId: undefined,
+        messageId: expect.stringMatching(/^edit:1700000000108:/),
         timestamp: undefined,
         text: "edited self prompt after original",
       }),

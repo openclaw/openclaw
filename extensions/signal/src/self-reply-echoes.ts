@@ -146,11 +146,21 @@ async function readEchoEntries(): Promise<EchoEntry[]> {
 
 async function writeEchoEntries(entries: EchoEntry[]): Promise<void> {
   const storePath = resolveEchoStorePath();
-  await fs.mkdir(path.dirname(storePath), { recursive: true, mode: 0o700 });
-  await fs.chmod(path.dirname(storePath), 0o700).catch(() => {});
-  await fs.writeFile(storePath, JSON.stringify({ entries }, null, 2), {
+  const storeDir = path.dirname(storePath);
+  const tempPath = path.join(
+    storeDir,
+    `.self-reply-echoes.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
+  );
+  await fs.mkdir(storeDir, { recursive: true, mode: 0o700 });
+  await fs.chmod(storeDir, 0o700).catch(() => {});
+  await fs.writeFile(tempPath, JSON.stringify({ entries }, null, 2), {
     encoding: "utf8",
     mode: 0o600,
+  });
+  await fs.chmod(tempPath, 0o600).catch(() => {});
+  await fs.rename(tempPath, storePath).catch(async (err: unknown) => {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw err;
   });
   await fs.chmod(storePath, 0o600).catch(() => {});
 }
