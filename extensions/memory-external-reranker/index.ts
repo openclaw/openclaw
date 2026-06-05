@@ -17,6 +17,7 @@ export default definePluginEntry({
           modelFallbacks: cfg.modelFallbacks,
           endpointPath: cfg.endpointPath,
           topN: cfg.topN,
+          additionalBodyParams: cfg.additionalBodyParams,
         },
         api.config,
       ),
