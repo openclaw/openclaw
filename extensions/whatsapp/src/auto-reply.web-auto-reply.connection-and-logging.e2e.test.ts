@@ -1,3 +1,4 @@
+// Whatsapp tests cover auto reply.web auto reply.connection and logging plugin behavior.
 import "./test-helpers.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";

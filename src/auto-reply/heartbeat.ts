@@ -82,6 +82,10 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     if (!trimmed) {
       continue;
     }
+    // Skip single-line HTML comments used by the bundled runtime template.
+    if (/^<!--.*-->$/.test(trimmed)) {
+      continue;
+    }
     // Skip markdown header lines (# followed by space or EOL, ## etc)
     // This intentionally does NOT skip lines like "#TODO" or "#hashtag" which might be content
     // (Those aren't valid markdown headers - ATX headers require space after #)
