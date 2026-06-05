@@ -1,4 +1,5 @@
 import type { TUI } from "@earendil-works/pi-tui";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
@@ -93,15 +94,8 @@ function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
 }
 
 function extractMessageTimestamp(message: Record<string, unknown>): number | null {
-  const timestamp = message.timestamp;
-  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
-    return timestamp;
-  }
-  if (typeof timestamp !== "string") {
-    return null;
-  }
-  const parsed = Date.parse(timestamp);
-  return Number.isFinite(parsed) ? parsed : null;
+  const raw = message.timestamp;
+  return asDateTimestampMs(typeof raw === "string" ? Date.parse(raw) : raw) ?? null;
 }
 
 export function createSessionActions(context: SessionActionContext) {
