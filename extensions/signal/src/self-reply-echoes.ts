@@ -4,6 +4,7 @@ import path from "node:path";
 import { withFileLock, type FileLockOptions } from "openclaw/plugin-sdk/file-lock";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeSignalUuidForCompare } from "./normalize.js";
 
 // Timestamp ids are persisted to avoid replaying already-processed Note to Self prompts
 // across restarts. Text/media hash fallbacks and pre-send markers stay short-lived so
@@ -45,7 +46,8 @@ function normalizeEchoText(value?: string | null): string | undefined {
 }
 
 function resolveEchoAccountKey(accountId: string, accountIdentity?: string | null): string {
-  const identity = accountIdentity?.trim().toLowerCase();
+  const trimmed = accountIdentity?.trim();
+  const identity = normalizeSignalUuidForCompare(trimmed) ?? trimmed?.toLowerCase();
   return identity ? `${accountId}\0${identity}` : accountId;
 }
 

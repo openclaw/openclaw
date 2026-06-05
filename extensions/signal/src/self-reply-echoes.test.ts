@@ -145,6 +145,37 @@ describe("signal self-reply echoes", () => {
     });
   });
 
+  it("matches compact and hyphenated UUID account identities", async () => {
+    await withStateDirEnv("openclaw-signal-self-echoes-", async () => {
+      await rememberSignalSelfReplyEcho({
+        accountId: "default",
+        accountIdentity: "123e4567-e89b-12d3-a456-426614174000",
+        messageId: "1000",
+        timestamp: 1000,
+      });
+
+      expect(
+        await hasSignalSelfReplyEcho({
+          accountId: "default",
+          accountIdentity: "123e4567e89b12d3a456426614174000",
+          messageId: "1000",
+          timestamp: 1000,
+        }),
+      ).toBe(true);
+
+      vi.resetModules();
+      const freshEchoes = await import("./self-reply-echoes.js");
+      expect(
+        await freshEchoes.hasSignalSelfReplyEcho({
+          accountId: "default",
+          accountIdentity: "123e4567e89b12d3a456426614174000",
+          messageId: "1000",
+          timestamp: 1000,
+        }),
+      ).toBe(true);
+    });
+  });
+
   it("merges concurrent persistent echo writes", async () => {
     await withStateDirEnv("openclaw-signal-self-echoes-", async () => {
       await Promise.all(

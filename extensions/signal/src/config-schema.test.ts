@@ -67,6 +67,34 @@ describe("signal groups schema", () => {
     expect(updated?.channels?.signal?.account).toBeUndefined();
   });
 
+  it("materializes inherited note-to-self account numbers when deleting the default account", () => {
+    const updated = signalConfigAdapter.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            ingressMode: "note-to-self",
+            accounts: {
+              work: {},
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(updated?.channels?.signal).toMatchObject({
+      ingressMode: "note-to-self",
+      accounts: {
+        work: {
+          account: "+15555550123",
+        },
+      },
+    });
+    expect(updated?.channels?.signal?.account).toBeUndefined();
+    expectValidSignalConfig(updated?.channels?.signal);
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const issues = expectInvalidSignalConfig({
       dmPolicy: "open",
