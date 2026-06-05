@@ -1,6 +1,6 @@
 // Moonshot plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { MOONSHOT_THINKING_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import { applyMoonshotNativeStreamingUsageCompat } from "./api.js";
 import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -61,14 +61,14 @@ export default defineSingleProviderPluginEntry({
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyMoonshotNativeStreamingUsageCompat(providerConfig),
-    // Kimi K2+ returns native tool_call IDs shaped like `functions.<name>:<index>`.
-    // Sanitizing them to alphanumeric-only breaks Kimi's serving-layer matching in
-    // multi-turn replay. See openclaw/openclaw#62319.
-    ...buildProviderReplayFamilyHooks({
-      family: "openai-compatible",
-      sanitizeToolCallIds: false,
-      dropReasoningFromHistory: false,
-    }),
+    // Strict sanitization preserves the first native Kimi ID and rewrites only
+    // later duplicates. Responses transports retain their existing replay policy.
+    buildReplayPolicy: ({ modelApi, modelId }) =>
+      buildOpenAICompatibleReplayPolicy(modelApi, {
+        modelId,
+        sanitizeToolCallIds: modelApi === "openai-completions",
+        dropReasoningFromHistory: false,
+      }),
     ...moonshotThinkingStreamHooks,
     wrapSimpleCompletionStreamFn: (ctx) =>
       ctx.modelId.trim().toLowerCase() === KIMI_K2_7_CODE_MODEL_ID
