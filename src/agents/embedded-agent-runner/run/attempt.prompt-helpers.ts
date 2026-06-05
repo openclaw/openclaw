@@ -304,7 +304,8 @@ function hasNonEmptyContent(content: unknown): boolean {
 }
 
 const QUEUED_USER_MESSAGE_MARKER =
-  "[Queued user message that arrived while the previous turn was still active]";
+  "[Queued user message from a previous active turn; preserved as context only. " +
+  "Continue with the active prompt below.]";
 const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;
 const MAX_STRUCTURED_JSON_STRING_CHARS = 300;
 const MAX_STRUCTURED_JSON_DEPTH = 4;
