@@ -13,6 +13,10 @@ import { PluginApprovalResolutions } from "../plugins/types.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
+const { mockPluginApprovalWarn } = vi.hoisted(() => ({
+  mockPluginApprovalWarn: vi.fn(),
+}));
+
 vi.mock("../plugins/hook-runner-global.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
     "../plugins/hook-runner-global.js",
@@ -20,6 +24,15 @@ vi.mock("../plugins/hook-runner-global.js", async () => {
   return {
     ...actual,
     getGlobalHookRunner: vi.fn(),
+  };
+});
+vi.mock("../logging/subsystem.js", () => {
+  const fakeLogger = {
+    warn: mockPluginApprovalWarn,
+    child: () => fakeLogger,
+  };
+  return {
+    createSubsystemLogger: () => fakeLogger,
   };
 });
 vi.mock("./tools/gateway.js", () => ({
@@ -76,6 +89,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as HookRunner);
     mockCallGatewayTool.mockReset();
+    mockPluginApprovalWarn.mockReset();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
@@ -163,6 +177,39 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       params: { command: "ls" },
     });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("emits a warning when requireApproval is returned in report mode", async () => {
+    runBeforeToolCallMock.mockResolvedValue({
+      requireApproval: {
+        pluginId: "test-plugin",
+        title: "Needs approval",
+        description: "Review before running",
+        severity: "info",
+      },
+      params: { adjusted: true },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "exec",
+      params: { command: "ls" },
+      toolCallId: "call-report-warn",
+      approvalMode: "report",
+    });
+
+    expect(result).toEqual({
+      blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-approval",
+      reason: "Review before running",
+      params: { command: "ls" },
+    });
+    expect(mockPluginApprovalWarn).toHaveBeenCalledTimes(1);
+    expect(mockPluginApprovalWarn).toHaveBeenCalledWith(
+      "Plugin returned requireApproval but approvalMode is 'report'; " +
+        "plugin approval requirement is denied without an interactive prompt. " +
+        "Use 'block' with user-facing instructions or an out-of-band approval workflow instead.",
+    );
   });
 
   it("defers approval-required tools without opening an approval request", async () => {

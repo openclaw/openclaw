@@ -52,6 +52,14 @@ export default definePluginEntry({
 Hook handlers run sequentially in descending `priority`. Same-priority hooks
 keep registration order.
 
+> **Note for Codex native tools**: When a `before_tool_call` hook returns
+> `requireApproval` in report approval mode (`openclaw_approval_mode` is
+> `"report"`), the approval requirement is cancelled and the tool call is
+> denied without an interactive approval prompt. A runtime warning is emitted.
+> Use `block` with user-facing instructions instead of `requireApproval` on
+> this path. See the [Codex harness runtime docs](/plugins/codex-harness-runtime)
+> for details.
+
 `api.on(name, handler, opts?)` accepts:
 
 - `priority` - handler ordering (higher runs first).

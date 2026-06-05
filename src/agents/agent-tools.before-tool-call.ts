@@ -642,6 +642,11 @@ async function resolveBeforeToolCallApprovalOutcome(params: {
   }
   if (params.approvalMode === "report") {
     notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
+    log.warn(
+      "Plugin returned requireApproval but approvalMode is 'report'; " +
+        "plugin approval requirement is denied without an interactive prompt. " +
+        "Use 'block' with user-facing instructions or an out-of-band approval workflow instead.",
+    );
     return {
       blocked: true,
       kind: "failure",

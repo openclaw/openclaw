@@ -106,9 +106,19 @@ returns `requireApproval` while the native payload sets report approval mode
 (`openclaw_approval_mode` is `"report"`), the native hook relay records the
 plugin approval requirement and returns no native decision. When Codex sends the
 app-server approval request for the same tool use, OpenClaw opens the plugin
-approval prompt and maps the decision back to Codex. Codex `PermissionRequest`
-events are a separate approval path and can still route through OpenClaw
-approvals when the runtime is configured for that bridge.
+approval prompt and maps the decision back to Codex.
+
+**For report-mode paths that are not relayed through the native hook relay's
+deferral** (e.g. when the approval arrives directly on the OpenClaw tool
+execution path), a plugin hook returning `requireApproval` is silently cancelled
+and the tool call is denied without an interactive approval prompt. A runtime
+warning is emitted in this case. Plugin authors should avoid returning
+`requireApproval` for tools that may execute in report mode; use `block` with
+user-facing instructions or an out-of-band durable approval workflow instead.
+
+Codex `PermissionRequest` events are a separate approval path and can still
+route through OpenClaw approvals when the runtime is configured for that
+bridge.
 
 Codex app-server item notifications also provide async `after_tool_call`
 observations for native tool completions that are not already covered by the
