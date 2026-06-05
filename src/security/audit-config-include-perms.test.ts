@@ -63,7 +63,7 @@ describe("security audit config include permissions", () => {
     expect(inspectPathPermissionsMock).toHaveBeenCalledWith(includePath, {
       env: undefined,
       exec: undefined,
-      platform: undefined,
+      platform: "linux",
     });
     const finding = findings.find(
       (entry) => entry.checkId === "fs.config_include.perms_world_readable",
