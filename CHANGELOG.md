@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - UI/mobile: add Workboard keyboard movement controls, tighten Workboard card operations, improve Android companion-first shell UX, and document chat ACK timing metadata. (#89802) Thanks @vincentkoc.
 - Release metadata: align the root package, publishable plugin manifests, generated shrinkwraps, appcast, iOS, Android, macOS, Matrix plugin changelog, and docs/generated baselines with the 2026.6.2 beta train.
 - Release/packaging: promote Windows node installer publishing, require verified Windows release asset links, and document GitHub release-note edits.
+- Git: ignore local `.toon`, `.wav`, and `.xlsx` artifacts.
 - Docs: refresh Windows Hub setup guidance and document Gateway, CLI, and plugin SDK helper contracts.
 
 ### Fixes

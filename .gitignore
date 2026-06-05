@@ -105,6 +105,9 @@ USER.md
 *.tgz
 *.tar.gz
 *.zip
+*.toon
+*.wav
+*.xlsx
 .idea
 .vscode/
 
