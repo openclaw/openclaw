@@ -1393,6 +1393,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const usage = event.usage as Record<string, unknown> | undefined;
             if (delta?.stop_reason) {
               output.stopReason = mapStopReason(delta.stop_reason);
+              if (delta.stop_reason === "max_turns") {
+                output.errorMessage =
+                  "Model turn budget exhausted (max_turns). " +
+                  "The run hit the internal turn limit before completing.";
+              }
             }
             if (typeof usage?.input_tokens === "number") {
               output.usage.input = usage.input_tokens;

@@ -38,6 +38,7 @@ export function handleRetryLimitExhaustion(params: {
       {
         text:
           `Run stopped: retry limit exceeded (session: ${params.agentMeta.sessionId}). ` +
+          `${params.message}. ` +
           "The agent did not complete within the allowed attempts. " +
           "You can retry, inspect the session logs for partial progress, " +
           "or use /new to start a fresh session.",
