@@ -93,11 +93,11 @@ vi.mock("./subagent-registry-helpers.js", () => ({
   MIN_ANNOUNCE_RETRY_DELAY_MS: 1_000,
   capFrozenResultText: (text: string) => text.trim(),
   formatDefaultGiveUpError: (
-    entry: { label?: string; task?: string; delivery?: { attemptCount?: number } },
+    entry: { label?: string; taskName?: string; delivery?: { attemptCount?: number } },
     reason: string,
   ) => {
     const retryCount = entry.delivery?.attemptCount ?? 0;
-    const label = entry.label ?? entry.task?.slice(0, 60) ?? "unknown";
+    const label = entry.label ?? entry.taskName ?? "subagent";
     return `subagent "${label}" delivery failed after ${retryCount} retries (${reason})`;
   },
   logAnnounceGiveUp: helperMocks.logAnnounceGiveUp,
@@ -978,14 +978,14 @@ describe("subagent registry lifecycle hardening", () => {
 
     // deliveryError must always be populated for audit/observability (#44925)
     expect(entry.delivery?.lastError).toBe(
-      'subagent "finish the task" delivery failed after 0 retries (retry-limit)',
+      'subagent "subagent" delivery failed after 0 retries (retry-limit)',
     );
     expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
       runId: entry.runId,
       runtime: "subagent",
       sessionKey: entry.childSessionKey,
       deliveryStatus: "failed",
-      error: 'subagent "finish the task" delivery failed after 0 retries (retry-limit)',
+      error: 'subagent "subagent" delivery failed after 0 retries (retry-limit)',
     });
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
     expect(persist).toHaveBeenCalled();
@@ -1018,7 +1018,7 @@ describe("subagent registry lifecycle hardening", () => {
     // Suspend path must also guarantee deliveryError (#44925)
     expect(entry.delivery?.status).toBe("suspended");
     expect(entry.delivery?.lastError).toBe(
-      'subagent "finish the task" delivery failed after 0 retries (retry-limit)',
+      'subagent "subagent" delivery failed after 0 retries (retry-limit)',
     );
     expect(entry.delivery?.suspendedReason).toBe("retry-limit");
     expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
@@ -1026,7 +1026,7 @@ describe("subagent registry lifecycle hardening", () => {
       runtime: "subagent",
       sessionKey: entry.childSessionKey,
       deliveryStatus: "failed",
-      error: 'subagent "finish the task" delivery failed after 0 retries (retry-limit)',
+      error: 'subagent "subagent" delivery failed after 0 retries (retry-limit)',
     });
     expect(persist).toHaveBeenCalled();
   });
@@ -1061,7 +1061,7 @@ describe("subagent registry lifecycle hardening", () => {
       reason: "subagent-delivery-failed",
       parentSessionKey: entry.requesterSessionKey,
       label: entry.label,
-      displayName: 'subagent "finish the task" delivery failed after 0 retries (retry-limit)',
+      displayName: 'subagent "subagent" delivery failed after 0 retries (retry-limit)',
     });
   });
 

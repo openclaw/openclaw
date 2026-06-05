@@ -119,7 +119,9 @@ export function formatDefaultGiveUpError(
   reason: "retry-limit" | "expiry",
 ): string {
   const retryCount = getDeliveryAttemptCount(entry);
-  const taskLabel = entry.label ?? entry.task?.slice(0, 60) ?? "unknown";
+  // Use label/taskName only — never copy raw task text which may contain user prompts
+  // that would leak into logs, delivery errors, and session lifecycle broadcasts (#44925).
+  const taskLabel = entry.label ?? entry.taskName ?? "subagent";
   return `subagent "${taskLabel}" delivery failed after ${retryCount} retries (${reason})`;
 }
 
