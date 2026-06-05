@@ -70,7 +70,10 @@ function hiddenArgumentsLabel(count: number): string {
 
 function buildEntrySummary(entry: ActivityEntry): string {
   if (entry.entryKind === "answer_candidate") {
-    return entry.summary;
+    const key = entry.candidateStatus
+      ? `activity.answerCandidate.${entry.candidateStatus}`
+      : "activity.answerCandidate.candidate";
+    return t(key);
   }
   return t("activity.entrySummary", {
     argumentSummary: hiddenArgumentsLabel(entry.hiddenArgumentCount),

@@ -479,6 +479,12 @@ export const id: TranslationMap = {
     argumentsHidden: "{count} argumen disembunyikan",
     streamLabel: "Entri aktivitas alat",
     toolCallId: "Panggilan alat",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "Jalankan",
     session: "Sesi",
     outputTruncated: "Pratinjau disunting dan dipotong.",

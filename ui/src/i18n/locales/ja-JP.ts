@@ -482,6 +482,12 @@ export const ja_JP: TranslationMap = {
     argumentsHidden: "{count} 件の引数が非表示",
     streamLabel: "ツールアクティビティエントリ",
     toolCallId: "ツール呼び出し",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "実行",
     session: "セッション",
     outputTruncated: "プレビューは編集され、切り詰められています。",

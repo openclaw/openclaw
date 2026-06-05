@@ -482,6 +482,12 @@ export const tr: TranslationMap = {
     argumentsHidden: "{count} bağımsız değişken gizlendi",
     streamLabel: "Araç etkinliği girişleri",
     toolCallId: "Araç çağrısı",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "Çalıştır",
     session: "Oturum",
     outputTruncated: "Önizleme gizlendi ve kısaltıldı.",

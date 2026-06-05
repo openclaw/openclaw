@@ -476,6 +476,12 @@ export const th: TranslationMap = {
     argumentsHidden: "ซ่อนอาร์กิวเมนต์ {count} รายการ",
     streamLabel: "รายการกิจกรรมของเครื่องมือ",
     toolCallId: "การเรียกใช้เครื่องมือ",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "รัน",
     session: "เซสชัน",
     outputTruncated: "ตัวอย่างถูกปกปิดและตัดให้สั้นลง",

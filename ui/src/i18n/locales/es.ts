@@ -480,6 +480,12 @@ export const es: TranslationMap = {
     argumentsHidden: "{count} argumentos ocultos",
     streamLabel: "Entradas de actividad de herramientas",
     toolCallId: "Llamada de herramienta",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "Ejecución",
     session: "Sesión",
     outputTruncated: "Vista previa censurada y truncada.",

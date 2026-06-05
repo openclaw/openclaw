@@ -481,6 +481,12 @@ export const nl: TranslationMap = {
     argumentsHidden: "{count} argumenten verborgen",
     streamLabel: "Toolactiviteitsvermeldingen",
     toolCallId: "Toolaanroep",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "Voer uit",
     session: "Sessie",
     outputTruncated: "Voorvertoning geredigeerd en afgekapt.",

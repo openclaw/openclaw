@@ -475,6 +475,12 @@ export const zh_TW: TranslationMap = {
     argumentsHidden: "已隱藏 {count} 個引數",
     streamLabel: "工具活動項目",
     toolCallId: "工具呼叫",
+    itemId: "Item",
+    answerCandidate: {
+      candidate: "Answer candidate streaming",
+      superseded: "Answer candidate superseded",
+      selected: "Answer candidate selected",
+    },
     runId: "執行",
     session: "工作階段",
     outputTruncated: "預覽已遮蔽並截斷。",
