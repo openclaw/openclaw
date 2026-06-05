@@ -125,7 +125,11 @@ export function resolveVcMeetingInvitedTurn(
 }
 
 function parseInviteTimestamp(value: string | undefined): number {
-  return Number.parseInt(value ?? "", 10) || Date.now();
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return Date.now();
+  }
+  return parsed < 10_000_000_000 ? parsed * 1000 : parsed;
 }
 
 function createNoopReplyDispatcher(): {

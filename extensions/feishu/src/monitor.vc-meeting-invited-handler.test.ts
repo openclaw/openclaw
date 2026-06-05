@@ -311,6 +311,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     const recordInboundSession = runtime.channel.session.recordInboundSession as ReturnType<
       typeof vi.fn
     >;
+    const inboundRun = runtime.channel.inbound.run as ReturnType<typeof vi.fn>;
     const finalizedContext = mockCallArg(finalizeInboundContext, "finalizeInboundContext") as
       | Record<string, unknown>
       | undefined;
@@ -328,6 +329,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
         VcMeetingTopic: "Weekly sync",
         VcInviterOpenId: "ou_inviter_1",
         VcInviteTime: "1712345678",
+        Timestamp: 1712345678000,
         OriginatingTo: "vc-meeting:123456789",
       }),
     );
@@ -338,6 +340,15 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
       | { updateLastRoute?: unknown }
       | undefined;
     expect(sessionRecord?.updateLastRoute).toBeUndefined();
+    const inboundParams = mockCallArg(inboundRun, "inbound.run") as
+      | Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]
+      | undefined;
+    const adapterInput = await Promise.resolve(inboundParams?.adapter.ingest(inboundParams.raw));
+    expect(adapterInput).toEqual(
+      expect.objectContaining({
+        timestamp: 1712345678000,
+      }),
+    );
     expect(withReplyDispatcher).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
