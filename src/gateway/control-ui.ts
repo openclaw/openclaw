@@ -979,6 +979,8 @@ export async function handleControlUiHttpRequest(
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
+      timezone:
+        config?.gateway?.controlUi?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
