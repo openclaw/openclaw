@@ -56,6 +56,23 @@ describe("VoiceCallConfigSchema allowFrom", () => {
   });
 });
 
+describe("msteams inbound default", () => {
+  it("defaults msteams inboundPolicy to a safe allowlist (never open)", () => {
+    const config = resolveVoiceCallConfig({ enabled: true, provider: "msteams" });
+
+    expect(config.inboundPolicy).toBe("allowlist");
+  });
+
+  it("honors an explicit msteams inboundPolicy", () => {
+    const open = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "msteams",
+      inboundPolicy: "open",
+    });
+    expect(open.inboundPolicy).toBe("open");
+  });
+});
+
 describe("validateProviderConfig", () => {
   const originalEnv = { ...process.env };
   const clearProviderEnv = () => {
