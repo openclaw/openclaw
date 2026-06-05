@@ -9,7 +9,31 @@ import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
-const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set(["browser", "cron", "message"]);
+const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set([
+  "agents_list",
+  "browser",
+  "canvas",
+  "code_execution",
+  "cron",
+  "gateway",
+  "image",
+  "image_generate",
+  "message",
+  "music_generate",
+  "nodes",
+  "pdf",
+  "sessions_history",
+  "sessions_list",
+  "sessions_send",
+  "sessions_spawn",
+  "sessions_yield",
+  "subagents",
+  "tts",
+  "video_generate",
+  "web_fetch",
+  "web_search",
+  "x_search",
+]);
 
 function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): Set<string> {
   if (!names) {

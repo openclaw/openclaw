@@ -146,6 +146,11 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
+        { name: "web_search" },
+        { name: "web_fetch" },
+        { name: "x_search" },
+        { name: "sessions_spawn" },
+        { name: "image_generate" },
         { name: "cron" },
         { name: "message" },
         { name: "exec" },

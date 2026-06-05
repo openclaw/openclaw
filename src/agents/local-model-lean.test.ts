@@ -16,6 +16,56 @@ function tools(names: string[]): AnyAgentTool[] {
 }
 
 describe("local model lean tool filtering", () => {
+  it("keeps core coding tools while trimming heavyweight surfaces", () => {
+    expect(
+      filterLocalModelLeanTools({
+        tools: tools([
+          "read",
+          "write",
+          "edit",
+          "exec",
+          "apply_patch",
+          "process",
+          "session_status",
+          "update_plan",
+          "browser",
+          "web_search",
+          "web_fetch",
+          "x_search",
+          "code_execution",
+          "gateway",
+          "nodes",
+          "sessions_spawn",
+          "sessions_yield",
+          "subagents",
+          "image_generate",
+          "video_generate",
+          "tts",
+          "cron",
+          "message",
+        ]),
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: true,
+              },
+            },
+          },
+        },
+      }).map((tool) => tool.name),
+    ).toEqual([
+      "read",
+      "write",
+      "edit",
+      "exec",
+      "apply_patch",
+      "process",
+      "session_status",
+      "update_plan",
+    ]);
+  });
+
   it("filters heavyweight tools for one configured agent", () => {
     const cfg: OpenClawConfig = {
       agents: {
