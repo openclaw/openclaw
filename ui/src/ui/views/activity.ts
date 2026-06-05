@@ -69,6 +69,9 @@ function hiddenArgumentsLabel(count: number): string {
 }
 
 function buildEntrySummary(entry: ActivityEntry): string {
+  if (entry.entryKind === "answer_candidate") {
+    return entry.summary;
+  }
   return t("activity.entrySummary", {
     argumentSummary: hiddenArgumentsLabel(entry.hiddenArgumentCount),
     status: statusLabel(entry.status),
@@ -156,8 +159,13 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
       </summary>
       <div class="activity-entry__body">
         <div class="activity-entry__facts">
-          <span>${hiddenArgumentsLabel(entry.hiddenArgumentCount)}</span>
-          <span class="mono">${t("activity.toolCallId")}: ${entry.toolCallId}</span>
+          ${entry.entryKind === "answer_candidate"
+            ? nothing
+            : html`<span>${hiddenArgumentsLabel(entry.hiddenArgumentCount)}</span>`}
+          <span class="mono"
+            >${entry.entryKind === "answer_candidate" ? "Item" : t("activity.toolCallId")}:
+            ${entry.toolCallId}</span
+          >
           <span class="mono">${t("activity.runId")}: ${entry.runId}</span>
           ${entry.sessionKey
             ? html`<span class="mono">${t("activity.session")}: ${entry.sessionKey}</span>`
