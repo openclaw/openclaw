@@ -1,3 +1,4 @@
+// Cron edit register tests cover cron edit command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -50,6 +51,26 @@ describe("cron edit command", () => {
           delivery: {
             mode: "announce",
             bestEffort: true,
+          },
+        },
+      },
+    );
+  });
+
+  it("does not imply announce mode for --no-best-effort-deliver alone", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--no-best-effort-deliver"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ bestEffortDeliver: false }),
+      {
+        id: "job-1",
+        patch: {
+          payload: { kind: "agentTurn" },
+          delivery: {
+            bestEffort: false,
           },
         },
       },

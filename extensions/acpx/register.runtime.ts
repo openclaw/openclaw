@@ -1,9 +1,15 @@
+/**
+ * Lazy ACPX runtime service registration. The plugin exposes an ACP backend
+ * immediately, then imports the heavier service only when a session needs it.
+ */
 import {
   getAcpRuntimeBackend,
+  registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
   type AcpRuntime,
 } from "openclaw/plugin-sdk/acp-runtime-backend";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/core";
+import { createLazyAcpRuntimeProxy } from "./src/runtime-proxy.js";
 
 const ACPX_BACKEND_ID = "acpx";
 
@@ -35,8 +41,8 @@ async function startRealService(state: DeferredServiceState): Promise<AcpRuntime
     throw new Error("ACPX runtime service is not started");
   }
   state.startPromise ??= (async () => {
-    const { createAcpxRuntimeService } = await loadServiceModule();
-    const service = createAcpxRuntimeService(state.params);
+    const { createAcpxRuntimeService: createAcpxRuntimeServiceLocal } = await loadServiceModule();
+    const service = createAcpxRuntimeServiceLocal(state.params);
     state.realService = service;
     await service.start(state.ctx as OpenClawPluginServiceContext);
     const backend = getAcpRuntimeBackend(ACPX_BACKEND_ID);
@@ -46,9 +52,21 @@ async function startRealService(state: DeferredServiceState): Promise<AcpRuntime
     state.realRuntime = backend.runtime;
     return state.realRuntime;
   })();
-  return await state.startPromise;
+  try {
+    return await state.startPromise;
+  } catch (error) {
+    state.startPromise = null;
+    state.realService = null;
+    throw error;
+  }
 }
 
+function createDeferredRuntime(state: DeferredServiceState): AcpRuntime {
+  const resolveRuntime = () => startRealService(state);
+  return createLazyAcpRuntimeProxy(resolveRuntime);
+}
+
+/** Creates the plugin service that registers ACPX as an ACP runtime backend. */
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {
@@ -69,7 +87,11 @@ export function createAcpxRuntimeService(
       }
 
       state.ctx = ctx;
-      await startRealService(state);
+      registerAcpRuntimeBackend({
+        id: ACPX_BACKEND_ID,
+        runtime: createDeferredRuntime(state),
+      });
+      ctx.logger.info("embedded acpx runtime backend registered lazily");
     },
     async stop(ctx) {
       if (state.realService) {

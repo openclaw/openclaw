@@ -1,3 +1,6 @@
+/**
+ * Tests plugin SDK file lock retry, stale lock, and cleanup behavior.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireFileLock,
   drainFileLockStateForTest,
-  FILE_LOCK_STALE_ERROR_CODE,
   FILE_LOCK_TIMEOUT_ERROR_CODE,
   resetFileLockStateForTest,
 } from "./file-lock.js";
@@ -117,7 +119,7 @@ describe("acquireFileLock", () => {
     await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("{");
   });
 
-  it("keeps a reported stale lock when its owner pid is alive", async () => {
+  it("keeps an expired lock when its live owner has no starttime proof", async () => {
     const filePath = path.join(tempDir, "live-owner");
     const lockPath = `${filePath}.lock`;
     const options = {

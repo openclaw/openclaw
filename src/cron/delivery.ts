@@ -1,3 +1,4 @@
+/** Sends cron announce payloads and best-effort failure notifications. */
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
@@ -31,6 +32,7 @@ export {
 const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
 const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
 
+/** Channel target metadata used for cron announcements and failure notifications. */
 export type CronAnnounceTarget = {
   channel?: string;
   to?: string;
@@ -54,6 +56,8 @@ async function resolveCronAnnounceDelivery(params: {
     }
   | { ok: false; error: Error }
 > {
+  // Resolve the target before building outbound identity/session so send errors
+  // report the configured route, not only the cron job id.
   const resolvedTarget = await resolveDeliveryTarget(params.cfg, params.agentId, {
     channel: params.target.channel as CronMessageChannel | undefined,
     to: params.target.to,
@@ -94,6 +98,8 @@ async function deliverCronAnnouncePayload(params: {
   message: string;
   abortSignal: AbortSignal;
 }): Promise<void> {
+  // Cron delivery is durable and non-best-effort for primary announces; partial
+  // channel failure must surface as a cron run failure.
   const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel: params.delivery.resolvedTarget.channel,
@@ -112,6 +118,7 @@ async function deliverCronAnnouncePayload(params: {
   }
 }
 
+/** Sends a cron announce payload and throws if target resolution or delivery fails. */
 export async function sendCronAnnouncePayloadStrict(params: {
   deps: CliDeps;
   cfg: OpenClawConfig;
@@ -134,6 +141,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   });
 }
 
+/** Sends a best-effort cron failure notification, logging resolution/send failures. */
 export async function sendFailureNotificationAnnounce(
   deps: CliDeps,
   cfg: OpenClawConfig,
@@ -145,6 +153,7 @@ export async function sendFailureNotificationAnnounce(
   const delivery = await resolveCronAnnounceDelivery({ cfg, agentId, jobId, target });
 
   if (!delivery.ok) {
+    // Failure alerts must not mask the original cron run failure.
     cronDeliveryLogger.warn(
       { error: delivery.error.message },
       "cron: failed to resolve failure destination target",
@@ -154,6 +163,8 @@ export async function sendFailureNotificationAnnounce(
 
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
+    // Failure notifications are secondary; timeout prevents a stuck channel send
+    // from extending an already-failed cron run.
     abortController.abort();
   }, FAILURE_NOTIFICATION_TIMEOUT_MS);
 

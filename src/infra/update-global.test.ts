@@ -1,3 +1,4 @@
+// Covers global update/install command orchestration.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -38,7 +39,17 @@ import {
   type CommandRunner,
 } from "./update-global.js";
 
+const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 const TELEGRAM_RUNTIME_API = bundledDistPluginFile("telegram", "runtime-api.js");
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: execFileSyncMock,
+  };
+});
+
 async function writeGlobalPackageJson(packageRoot: string, version = "1.0.0") {
   await fs.writeFile(
     path.join(packageRoot, "package.json"),
@@ -84,6 +95,7 @@ describe("update global helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
   afterEach(() => {
+    execFileSyncMock.mockClear();
     envSnapshot?.restore();
     envSnapshot = undefined;
   });

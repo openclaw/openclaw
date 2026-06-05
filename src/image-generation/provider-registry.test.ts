@@ -1,6 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+/** Tests image-generation provider registry aliases and plugin capability integration. */
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
+
+type ProviderRegistryModule = typeof import("./provider-registry.js");
 
 const resolvePluginCapabilityProvidersMock = vi.hoisted(() =>
   vi.fn<() => ImageGenerationProviderPlugin[]>(() => []),
@@ -25,10 +28,8 @@ function createProvider(
   };
 }
 
-type ImageProviderRegistry = typeof import("./provider-registry.js");
-
 function requireImageProvider(
-  registry: ImageProviderRegistry,
+  registry: ProviderRegistryModule,
   id: string,
 ): ImageGenerationProviderPlugin {
   const provider = registry.getImageGenerationProvider(id);
@@ -38,27 +39,43 @@ function requireImageProvider(
   return provider;
 }
 
-async function loadProviderRegistry(): Promise<ImageProviderRegistry> {
+async function loadProviderRegistry(): Promise<ProviderRegistryModule> {
   vi.resetModules();
-  return await import("./provider-registry.js");
+  return import("./provider-registry.js");
 }
 
 describe("image-generation provider registry", () => {
+  let delegationCase: {
+    calls: unknown[][];
+    providers: ImageGenerationProviderPlugin[];
+  };
+
+  beforeAll(async () => {
+    const cfg = {} as OpenClawConfig;
+    const { listImageGenerationProviders } = await loadProviderRegistry();
+    const providers = listImageGenerationProviders(cfg);
+    delegationCase = {
+      calls: [...resolvePluginCapabilityProvidersMock.mock.calls],
+      providers,
+    };
+  });
+
   beforeEach(() => {
     vi.resetModules();
     resolvePluginCapabilityProvidersMock.mockReset();
     resolvePluginCapabilityProvidersMock.mockReturnValue([]);
   });
 
-  it("delegates provider resolution to the capability provider boundary", async () => {
-    const { listImageGenerationProviders } = await loadProviderRegistry();
+  it("delegates provider resolution to the capability provider boundary", () => {
     const cfg = {} as OpenClawConfig;
 
-    expect(listImageGenerationProviders(cfg)).toStrictEqual([]);
-    expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
-      key: "imageGenerationProviders",
-      cfg,
-    });
+    expect(delegationCase.providers).toStrictEqual([]);
+    expect(delegationCase.calls).toContainEqual([
+      {
+        key: "imageGenerationProviders",
+        cfg,
+      },
+    ]);
   });
 
   it("uses active plugin providers without loading from disk", async () => {
@@ -80,11 +97,12 @@ describe("image-generation provider registry", () => {
       createProvider({ id: "safe-image", aliases: ["safe-alias", "constructor"] }),
     ]);
     const registry = await loadProviderRegistry();
-    const { getImageGenerationProvider, listImageGenerationProviders } = registry;
 
-    expect(listImageGenerationProviders().map((provider) => provider.id)).toEqual(["safe-image"]);
-    expect(getImageGenerationProvider("__proto__")).toBeUndefined();
-    expect(getImageGenerationProvider("constructor")).toBeUndefined();
+    expect(registry.listImageGenerationProviders().map((provider) => provider.id)).toEqual([
+      "safe-image",
+    ]);
+    expect(registry.getImageGenerationProvider("__proto__")).toBeUndefined();
+    expect(registry.getImageGenerationProvider("constructor")).toBeUndefined();
     expect(requireImageProvider(registry, "safe-alias").id).toBe("safe-image");
   });
 });

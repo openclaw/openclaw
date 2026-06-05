@@ -1,3 +1,4 @@
+// Google tests cover web search provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -131,6 +132,34 @@ describe("google web search provider", () => {
 
     expect(provider.credentialPath).toBe("plugins.entries.google.config.webSearch.apiKey");
     expect(provider.getConfiguredCredentialValue?.(config)).toBe("AIza-plugin-test");
+  });
+
+  it("keeps model-provider fallback config runtime-only when Gemini config was injected", () => {
+    const searchConfig = Object.defineProperty({ provider: "gemini" }, "gemini", {
+      value: { apiKey: "AIza-plugin-test" },
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+
+    const merged = testing.withGoogleModelProviderFallbacks(searchConfig, {
+      models: {
+        providers: {
+          google: createGoogleModelProviderConfig({
+            apiKey: "AIza-provider-test",
+            baseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
+          }),
+        },
+      },
+    });
+
+    expect(merged?.gemini).toEqual({
+      apiKey: "AIza-plugin-test",
+      providerApiKey: "AIza-provider-test",
+      providerBaseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
+    });
+    expect(Object.keys(merged ?? {})).toEqual(["provider"]);
+    expect(Object.getOwnPropertyDescriptor(merged, "gemini")?.enumerable).toBe(false);
   });
 
   it("defaults the Gemini web search model and trims explicit overrides", () => {

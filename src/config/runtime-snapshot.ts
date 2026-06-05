@@ -1,3 +1,4 @@
+// Produces redacted runtime config snapshots for diagnostics and UI surfaces.
 import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "./types.js";
 
@@ -7,7 +8,9 @@ export type RuntimeConfigSnapshotRefreshOptions = {
 
 export type RuntimeConfigSnapshotRefreshParams = RuntimeConfigSnapshotRefreshOptions & {
   sourceConfig: OpenClawConfig;
+  preflightResult?: unknown;
 };
+type MaybePromise<T> = T | Promise<T>;
 
 export type ConfigWriteAfterWrite =
   | { mode: "auto" }
@@ -61,6 +64,7 @@ export function resolveConfigWriteFollowUp(
 }
 
 export type RuntimeConfigSnapshotRefreshHandler = {
+  preflight?: (params: RuntimeConfigSnapshotRefreshParams) => MaybePromise<unknown>;
   refresh: (params: RuntimeConfigSnapshotRefreshParams) => boolean | Promise<boolean>;
   clearOnRefreshFailure?: () => void;
 };
@@ -267,6 +271,26 @@ export function loadPinnedRuntimeConfig(loadFresh: () => OpenClawConfig): OpenCl
   return getRuntimeConfigSnapshot() ?? config;
 }
 
+export async function preflightRuntimeSnapshotWrite(params: {
+  nextSourceConfig: OpenClawConfig;
+  refreshOptions?: RuntimeConfigSnapshotRefreshOptions;
+  createRefreshError: (detail: string, cause: unknown) => Error;
+  formatRefreshError: (error: unknown) => string;
+}): Promise<unknown> {
+  const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
+  if (!refreshHandler?.preflight) {
+    return undefined;
+  }
+  try {
+    return await refreshHandler.preflight({
+      sourceConfig: params.nextSourceConfig,
+      ...params.refreshOptions,
+    });
+  } catch (error) {
+    throw params.createRefreshError(params.formatRefreshError(error), error);
+  }
+}
+
 export async function finalizeRuntimeSnapshotWrite(params: {
   nextSourceConfig: OpenClawConfig;
   refreshOptions?: RuntimeConfigSnapshotRefreshOptions;
@@ -276,6 +300,7 @@ export async function finalizeRuntimeSnapshotWrite(params: {
   notifyCommittedWrite: () => void;
   createRefreshError: (detail: string, cause: unknown) => Error;
   formatRefreshError: (error: unknown) => string;
+  preflightResult?: unknown;
 }): Promise<void> {
   const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
   if (refreshHandler) {
@@ -283,6 +308,7 @@ export async function finalizeRuntimeSnapshotWrite(params: {
       const refreshed = await refreshHandler.refresh({
         sourceConfig: params.nextSourceConfig,
         ...params.refreshOptions,
+        preflightResult: params.preflightResult,
       });
       if (refreshed) {
         params.notifyCommittedWrite();

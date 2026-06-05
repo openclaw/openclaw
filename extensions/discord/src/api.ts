@@ -1,10 +1,13 @@
+// Discord API module exposes the plugin public contract.
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   resolveRetryConfig,
   retryAsync,
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
 import { isDiscordHtmlResponseBody, summarizeDiscordResponseBody } from "./error-body.js";
+import { parseDiscordRetryAfterBodySeconds, parseRetryAfterHeaderSeconds } from "./retry-after.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_API_RETRY_DEFAULTS = {
@@ -40,10 +43,7 @@ function parseDiscordApiErrorPayload(text: string): DiscordApiErrorPayload | nul
 
 function parseRetryAfterSeconds(text: string, response: Response): number | undefined {
   const payload = parseDiscordApiErrorPayload(text);
-  const retryAfter =
-    payload && typeof payload.retry_after === "number" && Number.isFinite(payload.retry_after)
-      ? payload.retry_after
-      : undefined;
+  const retryAfter = parseDiscordRetryAfterBodySeconds(payload?.retry_after);
   if (retryAfter !== undefined) {
     return retryAfter;
   }
@@ -51,15 +51,7 @@ function parseRetryAfterSeconds(text: string, response: Response): number | unde
   if (!header) {
     return undefined;
   }
-  const parsed = Number(header);
-  if (Number.isFinite(parsed) && parsed >= 0) {
-    return parsed;
-  }
-  const retryAt = Date.parse(header);
-  if (!Number.isFinite(retryAt)) {
-    return undefined;
-  }
-  return Math.max(0, (retryAt - Date.now()) / 1000);
+  return parseRetryAfterHeaderSeconds(header);
 }
 
 function formatRetryAfterSeconds(value: number | undefined): string | undefined {
@@ -95,7 +87,7 @@ function formatDiscordApiErrorText(text: string, response: Response): string | u
       ? payload.message.trim()
       : "unknown error";
   const retryAfter = formatRetryAfterSeconds(
-    typeof payload.retry_after === "number" ? payload.retry_after : undefined,
+    parseDiscordRetryAfterBodySeconds(payload.retry_after),
   );
   return retryAfter ? `${message} (retry after ${retryAfter})` : message;
 }
@@ -156,7 +148,7 @@ function resolveDiscordRequestSignal(options: DiscordApiRequestOptions) {
   if (options.signal || typeof options.timeoutMs !== "number") {
     return options.signal;
   }
-  return AbortSignal.timeout(options.timeoutMs);
+  return AbortSignal.timeout(resolveTimerTimeoutMs(options.timeoutMs, 1));
 }
 
 export async function requestDiscord<T>(

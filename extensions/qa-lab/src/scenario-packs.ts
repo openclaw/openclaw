@@ -1,3 +1,6 @@
+// Qa Lab plugin module implements scenario packs behavior.
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export type QaScenarioPackDefinition = {
   id: string;
   title: string;
@@ -45,7 +48,7 @@ export function resolveQaScenarioPackScenarioIds(params: {
   scenarioIds?: string[];
 }): string[] {
   const normalizedPack = params.pack?.trim().toLowerCase();
-  const explicitScenarioIds = [...new Set(params.scenarioIds ?? [])];
+  const explicitScenarioIds = uniqueStrings(params.scenarioIds ?? []);
   if (!normalizedPack) {
     return explicitScenarioIds;
   }
@@ -55,5 +58,5 @@ export function resolveQaScenarioPackScenarioIds(params: {
       `--pack must be one of ${QA_SCENARIO_PACKS.map((candidate) => candidate.id).join(", ")}, got "${params.pack}"`,
     );
   }
-  return [...new Set([...explicitScenarioIds, ...pack.scenarioIds])];
+  return uniqueStrings([...explicitScenarioIds, ...pack.scenarioIds]);
 }

@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message behavior.
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -160,8 +161,11 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
       );
     }
-    if (context.ctxPayload.InboundEventKind !== "room_event") {
-      void context.sendTyping().catch((err) => {
+    if (
+      context.ctxPayload.InboundEventKind !== "room_event" &&
+      context.initialTypingCueSent !== true
+    ) {
+      void context.sendTyping().catch((err: unknown) => {
         logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
       });
     }

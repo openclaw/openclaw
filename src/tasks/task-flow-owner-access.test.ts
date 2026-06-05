@@ -1,3 +1,4 @@
+// Verifies task-flow owner access checks for parent and child sessions.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   findLatestTaskFlowForOwner,
@@ -5,8 +6,22 @@ import {
   listTaskFlowsForOwner,
   resolveTaskFlowForLookupTokenForOwner,
 } from "./task-flow-owner-access.js";
-import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
+import {
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
+  resetTaskFlowRegistryForTests,
+} from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
 
 beforeEach(() => {
   resetTaskFlowRegistryForTests({ persist: false });

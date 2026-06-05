@@ -1,3 +1,4 @@
+// Control UI chat module implements chat sidebar raw behavior.
 import type { SidebarContent } from "../sidebar-content.ts";
 
 function toPlainTextCodeFence(value: string, language = ""): string {
@@ -17,12 +18,15 @@ export function buildRawSidebarContent(
       kind: "markdown",
       content: toPlainTextCodeFence(rawText),
       rawText,
+      ...(content.unavailableReason ? { unavailableReason: content.unavailableReason } : {}),
     };
   }
   if (content.rawText?.trim()) {
     return {
       kind: "markdown",
       content: toPlainTextCodeFence(content.rawText, "json"),
+      rawText: content.rawText,
+      ...(content.unavailableReason ? { unavailableReason: content.unavailableReason } : {}),
     };
   }
   return null;

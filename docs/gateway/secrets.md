@@ -150,13 +150,13 @@ Use one object shape everywhere:
   </Tab>
   <Tab title="exec">
     ```json5
-    { source: "exec", provider: "vault", id: "providers/openai/apiKey" }
+    { source: "exec", provider: "vault", id: "providers/openai/apiKey#value" }
     ```
 
     Validation:
 
     - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
-    - `id` must match `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
+    - `id` must match `^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$` (supports selectors such as `secret#json_key`)
     - `id` must not contain `.` or `..` as slash-delimited path segments (for example `a/../b` is rejected)
 
   </Tab>
@@ -182,6 +182,13 @@ Define providers under `secrets.providers`:
         args: ["--profile", "prod"],
         passEnv: ["PATH", "VAULT_ADDR"],
         jsonOnly: true,
+      },
+      "team-secrets": {
+        source: "exec",
+        pluginIntegration: {
+          pluginId: "acme-secrets",
+          integrationId: "secret-store",
+        },
       },
     },
     defaults: {
@@ -219,6 +226,11 @@ Define providers under `secrets.providers`:
     - Pair `allowSymlinkCommand` with `trustedDirs` for package-manager paths (for example `["/opt/homebrew"]`).
     - Supports timeout, no-output timeout, output byte limits, env allowlist, and trusted dirs.
     - Windows fail-closed note: if ACL verification is unavailable for the command path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
+    - Plugin-managed exec providers can use `pluginIntegration` instead of
+      copied `command`/`args`. OpenClaw resolves the current command details
+      from the installed plugin manifest during startup/reload. If the plugin is
+      disabled, removed, untrusted, or no longer declares the integration,
+      active SecretRefs using that provider fail closed.
 
     Request payload (stdin):
 

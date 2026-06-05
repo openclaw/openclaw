@@ -1,3 +1,4 @@
+// Verifies channel metadata validation and plugin capability lookups.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -151,6 +152,9 @@ vi.mock("../plugins/plugin-registry.js", () => ({
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: () => ({
+    manifestRegistry: mockLoadPluginManifestRegistry(),
+  }),
+  resolvePluginMetadataSnapshot: () => ({
     manifestRegistry: mockLoadPluginManifestRegistry(),
   }),
 }));
@@ -317,6 +321,20 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
 });
 
 describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
+  it("accepts the shipped deprecated bundledDiscovery marker", () => {
+    const result = validateConfigObjectWithPlugins({
+      plugins: {
+        allow: ["telegram"],
+        bundledDiscovery: "compat",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.plugins?.bundledDiscovery).toBe("compat");
+    }
+  });
+
   it("reuses the manifest registry loaded for compatibility during plugin validation", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(createCompatPluginConfigSchemaRegistry());
 
@@ -364,7 +382,7 @@ describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () =
   });
 
   it("loads a plugin metadata snapshot once during plugin validation", () => {
-    const loadPluginMetadataSnapshot = vi.fn((configForTest: unknown) => ({
+    const loadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) => ({
       manifestRegistry: createPluginConfigSchemaRegistry(),
     }));
 

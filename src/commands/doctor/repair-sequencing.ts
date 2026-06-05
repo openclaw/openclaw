@@ -1,10 +1,18 @@
+// Doctor repair sequence coordinator for config, auth, plugin, and warning repairs.
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
+import {
+  collectOpenAICodexAuthProfileStoreIdMap,
+  maybeMigrateAuthProfileJsonStoresToSqlite,
+  maybeRepairOpenAICodexAuthConfig,
+  maybeRepairOpenAICodexAuthProfileStores,
+} from "../doctor-auth-flat-profiles.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
 import {
   maybeRepairManagedNpmOpenClawPeerLinks,
   maybeRepairStaleManagedNpmBundledPlugins,
 } from "../doctor-plugin-registry.js";
+import { collectActiveToolSchemaProjectionWarnings } from "./shared/active-tool-schema-warnings.js";
 import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
@@ -30,6 +38,7 @@ import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 import { maybeRepairStaleSubagentAllowlists } from "./shared/stale-subagent-allowlist.js";
 import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
 
+/** Run doctor auto-repairs in dependency order and collect sanitized user notes. */
 export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
@@ -38,6 +47,7 @@ export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   changeNotes: string[];
   warningNotes: string[];
+  authProfilesRepaired: boolean;
 }> {
   let state = params.state;
   const changeNotes: string[] = [];
@@ -91,6 +101,14 @@ export async function runDoctorRepairSequence(params: {
     changes: codexRouteRepair.changes,
     warnings: codexRouteRepair.warnings,
   });
+  applyMutation(
+    maybeRepairOpenAICodexAuthConfig(state.candidate, {
+      profileIdMap: collectOpenAICodexAuthProfileStoreIdMap({
+        cfg: state.candidate,
+        env,
+      }),
+    }),
+  );
   applyMutation(
     await maybeRepairContextEngineHostCompatibility({
       cfg: state.candidate,
@@ -154,6 +172,16 @@ export async function runDoctorRepairSequence(params: {
   if (legacyOAuthSidecarRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(legacyOAuthSidecarRepair.warnings));
   }
+  const openAIAuthProviderRepair = await maybeRepairOpenAICodexAuthProfileStores({
+    cfg: state.candidate,
+    env,
+  });
+  if (openAIAuthProviderRepair.changes.length > 0) {
+    changeNotes.push(sanitizeLines(openAIAuthProviderRepair.changes));
+  }
+  if (openAIAuthProviderRepair.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(openAIAuthProviderRepair.warnings));
+  }
   const staleOAuthShadowRepair = await repairStaleOAuthProfileShadows({
     cfg: state.candidate,
     env,
@@ -164,6 +192,40 @@ export async function runDoctorRepairSequence(params: {
   if (staleOAuthShadowRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(staleOAuthShadowRepair.warnings));
   }
+  const authProfileSqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg: state.candidate,
+    prompter: { confirmAutoFix: async () => true },
+    env,
+  });
+  if (authProfileSqliteMigration.configChanged) {
+    state = applyDoctorConfigMutation({
+      state,
+      mutation: {
+        config: state.candidate,
+        changes: ["Auth profile SQLite migration updated auth.profiles."],
+      },
+      shouldRepair: true,
+    });
+  }
+  if (authProfileSqliteMigration.changes.length > 0) {
+    changeNotes.push(sanitizeLines(authProfileSqliteMigration.changes));
+  }
+  if (authProfileSqliteMigration.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(authProfileSqliteMigration.warnings));
+  }
+  const authProfilesRepaired =
+    legacyOAuthSidecarRepair.changes.length > 0 ||
+    openAIAuthProviderRepair.changes.length > 0 ||
+    staleOAuthShadowRepair.changes.length > 0 ||
+    authProfileSqliteMigration.changes.length > 0;
 
-  return { state, changeNotes, warningNotes };
+  const activeToolSchemaWarnings = collectActiveToolSchemaProjectionWarnings({
+    cfg: state.candidate,
+    env,
+  });
+  if (activeToolSchemaWarnings.length > 0) {
+    warningNotes.push(sanitizeLines(activeToolSchemaWarnings));
+  }
+
+  return { state, changeNotes, warningNotes, authProfilesRepaired };
 }

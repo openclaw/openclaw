@@ -1,9 +1,10 @@
+// Covers plugin middleware that can transform agent tool results.
 import { describe, expect, it } from "vitest";
 import { normalizeAgentToolResultMiddlewareRuntimes } from "./agent-tool-result-middleware.js";
 
 describe("normalizeAgentToolResultMiddlewareRuntimes", () => {
   it("defaults omitted runtimes to every supported runtime", () => {
-    expect(normalizeAgentToolResultMiddlewareRuntimes()).toEqual(["pi", "codex"]);
+    expect(normalizeAgentToolResultMiddlewareRuntimes()).toEqual(["openclaw", "codex"]);
   });
 
   it("preserves an explicit empty runtime list", () => {
@@ -12,8 +13,8 @@ describe("normalizeAgentToolResultMiddlewareRuntimes", () => {
 
   it("normalizes legacy harness names", () => {
     expect(
-      normalizeAgentToolResultMiddlewareRuntimes({ harnesses: ["codex-app-server", "pi"] }),
-    ).toEqual(["codex", "pi"]);
+      normalizeAgentToolResultMiddlewareRuntimes({ harnesses: ["codex-app-server", "openclaw"] }),
+    ).toEqual(["codex", "openclaw"]);
   });
 
   it("falls back to legacy harnesses when runtimes is undefined", () => {

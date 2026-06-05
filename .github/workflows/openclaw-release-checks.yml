@@ -191,11 +191,21 @@ jobs:
         working-directory: source
         env:
           RELEASE_REF: ${{ inputs.ref }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           SELECTED_SHA="$(git rev-parse HEAD)"
-          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
-          git fetch --tags origin '+refs/tags/*:refs/tags/*'
+          git_fetch_with_checkout_auth() {
+            if git config --get-all http.https://github.com/.extraheader >/dev/null; then
+              git fetch "$@"
+              return
+            fi
+            local auth_header
+            auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" fetch "$@"
+          }
+          git_fetch_with_checkout_auth --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git_fetch_with_checkout_auth --tags origin '+refs/tags/*:refs/tags/*'
 
           if git tag --points-at "${SELECTED_SHA}" | grep -Eq '^v'; then
             exit 0
@@ -238,6 +248,7 @@ jobs:
         env:
           SELECTED_SHA: ${{ steps.ref.outputs.sha }}
           WORKFLOW_REF: ${{ github.ref }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
@@ -245,7 +256,16 @@ jobs:
             exit 1
           fi
           alpha_branch="${WORKFLOW_REF#refs/heads/}"
-          git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+          git_fetch_with_checkout_auth() {
+            if git config --get-all http.https://github.com/.extraheader >/dev/null; then
+              git fetch "$@"
+              return
+            fi
+            local auth_header
+            auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" fetch "$@"
+          }
+          git_fetch_with_checkout_auth --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
           if ! git merge-base --is-ancestor "${SELECTED_SHA}" "refs/remotes/origin/${alpha_branch}"; then
             echo "Alpha release target ${SELECTED_SHA} must be reachable from ${alpha_branch}." >&2
             exit 1
@@ -474,7 +494,7 @@ jobs:
       - name: Checkout trusted workflow ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ github.ref_name }}
           fetch-depth: 0
 
@@ -765,7 +785,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -778,7 +798,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run parity lane
         env:
@@ -793,7 +813,7 @@ jobs:
               alt_model="openai/gpt-5.5-alt"
               ;;
             baseline)
-              model="anthropic/claude-opus-4-7"
+              model="anthropic/claude-opus-4-8"
               alt_model="anthropic/claude-sonnet-4-6"
               ;;
             *)
@@ -836,7 +856,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -856,7 +876,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Generate parity report
         run: |
@@ -865,7 +885,7 @@ jobs:
             --candidate-summary .artifacts/qa-e2e/openai-candidate/qa-suite-summary.json \
             --baseline-summary .artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json \
             --candidate-label "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --baseline-label anthropic/claude-opus-4-7 \
+            --baseline-label anthropic/claude-opus-4-8 \
             --output-dir .artifacts/qa-e2e/parity
 
       - name: Upload parity artifacts
@@ -883,7 +903,7 @@ jobs:
     if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
     continue-on-error: true
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     env:
@@ -901,7 +921,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -914,7 +934,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run runtime parity lane
         id: runtime_parity_lane
@@ -926,7 +946,7 @@ jobs:
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "openai/gpt-5.5-alt" \
-            --runtime-pair pi,codex \
+            --runtime-pair openclaw,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity"
 
       - name: Run standard runtime parity tier
@@ -939,7 +959,7 @@ jobs:
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "openai/gpt-5.5-alt" \
-            --runtime-pair pi,codex \
+            --runtime-pair openclaw,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity-standard"
 
       - name: Run soak runtime parity tier
@@ -953,7 +973,7 @@ jobs:
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "openai/gpt-5.5-alt" \
-            --runtime-pair pi,codex \
+            --runtime-pair openclaw,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity-soak"
 
       - name: Generate runtime parity report
@@ -1016,7 +1036,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1055,7 +1075,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
     continue-on-error: true
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1068,7 +1088,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1081,7 +1101,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run Matrix live lane
         id: run_lane
@@ -1147,7 +1167,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1179,7 +1199,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run Telegram live lane
         id: run_lane
@@ -1187,6 +1207,7 @@ jobs:
         env:
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
         run: |
@@ -1242,7 +1263,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1274,7 +1295,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run Discord live lane
         id: run_lane
@@ -1340,7 +1361,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1372,7 +1393,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run WhatsApp live lane
         id: run_lane
@@ -1435,7 +1456,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1467,7 +1488,7 @@ jobs:
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run Slack live lane
         id: run_lane

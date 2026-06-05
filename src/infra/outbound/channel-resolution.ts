@@ -1,3 +1,5 @@
+// Channel resolution exposes read-only outbound runtime facades and performs
+// optional bootstrap for deliverable channels that are not loaded yet.
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import { channelPluginHasNativeApprovalPromptUi } from "../../channels/plugins/native-approval-prompt.js";
@@ -32,6 +34,7 @@ import {
 
 type ChannelTargetResolver = NonNullable<ChannelMessagingAdapter["targetResolver"]>;
 
+/** Prompt-facing channel capabilities exposed to outbound/runtime callers. */
 export type ChannelPromptRuntime = {
   messageToolHints?: ChannelAgentPromptAdapter["messageToolHints"];
   messageToolCapabilities?: ChannelAgentPromptAdapter["messageToolCapabilities"];
@@ -39,6 +42,7 @@ export type ChannelPromptRuntime = {
   hasNativeApprovalPromptUi?: boolean;
 };
 
+/** Read-only channel runtime facade assembled from a channel plugin. */
 export type OutboundChannelRuntime = {
   id: string;
   label: string;
@@ -84,10 +88,12 @@ export type OutboundChannelRuntime = {
   blockStreamingCoalesceDefaults?: ChannelStreamingAdapter["blockStreamingCoalesceDefaults"];
 };
 
+/** Resets outbound channel bootstrap/resolution state for isolated tests. */
 export function resetOutboundChannelResolutionStateForTest(): void {
   resetOutboundChannelBootstrapStateForTests();
 }
 
+/** Normalizes a raw channel id and rejects non-deliverable/internal channels. */
 export function normalizeDeliverableOutboundChannel(
   raw?: string | null,
 ): DeliverableMessageChannel | undefined {
@@ -171,6 +177,7 @@ function toOutboundChannelRuntime(plugin: ChannelPlugin): OutboundChannelRuntime
   };
 }
 
+/** Resolves a deliverable outbound channel plugin, optionally bootstrapping it. */
 export function resolveOutboundChannelPlugin(params: {
   channel: string;
   cfg?: OpenClawConfig;
@@ -205,6 +212,7 @@ export function resolveOutboundChannelPlugin(params: {
   return resolveLoaded() ?? resolveDirectFromActiveRegistry(normalized) ?? resolve();
 }
 
+/** Resolves the message adapter for a deliverable outbound channel. */
 export function resolveOutboundChannelMessageAdapter(params: {
   channel: string;
   cfg?: OpenClawConfig;
@@ -213,6 +221,7 @@ export function resolveOutboundChannelMessageAdapter(params: {
   return resolveOutboundChannelPlugin(params)?.message;
 }
 
+/** Resolves a channel plugin for read-only metadata paths. */
 export function resolveOutboundChannelPluginForRead(params: {
   channel: string;
   cfg?: OpenClawConfig;
@@ -242,6 +251,7 @@ export function resolveOutboundChannelPluginForRead(params: {
   return getChannelPlugin(channelId);
 }
 
+/** Resolves the read-only outbound runtime facade for a channel. */
 export function resolveOutboundChannelRuntime(params: {
   channel: string;
   cfg?: OpenClawConfig;
@@ -250,6 +260,7 @@ export function resolveOutboundChannelRuntime(params: {
   return plugin ? toOutboundChannelRuntime(plugin) : undefined;
 }
 
+/** Reads an already-loaded channel plugin without bootstrapping. */
 export function resolveLoadedOutboundChannelPluginForRead(params: {
   channel: string;
 }): ChannelPlugin | undefined {

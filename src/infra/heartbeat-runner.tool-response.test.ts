@@ -1,3 +1,4 @@
+// Covers heartbeat tool-response handling and visible reply policy.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -397,6 +398,21 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     expectHeartbeatToolPrompt(result);
   });
 
+  it.each([
+    ["agentHarnessId", { agentHarnessId: "codex" }],
+    ["agentRuntimeOverride", { agentRuntimeOverride: "codex" }],
+  ])(
+    "preserves persisted Codex runtime from %s for non-OpenAI heartbeat sessions",
+    async (_field, session) => {
+      const result = await runPromptScenario({
+        config: { model: "anthropic/claude-sonnet-4-6" },
+        session,
+      });
+
+      expectHeartbeatToolPrompt(result);
+    },
+  );
+
   it("delivers Codex runtime failure notices during Codex heartbeat message-tool mode", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath });
@@ -493,7 +509,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       config: {
         agentRuntimeId: "codex",
         model: "openai/gpt-5.5",
-        modelRuntimeId: "pi",
+        modelRuntimeId: "native",
       },
     });
 

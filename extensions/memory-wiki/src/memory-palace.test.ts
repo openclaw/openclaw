@@ -1,3 +1,4 @@
+// Memory Wiki tests cover memory palace plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -16,6 +17,7 @@ describe("listMemoryWikiPalace", () => {
 
     await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
     await fs.mkdir(path.join(rootDir, "entities"), { recursive: true });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, "syntheses", "travel-system.md"),
       renderWikiMarkdown({
@@ -41,6 +43,22 @@ describe("listMemoryWikiPalace", () => {
       "utf8",
     );
     await fs.writeFile(
+      path.join(rootDir, "sources", "raw-chat.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.raw.chat",
+          title: "Raw chat source",
+          sourceType: "chatgpt",
+          updatedAt: "2026-04-08T08:00:00.000Z",
+        },
+        body: ["# Raw chat source", "", "Original imported source with no claim rows.", ""].join(
+          "\n",
+        ),
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
       path.join(rootDir, "entities", "mariano.md"),
       renderWikiMarkdown({
         frontmatter: {
@@ -58,6 +76,14 @@ describe("listMemoryWikiPalace", () => {
     const result = await listMemoryWikiPalace(config);
 
     expect(result.totalItems).toBe(2);
+    expect(result.totalPages).toBe(3);
+    expect(result.pageCounts).toEqual({
+      synthesis: 1,
+      entity: 1,
+      concept: 0,
+      source: 1,
+      report: 0,
+    });
     expect(result.totalClaims).toBe(3);
     expect(result.totalQuestions).toBe(1);
     expect(result.totalContradictions).toBe(1);

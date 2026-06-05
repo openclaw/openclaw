@@ -1,8 +1,9 @@
+// Matrix tests cover channel.message adapter plugin behavior.
 import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
@@ -58,6 +59,10 @@ describe("matrix channel message adapter", () => {
       accountId: "default",
     });
     mocks.sendMessageMatrix.mockReset();
+  });
+
+  it("declares Matrix markdown rendering support for shared reply payloads", () => {
+    expect(matrixPlugin.meta.markdownCapable).toBe(true);
   });
 
   beforeEach(() => {

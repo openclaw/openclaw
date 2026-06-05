@@ -1,7 +1,27 @@
+/**
+ * message built-in tool.
+ *
+ * Sends, edits, reacts to, polls, and routes messages through channel plugins and Gateway-backed actions.
+ */
+import { createHash } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import {
+  hasInboundMetadataSentinel,
+  stripInboundMetadata,
+} from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  getLoadedChannelPlugin,
+  listChannelPlugins,
+} from "../../channels/plugins/index.js";
 import {
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
@@ -17,9 +37,21 @@ import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
-import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import {
+  getBootEchoContextForSession,
+  stripBootEchoFromOutboundText,
+} from "../../gateway/boot-echo-guard.js";
+import {
+  parseInteractiveParam,
+  parseJsonMessageParam,
+} from "../../infra/outbound/message-action-params.js";
+import {
+  getToolResult,
+  runMessageAction,
+  type MessageActionRunResult,
+} from "../../infra/outbound/message-action-runner.js";
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import {
@@ -27,15 +59,26 @@ import {
   parseAgentSessionKey,
   parseThreadSessionSuffix,
 } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
-import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
+import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
+import {
+  channelTargetSchema,
+  channelTargetsSchema,
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+  stringEnum,
+} from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNumberParam, readStringParam } from "./common.js";
-import { resolveGatewayOptions } from "./gateway.js";
+import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
+import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
+import {
+  readGatewayCallOptions,
+  resolveGatewayOptions,
+  type GatewayCallOptions,
+} from "./gateway.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const MESSAGE_TOOL_THREAD_READ_HINT =
@@ -54,21 +97,165 @@ function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return EXPLICIT_TARGET_ACTIONS.has(action);
 }
 
-function normalizeToolCallIdForIdempotencyKey(toolCallId: unknown): string | undefined {
-  const value = normalizeOptionalString(toolCallId);
-  if (!value) {
+function normalizeMessageToolIdempotencyKeyPart(value: unknown): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
     return undefined;
   }
-  return value.replace(/[^A-Za-z0-9._:-]+/gu, "_");
+  return normalized.replace(/[^A-Za-z0-9._:-]+/gu, "_");
 }
 
-function sanitizePresentationTextFields(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+const MESSAGE_TOOL_IDEMPOTENCY_ENVELOPE_PARAM_NAMES = [
+  "gatewayToken",
+  "gatewayUrl",
+  "idempotencyKey",
+  "timeoutMs",
+] satisfies Array<keyof GatewayCallOptions | "idempotencyKey">;
+const MESSAGE_TOOL_IDEMPOTENCY_ENVELOPE_PARAM_KEYS = new Set<string>(
+  MESSAGE_TOOL_IDEMPOTENCY_ENVELOPE_PARAM_NAMES,
+);
+
+function stripMessageToolIdempotencyEnvelope(
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(params).toSorted()) {
+    if (!MESSAGE_TOOL_IDEMPOTENCY_ENVELOPE_PARAM_KEYS.has(key)) {
+      out[key] = params[key];
+    }
+  }
+  return out;
+}
+
+function canonicalizeMessageToolIdempotencyValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalizeMessageToolIdempotencyValue(entry));
+  }
+  if (!value || typeof value !== "object") {
     return value;
   }
+  const record = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(record).toSorted()) {
+    out[key] = canonicalizeMessageToolIdempotencyValue(record[key]);
+  }
+  return out;
+}
+
+function buildMessageToolDeliveryFingerprint(params: {
+  action: ChannelMessageActionName;
+  params: Record<string, unknown>;
+}): string {
+  const canonical = JSON.stringify(
+    canonicalizeMessageToolIdempotencyValue({
+      action: params.action,
+      params: stripMessageToolIdempotencyEnvelope(params.params),
+    }),
+  );
+  return createHash("sha256").update(canonical).digest("base64url").slice(0, 24);
+}
+
+function buildMessageToolAutogeneratedIdempotencyKey(params: {
+  runId: string;
+  deliveryFingerprint: string;
+  operationId: string;
+}): string {
+  return `${params.runId}:message-tool:${params.deliveryFingerprint}:${params.operationId}`;
+}
+
+function normalizeEscapedLineBreaksForVisibleText(text: string): string {
+  if (!text.includes("\\")) {
+    return text;
+  }
+  // The send path turns literal "\n" sequences into line breaks later; match
+  // that before privacy stripping so escaped delimiter lines cannot bypass it.
+  return text.replace(/\\r\\n|\\n|\\r/g, "\n");
+}
+
+type VisibleTextSuppressionReason = "internal_runtime_context_echo" | "inbound_metadata_echo";
+
+function sanitizeUserVisibleToolTextResult(
+  text: string,
+  bootPrompt: string | undefined,
+): {
+  text: string;
+  suppressionReason?: VisibleTextSuppressionReason;
+} {
+  const normalized = normalizeEscapedLineBreaksForVisibleText(text);
+  const strippedReasoning = stripFormattedReasoningMessage(normalized);
+  const strippedInternal = stripInternalRuntimeContext(strippedReasoning);
+  const strippedBoot = stripBootEchoFromOutboundText(strippedInternal, bootPrompt);
+  const strippedInbound = hasInboundMetadataSentinel(strippedBoot)
+    ? stripInboundMetadata(strippedBoot)
+    : strippedBoot;
+  const suppressionReason =
+    strippedBoot.trim().length === 0 &&
+    strippedReasoning.trim().length > 0 &&
+    (strippedInternal !== strippedReasoning || strippedBoot !== strippedInternal)
+      ? "internal_runtime_context_echo"
+      : strippedInbound.trim().length === 0 &&
+          strippedBoot.trim().length > 0 &&
+          strippedInbound !== strippedBoot
+        ? "inbound_metadata_echo"
+        : undefined;
+  return {
+    text: strippedInbound,
+    ...(suppressionReason ? { suppressionReason } : {}),
+  };
+}
+
+function sanitizeStringParam(
+  params: Record<string, unknown>,
+  field: string,
+  bootPrompt: string | undefined,
+): VisibleTextSuppressionReason | undefined {
+  if (typeof params[field] !== "string") {
+    return undefined;
+  }
+  const sanitized = sanitizeUserVisibleToolTextResult(params[field], bootPrompt);
+  params[field] = sanitized.text;
+  return sanitized.suppressionReason;
+}
+
+function sanitizeStringArrayParam(
+  params: Record<string, unknown>,
+  field: string,
+  bootPrompt: string | undefined,
+): VisibleTextSuppressionReason | undefined {
+  const value = params[field];
+  if (typeof value === "string") {
+    const sanitized = sanitizeUserVisibleToolTextResult(value, bootPrompt);
+    params[field] = sanitized.text;
+    return sanitized.suppressionReason;
+  }
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  let suppressionReason: VisibleTextSuppressionReason | undefined;
+  params[field] = value.map((entry) => {
+    if (typeof entry !== "string") {
+      return entry;
+    }
+    const sanitized = sanitizeUserVisibleToolTextResult(entry, bootPrompt);
+    suppressionReason ??= sanitized.suppressionReason;
+    return sanitized.text;
+  });
+  return suppressionReason;
+}
+
+function sanitizePresentationTextFieldsResult(
+  value: unknown,
+  bootPrompt: string | undefined,
+): { value: unknown; suppressionReason?: VisibleTextSuppressionReason } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { value };
+  }
+  let suppressionReason: VisibleTextSuppressionReason | undefined;
   const presentation = { ...(value as Record<string, unknown>) };
   if (typeof presentation.title === "string") {
-    presentation.title = stripFormattedReasoningMessage(presentation.title);
+    const sanitized = sanitizeUserVisibleToolTextResult(presentation.title, bootPrompt);
+    presentation.title = sanitized.text;
+    suppressionReason ??= sanitized.suppressionReason;
   }
   if (Array.isArray(presentation.blocks)) {
     presentation.blocks = presentation.blocks.map((block) => {
@@ -78,7 +265,9 @@ function sanitizePresentationTextFields(value: unknown): unknown {
       const sanitizedBlock = { ...(block as Record<string, unknown>) };
       for (const field of ["text", "placeholder"]) {
         if (typeof sanitizedBlock[field] === "string") {
-          sanitizedBlock[field] = stripFormattedReasoningMessage(sanitizedBlock[field]);
+          const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock[field], bootPrompt);
+          sanitizedBlock[field] = sanitized.text;
+          suppressionReason ??= sanitized.suppressionReason;
         }
       }
       if (Array.isArray(sanitizedBlock.buttons)) {
@@ -88,7 +277,36 @@ function sanitizePresentationTextFields(value: unknown): unknown {
           }
           const sanitizedButton = { ...(button as Record<string, unknown>) };
           if (typeof sanitizedButton.label === "string") {
-            sanitizedButton.label = stripFormattedReasoningMessage(sanitizedButton.label);
+            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedButton.label, bootPrompt);
+            sanitizedButton.label = sanitized.text;
+            suppressionReason ??= sanitized.suppressionReason;
+          }
+          if (typeof sanitizedButton.url === "string") {
+            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedButton.url, bootPrompt);
+            if (sanitized.text) {
+              sanitizedButton.url = sanitized.text;
+            } else {
+              delete sanitizedButton.url;
+            }
+            suppressionReason ??= sanitized.suppressionReason;
+          }
+          for (const webAppField of ["webApp", "web_app"]) {
+            const webApp = sanitizedButton[webAppField];
+            if (!webApp || typeof webApp !== "object" || Array.isArray(webApp)) {
+              continue;
+            }
+            const sanitizedWebApp = { ...(webApp as Record<string, unknown>) };
+            if (typeof sanitizedWebApp.url !== "string") {
+              continue;
+            }
+            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedWebApp.url, bootPrompt);
+            if (sanitized.text) {
+              sanitizedWebApp.url = sanitized.text;
+              sanitizedButton[webAppField] = sanitizedWebApp;
+            } else {
+              delete sanitizedButton[webAppField];
+            }
+            suppressionReason ??= sanitized.suppressionReason;
           }
           return sanitizedButton;
         });
@@ -100,7 +318,9 @@ function sanitizePresentationTextFields(value: unknown): unknown {
           }
           const sanitizedOption = { ...(option as Record<string, unknown>) };
           if (typeof sanitizedOption.label === "string") {
-            sanitizedOption.label = stripFormattedReasoningMessage(sanitizedOption.label);
+            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedOption.label, bootPrompt);
+            sanitizedOption.label = sanitized.text;
+            suppressionReason ??= sanitized.suppressionReason;
           }
           return sanitizedOption;
         });
@@ -108,7 +328,58 @@ function sanitizePresentationTextFields(value: unknown): unknown {
       return sanitizedBlock;
     });
   }
-  return presentation;
+  return { value: presentation, ...(suppressionReason ? { suppressionReason } : {}) };
+}
+
+function readFirstStringParam(params: Record<string, unknown>, keys: readonly string[]): string {
+  for (const key of keys) {
+    const value = readStringParam(params, key);
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function readStructuredAttachmentMediaParams(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const values: string[] = [];
+  for (const attachment of value) {
+    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+      continue;
+    }
+    const record = attachment as Record<string, unknown>;
+    for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
+      const candidate = readStringParam(record, key);
+      if (candidate) {
+        values.push(candidate);
+      }
+    }
+  }
+  return values;
+}
+
+function hasSanitizedSendPayloadContent(params: Record<string, unknown>): boolean {
+  const text = ["message", "text", "content", "caption", "SendMessage"]
+    .map((field) => (typeof params[field] === "string" ? params[field] : ""))
+    .filter((value) => value.trim())
+    .join("\n");
+  const mediaUrls = [
+    ...(readStringArrayParam(params, "mediaUrls") ?? []),
+    ...readStructuredAttachmentMediaParams(params.attachments),
+  ];
+  return hasReplyPayloadContent(
+    {
+      text,
+      mediaUrl: readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]),
+      mediaUrls,
+      presentation: params.presentation,
+      interactive: params.interactive,
+    },
+    { trimText: true },
+  );
 }
 
 function buildRoutingSchema() {
@@ -121,13 +392,26 @@ function buildRoutingSchema() {
   };
 }
 
+const presentationActionSchema = Type.Union([
+  Type.Object({
+    type: Type.Literal("command"),
+    command: Type.String(),
+  }),
+  Type.Object({
+    type: Type.Literal("callback"),
+    value: Type.String(),
+  }),
+]);
+
 const presentationOptionSchema = Type.Object({
   label: Type.String(),
-  value: Type.String(),
+  action: Type.Optional(presentationActionSchema),
+  value: Type.Optional(Type.String()),
 });
 
 const presentationButtonSchema = Type.Object({
   label: Type.String(),
+  action: Type.Optional(presentationActionSchema),
   value: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
   webApp: Type.Optional(Type.Object({ url: Type.String() })),
@@ -157,7 +441,11 @@ const presentationMessageSchema = Type.Object(
   },
 );
 
-function buildSendSchema(options: { includePresentation: boolean; includeDeliveryPin: boolean }) {
+function buildSendSchema(options: {
+  includePresentation: boolean;
+  includeDeliveryPin: boolean;
+  includeBestEffort: boolean;
+}) {
   const props: Record<string, TSchema> = {
     message: Type.Optional(Type.String()),
     effectId: Type.Optional(
@@ -180,24 +468,16 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     contentType: Type.Optional(Type.String()),
     mimeType: Type.Optional(Type.String()),
     caption: Type.Optional(Type.String()),
-    path: Type.Optional(Type.String()),
-    filePath: Type.Optional(Type.String()),
     attachments: Type.Optional(
       Type.Array(
         Type.Object({
           type: Type.Optional(stringEnum(["image", "audio", "video", "file"])),
           media: Type.Optional(Type.String()),
-          mediaUrl: Type.Optional(Type.String()),
-          path: Type.Optional(Type.String()),
-          filePath: Type.Optional(Type.String()),
-          fileUrl: Type.Optional(Type.String()),
-          url: Type.Optional(Type.String()),
           name: Type.Optional(Type.String()),
           mimeType: Type.Optional(Type.String()),
         }),
         {
-          description:
-            "Structured attachments; each needs media/mediaUrl/path/filePath/fileUrl/url.",
+          description: "Structured attachments; each entry uses media.",
         },
       ),
     ),
@@ -206,7 +486,6 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     asVoice: Type.Optional(Type.Boolean()),
     silent: Type.Optional(Type.Boolean()),
     quoteText: Type.Optional(Type.String({ description: "Telegram reply quote text." })),
-    bestEffort: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     forceDocument: Type.Optional(
       Type.Boolean({
@@ -221,6 +500,14 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
   };
   if (options.includePresentation) {
     props.presentation = Type.Optional(presentationMessageSchema);
+  }
+  if (options.includeBestEffort) {
+    props.bestEffort = Type.Optional(
+      Type.Boolean({
+        description:
+          "Optional delivery mode. Omit or set true for ordinary replies. Set false only when required durable delivery is necessary.",
+      }),
+    );
   }
   if (options.includeDeliveryPin) {
     props.delivery = Type.Optional(
@@ -281,8 +568,8 @@ function buildReactionSchema() {
 
 function buildFetchSchema() {
   return {
-    limit: Type.Optional(Type.Number()),
-    pageSize: Type.Optional(Type.Number()),
+    limit: optionalPositiveIntegerSchema(),
+    pageSize: optionalPositiveIntegerSchema(),
     pageToken: Type.Optional(Type.String()),
     before: Type.Optional(Type.String()),
     after: Type.Optional(Type.String()),
@@ -308,13 +595,15 @@ function buildPollSchema() {
       ),
     ),
     pollOptionIndex: Type.Optional(
-      Type.Number({
+      Type.Integer({
+        minimum: 1,
         description: "1-based poll option number.",
       }),
     ),
     pollOptionIndexes: Type.Optional(
       Type.Array(
-        Type.Number({
+        Type.Integer({
+          minimum: 1,
           description: "1-based poll option numbers for multiselect.",
         }),
       ),
@@ -329,8 +618,8 @@ function buildPollSchema() {
       case "stringArray":
         props[name] = Type.Optional(Type.Array(Type.String()));
         break;
-      case "number":
-        props[name] = Type.Optional(Type.Number());
+      case "positiveInteger":
+        props[name] = optionalPositiveIntegerSchema();
         break;
       case "boolean":
         props[name] = Type.Optional(Type.Boolean());
@@ -377,7 +666,7 @@ function buildStickerSchema() {
 function buildThreadSchema() {
   return {
     threadName: Type.Optional(Type.String()),
-    autoArchiveMin: Type.Optional(Type.Number()),
+    autoArchiveMin: optionalPositiveIntegerSchema(),
     appliedTags: Type.Optional(Type.Array(Type.String())),
   };
 }
@@ -392,7 +681,7 @@ function buildEventSchema() {
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
     image: Type.Optional(Type.String({ description: "Event cover image URL/path." })),
-    durationMin: Type.Optional(Type.Number()),
+    durationMin: optionalNonNegativeIntegerSchema(),
     until: Type.Optional(Type.String()),
   };
 }
@@ -400,16 +689,12 @@ function buildEventSchema() {
 function buildModerationSchema() {
   return {
     reason: Type.Optional(Type.String()),
-    deleteDays: Type.Optional(Type.Number()),
+    deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
   };
 }
 
 function buildGatewaySchema() {
-  return {
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-  };
+  return gatewayCallOptionSchemaProperties();
 }
 
 function buildPresenceSchema() {
@@ -444,15 +729,16 @@ function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
     channelType: Type.Optional(
-      Type.Number({
+      Type.Integer({
+        minimum: 0,
         description: "Numeric channel type, e.g. Discord. Avoids JSON Schema `type` collision.",
       }),
     ),
     parentId: Type.Optional(Type.String()),
     topic: Type.Optional(Type.String()),
-    position: Type.Optional(Type.Number()),
+    position: optionalNonNegativeIntegerSchema(),
     nsfw: Type.Optional(Type.Boolean()),
-    rateLimitPerUser: Type.Optional(Type.Number()),
+    rateLimitPerUser: optionalNonNegativeIntegerSchema(),
     categoryId: Type.Optional(Type.String()),
     clearParent: Type.Optional(
       Type.Boolean({
@@ -465,6 +751,7 @@ function buildChannelManagementSchema() {
 function buildMessageToolSchemaProps(options: {
   includePresentation: boolean;
   includeDeliveryPin: boolean;
+  includeBestEffort: boolean;
   extraProperties?: Record<string, TSchema>;
 }) {
   return {
@@ -493,6 +780,7 @@ function isSendOnlyActions(actions: readonly string[]): boolean {
 function buildSendOnlyMessageToolSchemaProps(options: {
   includePresentation: boolean;
   includeDeliveryPin: boolean;
+  includeBestEffort: boolean;
   extraProperties?: Record<string, TSchema>;
 }) {
   return {
@@ -508,6 +796,7 @@ function buildMessageToolSchemaFromActions(
   options: {
     includePresentation: boolean;
     includeDeliveryPin: boolean;
+    includeBestEffort: boolean;
     extraProperties?: Record<string, TSchema>;
   },
 ) {
@@ -523,6 +812,7 @@ function buildMessageToolSchemaFromActions(
 const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
   includePresentation: true,
   includeDeliveryPin: true,
+  includeBestEffort: false,
 });
 
 type MessageToolOptions = {
@@ -541,6 +831,7 @@ type MessageToolOptions = {
   currentThreadTs?: string;
   agentThreadId?: string | number;
   currentMessageId?: string | number;
+  currentInboundAudio?: boolean;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   sameChannelThreadRequired?: boolean;
@@ -717,7 +1008,7 @@ function resolveMessageToolActionSchemaActions(params: MessageToolDiscoveryParam
 
 function listAllMessageToolActions(params: MessageToolDiscoveryParams): ChannelMessageActionName[] {
   const pluginActions = listAllChannelSupportedActions(buildMessageActionDiscoveryInput(params));
-  return Array.from(new Set<ChannelMessageActionName>(["send", "broadcast", ...pluginActions]));
+  return uniqueValues<ChannelMessageActionName>(["send", "broadcast", ...pluginActions]);
 }
 
 function resolveIncludeCapability(
@@ -742,10 +1033,27 @@ function resolveIncludeDeliveryPin(params: MessageToolDiscoveryParams): boolean 
   return resolveIncludeCapability(params, "delivery-pin");
 }
 
+function resolveIncludeBestEffort(params: MessageToolDiscoveryParams): boolean {
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  if (!currentChannel) {
+    return false;
+  }
+  const adapter =
+    listChannelPlugins().find((plugin) => plugin.id === currentChannel)?.message ??
+    getLoadedChannelPlugin(currentChannel as Parameters<typeof getLoadedChannelPlugin>[0])
+      ?.message ??
+    getChannelPlugin(currentChannel as Parameters<typeof getChannelPlugin>[0])?.message;
+  return (
+    adapter?.durableFinal?.capabilities?.reconcileUnknownSend === true &&
+    typeof adapter.durableFinal.reconcileUnknownSend === "function"
+  );
+}
+
 function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
   const actions = resolveMessageToolActionSchemaActions(params);
   const includePresentation = resolveIncludePresentation(params);
   const includeDeliveryPin = resolveIncludeDeliveryPin(params);
+  const includeBestEffort = resolveIncludeBestEffort(params);
   const extraProperties = resolveChannelMessageToolSchemaProperties(
     buildMessageActionDiscoveryInput(
       params,
@@ -755,6 +1063,7 @@ function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
     includePresentation,
     includeDeliveryPin,
+    includeBestEffort,
     extraProperties,
   });
 }
@@ -803,9 +1112,7 @@ function buildMessageToolDescription(options?: {
   if (messageToolDiscoveryParams) {
     const actions = resolveMessageToolActionSchemaActions(messageToolDiscoveryParams);
     if (actions.length > 0) {
-      const sortedActions = Array.from(new Set(actions)).toSorted() as Array<
-        ChannelMessageActionName | "send"
-      >;
+      const sortedActions = sortUniqueStrings(actions) as Array<ChannelMessageActionName | "send">;
       return appendMessageToolReadHint(
         appendMessageToolVisibleReplyHint(
           `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
@@ -858,6 +1165,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
   let generatedIdempotencyCounter = 0;
+  const failedAutogeneratedIdempotencyKeys = new Map<string, string>();
   const effectiveCurrentChannel = resolveEffectiveCurrentChannelContext(options);
   const currentThreadTs =
     options?.currentThreadTs ??
@@ -913,7 +1221,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     description,
     parameters: schema,
     execute: async (toolCallId, args, signal) => {
-      // Check if already aborted before doing any work
       if (signal?.aborted) {
         const err = new Error("Message send aborted");
         err.name = "AbortError";
@@ -922,18 +1229,72 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
 
-      // Strip reasoning tags from text fields — models may include <think>…</think>
-      // in tool arguments, and the messaging tool send path has no other tag filtering.
-      for (const field of ["text", "content", "message", "caption"]) {
-        if (typeof params[field] === "string") {
-          params[field] = stripFormattedReasoningMessage(params[field]);
-        }
+      // Sanitize outbound text fields in three layers:
+      //
+      // 1. `stripFormattedReasoningMessage` — drops reasoning blocks
+      //    that some models emit into tool arguments.
+      // 2. `stripInternalRuntimeContext` — removes internal-runtime-context
+      //    delimited blocks (the same strip applied to final replies via
+      //    `sanitizeUserFacingText`). Catches wrapped BOOT.md or webchat
+      //    runtime-context echoes that preserve the marker lines.
+      // 3. `stripBootEchoFromOutboundText` — defense-in-depth check against
+      //    the active boot prompt for this session. Catches verbatim echoes
+      //    that paraphrase out the wrapper markers but reproduce a
+      //    substantial chunk of the boot prompt content. Refs #53732.
+      const bootPromptForSession = getBootEchoContextForSession(options?.agentSessionKey);
+      let suppressedVisiblePayloadReason: VisibleTextSuppressionReason | undefined;
+      parseJsonMessageParam(params, "presentation");
+      parseInteractiveParam(params);
+      for (const field of [
+        "text",
+        "content",
+        "message",
+        "caption",
+        "SendMessage",
+        "quoteText",
+        "quote_text",
+      ]) {
+        const suppressionReason = sanitizeStringParam(params, field, bootPromptForSession);
+        suppressedVisiblePayloadReason ??= suppressionReason;
       }
-      params.presentation = sanitizePresentationTextFields(params.presentation);
+      for (const field of ["pollQuestion", "poll_question"]) {
+        const suppressionReason = sanitizeStringParam(params, field, bootPromptForSession);
+        suppressedVisiblePayloadReason ??= suppressionReason;
+      }
+      for (const field of ["pollOption", "poll_option"]) {
+        const suppressionReason = sanitizeStringArrayParam(params, field, bootPromptForSession);
+        suppressedVisiblePayloadReason ??= suppressionReason;
+      }
+      const sanitizedPresentation = sanitizePresentationTextFieldsResult(
+        params.presentation,
+        bootPromptForSession,
+      );
+      params.presentation = sanitizedPresentation.value;
+      suppressedVisiblePayloadReason ??= sanitizedPresentation.suppressionReason;
+      const sanitizedInteractive = sanitizePresentationTextFieldsResult(
+        params.interactive,
+        bootPromptForSession,
+      );
+      params.interactive = sanitizedInteractive.value;
+      suppressedVisiblePayloadReason ??= sanitizedInteractive.suppressionReason;
 
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+      if (
+        suppressedVisiblePayloadReason &&
+        action === "send" &&
+        !hasSanitizedSendPayloadContent(params)
+      ) {
+        return jsonResult({
+          status: "suppressed",
+          reason: suppressedVisiblePayloadReason,
+          message:
+            suppressedVisiblePayloadReason === "inbound_metadata_echo"
+              ? "Suppressed outbound message text because it matched inbound runtime metadata."
+              : "Suppressed outbound message text because it matched internal runtime context.",
+        });
+      }
       const requireExplicitTarget = options?.requireExplicitTarget === true;
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
         const explicitTarget =
@@ -978,11 +1339,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         params.accountId = accountId;
       }
 
-      const gatewayResolved = resolveGatewayOptions({
-        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
-        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-        timeoutMs: readNumberParam(params, "timeoutMs"),
-      });
+      const gatewayResolved = resolveGatewayOptions(readGatewayCallOptions(params));
       const gateway = {
         url: gatewayResolved.url,
         token: gatewayResolved.token,
@@ -1018,34 +1375,64 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           : undefined;
 
-      const actionIdempotencyKey =
-        normalizeOptionalString(params.idempotencyKey) ??
-        (options?.runId
-          ? `${options.runId}:message-tool:${
-              normalizeToolCallIdForIdempotencyKey(toolCallId) ?? ++generatedIdempotencyCounter
-            }`
-          : undefined);
+      let autogeneratedDeliveryFingerprint: string | undefined;
+      let actionIdempotencyKey = normalizeOptionalString(params.idempotencyKey);
+      if (!actionIdempotencyKey && options?.runId) {
+        autogeneratedDeliveryFingerprint = buildMessageToolDeliveryFingerprint({ action, params });
+        actionIdempotencyKey = failedAutogeneratedIdempotencyKeys.get(
+          autogeneratedDeliveryFingerprint,
+        );
+        if (!actionIdempotencyKey) {
+          const operationId =
+            normalizeMessageToolIdempotencyKeyPart(toolCallId) ??
+            String(++generatedIdempotencyCounter);
+          actionIdempotencyKey = buildMessageToolAutogeneratedIdempotencyKey({
+            runId: normalizeMessageToolIdempotencyKeyPart(options.runId) ?? options.runId,
+            deliveryFingerprint: autogeneratedDeliveryFingerprint,
+            operationId,
+          });
+        }
+      }
       const actionParams = actionIdempotencyKey
         ? { ...params, idempotencyKey: actionIdempotencyKey }
         : params;
 
-      const result = await runMessageActionForTool({
-        cfg,
-        action,
-        params: actionParams,
-        defaultAccountId: accountId ?? undefined,
-        requesterSenderId: options?.requesterSenderId,
-        senderIsOwner: options?.senderIsOwner,
-        gateway,
-        toolContext,
-        sessionKey: options?.agentSessionKey,
-        sessionId: options?.sessionId,
-        agentId: resolvedAgentId,
-        sandboxRoot: options?.sandboxRoot,
-        sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
-        inboundEventKind: options?.inboundEventKind,
-        abortSignal: signal,
-      });
+      let result: MessageActionRunResult;
+      try {
+        result = await runMessageActionForTool({
+          cfg,
+          action,
+          params: actionParams,
+          defaultAccountId: accountId ?? undefined,
+          requesterSenderId: options?.requesterSenderId,
+          senderIsOwner: options?.senderIsOwner,
+          gateway,
+          toolContext,
+          sessionKey: options?.agentSessionKey,
+          sessionId: options?.sessionId,
+          agentId: resolvedAgentId,
+          sandboxRoot: options?.sandboxRoot,
+          sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+          inboundEventKind: options?.inboundEventKind,
+          inboundAudio: options?.currentInboundAudio,
+          abortSignal: signal,
+        });
+      } catch (error) {
+        if (autogeneratedDeliveryFingerprint && actionIdempotencyKey) {
+          failedAutogeneratedIdempotencyKeys.set(
+            autogeneratedDeliveryFingerprint,
+            actionIdempotencyKey,
+          );
+        }
+        throw error;
+      }
+      if (
+        autogeneratedDeliveryFingerprint &&
+        failedAutogeneratedIdempotencyKeys.get(autogeneratedDeliveryFingerprint) ===
+          actionIdempotencyKey
+      ) {
+        failedAutogeneratedIdempotencyKeys.delete(autogeneratedDeliveryFingerprint);
+      }
 
       const toolResult = getToolResult(result);
       if (toolResult) {

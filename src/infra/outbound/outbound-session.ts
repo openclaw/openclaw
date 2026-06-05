@@ -1,3 +1,7 @@
+// Outbound session routing maps send targets back into route/session metadata
+// so outbound-only messages can be mirrored into conversation state.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -9,10 +13,10 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RoutePeer } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { buildOutboundBaseSessionKey } from "./base-session-key.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
+/** Session route produced for an outbound message target. */
 export type OutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
@@ -23,6 +27,7 @@ export type OutboundSessionRoute = {
   threadId?: string | number;
 };
 
+/** Inputs required to resolve an outbound target into a session route. */
 export type ResolveOutboundSessionRouteParams = {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -69,9 +74,22 @@ function inferPeerKindFromPlugin(params: {
 }): ChatType | undefined {
   for (const target of params.targets) {
     const inferred = normalizeInferredPeerKind(
-      params.plugin?.messaging?.parseExplicitTarget?.({ raw: target })?.chatType ??
-        params.plugin?.messaging?.inferTargetChatType?.({ to: target }),
+      params.plugin?.messaging?.inferTargetChatType?.({ to: target }),
     );
+    if (inferred) {
+      return inferred;
+    }
+  }
+  return undefined;
+}
+
+function inferPeerKindFromLegacyParser(params: {
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
+  targets: readonly string[];
+}): ChatType | undefined {
+  for (const target of params.targets) {
+    const parsed = params.plugin?.messaging?.parseExplicitTarget?.({ raw: target });
+    const inferred = normalizeInferredPeerKind(parsed?.chatType);
     if (inferred) {
       return inferred;
     }
@@ -114,12 +132,10 @@ function inferPeerKind(params: {
   }
   const plugin = resolveOutboundChannelPlugin(params.channel);
   const strippedTarget = stripProviderPrefix(params.target, params.channel).trim();
-  const targets = [params.target, strippedTarget].filter(
-    (target, index, values): target is string =>
-      Boolean(target) && values.indexOf(target) === index,
-  );
+  const targets = uniqueStrings([params.target, strippedTarget].filter(Boolean));
   return (
     inferPeerKindFromPlugin({ plugin, targets }) ??
+    inferPeerKindFromLegacyParser({ plugin, targets }) ??
     inferPeerKindFromFallbackPrefixes(targets) ??
     "direct"
   );
@@ -165,6 +181,7 @@ function resolveFallbackSession(
   };
 }
 
+/** Resolves the session route used to mirror outbound delivery into conversation state. */
 export async function resolveOutboundSessionRoute(
   params: ResolveOutboundSessionRouteParams,
 ): Promise<OutboundSessionRoute | null> {
@@ -176,11 +193,13 @@ export async function resolveOutboundSessionRoute(
   const resolver = resolveOutboundChannelPlugin(params.channel)?.messaging
     ?.resolveOutboundSessionRoute;
   if (resolver) {
+    // Channel plugins can provide richer route semantics than the generic target parser.
     return await resolver(nextParams);
   }
   return resolveFallbackSession(nextParams);
 }
 
+/** Persists best-effort session metadata for an outbound-only route. */
 export async function ensureOutboundSessionEntry(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;

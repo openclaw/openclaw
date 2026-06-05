@@ -1,3 +1,8 @@
+/**
+ * Runtime context resolver for OpenClaw plugin tools.
+ *
+ * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -6,6 +11,7 @@ import { modelKey } from "./model-ref-shared.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
+/** Options provided by agent runtime callers when invoking OpenClaw plugin tools. */
 export type OpenClawPluginToolOptions = {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
@@ -27,6 +33,7 @@ export type OpenClawPluginToolOptions = {
   allowGatewaySubagentBinding?: boolean;
 };
 
+/** Resolves plugin-tool context inputs from runtime options and config state. */
 export function resolveOpenClawPluginToolInputs(params: {
   options?: OpenClawPluginToolOptions;
   resolvedConfig?: OpenClawConfig;
@@ -54,6 +61,8 @@ export function resolveOpenClawPluginToolInputs(params: {
           ...(modelProvider && modelId ? { modelRef: modelKey(modelProvider, modelId) } : {}),
         }
       : undefined;
+  // Delivery context is normalized once here so plugin tools receive the same
+  // channel/account/thread shape as gateway-delivered agent tools.
   const deliveryContext = normalizeDeliveryContext({
     channel: options?.agentChannel,
     to: options?.agentTo,

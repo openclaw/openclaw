@@ -1,3 +1,4 @@
+// Xai tests cover video generation provider plugin behavior.
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -49,6 +50,18 @@ function requireFetchInitCall(index: number): {
     init: call[1],
     timeoutMs: call[2],
   };
+}
+
+function streamedVideoResponse(bytes: string): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(bytes));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "video/mp4" } },
+  );
 }
 
 describe("xai video generation provider", () => {
@@ -105,6 +118,34 @@ describe("xai video generation provider", () => {
     expect(result.videos[0]?.fileName).toBe("video-1.webm");
     expect(result.metadata?.requestId).toBe("req_123");
     expect(result.metadata?.mode).toBe("generate");
+  });
+
+  it("rejects generated video downloads that exceed the configured media cap", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ request_id: "req_too_large" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          request_id: "req_too_large",
+          status: "done",
+          video: { url: "https://cdn.x.ai/too-large.mp4" },
+        }),
+      })
+      .mockResolvedValueOnce(streamedVideoResponse("too-large"));
+
+    const provider = buildXaiVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "xai",
+        model: "grok-imagine-video",
+        prompt: "short video",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("xAI generated video download exceeds 1 bytes");
   });
 
   it("wraps malformed successful xAI create responses", async () => {

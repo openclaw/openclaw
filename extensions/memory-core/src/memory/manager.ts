@@ -1,5 +1,6 @@
+// Memory Core plugin module implements manager behavior.
 import type { DatabaseSync } from "node:sqlite";
-import { type FSWatcher } from "chokidar";
+import type { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -20,6 +21,7 @@ import {
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -38,10 +40,15 @@ import {
 } from "./manager-cache.js";
 import { closeMemoryDatabase } from "./manager-db.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
 import {
+  createDegradedMemoryProviderLifecycle,
+  createPendingMemoryProviderLifecycle,
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
+  type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
+import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import {
@@ -112,6 +119,24 @@ export async function closeMemoryIndexManagersForAgent(params: {
   }
 }
 
+function resolveEffectiveMemorySearchSettings(
+  settings: ResolvedMemorySearchConfig,
+): ResolvedMemorySearchConfig {
+  if (settings.provider !== "none" || !settings.store.vector.enabled) {
+    return settings;
+  }
+  return {
+    ...settings,
+    store: {
+      ...settings.store,
+      vector: {
+        ...settings.store.vector,
+        enabled: false,
+      },
+    },
+  };
+}
+
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
   protected readonly cfg: OpenClawConfig;
@@ -124,7 +149,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private providerInitialized = false;
   protected override fallbackFrom?: EmbeddingProviderId;
   protected override fallbackReason?: string;
-  private providerUnavailableReason?: string;
+  protected providerUnavailableReason?: string;
+  protected override providerLifecycle: MemoryProviderLifecycleState;
   protected override providerRuntime?: EmbeddingProviderRuntime;
   protected batch: {
     enabled: boolean;
@@ -160,11 +186,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected override sessionWatchTimer: NodeJS.Timeout | null = null;
   protected override sessionUnsubscribe: (() => void) | null = null;
   protected override intervalTimer: NodeJS.Timeout | null = null;
+  protected override memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
   protected override closed = false;
   protected override dirty = false;
   protected override sessionsDirty = false;
   protected override sessionsDirtyFiles = new Set<string>();
   protected override sessionPendingFiles = new Set<string>();
+  private indexIdentityDirty = false;
   protected override sessionDeltas = new Map<
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
@@ -177,6 +205,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonlyRecoverySuccesses = 0;
   private readonlyRecoveryFailures = 0;
   private readonlyRecoveryLastError?: string;
+  private indexIdentityState: MemoryIndexIdentityState = {
+    status: "missing",
+    reason: "index metadata is missing",
+  };
 
   private static async loadProviderResult(params: {
     cfg: OpenClawConfig;
@@ -232,34 +264,44 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     purpose?: MemoryIndexManagerPurpose;
   }) {
     super();
+    const effectiveSettings = resolveEffectiveMemorySearchSettings(params.settings);
     this.cacheKey = params.cacheKey;
     this.cfg = params.cfg;
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
-    this.settings = params.settings;
+    this.settings = effectiveSettings;
     this.provider = null;
-    this.requestedProvider = params.settings.provider;
+    this.requestedProvider = effectiveSettings.provider;
+    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
     if (params.providerResult) {
       this.applyProviderResult(params.providerResult);
     }
-    this.sources = new Set(params.settings.sources);
+    this.sources = new Set(effectiveSettings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();
     this.cache = {
-      enabled: params.settings.cache.enabled,
-      maxEntries: params.settings.cache.maxEntries,
+      enabled: effectiveSettings.cache.enabled,
+      maxEntries: effectiveSettings.cache.maxEntries,
     };
-    this.fts = { enabled: params.settings.query.hybrid.enabled, available: false };
+    this.fts = { enabled: effectiveSettings.query.hybrid.enabled, available: false };
     this.ensureSchema();
     this.vector = {
-      enabled: params.settings.store.vector.enabled,
+      enabled: effectiveSettings.store.vector.enabled,
       available: null,
-      extensionPath: params.settings.store.vector.extensionPath,
+      extensionPath: effectiveSettings.store.vector.extensionPath,
     };
     const meta = this.readMeta();
     if (meta?.vectorDims) {
       this.vector.dims = meta.vectorDims;
     }
+    const initialIndexIdentity = this.resolveCurrentIndexIdentityState({
+      meta,
+      providerKeyKnown: Boolean(params.providerResult),
+    });
+    this.indexIdentityState = initialIndexIdentity;
+    this.indexIdentityDirty =
+      initialIndexIdentity.status === "mismatched" ||
+      (initialIndexIdentity.status === "missing" && this.sources.has("memory"));
     const transient = params.purpose === "status" || params.purpose === "cli";
     if (!transient) {
       this.ensureWatcher();
@@ -283,12 +325,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.fallbackFrom = providerState.fallbackFrom;
     this.fallbackReason = providerState.fallbackReason;
     this.providerUnavailableReason = providerState.providerUnavailableReason;
+    this.providerLifecycle = providerState.lifecycle;
     this.providerRuntime = providerState.providerRuntime;
     this.providerInitialized = true;
   }
 
   private async ensureProviderInitialized(): Promise<void> {
     if (this.providerInitialized) {
+      return;
+    }
+    if (this.settings.provider === "none") {
+      this.applyProviderResult({
+        provider: null,
+        requestedProvider: "none",
+        providerUnavailableReason: "No embedding provider available (FTS-only mode)",
+      });
+      this.providerKey = this.computeProviderKey();
+      this.batch = this.resolveBatchConfig();
       return;
     }
     if (!this.providerInitPromise) {
@@ -305,11 +358,52 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     try {
       await this.providerInitPromise;
+    } catch (err) {
+      // Clear the cached rejected promise so subsequent calls can retry
+      // initialization instead of being permanently stuck with a stale failure.
+      this.providerInitPromise = null;
+      throw err;
     } finally {
       if (this.providerInitialized) {
         this.providerInitPromise = null;
       }
     }
+  }
+
+  protected resetProviderInitializationForRetry(): void {
+    this.providerInitialized = false;
+    this.providerInitPromise = null;
+    this.providerUnavailableReason = undefined;
+    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
+  }
+
+  protected markLocalEmbeddingProviderDegraded(err: unknown): void {
+    if (this.provider?.id !== "local") {
+      return;
+    }
+    if (!isLocalEmbeddingWorkerFailure(err)) {
+      return;
+    }
+    const message = formatErrorMessage(err);
+    const degradedProvider = this.provider;
+    this.provider = null;
+    this.providerRuntime = undefined;
+    this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
+    this.providerLifecycle = createDegradedMemoryProviderLifecycle({
+      providerId: degradedProvider.id,
+      reason: message,
+      code: err.code,
+    });
+    EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+    this.providerKey = this.computeProviderKey();
+    this.batch = this.resolveBatchConfig();
+    this.vector.semanticAvailable = false;
+    void Promise.resolve(degradedProvider.close?.()).catch((errLocal: unknown) => {
+      log.debug(`memory embeddings: failed to close degraded local provider: ${String(errLocal)}`);
+    });
+    log.warn("memory embeddings: local provider degraded after worker failure", {
+      error: message,
+    });
   }
 
   async warmSession(sessionKey?: string): Promise<void> {
@@ -320,12 +414,32 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (key && this.sessionWarm.has(key)) {
       return;
     }
-    void this.sync({ reason: "session-start" }).catch((err) => {
+    void this.sync({ reason: "session-start" }).catch((err: unknown) => {
       log.warn(`memory sync failed (session-start): ${String(err)}`);
     });
     if (key) {
       this.sessionWarm.add(key);
     }
+  }
+
+  private refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
+    const provider =
+      this.settings.provider === "none"
+        ? null
+        : this.providerInitialized
+          ? this.provider
+            ? { id: this.provider.id, model: this.provider.model }
+            : null
+          : undefined;
+    const state = this.resolveCurrentIndexIdentityState({
+      ...(provider !== undefined ? { provider } : {}),
+      providerKeyKnown: params?.providerKeyKnown,
+    });
+    this.indexIdentityState = state;
+    this.indexIdentityDirty =
+      state.status === "mismatched" ||
+      (state.status === "missing" && (this.sources.has("memory") || this.hasIndexedChunks()));
+    return state;
   }
 
   async search(
@@ -374,11 +488,32 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (preflight.shouldInitializeProvider) {
       await this.ensureProviderInitialized();
     }
+    if (!this.provider && this.providerLifecycle.mode === "degraded") {
+      const activatedFallback = await this.activateFallbackProvider(
+        this.providerLifecycle.reason,
+      ).catch((fallbackErr: unknown) => {
+        log.warn(
+          `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
+        );
+        return false;
+      });
+      if (activatedFallback) {
+        this.refreshIndexIdentityDirty({
+          providerKeyKnown: this.providerInitialized,
+        });
+      }
+    }
+    const indexIdentity = this.refreshIndexIdentityDirty({
+      providerKeyKnown: this.providerInitialized,
+    });
+    if (indexIdentity.status !== "valid") {
+      return [];
+    }
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const searchSources =
       opts?.sources && opts.sources.length > 0
-        ? [...new Set(opts.sources)].filter((s) => this.sources.has(s))
+        ? uniqueValues(opts.sources).filter((s) => this.sources.has(s))
         : undefined;
     if (
       opts?.sources &&
@@ -408,7 +543,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           boostFallbackRanking: true,
         },
         sourceFilterList,
-      ).catch((err) => {
+      ).catch((err: unknown) => {
         log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
         return [];
       });
@@ -429,7 +564,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                     candidates,
                     { boostFallbackRanking: true },
                     sourceFilterList,
-                  ).catch((err) => {
+                  ).catch((err: unknown) => {
                     log.warn(
                       `memory search: FTS per-keyword query failed for "${term}": ${formatErrorMessage(err)}`,
                     );
@@ -461,23 +596,53 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
 
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
-    const keywordResults =
+    const loadKeywordResults = async () =>
       hybrid.enabled && this.fts.enabled && this.fts.available
         ? await this.searchKeyword(
             cleaned,
             candidates,
             { boostFallbackRanking: true },
             sourceFilterList,
-          ).catch((err) => {
+          ).catch((err: unknown) => {
             log.warn(`memory search: FTS hybrid keyword query failed: ${formatErrorMessage(err)}`);
             return [];
           })
         : [];
+    let keywordResults = await loadKeywordResults();
 
-    const queryVec = await this.embedQueryWithTimeout(cleaned);
+    let queryVec: number[];
+    try {
+      queryVec = await this.embedQueryWithRetry(cleaned);
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      const activatedFallback = this.shouldFallbackOnError(err)
+        ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
+            log.warn(
+              `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
+            );
+            return false;
+          })
+        : false;
+      if (activatedFallback) {
+        if (
+          this.refreshIndexIdentityDirty({
+            providerKeyKnown: this.providerInitialized,
+          }).status !== "valid"
+        ) {
+          return [];
+        }
+        keywordResults = await loadKeywordResults();
+        queryVec = await this.embedQueryWithRetry(cleaned);
+      } else if (!this.provider && this.fts.enabled && this.fts.available) {
+        log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
+        return this.selectScoredResults(keywordResults, maxResults, minScore, 0);
+      } else {
+        throw err;
+      }
+    }
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
-      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err) => {
+      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err: unknown) => {
           log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
           return [];
         })
@@ -651,14 +816,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.closed) {
       return;
     }
-    await this.ensureProviderInitialized();
     if (this.syncing) {
       if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
         return this.enqueueTargetedSessionSync(params.sessionFiles);
       }
       return this.syncing;
     }
-    this.syncing = this.runSyncWithReadonlyRecovery(params).finally(() => {
+    this.syncing = (async () => {
+      await this.ensureProviderInitialized();
+      await this.runSyncWithReadonlyRecovery(params);
+    })().finally(() => {
       this.syncing = null;
     });
     return this.syncing ?? Promise.resolve();
@@ -767,6 +934,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   status(): MemoryProviderStatus {
+    this.refreshIndexIdentityDirty({
+      providerKeyKnown: this.providerInitialized,
+    });
     const sourceFilter = this.buildSourceFilter();
     const aggregateState = collectMemoryStatusAggregate({
       db: {
@@ -795,7 +965,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       backend: "builtin",
       files: aggregateState.files,
       chunks: aggregateState.chunks,
-      dirty: this.dirty || this.sessionsDirty,
+      dirty: this.dirty || this.sessionsDirty || this.indexIdentityDirty,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.path,
       provider: providerInfo.provider,
@@ -846,7 +1016,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       custom: {
         searchMode: providerInfo.searchMode,
+        providerState: this.providerLifecycle,
         providerUnavailableReason: this.providerUnavailableReason,
+        indexIdentity: this.indexIdentityState,
         readonlyRecovery: {
           attempts: this.readonlyRecoveryAttempts,
           successes: this.readonlyRecoverySuccesses,
@@ -937,7 +1109,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return;
     }
     this.closed = true;
-    const pendingSync = this.syncing;
     const pendingProviderInit = this.providerInitPromise;
     if (this.watchTimer) {
       clearTimeout(this.watchTimer);
@@ -951,20 +1122,31 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       clearInterval(this.intervalTimer);
       this.intervalTimer = null;
     }
+    if (this.memoryWatchPressureStartupTimer) {
+      clearTimeout(this.memoryWatchPressureStartupTimer);
+      this.memoryWatchPressureStartupTimer = null;
+    }
     if (this.watcher) {
       await this.watcher.close();
       this.watcher = null;
     }
+    this.closeNativeMemoryWatchPairs();
     if (this.sessionUnsubscribe) {
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;
     }
     const closeErrors = new Map<EmbeddingProvider, unknown>();
-    const closeCurrentProvider = async () => {
+    // Sync/provider fallback may swap this.provider while close is awaiting.
+    // Keep every observed provider and drain the set after sync has settled.
+    const providersToClose = new Set<EmbeddingProvider>();
+    const rememberCurrentProvider = () => {
       const provider = this.provider;
       if (!provider) {
         return;
       }
+      providersToClose.add(provider);
+    };
+    const closeProvider = async (provider: EmbeddingProvider) => {
       try {
         await provider.close?.();
         closeErrors.delete(provider);
@@ -973,13 +1155,37 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         }
       } catch (err) {
         closeErrors.set(provider, err);
+        providersToClose.add(provider);
+      } finally {
+        rememberCurrentProvider();
       }
     };
-    await awaitPendingManagerWork({ pendingProviderInit });
-    await closeCurrentProvider();
-    try {
+    const drainTrackedProviders = async () => {
+      for (let attempt = 0; attempt < 2 && providersToClose.size > 0; attempt += 1) {
+        const providers = Array.from(providersToClose);
+        providersToClose.clear();
+        try {
+          for (const provider of providers) {
+            await closeProvider(provider);
+          }
+        } finally {
+          rememberCurrentProvider();
+        }
+      }
+    };
+    const awaitCurrentSync = async () => {
+      const pendingSync = this.syncing;
+      if (!pendingSync) {
+        return;
+      }
       await awaitPendingManagerWork({ pendingSync });
-      await closeCurrentProvider();
+    };
+    await awaitPendingManagerWork({ pendingProviderInit });
+    rememberCurrentProvider();
+    try {
+      await awaitCurrentSync();
+      rememberCurrentProvider();
+      await drainTrackedProviders();
     } finally {
       closeMemoryDatabase(this.db);
       if (INDEX_CACHE.get(this.cacheKey) === this) {
@@ -988,7 +1194,21 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     const closeError = closeErrors.values().next().value;
     if (closeError) {
-      throw closeError;
+      throw toLintErrorObject(closeError, "Non-Error thrown");
     }
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -1,3 +1,6 @@
+/**
+ * Tests for config gateway methods, writes, validation, and auth transitions.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearConfigSchemaResponseCacheForTests,
@@ -17,15 +20,12 @@ const { execFileMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    {
-      execFile: Object.assign(execFileMock, {
-        __promisify__: vi.fn(),
-      }) as typeof import("node:child_process").execFile,
-    },
-  );
+  const { mockNodeChildProcessModule } = await import("./node-child-process.test-support.js");
+  return mockNodeChildProcessModule({
+    execFile: Object.assign(execFileMock, {
+      __promisify__: vi.fn(),
+    }) as typeof import("node:child_process").execFile,
+  });
 });
 
 vi.mock("../../config/runtime-schema.js", () => ({
@@ -40,7 +40,21 @@ function invokeExecFileCallback(args: unknown[], error: Error | null) {
   callback(error);
 }
 
+function mockExecFileError(error: Error) {
+  execFileMock.mockImplementation((...args: unknown[]) => {
+    invokeExecFileCallback(args, error);
+    return {} as never;
+  });
+}
+
+async function invokeConfigOpenFile() {
+  const harness = createConfigHandlerHarness({ method: "config.openFile" });
+  await configHandlers["config.openFile"](harness.options);
+  return harness;
+}
+
 afterEach(() => {
+  vi.useRealTimers();
   clearConfigSchemaResponseCacheForTests();
   vi.clearAllMocks();
 });
@@ -87,8 +101,7 @@ describe("config.openFile", () => {
       return {} as never;
     });
 
-    const { options, respond } = createConfigHandlerHarness({ method: "config.openFile" });
-    await configHandlers["config.openFile"](options);
+    const { respond } = await invokeConfigOpenFile();
 
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -100,32 +113,44 @@ describe("config.openFile", () => {
     );
   });
 
-  it("returns a generic error and logs details when the opener fails", async () => {
+  it("returns a detailed error and logs details when the opener fails", async () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
-    execFileMock.mockImplementation((...args: unknown[]) => {
-      invokeExecFileCallback(
-        args,
-        Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }),
-      );
-      return {} as never;
-    });
+    mockExecFileError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
 
-    const { options, respond, logGateway } = createConfigHandlerHarness({
-      method: "config.openFile",
-    });
-    await configHandlers["config.openFile"](options);
+    const { respond, logGateway } = await invokeConfigOpenFile();
 
     expect(respond).toHaveBeenCalledWith(
       true,
       {
         ok: false,
         path: "/tmp/config.json",
-        error: "failed to open config file",
+        error: "Failed to open config file: spawn xdg-open ENOENT",
       },
       undefined,
     );
     expect(logGateway.warn).toHaveBeenCalledWith(
       "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
+    );
+  });
+
+  it("returns actionable headless environment error when xdg-open reports no method available", async () => {
+    process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
+    mockExecFileError(new Error("xdg-open: no method available for opening '/tmp/config.json'"));
+
+    const { respond, logGateway } = await invokeConfigOpenFile();
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: false,
+        path: "/tmp/config.json",
+        error:
+          "Cannot open file in headless environment. File path: /tmp/config.json. This environment appears to lack a graphical or terminal browser handler.",
+      },
+      undefined,
+    );
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      "config.openFile failed path=/tmp/config.json: xdg-open: no method available for opening '/tmp/config.json'",
     );
   });
 });
@@ -141,6 +166,16 @@ describe("config schema response cache", () => {
   it("can be cleared when config writes change schema inputs", () => {
     loadConfigSchemaResponseForTests();
     clearConfigSchemaResponseCacheForTests();
+    loadConfigSchemaResponseForTests();
+
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache schema responses when cache expiry would exceed Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    loadConfigSchemaResponseForTests();
     loadConfigSchemaResponseForTests();
 
     expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);

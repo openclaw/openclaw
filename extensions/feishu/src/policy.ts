@@ -1,3 +1,4 @@
+// Feishu plugin module implements policy behavior.
 import {
   normalizeAccountId,
   resolveMergedAccountConfig,
@@ -257,7 +258,7 @@ export function hasExplicitFeishuGroupConfig(params: {
   if (!groupId) {
     return false;
   }
-  if (Object.prototype.hasOwnProperty.call(groups, groupId) && groupId !== "*") {
+  if (Object.hasOwn(groups, groupId) && groupId !== "*") {
     return true;
   }
 

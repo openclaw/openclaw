@@ -1,6 +1,15 @@
+/**
+ * Channel inbound media normalization.
+ *
+ * Converts plugin attachment metadata into aligned prompt/context media payload fields.
+ */
+import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import type { HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
 import type { InboundMediaFacts } from "../turn/types.js";
 
+/**
+ * Attachment metadata accepted from channel plugins before core normalization.
+ */
 export type ChannelInboundMediaInput = {
   path?: string | null;
   url?: string | null;
@@ -10,6 +19,9 @@ export type ChannelInboundMediaInput = {
   messageId?: string | null;
 };
 
+/**
+ * Environment payload fields consumed by prompt/context builders for inbound media attachments.
+ */
 export type ChannelInboundMediaPayload = {
   MediaPath?: string;
   MediaUrl?: string;
@@ -24,12 +36,9 @@ function alignedStrings(values: Array<string | undefined>): string[] | undefined
   if (!values.some(Boolean)) {
     return undefined;
   }
+  // Preserve indexes across parallel Media* arrays so transcribed indexes and
+  // media metadata continue to refer to the same attachment.
   return values.map((value) => value ?? "");
-}
-
-function normalizeString(value: string | null | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
 }
 
 function normalizeKind(value: InboundMediaFacts["kind"] | null | undefined) {
@@ -40,6 +49,9 @@ function mediaType(media: InboundMediaFacts): string | undefined {
   return media.contentType ?? media.kind;
 }
 
+/**
+ * Normalizes plugin-provided attachment facts into the channel turn media shape.
+ */
 export function toInboundMediaFacts(
   media: readonly ChannelInboundMediaInput[] | null | undefined,
   defaults: {
@@ -61,6 +73,9 @@ export function toInboundMediaFacts(
   }));
 }
 
+/**
+ * Projects inbound attachment facts into transcript history without transient turn-only flags.
+ */
 export function toHistoryMediaEntries(
   media: readonly ChannelInboundMediaInput[] | null | undefined,
   defaults: {
@@ -77,6 +92,9 @@ export function toHistoryMediaEntries(
   }));
 }
 
+/**
+ * Builds prompt environment media fields while keeping single-item legacy fields populated.
+ */
 export function buildChannelInboundMediaPayload(
   media: readonly InboundMediaFacts[] | null | undefined,
 ): ChannelInboundMediaPayload {

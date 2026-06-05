@@ -1,3 +1,4 @@
+// Browser residue doctor tests cover detection of stale browser state.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
@@ -6,12 +7,14 @@ import type { HealthRepairContext } from "./health-checks.js";
 const browserMocks = vi.hoisted(() => ({
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
+  noteChromeMcpBrowserReadiness: vi.fn(),
 }));
 
 vi.mock("../commands/doctor-browser.js", () => ({
   detectLegacyClawdBrowserProfileResidue: browserMocks.detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue:
     browserMocks.maybeArchiveLegacyClawdBrowserProfileResidue,
+  noteChromeMcpBrowserReadiness: browserMocks.noteChromeMcpBrowserReadiness,
 }));
 
 const residue = {
@@ -38,6 +41,7 @@ describe("browser clawd profile residue health check", () => {
   beforeEach(() => {
     browserMocks.detectLegacyClawdBrowserProfileResidue.mockReset();
     browserMocks.maybeArchiveLegacyClawdBrowserProfileResidue.mockReset();
+    browserMocks.noteChromeMcpBrowserReadiness.mockReset();
   });
 
   it("reports legacy clawd profile residue through doctor lint", async () => {

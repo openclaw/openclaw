@@ -1,3 +1,4 @@
+// Node CLI register tests cover node command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodeCli } from "./register.js";
@@ -101,6 +102,36 @@ describe("registerNodeCli", () => {
 
     expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
       expect.objectContaining({ gatewayHost: "10.0.0.2", gatewayPort: 19001 }),
+    );
+  });
+
+  it("inherits saved TLS settings only when using the saved gateway endpoint", async () => {
+    daemonMocks.loadNodeHostConfig.mockResolvedValue({
+      version: 1,
+      nodeId: "node-existing",
+      gateway: {
+        host: "10.0.0.2",
+        port: 19001,
+        tls: true,
+        tlsFingerprint: "old-fingerprint",
+      },
+    });
+
+    await createProgram().parseAsync(["node", "run"], { from: "user" });
+    expect(daemonMocks.runNodeHost).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        gatewayTls: true,
+        gatewayTlsFingerprint: "old-fingerprint",
+      }),
+    );
+
+    await createProgram().parseAsync(["node", "run", "--host", "10.0.0.3"], { from: "user" });
+    expect(daemonMocks.runNodeHost).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        gatewayHost: "10.0.0.3",
+        gatewayTls: undefined,
+        gatewayTlsFingerprint: undefined,
+      }),
     );
   });
 });

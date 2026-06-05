@@ -1,3 +1,4 @@
+// Voice Call tests cover config plugin behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   VoiceCallConfigSchema,
@@ -427,7 +428,6 @@ describe("normalizeVoiceCallConfig", () => {
       enabled: false,
       maxChars: 6000,
       includeIdentity: true,
-      includeSystemPrompt: true,
       includeWorkspaceFiles: true,
       files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     });

@@ -28,7 +28,7 @@ export const DEFAULT_RESOURCE_LIMITS = {
   "live:gemini": 4,
   "live:opencode": 4,
   "live:openai": 1,
-  npm: 10,
+  npm: 5,
   service: 7,
 };
 export const DEFAULT_TAIL_PARALLELISM = 10;
@@ -290,7 +290,7 @@ export function laneWeight(poolLane) {
 }
 
 export function laneResources(poolLane) {
-  return ["docker", ...(poolLane.resources ?? [])];
+  return [...new Set(["docker", ...(poolLane.resources ?? [])])];
 }
 
 export function laneSummary(poolLane) {
@@ -459,7 +459,7 @@ export function resolveDockerE2ePlan(options) {
   const configuredLanes = selectedLanes
     ? selectedLanes
     : releaseLanes
-      ? releaseLanes
+      ? applyLiveMode(releaseLanes, options.liveMode)
       : options.liveMode === "only"
         ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], options.liveMode)
         : applyLiveMode(retriedMainLanes, options.liveMode);

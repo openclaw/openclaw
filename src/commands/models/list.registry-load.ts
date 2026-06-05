@@ -1,13 +1,14 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
+/** Registry-loading adapters for model-list row construction. */
+import { loadAgentModelRegistry } from "../../agents/model-registry-loader.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
-import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ModelRegistry } from "../../llm/model-registry.js";
+import type { Model } from "../../llm/types.js";
 import { loadModelRegistry } from "./list.registry.js";
 import type { ConfiguredEntry } from "./list.types.js";
 import { modelKey } from "./shared.js";
 
+/** Loads the full model registry and tracks discovered provider/model keys. */
 export async function loadListModelRegistry(
   cfg: OpenClawConfig,
   opts?: {
@@ -28,7 +29,7 @@ function findConfiguredRegistryModel(params: {
   registry: ModelRegistry;
   entry: ConfiguredEntry;
   cfg: OpenClawConfig;
-}): Model<Api> | undefined {
+}): Model | undefined {
   const model = params.registry.find(params.entry.ref.provider, params.entry.ref.model);
   if (!model) {
     return undefined;
@@ -46,18 +47,14 @@ function findConfiguredRegistryModel(params: {
   return model;
 }
 
+/** Loads only configured registry entries and their auth availability. */
 export function loadConfiguredListModelRegistry(
   cfg: OpenClawConfig,
   entries: ConfiguredEntry[],
   opts?: { providerFilter?: string; workspaceDir?: string },
 ) {
-  const agentDir = resolveDefaultAgentDir(cfg);
-  const authStorage = discoverAuthStorage(agentDir, {
-    readOnly: true,
-    config: cfg,
+  const { registry } = loadAgentModelRegistry(cfg, {
     workspaceDir: opts?.workspaceDir,
-  });
-  const registry = discoverModels(authStorage, agentDir, {
     providerFilter: opts?.providerFilter,
   });
   const discoveredKeys = new Set<string>();

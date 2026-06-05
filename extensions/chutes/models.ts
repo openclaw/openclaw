@@ -1,3 +1,6 @@
+/**
+ * Chutes model catalog, static model definitions, and dynamic model discovery.
+ */
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -5,6 +8,7 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -12,13 +16,17 @@ import { isChutesModelDiscoveryTestEnvironment } from "./model-discovery-env.js"
 
 const log = createSubsystemLogger("chutes-models");
 
+/** Base URL for Chutes OpenAI-compatible inference. */
 export const CHUTES_BASE_URL = "https://llm.chutes.ai/v1";
+/** Default Chutes model id used for onboarding. */
 export const CHUTES_DEFAULT_MODEL_ID = "zai-org/GLM-4.7-TEE";
+/** Default Chutes model ref used for onboarding. */
 export const CHUTES_DEFAULT_MODEL_REF = `chutes/${CHUTES_DEFAULT_MODEL_ID}`;
 
 const CHUTES_DEFAULT_CONTEXT_WINDOW = 128000;
 const CHUTES_DEFAULT_MAX_TOKENS = 4096;
 
+/** Bundled fallback Chutes model catalog. */
 export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
     id: "Qwen/Qwen3-32B",
@@ -349,6 +357,9 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
     name: "Qwen/Qwen2.5-VL-32B-Instruct",
     reasoning: false,
     input: ["text", "image"],
+    mediaInput: {
+      image: { maxPixels: 12845056, preferredSidePx: 2048, tokenMode: "provider" },
+    },
     contextWindow: 16384,
     maxTokens: 16384,
     cost: { input: 0.05, output: 0.22, cacheRead: 0, cacheWrite: 0 },
@@ -358,6 +369,9 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
     name: "Qwen/Qwen3-VL-235B-A22B-Instruct",
     reasoning: false,
     input: ["text", "image"],
+    mediaInput: {
+      image: { maxPixels: 12845056, preferredSidePx: 2048, tokenMode: "provider" },
+    },
     contextWindow: 262144,
     maxTokens: 262144,
     cost: { input: 0.3, output: 1.2, cacheRead: 0, cacheWrite: 0 },
@@ -445,6 +459,7 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
   },
 ];
 
+/** Adds Chutes provider compat metadata to one model catalog entry. */
 export function buildChutesModelDefinition(
   model: (typeof CHUTES_MODEL_CATALOG)[number],
 ): ModelDefinitionConfig {
@@ -484,6 +499,7 @@ interface CacheEntry {
 
 const modelCache = new Map<string, CacheEntry>();
 
+/** Clears the dynamic Chutes model discovery cache for tests. */
 export function clearChutesModelCacheForTests(): void {
   modelCache.clear();
 }
@@ -514,6 +530,7 @@ function cacheAndReturn(
   return models;
 }
 
+/** Discovers Chutes models dynamically, falling back to the bundled static catalog. */
 export async function discoverChutesModels(accessToken?: string): Promise<ModelDefinitionConfig[]> {
   const trimmedKey = normalizeOptionalString(accessToken) ?? "";
   const now = Date.now();
@@ -610,8 +627,9 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
             cacheRead: 0,
             cacheWrite: 0,
           },
-          contextWindow: entry.context_length || CHUTES_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: entry.max_output_length || CHUTES_DEFAULT_MAX_TOKENS,
+          contextWindow:
+            asPositiveSafeInteger(entry.context_length) ?? CHUTES_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: asPositiveSafeInteger(entry.max_output_length) ?? CHUTES_DEFAULT_MAX_TOKENS,
           compat: {
             supportsUsageInStreaming: false,
           },

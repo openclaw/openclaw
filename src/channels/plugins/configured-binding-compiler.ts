@@ -1,10 +1,15 @@
-import { listConfiguredBindings } from "../../config/bindings.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { pickFirstExistingAgentId } from "../../routing/resolve-route.js";
+/**
+ * Configured binding compiler.
+ *
+ * Compiles config rules into channel/provider-specific binding registry entries.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { listConfiguredBindings } from "../../config/bindings.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pickFirstExistingAgentId } from "../../routing/resolve-route.js";
 import { resolveChannelConfiguredBindingProvider } from "./binding-provider.js";
 import type { CompiledConfiguredBinding, ConfiguredBindingChannel } from "./binding-types.js";
 import { resolveConfiguredBindingConsumer } from "./configured-binding-consumers.js";
@@ -13,9 +18,6 @@ import type {
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
-
-// Configured bindings are channel-owned rules compiled from config, separate
-// from runtime plugin-owned conversation bindings.
 
 export type CompiledConfiguredBindingRegistry = {
   rulesByChannel: Map<ConfiguredBindingChannel, CompiledConfiguredBinding[]>;

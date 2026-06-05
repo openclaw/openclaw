@@ -1,3 +1,4 @@
+// Test Device Pair Telegram script supports OpenClaw repository automation.
 import { sendMessageTelegram } from "../../extensions/telegram/runtime-api.js";
 import { getRuntimeConfig } from "../../src/config/config.js";
 import { matchPluginCommand, executePluginCommand } from "../../src/plugins/commands.js";
@@ -55,12 +56,12 @@ const result = await executePluginCommand({
   config: cfg,
   from: `telegram:${chatId}`,
   to: `telegram:${chatId}`,
-  accountId: accountId,
+  accountId,
 });
 
 if (result.text) {
   await sendMessageTelegram(chatId, result.text, {
-    accountId: accountId,
+    accountId,
   });
 }
 

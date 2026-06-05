@@ -1,3 +1,5 @@
+// Provides shared helpers for plugin hook tests.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createHookRunner } from "./hooks.js";
 import type { PluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
@@ -12,7 +14,7 @@ export function createMockPluginRegistry(
 ): PluginRegistry {
   const pluginIds =
     hooks.length > 0
-      ? [...new Set(hooks.map((hook) => hook.pluginId ?? "test-plugin"))]
+      ? uniqueStrings(hooks.map((hook) => hook.pluginId ?? "test-plugin"))
       : ["test-plugin"];
   return {
     plugins: pluginIds.map((pluginId) =>
@@ -38,7 +40,7 @@ export function createMockPluginRegistry(
     embeddingProviders: [],
     speechProviders: [],
     mediaUnderstandingProviders: [],
-    meetingNotesSourceProviders: [],
+    transcriptSourceProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],
     musicGenerationProviders: [],

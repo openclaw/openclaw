@@ -1,8 +1,23 @@
+/** Provides plugin CLI node APIs by forwarding calls to the Gateway. */
 import { randomUUID } from "node:crypto";
+import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { callGateway } from "../gateway/call.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
+/** Adds Gateway timer grace for plugin CLI node invoke calls. */
+export function resolvePluginCliNodeInvokeGatewayTimeoutMs(
+  timeoutMs: number | undefined,
+): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? addTimerTimeoutGraceMs(timeoutMs)
+    : undefined;
+}
+
+/** Creates the `runtime.nodes` implementation exposed to CLI plugin code. */
 export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
   return {
     async list(params) {
@@ -36,7 +51,7 @@ export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
           timeoutMs: params.timeoutMs,
           idempotencyKey: params.idempotencyKey || randomUUID(),
         },
-        timeoutMs: params.timeoutMs ? params.timeoutMs + 5_000 : undefined,
+        timeoutMs: resolvePluginCliNodeInvokeGatewayTimeoutMs(params.timeoutMs),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       });

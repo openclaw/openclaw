@@ -1,3 +1,4 @@
+// Onboarding plugin install tests cover install sources, trust checks, and install records.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -78,9 +79,24 @@ const recordPluginInstall = vi.hoisted(() =>
   })),
 );
 const buildNpmResolutionInstallFields = vi.hoisted(() => vi.fn(() => ({})));
+const resolveNpmInstallRecordSpec = vi.hoisted(() =>
+  vi.fn(
+    (params: {
+      requestedSpec?: string;
+      resolution?: { resolvedSpec?: string };
+      pinResolvedRegistrySpec?: boolean;
+    }) => {
+      if (params.pinResolvedRegistrySpec && params.resolution?.resolvedSpec) {
+        return params.resolution.resolvedSpec;
+      }
+      return params.requestedSpec;
+    },
+  ),
+);
 vi.mock("../plugins/installs.js", () => ({
   recordPluginInstall,
   buildNpmResolutionInstallFields,
+  resolveNpmInstallRecordSpec,
 }));
 
 const withTimeout = vi.hoisted(() => vi.fn(async <T>(promise: Promise<T>) => await promise));

@@ -1,4 +1,13 @@
+/**
+ * Tool-call loop detection.
+ *
+ * Watches recent tool history for repeated no-progress patterns and circuit-breaker thresholds.
+ */
 import { createHash } from "node:crypto";
+import {
+  normalizeNullableString as nonEmptyStringField,
+  normalizeOptionalString as normalizeRunId,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -63,11 +72,6 @@ type ToolLoopDetectionScope = {
   runId?: string;
 };
 
-function normalizeRunId(runId?: string): string | undefined {
-  const trimmed = runId?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function selectHistoryForScope(
   history: readonly ToolCallRecord[],
   scope?: ToolLoopDetectionScope,
@@ -84,7 +88,7 @@ function asPositiveInt(value: number | undefined, fallback: number): number {
 }
 
 function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedLoopDetectionConfig {
-  let warningThreshold = asPositiveInt(
+  const warningThreshold = asPositiveInt(
     config?.warningThreshold,
     DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
   );
@@ -190,14 +194,6 @@ function extractUnknownToolName(error: unknown): string | undefined {
 
 function stringField(value: unknown): string | null {
   return typeof value === "string" ? value : null;
-}
-
-function nonEmptyStringField(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
 }
 
 function hashExecToolOutcome(details: Record<string, unknown>, text: string): string | undefined {

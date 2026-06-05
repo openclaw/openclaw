@@ -1,5 +1,7 @@
+// Matrix plugin module implements cli behavior.
 import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { parseStrictInteger, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
@@ -215,8 +217,9 @@ function printMatrixOwnDevices(
     console.log(
       `- ${formatMatrixCliText(device.deviceId)}${labels.length ? ` (${labels.join(", ")})` : ""}`,
     );
-    if (device.lastSeenTs) {
-      printTimestamp("  Last seen", new Date(device.lastSeenTs).toISOString());
+    const lastSeenAt = timestampMsToIsoString(device.lastSeenTs);
+    if (lastSeenAt) {
+      printTimestamp("  Last seen", lastSeenAt);
     }
     if (device.lastSeenIp) {
       console.log(`  Last IP: ${formatMatrixCliText(device.lastSeenIp)}`);
@@ -234,8 +237,11 @@ function parseOptionalInt(value: string | undefined, fieldName: string): number 
   if (!trimmed) {
     return undefined;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed)) {
+  if (!/^-?\d+$/.test(trimmed)) {
+    throw new Error(`${fieldName} must be an integer`);
+  }
+  const parsed = parseStrictInteger(trimmed);
+  if (parsed === undefined) {
     throw new Error(`${fieldName} must be an integer`);
   }
   return parsed;
@@ -394,10 +400,7 @@ async function addMatrixAccount(params: {
     }
   }
 
-  let deviceHealth: MatrixCliAccountAddResult["deviceHealth"] = {
-    currentDeviceId: null,
-    staleOpenClawDeviceIds: [],
-  };
+  let deviceHealth: MatrixCliAccountAddResult["deviceHealth"];
   try {
     const addedDevices = await listMatrixOwnDevices({ accountId, cfg: updated });
     deviceHealth = {

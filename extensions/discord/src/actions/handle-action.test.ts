@@ -1,3 +1,4 @@
+// Discord tests cover handle action plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -74,6 +75,70 @@ describe("handleDiscordMessageAction", () => {
         reason: undefined,
         deleteMessageDays: undefined,
         senderUserId: "trusted-sender-id",
+      },
+      cfg,
+    });
+  });
+
+  it("rejects fractional moderation durations before invoking Discord runtime", async () => {
+    const cfg = discordConfig({ moderation: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "timeout",
+        params: {
+          guildId: "guild-1",
+          userId: "user-2",
+          durationMin: 5.5,
+        },
+        cfg,
+        requesterSenderId: "trusted-sender-id",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).rejects.toThrow("durationMin must be a non-negative integer");
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("uses Discord requesterSenderId for guild admin actions and ignores params senderUserId", async () => {
+    const cfg = discordConfig({ channels: true });
+    await handleDiscordMessageAction({
+      action: "channel-delete",
+      params: {
+        channelId: "channel-1",
+        senderUserId: "spoofed-admin-id",
+      },
+      cfg,
+      requesterSenderId: "trusted-sender-id",
+      toolContext: { currentChannelProvider: "discord" },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "channelDelete",
+        accountId: undefined,
+        channelId: "channel-1",
+        senderUserId: "trusted-sender-id",
+      },
+      cfg,
+    });
+  });
+
+  it("does not treat non-Discord requester ids as Discord guild admin sender ids", async () => {
+    const cfg = discordConfig({ channels: true });
+    await handleDiscordMessageAction({
+      action: "channel-delete",
+      params: {
+        channelId: "channel-1",
+      },
+      cfg,
+      requesterSenderId: "telegram-user-id",
+      toolContext: { currentChannelProvider: "telegram" },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "channelDelete",
+        accountId: undefined,
+        channelId: "channel-1",
       },
       cfg,
     });

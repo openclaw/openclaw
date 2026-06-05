@@ -1,3 +1,4 @@
+// Verifies TUI command definitions and parser metadata.
 import { describe, expect, it } from "vitest";
 import { getSlashCommands, helpText, parseCommand } from "./commands.js";
 
@@ -37,6 +38,14 @@ describe("getSlashCommands", () => {
     expect(status?.description).toBe("Show current status.");
     expect(gatewayStatus?.description).toBe("Show gateway status summary");
     expect(crestodian?.description).toBe("Return to Crestodian");
+  });
+
+  it("distinguishes new-session and reset command descriptions", () => {
+    const commands = getSlashCommands();
+    const newSession = commands.find((command) => command.name === "new");
+    const reset = commands.find((command) => command.name === "reset");
+    expect(newSession?.description).toBe("Spawn a new isolated session");
+    expect(reset?.description).toBe("Reset the current session");
   });
 
   it("uses session-provided thinking levels for completions", () => {

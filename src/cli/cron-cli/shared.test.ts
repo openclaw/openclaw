@@ -1,9 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Cron shared tests cover shared cron CLI parsing, display, and error helpers.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   coerceCronDeliveryPreviews,
   getCronChannelOptions,
+  parseAt,
   parseCronToolsAllow,
   printCronList,
 } from "./shared.js";
@@ -29,6 +31,10 @@ function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
 function expectLogsToInclude(logs: readonly string[], text: string): void {
   expect(logs.join("\n")).toContain(text);
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createBaseJob(overrides: Partial<CronJob>): CronJob {
   const now = Date.now();
@@ -228,6 +234,34 @@ describe("printCronList", () => {
 
     printCronList([job], runtime);
     expectLogsToInclude(logs, "(exact)");
+  });
+});
+
+describe("parseAt", () => {
+  it("accepts leading plus relative durations for cron add --at", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+
+    expect(parseAt("+30m")).toBe("2026-05-25T00:30:00.000Z");
+    expect(parseAt("30m")).toBe("2026-05-25T00:30:00.000Z");
+  });
+
+  it("rejects out-of-range epoch milliseconds", () => {
+    expect(parseAt(String(Number.MAX_SAFE_INTEGER))).toBeNull();
+  });
+
+  it("rejects relative durations outside the Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+
+    expect(parseAt("+999999999999999999d")).toBeNull();
+  });
+
+  it("rejects relative durations when the current clock is at the Date boundary", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    expect(parseAt("+1m")).toBeNull();
   });
 });
 

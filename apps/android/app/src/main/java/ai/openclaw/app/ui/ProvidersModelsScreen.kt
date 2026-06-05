@@ -18,11 +18,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -55,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/** Android providers/models browser backed by the gateway catalog. */
 @Composable
 internal fun ProvidersModelsScreen(
   viewModel: MainViewModel,
@@ -77,9 +82,16 @@ internal fun ProvidersModelsScreen(
     }
   }
 
-  ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 13.dp, end = 20.dp, bottom = 13.dp)) {
+  ClawScaffold(
+    contentPadding = PaddingValues(start = 20.dp, top = 13.dp, end = 20.dp, bottom = 6.dp),
+    contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+  ) {
     Box(modifier = Modifier.fillMaxSize()) {
-      LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp), contentPadding = PaddingValues(bottom = 112.dp)) {
+      LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+        contentPadding = PaddingValues(bottom = 4.dp),
+      ) {
         item {
           Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
@@ -190,6 +202,7 @@ private data class ProviderRow(
   val modelCount: Int,
 )
 
+/** Combines auth-provider readiness rows with catalog-only providers. */
 private fun providerRows(
   providers: List<GatewayModelProviderSummary>,
   models: List<GatewayModelSummary>,
@@ -206,6 +219,8 @@ private fun providerRows(
         modelCount = modelCounts[provider.id] ?: 0,
       )
     }
+  // Static/catalog-only providers may expose models without a matching auth
+  // provider row; keep them visible as ready providers.
   val missingAuthRows =
     modelCounts.keys
       .filter { provider -> authRows.none { it.id == provider } }
@@ -245,6 +260,7 @@ private fun providerSetupSubtitle(
     else -> "Add provider credentials on your Gateway"
   }
 
+/** Normalizes gateway provider status strings into a ready/not-ready boolean. */
 internal fun modelProviderReady(status: String): Boolean {
   val normalized = status.trim().lowercase()
   return normalized == "ok" ||
@@ -254,6 +270,7 @@ internal fun modelProviderReady(status: String): Boolean {
     normalized == "static"
 }
 
+/** Groups models by provider using the same display priority as provider rows. */
 private fun sortedModelGroups(models: List<GatewayModelSummary>): List<Pair<String, List<GatewayModelSummary>>> =
   models
     .groupBy { it.provider }
@@ -270,7 +287,7 @@ private fun providerPriority(provider: String): Int =
     "google" -> 2
     "openrouter" -> 3
     "ollama", "ollama-local" -> 4
-    "codex", "openai-codex" -> 5
+    "codex" -> 5
     else -> 100
   }
 
@@ -483,6 +500,7 @@ private fun ModelRow(model: GatewayModelSummary) {
   }
 }
 
+/** Derives compact capability chips for model catalog rows. */
 private fun modelCapabilityLabels(model: GatewayModelSummary): List<String> =
   buildList {
     if (model.supportsReasoning) add("Reasoning")

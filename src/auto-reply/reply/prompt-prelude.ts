@@ -1,17 +1,24 @@
-import type { CurrentInboundPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
+/** Builds prompt body and envelope metadata for reply runs. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
 const REPLY_MEDIA_HINT =
-  "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Absolute and ~ paths only work when they stay inside your allowed file-read boundary; host file:// URLs are blocked. Keep caption in the text body.";
+  "To send an image back, use the message tool with structured media fields such as media, mediaUrl, path, or filePath. Keep caption in the text body.";
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
-const ROOM_EVENT_VISIBLE_REPLY_CONTRACT = "message_tool_only";
+const ROOM_EVENT_SOURCE_REPLY_DELIVERY_MODE = "message_tool_only";
+const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
+  "Conversation context (untrusted, chronological, selected for current message):",
+  "Chat history since last reply (untrusted, for context):",
+];
 
+/** Builds command/transcript/queued prompt bodies from inbound context. */
 export function buildReplyPromptBodies(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
@@ -70,8 +77,10 @@ export function buildReplyPromptBodies(params: {
   };
 }
 
+/** Startup action associated with a reply prompt envelope. */
 export type ReplyPromptEnvelopeStartupAction = "new" | "reset";
 
+/** Full prompt envelope passed into reply run preparation. */
 export type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & {
   /** Model-visible body before media, thread context, and inter-session annotation are applied. */
   effectiveBaseBody: string;
@@ -81,6 +90,7 @@ export type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & {
   currentInboundContext?: CurrentInboundPromptContext;
 };
 
+/** Base prompt envelope fields before body variants are added. */
 export type ReplyPromptEnvelopeBase = {
   /** Model-visible body before media, thread context, and inter-session annotation are applied. */
   effectiveBaseBody: string;
@@ -103,6 +113,7 @@ type ReplyPromptEnvelopeBaseParams = {
   softResetTail?: string;
   isHeartbeat?: boolean;
   inboundEventKind?: InboundEventKind;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
 function formatRoomEventLine(ctx: TemplateContext, body: string): string {
@@ -129,13 +140,18 @@ function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
   );
 }
 
-function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams): string {
+function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams, roomContext: string): string {
   const roomEventBody = resolveRoomEventBody(params);
+  const roomContextBlock = roomContext.trim() ? `Room context:\n${roomContext.trim()}` : "";
+  const visibleReplyContract =
+    params.sourceReplyDeliveryMode === "message_tool_only"
+      ? `visible_reply_contract: ${ROOM_EVENT_SOURCE_REPLY_DELIVERY_MODE}`
+      : undefined;
   return [
     "[OpenClaw room event]",
     "inbound_event_kind: room_event",
-    `visible_reply_contract: ${ROOM_EVENT_VISIBLE_REPLY_CONTRACT}`,
-    params.inboundUserContext.trim() ? `Room context:\n${params.inboundUserContext.trim()}` : "",
+    visibleReplyContract,
+    roomContextBlock,
     `Current event:\n${formatRoomEventLine(params.sessionCtx, roomEventBody)}`,
     "Treat this as observed room activity. Decide whether to act.",
   ]
@@ -143,15 +159,28 @@ function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams): string {
     .join("\n\n");
 }
 
+function buildResumableRoomContext(roomContext: string): string {
+  return roomContext
+    .split(/\n{2,}/u)
+    .filter(
+      (block) =>
+        !RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES.some((prefix) => block.startsWith(prefix)),
+    )
+    .join("\n\n");
+}
+
+/** Builds prompt envelope metadata shared by all body variants. */
 export function buildReplyPromptEnvelopeBase(
   params: ReplyPromptEnvelopeBaseParams,
 ): ReplyPromptEnvelopeBase {
   const softResetTail = params.softResetTail?.trim() ?? "";
   const isRoomEvent = params.inboundEventKind === "room_event";
-  const roomEventContext = buildRoomEventContext(params);
-  const currentInboundContextText = isRoomEvent
-    ? roomEventContext
-    : params.inboundUserContext.trim();
+  const inboundUserContext = params.inboundUserContext.trim();
+  const roomEventContext = buildRoomEventContext(params, inboundUserContext);
+  const resumableRoomEventContext = isRoomEvent
+    ? buildRoomEventContext(params, buildResumableRoomContext(inboundUserContext))
+    : undefined;
+  const currentInboundContextText = isRoomEvent ? roomEventContext : inboundUserContext;
   const resetModelBody = params.isBareSessionReset
     ? [
         params.inboundUserContext,
@@ -182,6 +211,7 @@ export function buildReplyPromptEnvelopeBase(
     !params.isBareSessionReset && currentInboundContextText
       ? {
           text: currentInboundContextText,
+          ...(resumableRoomEventContext ? { resumableText: resumableRoomEventContext } : {}),
           promptJoiner: params.inboundUserContextPromptJoiner,
         }
       : undefined;
@@ -193,6 +223,7 @@ export function buildReplyPromptEnvelopeBase(
   };
 }
 
+/** Builds the full reply prompt envelope for a prepared run. */
 export function buildReplyPromptEnvelope(
   params: ReplyPromptEnvelopeBaseParams & {
     prefixedBody?: string;

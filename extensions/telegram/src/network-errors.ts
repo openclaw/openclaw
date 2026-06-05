@@ -1,9 +1,11 @@
+// Telegram plugin module implements network errors behavior.
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
   formatErrorMessage,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
@@ -12,6 +14,7 @@ const RECOVERABLE_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
   "EPIPE",
+  "ENETDOWN",
   "ETIMEDOUT",
   "ESOCKETTIMEDOUT",
   "ENETUNREACH",
@@ -41,6 +44,7 @@ const PRE_CONNECT_ERROR_CODES = new Set([
   "ECONNREFUSED", // Server actively refused the connection (never reached Telegram)
   "ENOTFOUND", // DNS resolution failed (never sent)
   "EAI_AGAIN", // Transient DNS failure (never sent)
+  "ENETDOWN", // Local network interface is down before connect completes (never sent)
   "ENETUNREACH", // No route to host (never sent)
   "EHOSTUNREACH", // Host unreachable (never sent)
 ]);
@@ -115,7 +119,7 @@ function getNumericHttpStatus(err: unknown): number | undefined {
     if (typeof value === "string") {
       const trimmed = value.trim();
       if (/^\d+$/.test(trimmed)) {
-        return Number.parseInt(trimmed, 10);
+        return parseStrictNonNegativeInteger(trimmed);
       }
     }
   }

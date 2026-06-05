@@ -1,5 +1,6 @@
-import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth";
-import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
+// Discord tests cover native command.command arg plugin behavior.
+import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth-native";
+import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {

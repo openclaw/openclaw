@@ -1,6 +1,9 @@
+// Media-understanding default model/provider selection from config, manifest
+// metadata, and capability declarations.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
 import {
   normalizeMediaExecutionProviderId,
@@ -28,6 +31,8 @@ function cacheConfigRegistry(
   key: string,
   registry: Map<string, MediaUnderstandingProvider>,
 ): Map<string, MediaUnderstandingProvider> {
+  // Config snapshots are process-stable enough for bounded reuse; cap entries so
+  // tests and multi-workspace runs cannot grow this cache without limit.
   if (
     !configRegistryCache.has(key) &&
     configRegistryCache.size >= MAX_CONFIG_REGISTRY_CACHE_ENTRIES
@@ -132,9 +137,10 @@ function insertConfiguredImageProviders(params: {
   for (const providerId of params.configured.filter((id) => !isExecutionAliasProvider(id))) {
     merged.push(providerId);
   }
-  return [...new Set(merged)];
+  return uniqueStrings(merged);
 }
 
+/** Resolves the default provider model for a media capability from config or manifest metadata. */
 export function resolveDefaultMediaModel(params: {
   providerId: string;
   capability: MediaUnderstandingCapability;
@@ -167,6 +173,7 @@ export function resolveDefaultMediaModel(params: {
   return undefined;
 }
 
+/** Resolves auto-discovery provider order for a media capability using manifest priorities. */
 export function resolveAutoMediaKeyProviders(params: {
   capability: MediaUnderstandingCapability;
   cfg?: OpenClawConfig;
@@ -205,6 +212,7 @@ export function resolveAutoMediaKeyProviders(params: {
   });
 }
 
+/** Returns whether provider metadata declares native PDF document input support. */
 export function providerSupportsNativePdfDocument(params: {
   providerId: string;
   cfg?: OpenClawConfig;
@@ -215,4 +223,23 @@ export function providerSupportsNativePdfDocument(params: {
     params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   return provider?.nativeDocumentInputs?.includes("pdf") ?? false;
+}
+
+/** Resolves provider-specific document model hints, preserving explicit unsupported markers. */
+export function resolveDocumentMediaModel(params: {
+  providerId: string;
+  document: "pdf";
+  mode: "textExtraction" | "image";
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  providerRegistry?: Map<string, MediaUnderstandingProvider>;
+}): string | false | undefined {
+  const registry =
+    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
+  const provider = registry.get(normalizeMediaProviderId(params.providerId));
+  const value = provider?.documentModels?.[params.document]?.[params.mode];
+  if (value === false) {
+    return false;
+  }
+  return normalizeOptionalString(value);
 }
