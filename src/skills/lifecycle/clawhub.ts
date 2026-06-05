@@ -892,9 +892,7 @@ async function performClawHubSkillInstall(
     let version!: string;
     let detail: ClawHubSkillDetail | undefined;
     let latestResolution: Extract<ClawHubSkillInstallResolutionResponse, { ok: true }> | undefined;
-    let install:
-      | Awaited<ReturnType<typeof installArchiveResolution>>
-      | Awaited<ReturnType<typeof installGitHubResolution>>;
+    let install: Awaited<ReturnType<typeof installArchiveResolution>>;
 
     const archive = params.version
       ? await (async () => {

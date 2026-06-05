@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -40,7 +40,7 @@ async function spawnOpenClaw(
   });
 }
 
-async function buildGitHubSkillZip(commit: string): Promise<Buffer> {
+async function buildGitHubSkillZip(): Promise<Buffer> {
   const zip = new JSZip();
   zip.file("skills-main/skills/aiq-deploy/SKILL.md", "# AIQ Deploy\n");
   zip.file("skills-main/skills/aiq-deploy/skill-card.md", "# Card\n");
@@ -53,8 +53,8 @@ describe("openclaw skills install ClawHub GitHub-backed E2E", () => {
     const commit = "c".repeat(40);
     const telemetryBodies: unknown[] = [];
     const requestLog: string[] = [];
-    const githubZipBytes = await buildGitHubSkillZip(commit);
-    const server = createServer(async (req, res) => {
+    const githubZipBytes = await buildGitHubSkillZip();
+    async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       requestLog.push(`${req.method ?? "GET"} ${url.pathname}`);
 
@@ -92,8 +92,18 @@ describe("openclaw skills install ClawHub GitHub-backed E2E", () => {
 
       res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
       res.end("not found");
+    }
+    const server = createServer((req, res) => {
+      void handleRequest(req, res).catch((error: unknown) => {
+        res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end(error instanceof Error ? error.message : String(error));
+      });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        resolve();
+      });
+    });
 
     const registry = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-cli-e2e-"));
@@ -134,7 +144,11 @@ describe("openclaw skills install ClawHub GitHub-backed E2E", () => {
         ],
       });
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   }, 30_000);

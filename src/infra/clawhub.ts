@@ -1364,12 +1364,17 @@ export async function downloadClawHubSkillArchiveUrl(params: {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubDownloadResult> {
+  const explicitToken = normalizeOptionalString(params.token);
+  const requestUrl = new URL(params.url, `${normalizeBaseUrl(params.baseUrl)}/`);
+  const registryOrigin = new URL(`${normalizeBaseUrl(params.baseUrl)}/`).origin;
+  const skipAuth = explicitToken == null && requestUrl.origin !== registryOrigin;
   const { response, url, hasToken } = await clawhubRequest({
     baseUrl: params.baseUrl,
     url: params.url,
-    token: params.token,
+    token: explicitToken,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
+    skipAuth,
   });
   if (!response.ok) {
     throw await buildClawHubError(response, url, hasToken);

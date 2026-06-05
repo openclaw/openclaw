@@ -150,7 +150,7 @@ describe("task-flow-registry store runtime", () => {
   });
 
   it("rejects corrupt persisted flow rows during sqlite restore", async () => {
-    await withFlowRegistryTempDir(async (root) => {
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -174,7 +174,7 @@ describe("task-flow-registry store runtime", () => {
   });
 
   it("drops invalid requester origins during sqlite restore", async () => {
-    await withFlowRegistryTempDir(async (root) => {
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -203,7 +203,7 @@ describe("task-flow-registry store runtime", () => {
   });
 
   it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {
-    await withFlowRegistryTempDir(async (root) => {
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -248,7 +248,7 @@ describe("task-flow-registry store runtime", () => {
   });
 
   it("round-trips explicit json null through sqlite", async () => {
-    await withFlowRegistryTempDir(async (root) => {
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -269,7 +269,7 @@ describe("task-flow-registry store runtime", () => {
   });
 
   it("prunes large sqlite snapshots without binding every flow id at once", async () => {
-    await withFlowRegistryTempDir(async (root) => {
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       const flows = new Map<string, TaskFlowRecord>();
@@ -299,7 +299,7 @@ describe("task-flow-registry store runtime", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withFlowRegistryTempDir(async (root) => {
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       createManagedTaskFlow({
