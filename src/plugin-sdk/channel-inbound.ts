@@ -1,3 +1,4 @@
+// Channel inbound contracts define plugin ingress payloads and reply dispatch metadata.
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,
@@ -131,6 +132,8 @@ export function buildChannelTurnContext(
   params: BuildChannelTurnContextParams,
 ): BuiltChannelTurnContext {
   const inboundEventKind = params.message.inboundEventKind ?? params.message.inboundTurnKind;
+  // Normalize the legacy turn-kind field before delegating so downstream context builders
+  // only need to preserve the current inbound-event contract.
   const ctx = buildChannelInboundEventContext({
     ...params,
     message: {

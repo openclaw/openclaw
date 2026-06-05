@@ -1,3 +1,8 @@
+/**
+ * Applies runtime-plan or provider fallback tool schema policy. The helpers
+ * normalize tool schemas, preserve owner metadata across cloned definitions,
+ * and emit provider diagnostics.
+ */
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
@@ -33,6 +38,7 @@ type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult
   ) => void;
 };
 
+/** Builds the provider/runtime context passed into runtime-plan tool hooks. */
 function runtimePlanToolContext(params: {
   workspaceDir?: string;
   modelApi?: string | null;
@@ -45,6 +51,8 @@ function runtimePlanToolContext(params: {
   };
 }
 
+// Normalizers may return cloned tool definitions. Copy plugin/channel metadata
+// so downstream inventory, delivery, and attribution still know the owner.
 function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   if (source === target) {
     return;
@@ -53,6 +61,8 @@ function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   copyChannelAgentToolMeta(source as never, target as never);
 }
 
+// Duplicate names cannot be matched by map lookup alone, so same-index matches
+// take precedence and unique-name fallback covers cloned arrays.
 function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TResult = unknown>(
   sourceTools: AgentTool<TSchemaType, TResult>[],
   normalizedTools: AgentTool<TSchemaType, TResult>[],
@@ -81,6 +91,7 @@ function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TRes
   return normalizedTools;
 }
 
+/** Normalizes tool schemas through a runtime plan or provider fallback policy. */
 export function normalizeAgentRuntimeTools<
   TSchemaType extends TSchema = TSchema,
   TResult = unknown,
@@ -115,6 +126,7 @@ export function normalizeAgentRuntimeTools<
   return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
 }
 
+/** Emits runtime-plan or provider fallback diagnostics for normalized tools. */
 export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyParams): void {
   const planContext = runtimePlanToolContext(params);
   if (params.runtimePlan) {

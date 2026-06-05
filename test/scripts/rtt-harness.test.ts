@@ -1,3 +1,4 @@
+// Rtt Harness tests cover rtt harness script behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -207,6 +208,11 @@ describe("RTT harness", () => {
     expect(script).toContain("start_credential_heartbeat() {\n  (\n    set +e");
     expect(script).toContain("Convex credential heartbeat exited with status");
     expect(script).toContain('kill -TERM "$rtt_shell_pid"');
+    expect(script).toContain("const controller = new AbortController();");
+    expect(script).toContain("const timer = setTimeout(() => controller.abort(), 1000);");
+    expect(script).toContain('if [ "$mock_ready" != "1" ]; then');
+    expect(script).toContain("Mock OpenAI server did not become ready");
+    expect(script).not.toContain("fetch('http://127.0.0.1:${mock_port}/health')");
     expect(script).not.toContain('export TELEGRAM_BOT_TOKEN="$OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN"');
   });
 

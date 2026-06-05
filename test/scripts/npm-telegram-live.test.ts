@@ -1,3 +1,4 @@
+// Npm Telegram Live tests cover npm telegram live script behavior.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,8 +47,8 @@ describe("package Telegram live Docker E2E", () => {
     expect(installRun).toContain(
       '"$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
     );
-    expect(installRun).toContain('elif command -v gtimeout >/dev/null 2>&1; then');
-    expect(installRun).toContain("timeout_bin=\"gtimeout\"");
+    expect(installRun).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
+    expect(installRun).toContain('timeout_bin="gtimeout"');
     expect(installRun).toContain(
       'echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2',
     );
@@ -56,7 +57,9 @@ describe("package Telegram live Docker E2E", () => {
       '"$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
     );
     expect(installRun).toContain('npm install -g "$install_source" --no-fund --no-audit');
-    expect(installRun).not.toContain("running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT");
+    expect(installRun).not.toContain(
+      "running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT",
+    );
     expect(installRun).toContain('"${package_mount_args[@]}"');
     expect(installRun).not.toContain('"${docker_env[@]}"');
     expect(installRun).toContain("run_logged docker_e2e_docker_run_cmd run --rm");

@@ -1,3 +1,4 @@
+// Research signal helpers normalize skill names and extract research-worthy signals.
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import { compactWhitespace, extractTranscriptText } from "./text.js";
 
@@ -19,6 +20,7 @@ type DurableInstruction = {
   evidence: string;
 };
 
+// Topic inference stays conservative so autocapture proposes broad skills, not brittle names.
 function inferTopic(text: string): { skillName: string; title: string; label: string } {
   const lower = text.toLowerCase();
   if (/\banimated\b|\bgifs?\b/.test(lower)) {
@@ -59,6 +61,7 @@ function extractInstruction(text: string): string | undefined {
   return trimmed.replace(/^ok[,. ]+/i, "");
 }
 
+/** Extracts a candidate durable instruction from transcript text. */
 export function extractDurableInstructionProposal(params: {
   messages: unknown[];
 }): DurableInstruction | undefined {

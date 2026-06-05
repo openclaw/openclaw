@@ -1,3 +1,4 @@
+// OpenClaw npm release check tests validate package release checks.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -458,9 +459,9 @@ describe("runNpmReleaseCheckCommand", () => {
 describe("resolveNpmReleaseCheckCommandTimeoutMs", () => {
   it("parses only positive integer environment timeouts", () => {
     expect(resolveNpmReleaseCheckCommandTimeoutMs({})).toBe(10 * 60 * 1000);
-    expect(resolveNpmReleaseCheckCommandTimeoutMs({ OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: "" })).toBe(
-      10 * 60 * 1000,
-    );
+    expect(
+      resolveNpmReleaseCheckCommandTimeoutMs({ OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: "" }),
+    ).toBe(10 * 60 * 1000);
     expect(
       resolveNpmReleaseCheckCommandTimeoutMs({
         OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: "1234",
@@ -468,8 +469,8 @@ describe("resolveNpmReleaseCheckCommandTimeoutMs", () => {
     ).toBe(1234);
 
     for (const raw of ["nope", "10m", "1e3", "0", "-1", "9007199254740992"]) {
-      expect(
-        () => resolveNpmReleaseCheckCommandTimeoutMs({
+      expect(() =>
+        resolveNpmReleaseCheckCommandTimeoutMs({
           OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: raw,
         }),
       ).toThrow(`invalid OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: ${raw}`);

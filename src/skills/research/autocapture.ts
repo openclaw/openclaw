@@ -1,3 +1,4 @@
+// Research autocapture helpers decide when skill research signals should be captured.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveSkillWorkshopConfig } from "../workshop/config.js";
@@ -17,12 +18,14 @@ type SkillResearchAgentContext = {
 
 const log = createSubsystemLogger("skills/research");
 
+// Captured updates append below existing skill text so learned context stays auditable.
 function buildAutoCaptureUpdateContent(existingSkill: string, capturedContent: string): string {
   return [existingSkill.trimEnd(), "", "## Captured Update", "", capturedContent.trim(), ""].join(
     "\n",
   );
 }
 
+/** Captures durable skill research signals from a session transcript when enabled. */
 export async function runSkillResearchAutoCapture(params: {
   event: SkillResearchAgentEndEvent;
   ctx: SkillResearchAgentContext;

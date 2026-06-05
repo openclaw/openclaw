@@ -1,3 +1,4 @@
+// Windows spawn helpers resolve Windows command execution details for plugin runtimes.
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import {
@@ -6,20 +7,29 @@ import {
 } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 
+/** Final execution strategy chosen for a Windows spawn command. */
 export type WindowsSpawnResolution =
   | "direct"
   | "node-entrypoint"
   | "exe-entrypoint"
   | "shell-fallback";
 
+/** Direct-spawn resolution before shell fallback is considered. */
 export type WindowsSpawnCandidateResolution = Exclude<WindowsSpawnResolution, "shell-fallback">;
+
+/** Direct-spawn candidate before shell fallback policy is applied. */
 export type WindowsSpawnProgramCandidate = {
+  /** Executable passed to child_process after wrapper resolution. */
   command: string;
+  /** Arguments prepended before call-site argv, usually a resolved JS entrypoint. */
   leadingArgv: string[];
+  /** Candidate resolution path, or unresolved-wrapper when shell policy must decide. */
   resolution: WindowsSpawnCandidateResolution | "unresolved-wrapper";
+  /** Hide the transient Windows console for Node/exe entrypoint launches. */
   windowsHide?: boolean;
 };
 
+/** Spawn program after Windows wrapper resolution and fallback policy. */
 export type WindowsSpawnProgram = {
   command: string;
   leadingArgv: string[];
@@ -28,6 +38,7 @@ export type WindowsSpawnProgram = {
   windowsHide?: boolean;
 };
 
+/** Fully materialized child_process invocation for a resolved Windows spawn program. */
 export type WindowsSpawnInvocation = {
   command: string;
   argv: string[];
@@ -36,6 +47,7 @@ export type WindowsSpawnInvocation = {
   windowsHide?: boolean;
 };
 
+/** Inputs used to resolve a command into a Windows-safe direct spawn program. */
 export type ResolveWindowsSpawnProgramParams = {
   command: string;
   platform?: NodeJS.Platform;
@@ -45,10 +57,12 @@ export type ResolveWindowsSpawnProgramParams = {
   /** Trusted compatibility escape hatch for callers that intentionally accept shell-mediated wrapper execution. */
   allowShellFallback?: boolean;
 };
+/** Inputs for candidate resolution that intentionally excludes shell fallback policy. */
 export type ResolveWindowsSpawnProgramCandidateParams = Omit<
   ResolveWindowsSpawnProgramParams,
   "allowShellFallback"
 >;
+/** Parsed executable plus inline arguments from a command string. */
 export type WindowsSpawnCommandInlineArgs = {
   executable: string;
   arguments: string;
@@ -104,6 +118,7 @@ function readCommandToken(command: string): { token: string; rest: string } | nu
   };
 }
 
+/** Detect command strings like `node script.js` that should be split before spawn. */
 export function detectWindowsSpawnCommandInlineArgs(
   command: string,
 ): WindowsSpawnCommandInlineArgs | null {
@@ -314,6 +329,8 @@ export function resolveWindowsSpawnProgramCandidate(
       };
     }
 
+    // Unresolved .cmd/.bat wrappers are not passed through cmd.exe unless the
+    // caller explicitly accepts shell metacharacter parsing with allowShellFallback.
     return {
       command: resolvedCommand,
       leadingArgv: [],

@@ -1,3 +1,5 @@
+// Image input normalization converts HEIC/HEIF payloads through the shared
+// input-file media path before provider execution.
 import { extractImageContentFromSource, normalizeMimeType } from "../media/input-files.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 
@@ -13,6 +15,7 @@ function isHeicInput(params: { mime?: string; fileName?: string }): boolean {
   return Boolean(fileName && HEIC_EXT_RE.test(fileName));
 }
 
+/** Normalizes image bytes before provider execution, converting HEIC/HEIF inputs to JPEG. */
 export async function normalizeImageDescriptionInput(params: {
   buffer: Buffer;
   fileName?: string;
@@ -23,6 +26,7 @@ export async function normalizeImageDescriptionInput(params: {
     return { buffer: params.buffer, mime: params.mime };
   }
   const sourceMime = normalizeMimeType(params.mime) ?? "image/heic";
+  // Reuse input-file extraction so HEIC conversion follows the same MIME and size guards.
   const image = await extractImageContentFromSource(
     {
       type: "base64",
