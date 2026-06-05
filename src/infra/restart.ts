@@ -103,6 +103,7 @@ export type GatewayRestartIntent = {
   reason?: string;
   force?: boolean;
   waitMs?: number;
+  skipDeferral?: boolean;
 };
 
 function resolveGatewayRestartIntentPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -777,7 +778,10 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       clearActiveDeferralPolls();
       pendingRestartReason = reason;
       pendingRestartEmitHooks = opts?.emitHooks;
-      void emitPreparedGatewayRestart(undefined, reason);
+      void emitPreparedGatewayRestart(undefined, reason, {
+        skipDeferral: true,
+        ...(reason ? { reason } : {}),
+      });
       return {
         ok: true,
         pid: process.pid,
@@ -835,7 +839,13 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       pendingRestartPreparing = true;
       const pendingCheck = preRestartCheck;
       if (scheduledSkipDeferral || !pendingCheck) {
-        void emitPreparedGatewayRestart(undefined, scheduledReason);
+        void emitPreparedGatewayRestart(
+          undefined,
+          scheduledReason,
+          scheduledSkipDeferral
+            ? { skipDeferral: true, ...(scheduledReason ? { reason: scheduledReason } : {}) }
+            : undefined,
+        );
         return;
       }
       const cfg = getRuntimeConfig();

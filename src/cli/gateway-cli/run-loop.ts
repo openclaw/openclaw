@@ -29,6 +29,7 @@ type RestartIntentOptions = {
   reason?: string;
   force?: boolean;
   waitMs?: number;
+  skipDeferral?: boolean;
 };
 type GatewayRunSignalRequest = {
   action: GatewayRunSignalAction;
@@ -443,6 +444,9 @@ export async function runGatewayLoop(params: {
       const resolveRestartCloseDrainTimeoutMs = () => {
         if (!isRestart) {
           return null;
+        }
+        if (restartIntent?.skipDeferral) {
+          return 0;
         }
         if (restartDrainTimeoutMs === undefined) {
           return Math.max(0, SHUTDOWN_TIMEOUT_MS - RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS);
