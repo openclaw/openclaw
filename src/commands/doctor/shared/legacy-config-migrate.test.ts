@@ -769,6 +769,45 @@ describe("legacy memory search config migrate", () => {
     ]);
   });
 
+  it("keeps canonical OpenAI model-level context budgets authoritative over legacy provider budgets", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            models: [
+              {
+                id: "openai/gpt-5.5",
+                contextWindow: 272_000,
+              },
+            ],
+          },
+          "openai-codex": {
+            contextTokens: 1_050_000,
+            contextWindow: 1_050_000,
+            maxTokens: 16_384,
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.openai).toEqual({
+      api: "openai-chatgpt-responses",
+      maxTokens: 16_384,
+      models: [
+        {
+          id: "openai/gpt-5.5",
+          contextWindow: 272_000,
+        },
+      ],
+    });
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "Copied models.providers.openai-codex maxTokens metadata to models.providers.openai.",
+      "Removed models.providers.openai-codex because models.providers.openai already exists.",
+    ]);
+  });
+
   it("normalizes scoped canonical OpenAI model rows before copying legacy Codex context metadata", () => {
     const res = migrateLegacyConfigForTest({
       models: {

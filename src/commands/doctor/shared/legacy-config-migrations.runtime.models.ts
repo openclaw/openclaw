@@ -1130,18 +1130,21 @@ function copyLegacyOpenAICodexContextMetadataToExistingCanonicalRows(params: {
   legacyProvider: Record<string, unknown>;
   canonicalProvider: Record<string, unknown>;
   changes: string[];
+  skipProviderLevelMetadata?: boolean;
 }): boolean {
   let changed = false;
-  const providerKeys = copyMissingContextMetadata({
-    source: params.legacyProvider,
-    target: params.canonicalProvider,
-    blockContextBudget: hasModelLevelContextBudget(params.canonicalProvider),
-  });
-  if (providerKeys.length > 0) {
-    params.changes.push(
-      `Copied models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} ${providerKeys.join(", ")} metadata to models.providers.${OPENAI_PROVIDER_ID}.`,
-    );
-    changed = true;
+  if (!params.skipProviderLevelMetadata) {
+    const providerKeys = copyMissingContextMetadata({
+      source: params.legacyProvider,
+      target: params.canonicalProvider,
+      blockContextBudget: hasModelLevelContextBudget(params.canonicalProvider),
+    });
+    if (providerKeys.length > 0) {
+      params.changes.push(
+        `Copied models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} ${providerKeys.join(", ")} metadata to models.providers.${OPENAI_PROVIDER_ID}.`,
+      );
+      changed = true;
+    }
   }
 
   const canonicalModels = Array.isArray(params.canonicalProvider.models)
@@ -1227,8 +1230,9 @@ function getMergeableLegacyOpenAIModels(params: {
   const canonicalModelNames = new Set<string>();
   for (const m of canonicalModels) {
     const mr = getRecord(m);
-    if (typeof mr?.id === "string" && mr.id) {
-      canonicalModelIds.add(mr.id);
+    const normalizedId = normalizeOpenAIModelIdForComparison(mr?.id);
+    if (normalizedId) {
+      canonicalModelIds.add(normalizedId);
     }
     if (typeof mr?.name === "string" && mr.name) {
       canonicalModelNames.add(mr.name);
@@ -1239,7 +1243,7 @@ function getMergeableLegacyOpenAIModels(params: {
     if (!mr) {
       return false;
     }
-    const id = typeof mr.id === "string" ? mr.id : undefined;
+    const id = normalizeOpenAIModelIdForComparison(mr.id);
     const name = typeof mr.name === "string" ? mr.name : undefined;
     if (!id && !name) {
       return false;
@@ -1407,17 +1411,18 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
       const canonicalEntry = getCanonicalOpenAIProviderEntry(providers);
       const canonicalKey = canonicalEntry?.key ?? OPENAI_PROVIDER_ID;
       const canonical = canonicalEntry?.value ?? {};
-      copyLegacyOpenAICodexContextMetadataToExistingCanonicalRows({
-        legacyProvider: normalized.value,
-        canonicalProvider: canonical,
-        changes,
-      });
       const canonicalModels: unknown[] = Array.isArray(canonical.models)
         ? (canonical.models as unknown[])
         : [];
       const modelsToMerge = getMergeableLegacyOpenAIModels({
         canonical,
         legacy: normalized.value,
+      });
+      copyLegacyOpenAICodexContextMetadataToExistingCanonicalRows({
+        legacyProvider: normalized.value,
+        canonicalProvider: canonical,
+        changes,
+        skipProviderLevelMetadata: modelsToMerge.length > 0,
       });
       const mergeBlockers =
         modelsToMerge.length > 0
