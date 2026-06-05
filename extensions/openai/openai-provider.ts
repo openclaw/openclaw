@@ -614,38 +614,38 @@ export function buildOpenAIProvider(): ProviderPlugin {
       order: "simple",
       run: async (ctx) => {
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
-        if (isCodexCatalogAuthMode(auth.mode)) {
-          try {
-            const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
-              await import("openclaw/plugin-sdk/provider-auth-runtime");
-            const runtimeAuth = await resolveApiKeyForProvider({
+        try {
+          const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
+            await import("openclaw/plugin-sdk/provider-auth-runtime");
+          const runtimeAuth = await resolveApiKeyForProvider({
+            provider: PROVIDER_ID,
+            cfg: ctx.config,
+            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+            ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+            ...(auth.profileId
+              ? {
+                  profileId: auth.profileId,
+                  lockedProfile: true,
+                }
+              : {}),
+          });
+          if (runtimeAuth && isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
+            const metadata = resolveProviderAuthProfileMetadata({
               provider: PROVIDER_ID,
               cfg: ctx.config,
               ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-              ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-              ...(auth.profileId
-                ? {
-                    profileId: auth.profileId,
-                    lockedProfile: true,
-                  }
+              ...((runtimeAuth.profileId ?? auth.profileId)
+                ? { profileId: runtimeAuth.profileId ?? auth.profileId }
                 : {}),
             });
-            if (isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
-              const metadata = resolveProviderAuthProfileMetadata({
-                provider: PROVIDER_ID,
-                cfg: ctx.config,
-                ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-                ...((runtimeAuth.profileId ?? auth.profileId)
-                  ? { profileId: runtimeAuth.profileId ?? auth.profileId }
-                  : {}),
-              });
-              const provider = await buildOpenAICodexLiveProviderConfig({
-                discoveryApiKey: runtimeAuth.apiKey,
-                accountId: metadata.accountId,
-              });
-              return provider ? { providers: { [PROVIDER_ID]: provider } } : null;
-            }
-          } catch {
+            const provider = await buildOpenAICodexLiveProviderConfig({
+              discoveryApiKey: runtimeAuth.apiKey,
+              accountId: metadata.accountId,
+            });
+            return provider ? { providers: { [PROVIDER_ID]: provider } } : null;
+          }
+        } catch {
+          if (isCodexCatalogAuthMode(auth.mode)) {
             return null;
           }
         }

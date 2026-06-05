@@ -84,6 +84,20 @@ export async function planAllModelListSources(params: {
     });
   }
 
+  const { hasProviderRuntimeCatalogForFilter, hasProviderStaticCatalogForFilter } =
+    await import("./list.provider-catalog.js");
+  const hasProviderRuntimeCatalog = await hasProviderRuntimeCatalogForFilter({
+    cfg: params.cfg,
+    providerFilter: params.providerFilter,
+    metadataSnapshot: params.metadataSnapshot,
+  });
+  if (hasProviderRuntimeCatalog) {
+    return createSourcePlan({
+      kind: "provider-runtime-scoped",
+      fallbackToRegistryWhenEmpty: true,
+    });
+  }
+
   const staticManifestCatalogRows = loadStaticManifestCatalogRowsForList({
     cfg: params.cfg,
     providerFilter: params.providerFilter,
@@ -128,7 +142,6 @@ export async function planAllModelListSources(params: {
     });
   }
 
-  const { hasProviderStaticCatalogForFilter } = await import("./list.provider-catalog.js");
   const hasProviderStaticCatalog = await hasProviderStaticCatalogForFilter({
     cfg: params.cfg,
     providerFilter: params.providerFilter,

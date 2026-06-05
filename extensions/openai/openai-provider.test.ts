@@ -361,6 +361,61 @@ describe("buildOpenAIProvider", () => {
     }
   });
 
+  it("uses runtime OAuth profiles when catalog auth resolution is empty", async () => {
+    mocks.resolveApiKeyForProvider.mockResolvedValue({
+      mode: "oauth",
+      apiKey: "fresh-oauth-token",
+      source: "profile:openai:chatgpt",
+      profileId: "openai:chatgpt",
+    });
+    mocks.resolveProviderAuthProfileMetadata.mockReturnValue({
+      profileId: "openai:chatgpt",
+      accountId: "acct-openai-workspace",
+    });
+    const provider = buildOpenAIProvider();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        models: [
+          {
+            slug: "gpt-5.5",
+            display_name: "GPT-5.5",
+            visibility: "list",
+          },
+        ],
+      }),
+    );
+
+    try {
+      const result = await provider.catalog?.run({
+        resolveProviderAuth: () => ({
+          mode: "none",
+          apiKey: undefined,
+          discoveryApiKey: undefined,
+          source: "none",
+        }),
+        config: { auth: { profiles: {} } },
+        agentDir: "/tmp/openai-agent",
+        workspaceDir: "/tmp/openai-workspace",
+      } as never);
+
+      if (!result || "provider" in result) {
+        throw new Error("expected OpenAI Codex live provider catalog");
+      }
+      expect(mocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
+        provider: "openai",
+        cfg: { auth: { profiles: {} } },
+        agentDir: "/tmp/openai-agent",
+        workspaceDir: "/tmp/openai-workspace",
+      });
+      expect(result.providers.openai?.api).toBe("openai-chatgpt-responses");
+      expect(result.providers.openai?.auth).toBe("oauth");
+      expect(result.providers.openai?.models.map((model) => model.id)).toEqual(["gpt-5.5"]);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("maps direct Codex catalog rows into OpenAI ChatGPT response models", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({

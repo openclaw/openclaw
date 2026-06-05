@@ -156,6 +156,39 @@ export async function hasProviderStaticCatalogForFilter(params: {
   registryIndex?: PluginRegistrySnapshot;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<boolean> {
+  return await hasProviderCatalogForFilter(
+    params,
+    (provider) => typeof provider.staticCatalog?.run === "function",
+    { discoveryEntriesOnly: true },
+  );
+}
+
+export async function hasProviderRuntimeCatalogForFilter(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  providerFilter: string;
+  registryIndex?: PluginRegistrySnapshot;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): Promise<boolean> {
+  return await hasProviderCatalogForFilter(
+    params,
+    (provider) =>
+      typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function",
+    { discoveryEntriesOnly: false },
+  );
+}
+
+async function hasProviderCatalogForFilter(
+  params: {
+    cfg: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    providerFilter: string;
+    registryIndex?: PluginRegistrySnapshot;
+    metadataSnapshot?: PluginMetadataSnapshot;
+  },
+  predicate: (provider: ProviderPlugin) => boolean,
+  options: { discoveryEntriesOnly: boolean },
+): Promise<boolean> {
   const env = params.env ?? process.env;
   const providerFilter = normalizeProviderId(params.providerFilter);
   if (!providerFilter) {
@@ -184,14 +217,12 @@ export async function hasProviderStaticCatalogForFilter(params: {
     env,
     onlyPluginIds: scopedPluginIds,
     includeUntrustedWorkspacePlugins: false,
-    requireCompleteDiscoveryEntryCoverage: true,
-    discoveryEntriesOnly: true,
+    requireCompleteDiscoveryEntryCoverage: options.discoveryEntriesOnly,
+    discoveryEntriesOnly: options.discoveryEntriesOnly,
     pluginMetadataSnapshot: params.metadataSnapshot,
   });
   return providers.some(
-    (provider) =>
-      typeof provider.staticCatalog?.run === "function" &&
-      providerMatchesFilter({ provider, providerFilter }),
+    (provider) => predicate(provider) && providerMatchesFilter({ provider, providerFilter }),
   );
 }
 

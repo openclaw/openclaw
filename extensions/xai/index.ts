@@ -183,30 +183,30 @@ export default defineSingleProviderPluginEntry({
       order: "simple",
       run: async (ctx) => {
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
-        if (auth.mode === "oauth") {
-          try {
-            const { resolveApiKeyForProvider } =
-              await import("openclaw/plugin-sdk/provider-auth-runtime");
-            const runtimeAuth = await resolveApiKeyForProvider({
-              provider: PROVIDER_ID,
-              cfg: ctx.config,
-              ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-              ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-              ...(auth.profileId
-                ? {
-                    profileId: auth.profileId,
-                    lockedProfile: true,
-                  }
-                : {}),
-            });
-            if (runtimeAuth.mode === "oauth" && runtimeAuth.apiKey) {
-              return {
-                provider: await buildLiveXaiOAuthProvider({
-                  discoveryApiKey: runtimeAuth.apiKey,
-                }),
-              };
-            }
-          } catch {
+        try {
+          const { resolveApiKeyForProvider } =
+            await import("openclaw/plugin-sdk/provider-auth-runtime");
+          const runtimeAuth = await resolveApiKeyForProvider({
+            provider: PROVIDER_ID,
+            cfg: ctx.config,
+            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+            ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+            ...(auth.profileId
+              ? {
+                  profileId: auth.profileId,
+                  lockedProfile: true,
+                }
+              : {}),
+          });
+          if (runtimeAuth?.mode === "oauth" && runtimeAuth.apiKey) {
+            return {
+              provider: await buildLiveXaiOAuthProvider({
+                discoveryApiKey: runtimeAuth.apiKey,
+              }),
+            };
+          }
+        } catch {
+          if (auth.mode === "oauth") {
             // OAuth discovery is advisory; fall through so configured API-key
             // auth can still publish the standard xAI catalog.
           }

@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   loadStaticManifestCatalogRowsForList: vi.fn(),
   loadSupplementalManifestCatalogRowsForList: vi.fn(),
   loadProviderIndexCatalogRowsForList: vi.fn(),
+  hasProviderRuntimeCatalogForFilter: vi.fn(),
   hasProviderStaticCatalogForFilter: vi.fn(),
 }));
 
@@ -18,6 +19,7 @@ vi.mock("./list.provider-index-catalog.js", () => ({
 }));
 
 vi.mock("./list.provider-catalog.js", () => ({
+  hasProviderRuntimeCatalogForFilter: mocks.hasProviderRuntimeCatalogForFilter,
   hasProviderStaticCatalogForFilter: mocks.hasProviderStaticCatalogForFilter,
 }));
 
@@ -39,6 +41,7 @@ describe("planAllModelListSources", () => {
     mocks.loadStaticManifestCatalogRowsForList.mockReturnValue([]);
     mocks.loadSupplementalManifestCatalogRowsForList.mockReturnValue([]);
     mocks.loadProviderIndexCatalogRowsForList.mockReturnValue([]);
+    mocks.hasProviderRuntimeCatalogForFilter.mockResolvedValue(false);
     mocks.hasProviderStaticCatalogForFilter.mockResolvedValue(false);
   });
 
@@ -62,6 +65,24 @@ describe("planAllModelListSources", () => {
     });
     expect(mocks.loadSupplementalManifestCatalogRowsForList).not.toHaveBeenCalled();
     expect(mocks.loadProviderIndexCatalogRowsForList).not.toHaveBeenCalled();
+    expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
+  });
+
+  it("uses runtime catalog plans before static manifest rows for live providers", async () => {
+    const { planAllModelListSources } = await import("./list.source-plan.js");
+    mocks.hasProviderRuntimeCatalogForFilter.mockResolvedValueOnce(true);
+    mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([catalogRow]);
+
+    const plan = await planAllModelListSources({
+      all: true,
+      providerFilter: "openai",
+      cfg: {},
+    });
+
+    expect(plan.kind).toBe("provider-runtime-scoped");
+    expect(plan.requiresInitialRegistry).toBe(false);
+    expect(plan.fallbackToRegistryWhenEmpty).toBe(true);
+    expect(mocks.loadStaticManifestCatalogRowsForList).not.toHaveBeenCalled();
     expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
   });
 
@@ -158,5 +179,22 @@ describe("planAllModelListSources", () => {
     expect(plan.requiresInitialRegistry).toBe(false);
     expect(plan.skipRuntimeModelSuppression).toBe(true);
     expect(plan.fallbackToRegistryWhenEmpty).toBe(true);
+  });
+
+  it("uses runtime-scoped plans for providers with live and static catalog hooks", async () => {
+    const { planAllModelListSources } = await import("./list.source-plan.js");
+    mocks.hasProviderRuntimeCatalogForFilter.mockResolvedValueOnce(true);
+    mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
+
+    const plan = await planAllModelListSources({
+      all: true,
+      providerFilter: "openai",
+      cfg: {},
+    });
+    expect(plan.kind).toBe("provider-runtime-scoped");
+    expect(plan.requiresInitialRegistry).toBe(false);
+    expect(plan.skipRuntimeModelSuppression).toBe(false);
+    expect(plan.fallbackToRegistryWhenEmpty).toBe(true);
+    expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
   });
 });
