@@ -17,6 +17,9 @@ describe("command-status type re-exports (#76759)", () => {
       remainingTokens: 1024,
       percentUsed: 50,
       model: "claude-opus-4-7",
+      configuredModel: "claude-opus-4-7",
+      selectedModel: "claude-opus-4-7",
+      modelSelectionReason: null,
       contextTokens: 200000,
       flags: [],
     };
