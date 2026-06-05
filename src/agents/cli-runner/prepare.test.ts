@@ -1355,7 +1355,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         (
           runtime: { ownerToken: string; nonOwnerToken: string },
           senderIsOwner: boolean,
-          context?: { senderId?: string | null },
+          context?: { senderId?: string | null; messageProvider?: string | null },
         ) =>
           `${senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken}${
             context?.senderId ? `:sender:${context.senderId}` : ""
@@ -1424,7 +1424,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           nonOwnerToken: "loopback-non-owner-token",
         },
         false,
-        { senderId: "user-123" },
+        { senderId: "user-123", messageProvider: "telegram" },
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

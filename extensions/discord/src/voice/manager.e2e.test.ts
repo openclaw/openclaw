@@ -5414,7 +5414,12 @@ describe("DiscordVoiceManager", () => {
     await processVoiceSegment(manager, "u-guest");
 
     const commandArgs = lastAgentCommandArgs() as
-      | { message?: string; messageChannel?: string; messageProvider?: string }
+      | {
+          message?: string;
+          messageChannel?: string;
+          messageProvider?: string;
+          senderId?: string;
+        }
       | undefined;
 
     expect(commandArgs?.messageChannel).toBe("discord");

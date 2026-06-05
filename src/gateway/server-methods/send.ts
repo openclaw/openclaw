@@ -510,19 +510,16 @@ export const sendHandlers: GatewayRequestHandlers = {
       try {
         const gatewayClientScopes = client?.connect?.scopes ?? [];
         const gatewayClientIsAdmin = gatewayClientScopes.includes(ADMIN_SCOPE);
-        const gatewayClientCanSupplyTrustedIdentity =
-          gatewayClientIsAdmin || client?.internal?.trustedMessageActionRequester === true;
         const requesterSenderId = normalizeOptionalString(request.requesterSenderId) ?? undefined;
+        const senderIsOwner = request.senderIsOwner === true;
         const handled = await dispatchChannelMessageAction({
           channel,
           action: request.action as never,
           cfg,
           params: request.params,
           accountId: normalizeOptionalString(request.accountId) ?? undefined,
-          requesterSenderId: gatewayClientCanSupplyTrustedIdentity ? requesterSenderId : undefined,
-          senderIsOwner: gatewayClientCanSupplyTrustedIdentity
-            ? request.senderIsOwner === true
-            : false,
+          requesterSenderId: gatewayClientIsAdmin ? requesterSenderId : undefined,
+          senderIsOwner: gatewayClientIsAdmin ? senderIsOwner : false,
           sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           inboundEventKind: request.inboundTurnKind,

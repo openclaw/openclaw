@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 
 // Process-local MCP loopback runtime state for owner/non-owner HTTP access.
 type McpLoopbackRuntime = {
@@ -15,6 +16,7 @@ type ActiveMcpLoopbackRuntime = McpLoopbackRuntime & {
 export type McpLoopbackAuthContext = {
   senderIsOwner: boolean;
   senderId: string | undefined;
+  messageProvider?: string;
 };
 
 const SCOPED_TOKEN_PREFIX = "ctx1";
@@ -24,6 +26,10 @@ let activeRuntime: ActiveMcpLoopbackRuntime | undefined;
 function normalizeSenderId(senderId: string | null | undefined): string | undefined {
   const trimmed = typeof senderId === "string" ? senderId.trim() : "";
   return trimmed || undefined;
+}
+
+function normalizeScopedMessageProvider(value: string | null | undefined): string | undefined {
+  return normalizeMessageChannel(value) ?? undefined;
 }
 
 function encodeScopedPayload(auth: McpLoopbackAuthContext): string {
@@ -41,9 +47,12 @@ function readScopedAuth(encodedPayload: string): McpLoopbackAuthContext | null {
       const senderId = normalizeSenderId(
         (decoded as { senderId?: unknown }).senderId as string | undefined,
       );
+      const messageProvider = normalizeScopedMessageProvider(
+        (decoded as { messageProvider?: unknown }).messageProvider as string | undefined,
+      );
       const senderIsOwner = (decoded as { senderIsOwner?: unknown }).senderIsOwner;
       if (senderId && typeof senderIsOwner === "boolean") {
-        return { senderIsOwner, senderId };
+        return { senderIsOwner, senderId, messageProvider };
       }
     }
   } catch {
@@ -93,7 +102,7 @@ export function setActiveMcpLoopbackRuntime(
 export function resolveMcpLoopbackBearerToken(
   runtime: McpLoopbackRuntime,
   senderIsOwner: boolean,
-  context?: { senderId?: string | null },
+  context?: { senderId?: string | null; messageProvider?: string | null },
 ): string {
   const baseToken = senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken;
   const senderId = normalizeSenderId(context?.senderId);
@@ -104,7 +113,11 @@ export function resolveMcpLoopbackBearerToken(
   if (!scopedTokenSecret) {
     throw new Error("MCP loopback sender context is unavailable");
   }
-  const encodedPayload = encodeScopedPayload({ senderIsOwner, senderId });
+  const encodedPayload = encodeScopedPayload({
+    senderIsOwner,
+    senderId,
+    messageProvider: normalizeScopedMessageProvider(context?.messageProvider),
+  });
   return [
     SCOPED_TOKEN_PREFIX,
     encodedPayload,

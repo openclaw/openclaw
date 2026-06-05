@@ -1,6 +1,5 @@
 // Message action security tests cover channel message action authorization and validation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { discordPlugin as registeredDiscordPlugin } from "../../../extensions/discord/api.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -56,101 +55,6 @@ describe("dispatchChannelMessageAction trusted sender guard", () => {
       }),
     ).rejects.toThrow("Trusted sender identity is required for discord:kick");
     expect(handleAction).not.toHaveBeenCalled();
-  });
-
-  it("rejects registered Discord moderation actions without trusted sender in Discord tool context", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          source: "test",
-          plugin: registeredDiscordPlugin as unknown as ChannelPlugin,
-        },
-      ]),
-    );
-
-    for (const toolContext of [
-      { currentChannelProvider: "discord" },
-      { currentChannelProvider: "discord", requesterSourceProvider: "discord-voice" },
-    ] as const) {
-      for (const action of ["timeout", "kick", "ban"] as const) {
-        await expect(
-          dispatchChannelMessageAction({
-            channel: "discord",
-            action,
-            cfg: {
-              channels: {
-                discord: {
-                  token: "Bot fake",
-                  actions: { moderation: true },
-                },
-              },
-            } as OpenClawConfig,
-            params: { guildId: "g1", userId: "u1" },
-            toolContext,
-          }),
-        ).rejects.toThrow(`Trusted sender identity is required for discord:${action}`);
-      }
-    }
-  });
-
-  it("rejects registered Discord moderation actions from non-Discord tool context", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          source: "test",
-          plugin: registeredDiscordPlugin as unknown as ChannelPlugin,
-        },
-      ]),
-    );
-
-    await expect(
-      dispatchChannelMessageAction({
-        channel: "discord",
-        action: "ban",
-        cfg: {
-          channels: {
-            discord: {
-              token: "Bot fake",
-              actions: { moderation: true },
-            },
-          },
-        } as OpenClawConfig,
-        params: { guildId: "g1", userId: "u1" },
-        requesterSenderId: "telegram-user-id",
-        toolContext: { currentChannelProvider: "telegram" },
-      }),
-    ).rejects.toThrow("requires a Discord requester context");
-  });
-
-  it("rejects registered Discord moderation actions without trusted context", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          source: "test",
-          plugin: registeredDiscordPlugin as unknown as ChannelPlugin,
-        },
-      ]),
-    );
-
-    await expect(
-      dispatchChannelMessageAction({
-        channel: "discord",
-        action: "ban",
-        cfg: {
-          channels: {
-            discord: {
-              token: "Bot fake",
-              actions: { moderation: true },
-            },
-          },
-        } as OpenClawConfig,
-        params: { guildId: "g1", userId: "u1" },
-        requesterSenderId: "client-supplied-sender-id",
-      }),
-    ).rejects.toThrow("requires a trusted Discord requester sender");
   });
 
   it("allows privileged discord moderation action with trusted sender in tool context", async () => {

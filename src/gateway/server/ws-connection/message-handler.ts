@@ -1729,10 +1729,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
           connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
           isOperatorApprovalRuntimeToken(connectParams.auth?.approvalRuntimeToken);
-        const isTrustedMessageActionRequester =
-          skipLocalBackendSelfPairing &&
-          !device &&
-          (authMethod === "token" || authMethod === "password" || authMethod === "none");
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {
           socket,
@@ -1743,13 +1739,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
-          ...(isTrustedApprovalRuntime || isTrustedMessageActionRequester
+          ...(isTrustedApprovalRuntime
             ? {
                 internal: {
-                  ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
-                  ...(isTrustedMessageActionRequester
-                    ? { trustedMessageActionRequester: true }
-                    : {}),
+                  approvalRuntime: true,
                 },
               }
             : {}),

@@ -529,7 +529,10 @@ describe("mcp loopback server", () => {
     const { runtime, port: serverPort } = await startLoopbackServerForTest(port);
 
     const token = runtime
-      ? resolveMcpLoopbackBearerToken(runtime, false, { senderId: "user-123" })
+      ? resolveMcpLoopbackBearerToken(runtime, false, {
+          senderId: "user-123",
+          messageProvider: "telegram",
+        })
       : undefined;
     const response = await sendRaw({
       port: serverPort,
@@ -574,7 +577,10 @@ describe("mcp loopback server", () => {
   it("derives sender identity from scoped bearer token and ignores spoofed sender headers", async () => {
     const { runtime } = await startLoopbackServerForTest();
     const token = runtime
-      ? resolveMcpLoopbackBearerToken(runtime, false, { senderId: "real-user" })
+      ? resolveMcpLoopbackBearerToken(runtime, false, {
+          senderId: "real-user",
+          messageProvider: "discord",
+        })
       : undefined;
 
     const response = await sendLoopbackToolsList({
@@ -592,6 +598,25 @@ describe("mcp loopback server", () => {
     expect(call.messageProvider).toBe("discord");
     expect(call.senderIsOwner).toBe(false);
     expect(call.senderId).toBe("real-user");
+  });
+
+  it("rejects sender-scoped tokens replayed with a different message channel", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const token = resolveMcpLoopbackBearerToken(runtime, false, {
+      senderId: "telegram-user",
+      messageProvider: "telegram",
+    });
+
+    const response = await sendLoopbackToolsList({
+      token,
+      headers: {
+        "x-session-key": "agent:main:discord:group:g1",
+        "x-openclaw-message-channel": "discord",
+      },
+    });
+
+    expect(response.status).toBe(401);
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
   });
 
   it("rejects sender-scoped tokens forged with the exposed non-owner bearer token", async () => {

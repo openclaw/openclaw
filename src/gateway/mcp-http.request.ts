@@ -8,7 +8,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { getHeader } from "./http-utils.js";
 import {
   resolveMcpLoopbackScopedTokenAuth,
@@ -93,6 +93,30 @@ function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   }).ok;
 }
 
+function rejectMcpLoopbackScopedContextMismatch(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  auth: McpLoopbackAuthContext;
+}): boolean {
+  if (!params.auth.senderId) {
+    return false;
+  }
+  const requestedMessageProvider =
+    normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ?? undefined;
+  if (requestedMessageProvider === params.auth.messageProvider) {
+    return false;
+  }
+  logMcpLoopbackHttp("reject", {
+    reason: "scoped_context_mismatch",
+    method: params.req.method ?? "",
+    requestedMessageProvider: requestedMessageProvider ?? "",
+    tokenMessageProvider: params.auth.messageProvider ?? "",
+  });
+  params.res.writeHead(401, { "Content-Type": "application/json" });
+  params.res.end(JSON.stringify({ error: "unauthorized" }));
+  return true;
+}
+
 export function validateMcpLoopbackRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -170,6 +194,10 @@ export function validateMcpLoopbackRequest(params: {
     });
     params.res.writeHead(401, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "unauthorized" }));
+    return null;
+  }
+
+  if (rejectMcpLoopbackScopedContextMismatch({ req: params.req, res: params.res, auth })) {
     return null;
   }
 

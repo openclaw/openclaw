@@ -199,10 +199,11 @@ function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
 async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
   actionParams: Record<string, unknown>;
+  trustedRequesterIdentity?: boolean;
 }): Promise<T> {
-  const { callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
+  const { callGatewayLeastPrivilege, callGatewayScoped } = await loadMessageActionGatewayRuntime();
   const gateway = resolveGatewayActionOptions(params.gateway);
-  return await callGatewayLeastPrivilege<T>({
+  const callParams = {
     url: gateway.url,
     token: gateway.token,
     method: "message.action",
@@ -211,7 +212,14 @@ async function callGatewayMessageAction<T>(params: {
     clientName: gateway.clientName,
     clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
-  });
+  };
+  if (params.trustedRequesterIdentity) {
+    return await callGatewayScoped<T>({
+      ...callParams,
+      scopes: ["operator.admin", "operator.write"],
+    });
+  }
+  return await callGatewayLeastPrivilege<T>(callParams);
 }
 
 async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
@@ -699,6 +707,23 @@ async function runGatewayPluginMessageActionOrNull(params: {
   if (executionMode !== "gateway") {
     return null;
   }
+  const actionNeedsTrustedRequester =
+    plugin.actions.requiresTrustedRequesterSender?.({
+      action: params.action,
+      toolContext: params.input.toolContext,
+    }) === true;
+  // Local owner calls do not carry a tool context. Re-evaluate as a same-channel
+  // action so only plugin-declared privileged actions preserve owner trust.
+  const ownerActionNeedsTrustedRequester =
+    params.input.senderIsOwner === true &&
+    !params.input.toolContext &&
+    plugin.actions.requiresTrustedRequesterSender?.({
+      action: params.action,
+      toolContext: { currentChannelProvider: params.channel },
+    }) === true;
+  const idempotencyKey = await resolveGatewayActionIdempotencyKey(
+    normalizeOptionalString(params.params.idempotencyKey),
+  );
   const payload = await callGatewayMessageAction<unknown>({
     gateway: params.gateway,
     actionParams: {
@@ -713,10 +738,9 @@ async function runGatewayPluginMessageActionOrNull(params: {
       inboundTurnKind: params.input.inboundEventKind,
       agentId: params.agentId,
       toolContext: params.input.toolContext,
-      idempotencyKey: await resolveGatewayActionIdempotencyKey(
-        normalizeOptionalString(params.params.idempotencyKey),
-      ),
+      idempotencyKey,
     },
+    trustedRequesterIdentity: actionNeedsTrustedRequester || ownerActionNeedsTrustedRequester,
   });
   return params.result(payload);
 }

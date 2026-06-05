@@ -197,7 +197,7 @@ async function runMessageActionRequest(
   params: Record<string, unknown>,
   client?: {
     connect?: { scopes?: string[]; client?: { id?: string; mode?: string } };
-    internal?: { trustedMessageActionRequester?: boolean };
+    internal?: { approvalRuntime?: boolean };
   } | null,
 ) {
   const respond = vi.fn();
@@ -1598,13 +1598,10 @@ describe("gateway send mirroring", () => {
         connect: {
           scopes: ["operator.write"],
         },
-        internal: {
-          trustedMessageActionRequester: true,
-        },
       },
     );
 
-    expect(lastDispatchChannelMessageActionCall()?.requesterSenderId).toBe("trusted-user");
+    expect(lastDispatchChannelMessageActionCall()?.requesterSenderId).toBeUndefined();
     expect(lastDispatchChannelMessageActionCall()?.senderIsOwner).toBe(false);
 
     mocks.dispatchChannelMessageAction.mockClear();
@@ -1631,13 +1628,41 @@ describe("gateway send mirroring", () => {
         connect: {
           scopes: ["operator.write"],
         },
-        internal: {
-          trustedMessageActionRequester: true,
-        },
       },
     );
 
     expect(lastDispatchChannelMessageActionCall()?.requesterSenderId).toBeUndefined();
+    expect(lastDispatchChannelMessageActionCall()?.senderIsOwner).toBe(false);
+
+    mocks.dispatchChannelMessageAction.mockClear();
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({
+        ok: true,
+        messageId: "wamid.4",
+      }),
+    );
+
+    await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: {
+          chatJid: "+15551234567",
+          messageId: "wamid.4",
+          emoji: "✅",
+        },
+        requesterSenderId: "admin-supplied-user",
+        senderIsOwner: true,
+        idempotencyKey: "idem-message-action-admin",
+      },
+      {
+        connect: {
+          scopes: ["operator.admin"],
+        },
+      },
+    );
+
+    expect(lastDispatchChannelMessageActionCall()?.requesterSenderId).toBe("admin-supplied-user");
     expect(lastDispatchChannelMessageActionCall()?.senderIsOwner).toBe(true);
   });
 

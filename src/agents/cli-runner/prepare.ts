@@ -285,7 +285,10 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_TOKEN: prepareDeps.resolveMcpLoopbackBearerToken(
             mcpLoopbackRuntime,
             params.senderIsOwner === true,
-            { senderId: params.senderId },
+            {
+              senderId: params.senderId,
+              messageProvider: params.messageChannel ?? params.messageProvider,
+            },
           ),
           OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",

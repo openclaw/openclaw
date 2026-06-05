@@ -8,6 +8,52 @@ import { resetPdfToolAuthEnv } from "./pdf-tool.test-support.js";
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-8";
 const TEST_AGENT_DIR = "/tmp/openclaw-pdf-model-config";
 
+const pdfModelConfigMetadataPlugins = vi.hoisted(() => [
+  {
+    contracts: {
+      mediaUnderstandingProviders: ["anthropic", "google", "minimax", "minimax-portal", "openai"],
+    },
+    mediaUnderstandingProviderMetadata: {
+      anthropic: {
+        capabilities: ["image"],
+        defaultModels: { image: "claude-opus-4-8" },
+        autoPriority: { image: 20 },
+        nativeDocumentInputs: ["pdf"],
+      },
+      google: {
+        capabilities: ["image", "audio", "video"],
+        defaultModels: { image: "gemini-3-flash-preview" },
+        autoPriority: { image: 30, audio: 40, video: 10 },
+        nativeDocumentInputs: ["pdf"],
+      },
+      minimax: {
+        capabilities: ["image"],
+        defaultModels: { image: "MiniMax-VL-01" },
+        autoPriority: { image: 40 },
+        documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
+      },
+      "minimax-portal": {
+        capabilities: ["image"],
+        defaultModels: { image: "MiniMax-VL-01" },
+        autoPriority: { image: 50 },
+        documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
+      },
+      openai: {
+        capabilities: ["image", "audio"],
+        defaultModels: { image: "gpt-5.5", audio: "gpt-4o-transcribe" },
+        autoPriority: { image: 20, audio: 20 },
+      },
+    },
+  },
+]);
+
+vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: () => ({
+    index: { plugins: [] },
+    plugins: pdfModelConfigMetadataPlugins,
+  }),
+}));
+
 vi.mock("./model-config.helpers.js", () => ({
   coerceToolModelConfig: (model?: unknown) => {
     if (typeof model === "string") {

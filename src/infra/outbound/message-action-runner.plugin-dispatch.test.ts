@@ -91,6 +91,7 @@ const mocks = vi.hoisted(() => ({
   executeSendAction: vi.fn(),
   executePollAction: vi.fn(),
   callGatewayLeastPrivilege: vi.fn(),
+  callGatewayScoped: vi.fn(),
   randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
 }));
@@ -107,6 +108,7 @@ vi.mock("./outbound-send-service.js", () => ({
 
 vi.mock("./message.gateway.runtime.js", () => ({
   callGatewayLeastPrivilege: mocks.callGatewayLeastPrivilege,
+  callGatewayScoped: mocks.callGatewayScoped,
   randomIdempotencyKey: mocks.randomIdempotencyKey,
 }));
 
@@ -187,6 +189,9 @@ function createGatewayActionPlugin(params: {
   capabilities?: ChannelPlugin["capabilities"];
   messaging?: ChannelPlugin["messaging"];
   handleAction: ChannelActionHandler;
+  requiresTrustedRequesterSender?: NonNullable<
+    ChannelPlugin["actions"]
+  >["requiresTrustedRequesterSender"];
 }): ChannelPlugin {
   const actions = new Set(params.actions);
   const gatewayActions = new Set(params.gatewayActions ?? params.actions);
@@ -206,6 +211,7 @@ function createGatewayActionPlugin(params: {
       describeMessageTool: () => ({ actions: params.actions }),
       supportsAction: ({ action }) => actions.has(action),
       resolveExecutionMode: ({ action }) => (gatewayActions.has(action) ? "gateway" : "local"),
+      requiresTrustedRequesterSender: params.requiresTrustedRequesterSender,
       handleAction: params.handleAction,
     },
   };
@@ -274,6 +280,7 @@ describe("runMessageAction plugin dispatch", () => {
         await executePluginAction({ action: "poll", ctx }),
     );
     mocks.callGatewayLeastPrivilege.mockReset();
+    mocks.callGatewayScoped.mockReset();
     mocks.randomIdempotencyKey.mockClear();
     mocks.maybeApplyTtsToPayload.mockReset();
     mocks.maybeApplyTtsToPayload.mockImplementation(
@@ -509,6 +516,7 @@ describe("runMessageAction plugin dispatch", () => {
         "gateway least privilege call",
       );
       expectRecordFields(gatewayCall, { method: "message.action" }, "gateway call");
+      expect(mocks.callGatewayScoped).not.toHaveBeenCalled();
       const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
       expectRecordFields(
         gatewayParams,
@@ -524,7 +532,6 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "gateway call params",
       );
-      expect(gatewayParams.trustedRequesterToken).toBeUndefined();
       expectRecordFields(
         readRecordField(gatewayParams, "toolContext", "gateway tool context"),
         {
@@ -553,6 +560,189 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "result payload",
       );
+    });
+
+    it("requests admin scope for gateway actions that require trusted requester identity", async () => {
+      const handleActionEntry = vi.fn(async () =>
+        jsonResult({
+          ok: true,
+          local: true,
+        }),
+      );
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat privileged action test plugin.",
+        actions: ["react"],
+        capabilities: { chatTypes: ["direct"], reactions: true },
+        requiresTrustedRequesterSender: ({ action, toolContext }) =>
+          action === "react" && toolContext?.requesterSourceProvider === "gatewaychat-voice",
+        handleAction: handleActionEntry,
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayScoped.mockResolvedValue({
+        ok: true,
+        added: "✅",
+      });
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "react",
+        params: {
+          channel: "gatewaychat",
+          to: "+15551234567",
+          chatJid: "+15551234567",
+          messageId: "wamid.1",
+          emoji: "✅",
+        },
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:main",
+        sessionId: "session-123",
+        agentId: "alpha",
+        inboundEventKind: "room_event",
+        toolContext: {
+          currentChannelProvider: "gatewaychat",
+          requesterSourceProvider: "gatewaychat-voice",
+          currentMessageId: "wamid.1",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        dryRun: false,
+      });
+
+      const gatewayCall = readMockCallArg(mocks.callGatewayScoped, "gateway scoped call");
+      expectRecordFields(gatewayCall, { method: "message.action" }, "gateway call");
+      expect(gatewayCall.scopes).toEqual(["operator.admin", "operator.write"]);
+      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      expectRecordFields(
+        gatewayParams,
+        {
+          channel: "gatewaychat",
+          action: "react",
+          requesterSenderId: "trusted-user",
+          sessionKey: "agent:alpha:main",
+          sessionId: "session-123",
+          agentId: "alpha",
+          inboundTurnKind: "room_event",
+          idempotencyKey: "idem-gateway-action",
+        },
+        "gateway call params",
+      );
+      expectRecordFields(
+        readRecordField(gatewayParams, "toolContext", "gateway tool context"),
+        {
+          currentChannelProvider: "gatewaychat",
+          requesterSourceProvider: "gatewaychat-voice",
+          currentMessageId: "wamid.1",
+        },
+        "gateway tool context",
+      );
+      expect(handleActionEntry).not.toHaveBeenCalled();
+      expectRecordFields(
+        result,
+        {
+          kind: "action",
+          channel: "gatewaychat",
+          action: "react",
+          handledBy: "plugin",
+        },
+        "result",
+      );
+      expectRecordFields(
+        readRecordField(result, "payload", "result payload"),
+        {
+          ok: true,
+          added: "✅",
+        },
+        "result payload",
+      );
+    });
+
+    it("preserves owner trust for privileged gateway actions without tool context", async () => {
+      const handleActionEntry = vi.fn(async () =>
+        jsonResult({
+          ok: true,
+          local: true,
+        }),
+      );
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat privileged owner action test plugin.",
+        actions: ["ban"],
+        requiresTrustedRequesterSender: ({ action, toolContext }) =>
+          action === "ban" && toolContext?.currentChannelProvider === "gatewaychat",
+        handleAction: handleActionEntry,
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayScoped.mockResolvedValue({
+        ok: true,
+        banned: "user-2",
+      });
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "ban",
+        params: {
+          channel: "gatewaychat",
+          guildId: "guild-1",
+          userId: "user-2",
+        },
+        senderIsOwner: true,
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        dryRun: false,
+      });
+
+      const gatewayCall = readMockCallArg(mocks.callGatewayScoped, "gateway scoped call");
+      expectRecordFields(gatewayCall, { method: "message.action" }, "gateway call");
+      expect(gatewayCall.scopes).toEqual(["operator.admin", "operator.write"]);
+      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      expectRecordFields(
+        gatewayParams,
+        {
+          channel: "gatewaychat",
+          action: "ban",
+          senderIsOwner: true,
+          idempotencyKey: "idem-gateway-action",
+        },
+        "gateway call params",
+      );
+      expect(handleActionEntry).not.toHaveBeenCalled();
     });
 
     it("ignores gateway url overrides for backend plugin actions", async () => {
