@@ -4308,6 +4308,7 @@ export const testing = {
   createAzureOpenAIClient,
   createOpenAICompletionsClient,
   createOpenAIResponsesClient,
+  createResponsesStreamWithEncryptedContentRetry,
   enforceCodeModeResponsesToolSurface,
   sanitizeOpenAICodexResponsesParams,
   sanitizeResponsesInput,

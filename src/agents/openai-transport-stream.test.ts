@@ -10331,23 +10331,57 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
   });
 
-  it("sanitizes null content in managed transport Responses input before SDK serialization", () => {
-    const input = [
-      { role: "system", content: "You are a helpful assistant" },
-      { role: "user", content: "Hello" },
-      { role: "assistant", content: null },
-      { role: "user", content: null },
-      { role: "developer", content: null },
-      { type: "function_call", name: "test", arguments: "{}" },
-    ] as unknown as Parameters<typeof testing.sanitizeResponsesInput>[0];
+  it("sanitizes null content in managed transport Responses input before SDK serialization", async () => {
+    const captured: unknown[] = [];
+    const mockClient = {
+      responses: {
+        create: vi.fn(async (request: unknown) => {
+          captured.push(request);
+          return neverYieldsStream();
+        }),
+      },
+    };
 
-    testing.sanitizeResponsesInput(input);
+    const request = {
+      model: "gpt-5.4",
+      input: [
+        { role: "system", content: "You are a helpful assistant" },
+        { role: "user", content: "Hello" },
+        { role: "assistant", content: null },
+        { role: "user", content: null },
+        { role: "developer", content: null },
+        { type: "function_call", name: "test", arguments: "{}" },
+      ],
+      stream: true,
+    } as unknown as Parameters<
+      typeof testing.createResponsesStreamWithEncryptedContentRetry
+    >[0]["request"];
 
-    expect(input[0]).toEqual({ role: "system", content: "You are a helpful assistant" });
-    expect(input[1]).toEqual({ role: "user", content: "Hello" });
-    expect(input[2]).toEqual({ role: "assistant", content: [] });
-    expect(input[3]).toEqual({ role: "user", content: "" });
-    expect(input[4]).toEqual({ role: "developer", content: "" });
-    expect(input[5]).toEqual({ type: "function_call", name: "test", arguments: "{}" });
+    await testing.createResponsesStreamWithEncryptedContentRetry({
+      client: mockClient as never,
+      request,
+      requestOptions: {},
+      model: {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+    });
+
+    expect(mockClient.responses.create).toHaveBeenCalledTimes(1);
+    const sent = captured[0] as { input: Array<Record<string, unknown>> };
+    expect(sent.input[0]).toEqual({ role: "system", content: "You are a helpful assistant" });
+    expect(sent.input[1]).toEqual({ role: "user", content: "Hello" });
+    expect(sent.input[2]).toEqual({ role: "assistant", content: [] });
+    expect(sent.input[3]).toEqual({ role: "user", content: "" });
+    expect(sent.input[4]).toEqual({ role: "developer", content: "" });
+    expect(sent.input[5]).toEqual({ type: "function_call", name: "test", arguments: "{}" });
   });
 });
