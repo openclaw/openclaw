@@ -17,6 +17,7 @@ import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-v
 import { describe, expect, it, vi } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googlePlugin from "./index.js";
+import googleProviderDiscovery from "./provider-discovery.js";
 import { registerGoogleProvider } from "./provider-registration.js";
 
 const googleProviderPlugin = {
@@ -203,6 +204,16 @@ describe("google provider plugin hooks", () => {
           GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
           GOOGLE_CLOUD_PROJECT: "",
           GCLOUD_PROJECT: "vertex-project",
+          GOOGLE_CLOUD_LOCATION: "global",
+        },
+      }),
+    ).toBe("gcp-vertex-credentials");
+    expect(
+      googleProviderDiscovery.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: {
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+          GOOGLE_CLOUD_PROJECT: "vertex-project",
           GOOGLE_CLOUD_LOCATION: "global",
         },
       }),
