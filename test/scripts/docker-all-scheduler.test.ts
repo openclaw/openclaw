@@ -1,3 +1,4 @@
+// Docker All Scheduler tests cover docker all scheduler script behavior.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

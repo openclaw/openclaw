@@ -1,3 +1,5 @@
+// Chat directive tag tests cover reply directive metadata, transcript mirrors,
+// current-message reply routing, and dispatched payload ordering.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

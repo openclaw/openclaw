@@ -1,3 +1,4 @@
+// Approval native helpers translate plugin approval requests into host-native approval records.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

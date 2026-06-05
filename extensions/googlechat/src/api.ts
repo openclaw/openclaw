@@ -1,3 +1,4 @@
+// Googlechat API module exposes the plugin public contract.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";

@@ -1,3 +1,4 @@
+// Doctor heartbeat template repair tests cover migration and repair of heartbeat prompt templates.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

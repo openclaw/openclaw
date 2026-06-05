@@ -459,7 +459,7 @@ export function resolveDockerE2ePlan(options) {
   const configuredLanes = selectedLanes
     ? selectedLanes
     : releaseLanes
-      ? releaseLanes
+      ? applyLiveMode(releaseLanes, options.liveMode)
       : options.liveMode === "only"
         ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], options.liveMode)
         : applyLiveMode(retriedMainLanes, options.liveMode);

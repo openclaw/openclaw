@@ -1,3 +1,4 @@
+// Provider OAuth runtime helpers expose shared browser/OAuth flows for provider plugins.
 import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationMs,

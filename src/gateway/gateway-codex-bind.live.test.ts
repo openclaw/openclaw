@@ -1,3 +1,4 @@
+// Codex bind live gateway tests verify bundled Codex plugin channel binding and outbound session routing.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

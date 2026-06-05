@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover backend config behavior.
 import syncFs from "node:fs";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
