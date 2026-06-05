@@ -107,6 +107,8 @@ Two modes:
 
 At least one of `streaming.enabled` / `realtime.enabled` must be set (validated), and `msteams.port` + `msteams.sharedSecret` are required.
 
+For `inboundPolicy: "allowlist"`, Teams callers have no phone number, so `allowFrom` entries are matched against the caller's **AAD object id** (a GUID) — list the caller's `aadId` (carrier providers still use E.164 numbers; either form is accepted).
+
 ```json5
 {
   provider: "msteams",
