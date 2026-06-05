@@ -1,3 +1,4 @@
+// Resolves OpenClaw home and platform-specific config directories.
 import os from "node:os";
 import path from "node:path";
 
@@ -129,7 +130,11 @@ export function resolveHomeRelativePath(
   return path.resolve(trimmed);
 }
 
-/** Backward-compatible alias for resolving user paths against the effective home. */
+/**
+ * Backward-compatible alias for resolving user paths against the effective home.
+ *
+ * @deprecated Use resolveHomeRelativePath.
+ */
 export function resolveUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,

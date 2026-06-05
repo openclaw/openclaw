@@ -1,3 +1,4 @@
+// Registers and watches plugin channel runtime context values.
 import type {
   ChannelRuntimeContextKey,
   ChannelRuntimeSurface,
@@ -49,18 +50,17 @@ export function registerChannelRuntimeContext(
   });
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Runtime context values are caller-typed by key.
 /** Reads a channel-scoped runtime context from the current runtime registry. */
-export function getChannelRuntimeContext<T = unknown>(
+export function getChannelRuntimeContext(
   params: ChannelRuntimeContextKey & {
     channelRuntime?: ChannelRuntimeSurface;
   },
-): T | undefined {
+): unknown {
   const runtimeContexts = resolveRuntimeContextRegistry(params);
   if (!runtimeContexts) {
     return undefined;
   }
-  return runtimeContexts.get<T>({
+  return runtimeContexts.get({
     channelId: params.channelId,
     accountId: params.accountId,
     capability: params.capability,

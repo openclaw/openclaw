@@ -1,3 +1,8 @@
+/**
+ * Structured logging for model fallback decisions. The log payload carries
+ * sanitized error observations plus step fields that make fallback chains
+ * auditable.
+ */
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildTextObservationFields } from "./embedded-agent-error-observation.js";
@@ -6,6 +11,7 @@ import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js"
 
 const decisionLog = createSubsystemLogger("model-fallback").child("decision");
 
+/** Return whether fallback decision logging is enabled for warn-level events. */
 export function isModelFallbackDecisionLogEnabled(): boolean {
   return decisionLog.isEnabled("warn");
 }
@@ -33,6 +39,7 @@ function buildErrorObservationFields(error?: string): {
 
 type FallbackStepOutcome = "next_fallback" | "succeeded" | "chain_exhausted";
 
+/** Structured fields that describe one fallback-chain transition. */
 export type ModelFallbackStepFields = {
   fallbackStepType: "fallback_step";
   fallbackStepFromModel: string;
@@ -43,6 +50,7 @@ export type ModelFallbackStepFields = {
   fallbackStepFinalOutcome: FallbackStepOutcome;
 };
 
+/** Input payload for logging one model fallback decision. */
 export type ModelFallbackDecisionParams = {
   decision:
     | "skip_candidate"
@@ -85,6 +93,8 @@ function buildFallbackStepFields(params: {
 }): ModelFallbackStepFields | undefined {
   const lastPreviousAttempt = params.previousAttempts?.at(-1);
   if (params.decision === "candidate_succeeded") {
+    // Success records the previous failed candidate as the source and the current
+    // candidate as the successful fallback destination.
     if (!lastPreviousAttempt) {
       return undefined;
     }
@@ -120,6 +130,7 @@ function buildFallbackStepFields(params: {
   };
 }
 
+/** Log one model fallback decision and return structured fallback-step fields. */
 export function logModelFallbackDecision(
   params: ModelFallbackDecisionParams,
 ): ModelFallbackStepFields | undefined {

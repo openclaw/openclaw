@@ -1,3 +1,4 @@
+/** Detects when secrets runtime preparation can safely use a fast path. */
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -11,6 +12,7 @@ import {
   AUTH_STATE_FILENAME,
   LEGACY_AUTH_FILENAME,
 } from "../agents/auth-profiles/path-constants.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveOAuthPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -98,6 +100,7 @@ function resolveCandidateAgentDirs(params: {
 
 function hasCandidateAuthProfileStoreSource(agentDir: string): boolean {
   return (
+    existsSync(resolveAuthProfileDatabasePath(agentDir)) ||
     existsSync(path.join(agentDir, AUTH_PROFILE_FILENAME)) ||
     existsSync(path.join(agentDir, AUTH_STATE_FILENAME)) ||
     existsSync(path.join(agentDir, LEGACY_AUTH_FILENAME))
@@ -197,6 +200,7 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
 /**
  * Returns whether a snapshot can skip full SecretRef/web-tool resolution.
  */
+/** Returns whether current config/auth/plugin state allows skipping full secret preparation. */
 export function canUseSecretsRuntimeFastPath(params: {
   sourceConfig: OpenClawConfig;
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;

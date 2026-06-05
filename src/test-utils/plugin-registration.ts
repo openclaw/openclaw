@@ -1,3 +1,4 @@
+// Test helpers for captured plugin registration and manifest setup.
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
 import type {
   ImageGenerationProviderPlugin,

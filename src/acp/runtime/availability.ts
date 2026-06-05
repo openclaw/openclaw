@@ -1,3 +1,4 @@
+/** Availability check for exposing ACP runtime spawning to tools and clients. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAcpEnabledByPolicy } from "../policy.js";
 import { getAcpRuntimeBackend } from "./registry.js";

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -175,7 +176,14 @@ export function createWhatsAppPluginBase(params: {
         },
       },
     },
-    reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
+    // `channels.whatsapp.accounts.*` (account add/remove, and `enabled` flips)
+    // must restart the channel so a disabled account's provider is torn down;
+    // the broad `channels.whatsapp` noop prefix below otherwise swallows it as a
+    // hot no-op and leaves the account connected until a full restart.
+    reload: {
+      configPrefixes: ["web", "channels.whatsapp.accounts"],
+      noopPrefixes: ["channels.whatsapp"],
+    },
     gatewayMethodDescriptors: [{ name: "web.login.start" }, { name: "web.login.wait" }],
     configSchema: WhatsAppChannelConfigSchema,
     config: {

@@ -1,3 +1,4 @@
+// Validates secret input schema fragments shared by config sections.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { hasConfiguredSecretInput } from "./types.secrets.js";

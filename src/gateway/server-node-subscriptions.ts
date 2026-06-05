@@ -1,3 +1,5 @@
+// Gateway node subscription manager.
+// Maintains bidirectional node/session fanout indexes.
 import { serializeEventPayload, type SerializedEventPayload } from "./node-registry.js";
 
 // Node subscription manager keeps bidirectional node/session indexes so gateway
@@ -152,6 +154,8 @@ export function createNodeSubscriptionManager(
     if (!nodeSet) {
       return;
     }
+    // Remove reverse session indexes before deleting the node index so session
+    // fanout cannot retain disconnected node ids.
     for (const sessionKey of nodeSet) {
       const sessionSet = sessionSubscribers.get(sessionKey);
       sessionSet?.delete(normalizedNodeId);

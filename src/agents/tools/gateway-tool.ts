@@ -1,3 +1,8 @@
+/**
+ * gateway built-in tool.
+ *
+ * Exposes selected Gateway control/config/update actions with fail-closed config mutation boundaries.
+ */
 import { isDeepStrictEqual } from "node:util";
 import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -40,9 +45,7 @@ const CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE = "config schema path not found";
 // trust-boundary control on `config.apply`/`config.patch`, so the runtime tool
 // must fail closed and allow only a narrow set of agent-tunable paths.
 const ALLOWED_GATEWAY_CONFIG_PATHS = [
-  // Agent prompt/model tuning.
-  "agents.defaults.promptOverlays",
-  "agents.defaults.model",
+  // Low-risk agent runtime tuning.
   "agents.defaults.thinkingDefault",
   "agents.defaults.subagents.thinking",
   "agents.defaults.reasoningDefault",

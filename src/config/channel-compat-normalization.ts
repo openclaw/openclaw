@@ -1,3 +1,4 @@
+// Normalizes channel config compatibility fields during config loading.
 import {
   normalizeLegacyDmAliases,
   type CompatMutationResult,

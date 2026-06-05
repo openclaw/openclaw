@@ -1,3 +1,4 @@
+// Provides fixtures for plugin auto-enable config tests.
 import path from "node:path";
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";

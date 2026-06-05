@@ -1,3 +1,4 @@
+// Computes bounded backoff delays and abortable sleeps.
 import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 /** Exponential backoff settings for retry loops that need bounded jitter. */

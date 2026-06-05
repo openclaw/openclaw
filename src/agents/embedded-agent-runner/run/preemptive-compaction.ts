@@ -1,3 +1,6 @@
+/**
+ * Estimates prompt pressure and decides pre-prompt compaction routing.
+ */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
 import { estimateStringChars } from "../../../utils/cjk-chars.js";
@@ -223,7 +226,11 @@ export function estimateRenderedLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
-/** Backward-compatible alias for callers that still name this a pre-prompt estimate. */
+/**
+ * Backward-compatible alias for callers that still name this a pre-prompt estimate.
+ *
+ * @deprecated Use estimateLlmBoundaryTokenPressure.
+ */
 export function estimatePrePromptTokens(params: {
   messages: AgentMessage[];
   systemPrompt?: string;

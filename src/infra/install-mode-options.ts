@@ -1,3 +1,4 @@
+// Resolves common install/update mode options.
 type InstallMode = "install" | "update";
 
 type InstallModeOptions<TLogger> = {

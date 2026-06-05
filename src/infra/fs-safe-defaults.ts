@@ -1,3 +1,4 @@
+// Applies OpenClaw's default fs-safe runtime configuration.
 import { configureFsSafePython } from "@openclaw/fs-safe/config";
 
 // OpenClaw does not rely on Python helpers for normal filesystem safety. Tests

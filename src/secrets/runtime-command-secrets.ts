@@ -1,3 +1,4 @@
+/** Resolves command-scoped secrets, including web provider override credentials. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -403,6 +404,7 @@ async function resolveForcedActiveCommandSecretTargets(params: {
  * Resolves command-scoped SecretRef assignments from the active runtime snapshot.
  * Provider overrides are evaluated against cloned snapshot config.
  */
+/** Resolves command secret assignments from the active prepared runtime snapshot. */
 export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
   /** Command name used in diagnostics returned to gateway/tool callers. */
   commandName: string;

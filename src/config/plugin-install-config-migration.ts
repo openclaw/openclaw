@@ -1,3 +1,4 @@
+// Migrates plugin install config entries into canonical config shape.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import type { PluginInstallRecord } from "./types.plugins.js";

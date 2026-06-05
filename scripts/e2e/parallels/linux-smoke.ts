@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
+// Linux Smoke script supports OpenClaw repository automation.
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,6 +23,7 @@ import {
   say,
   shellQuote,
   warn,
+  withProgressOnStderr,
   writeJson,
   writeSummaryMarkdown,
   type Mode,
@@ -828,5 +830,6 @@ fi`,
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const options = parseArgs(process.argv.slice(2));
   await mkdir(repoRoot, { recursive: true });
-  await new LinuxSmoke(options).run();
+  const runSmoke = () => new LinuxSmoke(options).run();
+  await (options.json ? withProgressOnStderr(runSmoke) : runSmoke());
 }

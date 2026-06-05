@@ -1,3 +1,4 @@
+// Compiles plugin manifest schemas for validation without runtime loading.
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import { Format } from "typebox/format";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";

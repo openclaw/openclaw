@@ -1,3 +1,4 @@
+// Resolves runtime safe-bin policy and trust warnings.
 import { resolveSafeBins } from "./exec-approvals-allowlist.js";
 import {
   normalizeSafeBinProfileFixtures,

@@ -1,3 +1,4 @@
+// Evaluates tool descriptors against runtime availability constraints.
 import type {
   JsonObject,
   JsonPrimitive,

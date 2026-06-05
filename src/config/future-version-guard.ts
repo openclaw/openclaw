@@ -1,3 +1,4 @@
+// Rejects config files written by unsupported future versions.
 import { VERSION } from "../version.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";

@@ -1,3 +1,4 @@
+// Normalizes heartbeat wake reasons for logs and UI.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 // Heartbeat wake reasons are displayed/logged, so normalize blanks to a stable
