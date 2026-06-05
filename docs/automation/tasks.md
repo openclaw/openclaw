@@ -59,7 +59,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
   </Tab>
   <Tab title="Cancel and notify">
     ```bash
-    # Cancel a running task (kills the child session)
+    # Cancel a cancellable running task
     openclaw tasks cancel <lookup>
 
     # Change notification policy for a task
@@ -213,6 +213,8 @@ openclaw tasks notify <lookup> state_changes
     ```
 
     For ACP and subagent tasks, this kills the child session. For CLI-tracked tasks, cancellation is recorded in the task registry (there is no separate child runtime handle). Status transitions to `cancelled` and a delivery notification is sent when applicable.
+
+    Cron task records are ledger entries for cron runs, not the scheduler handle itself. `openclaw tasks cancel` does not stop an active cron run; use `openclaw cron list` to find the job, `openclaw cron disable <job-id>` or `openclaw cron remove <job-id>` to prevent future runs, and `openclaw cron runs --id <job-id>` to inspect run results.
 
   </Accordion>
   <Accordion title="tasks notify">

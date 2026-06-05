@@ -69,6 +69,8 @@ openclaw tasks cancel <lookup>
 
 Cancels a running background task.
 
+`tasks cancel` can cancel ACP, subagent, and CLI-tracked task records. Cron task records track cron runs in the task ledger; they do not own the scheduler handle. To stop future cron runs, find the job with `openclaw cron list`, then run `openclaw cron disable <job-id>` or `openclaw cron remove <job-id>`. Use `openclaw cron runs --id <job-id>` to inspect the current run's result.
+
 ### `audit`
 
 ```bash

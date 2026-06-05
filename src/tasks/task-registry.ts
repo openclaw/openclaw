@@ -2030,6 +2030,9 @@ export function updateTaskNotifyPolicyById(params: {
   });
 }
 
+const CRON_TASK_CANCEL_UNSUPPORTED_REASON =
+  "Active cron runs cannot be cancelled from the task ledger yet. The run will continue; use `openclaw cron list` to find the job, then `openclaw cron disable <job-id>` or `openclaw cron remove <job-id>` to prevent future runs, and `openclaw cron runs --id <job-id>` to inspect results.";
+
 export function linkTaskToFlowById(params: { taskId: string; flowId: string }): TaskRecord | null {
   ensureTaskRegistryReady();
   const flowId = params.flowId.trim();
@@ -2080,6 +2083,14 @@ export async function cancelTaskById(params: {
   const childSessionKey = task.childSessionKey?.trim();
   try {
     if (task.runtime !== "cli") {
+      if (task.runtime === "cron") {
+        return {
+          found: true,
+          cancelled: false,
+          reason: CRON_TASK_CANCEL_UNSUPPORTED_REASON,
+          task: cloneTaskRecord(task),
+        };
+      }
       if (!childSessionKey) {
         if (!isChildlessCodexNativeSubagentTask(task)) {
           return {

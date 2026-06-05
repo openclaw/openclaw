@@ -3527,6 +3527,39 @@ describe("task-registry", () => {
     });
   });
 
+  it("returns an actionable reason when active cron tasks cannot be cancelled", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cron",
+        ownerKey: "",
+        scopeKind: "system",
+        childSessionKey: "agent:main:cron:daily-digest",
+        sourceId: "cron:daily-digest",
+        runId: "run-cron-active",
+        task: "Daily digest",
+        status: "running",
+        deliveryStatus: "not_applicable",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(result).toEqual({
+        found: true,
+        cancelled: false,
+        reason:
+          "Active cron runs cannot be cancelled from the task ledger yet. The run will continue; use `openclaw cron list` to find the job, then `openclaw cron disable <job-id>` or `openclaw cron remove <job-id>` to prevent future runs, and `openclaw cron runs --id <job-id>` to inspect results.",
+        task,
+      });
+      expectRecordFields(getTaskById(task.taskId), {
+        taskId: task.taskId,
+        status: "running",
+      });
+    });
+  });
+
   it("cancels childless codex-native tasks without routing through OpenClaw subagent sessions", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryForTests();
