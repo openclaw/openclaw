@@ -2381,5 +2381,48 @@ describe("dispatchReplyFromConfig", () => {
     expect(textFallback).toBeDefined();
   });
 
+
+  it("delivers accumulated block text when captioned final is ordinary media-only", async () => {
+    setNoAbort();
+    // Regression: in captioned-final mode a suppressed text-only block accumulates,
+    // then the final reply is ORDINARY media (image, not synthesized TTS voice).
+    // The ordinary final reaches the user but carries no synthesized voice and no
+    // visible text, so it must not block the captioned block-text fallback: the
+    // accumulated assistant text must still be delivered alongside the image.
+    ttsMocks.state.synthesizeFinalAudio = true;
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:telegram:ordinary-media-final",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "Block speech content." });
+      return { mediaUrls: ["https://example.com/photo.png"] };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const finalPayloads = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([payload]) => payload as ReplyPayload,
+    );
+    // The ordinary image final still reached the user...
+    const imageFinal = finalPayloads.find((payload) =>
+      payload.mediaUrls?.includes("https://example.com/photo.png"),
+    );
+    expect(imageFinal).toBeDefined();
+    // ...and the accumulated block text was still delivered (as the synthesized
+    // captioned voice or, if synthesis is unavailable, a text-only fallback).
+    const blockTextDelivered = finalPayloads.some(
+      (payload) =>
+        payload.spokenText === "Block speech content." || payload.text === "Block speech content.",
+    );
+    expect(blockTextDelivered).toBe(true);
+  });
+
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

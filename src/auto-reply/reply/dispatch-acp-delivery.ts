@@ -16,7 +16,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
-import { isReplyPayloadStatusNotice } from "../reply-payload.js";
+import { isReplyPayloadStatusNotice, isReplyPayloadTtsSupplement } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -481,8 +481,14 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       ttsAuto: params.sessionTtsAuto,
       skipTts: meta?.skipTts,
     });
+    // ACP only emits text finals plus the genuine synthesized voice supplement
+    // today, so a final's media must be a TTS supplement to count as delivered TTS
+    // media. This defends the deliveredFinalTtsMedia writes below against a
+    // hypothetical ordinary media-only final falsely satisfying the TTS-media gate.
     const hasFinalMedia =
-      kind === "final" && resolveSendableOutboundReplyParts(ttsPayload).hasMedia;
+      kind === "final" &&
+      resolveSendableOutboundReplyParts(ttsPayload).hasMedia &&
+      isReplyPayloadTtsSupplement(ttsPayload);
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
       const toolCallId = normalizeOptionalString(meta?.toolCallId);
