@@ -2094,4 +2094,40 @@ describe("anthropic transport stream", () => {
     // stream (a timing artefact of synchronous mock SSE delivery).
     expect(eventTypes).not.toContain("start");
   });
+
+  it("maps max_turns stop reason to error in transport stream", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "hello" },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "max_turns" },
+          usage: { output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "test" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+  });
 });

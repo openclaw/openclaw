@@ -341,6 +341,36 @@ describe("Anthropic provider", () => {
     expect(eventTypes).not.toContain("start");
   });
 
+  it("maps max_turns stop reason to error", async () => {
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        fetch: () =>
+          Promise.resolve(
+            createSseResponse([
+              {
+                type: "message_start",
+                message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
+              },
+              {
+                type: "message_delta",
+                delta: { stop_reason: "max_turns" },
+                usage: { input_tokens: 1, output_tokens: 1 },
+              },
+              { type: "message_stop" },
+            ]),
+          ),
+      },
+    );
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+  });
+
   it("strips the internal cache boundary when Anthropic cache control is disabled", async () => {
     let capturedPayload: unknown;
     const stream = streamSimpleAnthropic(

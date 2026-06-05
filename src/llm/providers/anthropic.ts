@@ -1364,10 +1364,10 @@ function mapStopReason(reason: string): StopReason {
     case "max_tokens":
       return "length";
     case "max_turns":
-      // Anthropic returns this when the model hits its internal turn budget.
-      // It is a terminal stop, not an error — treat it as a normal stop so
-      // the assistant payload surfaces the last visible text.
-      return "stop";
+      // Anthropic returns this when the model exhausts its internal turn
+      // budget. Treat it as an error so the run surfaces actionable
+      // diagnostics instead of silently completing.
+      return "error";
     case "tool_use":
       return "toolUse";
     case "refusal":
