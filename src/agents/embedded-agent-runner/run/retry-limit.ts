@@ -37,8 +37,10 @@ export function handleRetryLimitExhaustion(params: {
     payloads: [
       {
         text:
-          "Request failed after repeated internal retries. " +
-          "Please try again, or use /new to start a fresh session.",
+          `Run stopped: retry limit exceeded (session: ${params.agentMeta.sessionId}). ` +
+          "The agent did not complete within the allowed attempts. " +
+          "You can retry, inspect the session logs for partial progress, " +
+          "or use /new to start a fresh session.",
         isError: true,
       },
     ],
