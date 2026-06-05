@@ -92,9 +92,13 @@ vi.mock("./subagent-registry-helpers.js", () => ({
   MAX_ANNOUNCE_RETRY_COUNT: 5,
   MIN_ANNOUNCE_RETRY_DELAY_MS: 1_000,
   capFrozenResultText: (text: string) => text.trim(),
-  formatDefaultGiveUpError: (entry: { label?: string; task?: string }, reason: string) => {
+  formatDefaultGiveUpError: (
+    entry: { label?: string; task?: string; delivery?: { attemptCount?: number } },
+    reason: string,
+  ) => {
+    const retryCount = entry.delivery?.attemptCount ?? 0;
     const label = entry.label ?? entry.task?.slice(0, 60) ?? "unknown";
-    return `subagent "${label}" delivery failed after 0 retries (${reason})`;
+    return `subagent "${label}" delivery failed after ${retryCount} retries (${reason})`;
   },
   logAnnounceGiveUp: helperMocks.logAnnounceGiveUp,
   persistSubagentSessionTiming: helperMocks.persistSubagentSessionTiming,
@@ -985,6 +989,80 @@ describe("subagent registry lifecycle hardening", () => {
     });
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
     expect(persist).toHaveBeenCalled();
+  });
+
+  it("suspend path guarantees error string when no prior error exists (#44925)", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      cleanup: "keep",
+      delivery: { status: "pending" },
+      outcome: { status: "ok" },
+      retainAttachmentsOnKeep: true,
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    // Suspend path must also guarantee deliveryError (#44925)
+    expect(entry.delivery?.status).toBe("suspended");
+    expect(entry.delivery?.lastError).toBe(
+      'subagent "finish the task" delivery failed after 0 retries (retry-limit)',
+    );
+    expect(entry.delivery?.suspendedReason).toBe("retry-limit");
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      deliveryStatus: "failed",
+      error: 'subagent "finish the task" delivery failed after 0 retries (retry-limit)',
+    });
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it("emits subagent-delivery-failed event on all give-up paths (#44925)", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_ERROR,
+      expectsCompletionMessage: true,
+      delivery: { status: "pending" },
+      outcome: { status: "error" as const, error: "child crashed" },
+      retainAttachmentsOnKeep: false,
+    });
+
+    lifecycleEventMocks.emitSessionLifecycleEvent.mockClear();
+
+    const controller = createLifecycleController({
+      entry,
+      persist: vi.fn(),
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    // Verify event was emitted with correct payload (#44925)
+    expect(lifecycleEventMocks.emitSessionLifecycleEvent).toHaveBeenCalledWith({
+      sessionKey: entry.childSessionKey,
+      reason: "subagent-delivery-failed",
+      parentSessionKey: entry.requesterSessionKey,
+      label: entry.label,
+      displayName: 'subagent "finish the task" delivery failed after 0 retries (retry-limit)',
+    });
   });
 
   it("suspends successful keep-mode final delivery instead of completing cleanup on retry exhaustion", async () => {
