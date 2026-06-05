@@ -350,7 +350,9 @@ function mergeConfig(
       provider:
         overrides?.query?.hybrid?.mmr?.provider ??
         defaults?.query?.hybrid?.mmr?.provider ??
-        ((defaults?.query?.hybrid?.mmr?.enabled ?? DEFAULT_MMR_ENABLED)
+        ((overrides?.query?.hybrid?.mmr?.enabled ??
+        defaults?.query?.hybrid?.mmr?.enabled ??
+        DEFAULT_MMR_ENABLED)
           ? DEFAULT_MMR_PROVIDER
           : DEFAULT_MMR_FALLBACK),
       fallback:
