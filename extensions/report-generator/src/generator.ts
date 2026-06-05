@@ -1,5 +1,7 @@
 import type { PluginRuntime } from "../api.js";
 import type { PluginLogger } from "../api.js";
+import { buildDataDigest, computeDailyAverage } from "./data-digest.js";
+import { ToolActivityNarrator } from "./tool-activity.js";
 import type { FeedRecord, GeneratedReport, ReportPeriod } from "./types.js";
 
 interface GenerateOptions {
@@ -9,47 +11,27 @@ interface GenerateOptions {
   feedData: FeedRecord[];
   template: string;
   userId: string;
-  /** Topic the report covers (download.topicId; 328-349 means slave-topic matching). */
+  /** Topic the report covers (download.topicId). */
   topicId: number;
-  /** Original topic id when the task uses slave-topic matching (0 otherwise). */
+  /** Slave topic id when the task uses slave-topic matching (0 otherwise). */
   slaveTopicId: number;
   /**
-   * Per-user agent to run the generation under (e.g. "rabbitmq-1749").
-   * The subagent then inherits that agent's workspace, DB skills, and schema
-   * knowledge so it can query the database autonomously. Falls back to the
-   * default agent when absent (legacy tasks).
+   * Per-user agent to run the generation under (e.g. "rabbitmq-1749") so the
+   * report inherits that agent's workspace persona and templates. The agent
+   * has no database access — all report data arrives pre-queried in the
+   * prompt. Falls back to the default agent when absent (legacy tasks).
    */
   agentId?: string;
   /** Called with each LLM text delta for real-time streaming to the frontend. */
   onDelta?: (delta: string) => void;
+  /**
+   * Called with sanitized activity status lines while the agent runs tools
+   * (tool phases produce no text deltas — without these the frontend sees a
+   * dead stream). Messages carry only generic labels; tool args (paths,
+   * credentials) never reach this callback.
+   */
+  onActivity?: (message: string) => void;
 }
-
-/**
- * Condensed schema of the feed tables, distilled from
- * extensions/feed-search/src/feed_monitor_item.sql and
- * feed_monitor_item_data.sql, injected into the autonomous prompt so the
- * agent writes correct SQL without guessing column names.
- */
-const FEED_TABLE_SCHEMA = `### feed_monitor_item（舆情条目主表，主键 id）
-- topicId / slaveTopicId：专题归属（mediumint；从属专题模式按 slaveTopicId 过滤）
-- date：发布时间（datetime，有索引）；updateDate：更新时间
-- platform：平台名（varchar）；platformType / originType：平台与来源类型
-- contentType：enum('Article','Video','Comment')
-- emotion：情感 enum('Positive','Neutral','Negative')
-- level：风险级别 enum('Red','Orange','Yellow','Blue')（Red 最高）
-- mediaLevel：媒体级别 enum('Central','Local','Government','Institute','Enterprise','Other')
-- fansNumber 粉丝量 / readCount 阅读量 / comments 评论量 / forwardNumber 转发量 / praiseNum 点赞量 / topicInteractionCount 互动量
-- author 作者 / city 城市 / link 原文链接 / official 是否官方 / original 是否原创
-- skip：tinyint，=1 表示已忽略，**统计必须加 WHERE skip = 0**
-- duplicated：是否重复条目
-
-### feed_monitor_item_data（内容详情表，与主表 1:1，主键 id = feed_monitor_item.id）
-- title / titleClean：标题；content：正文；summary：摘要
-- keywords / keySentences / label：关键词、关键句、标签
-- author / reporter
-- 全文索引 ft_search_index(title, author, summary, content)
-
-联表方式：FROM feed_monitor_item f JOIN feed_monitor_item_data d ON d.id = f.id`;
 
 function extractAssistantDelta(data: Record<string, unknown>): string {
   const delta = data.delta;
@@ -102,12 +84,23 @@ export class ReportGenerator {
    * Generate a report using subagent with LLM based on feed data and template.
    */
   async generate(options: GenerateOptions, logger: PluginLogger): Promise<GeneratedReport> {
-    const { period, requirement, dateScope, feedData, template, userId, agentId, onDelta } =
-      options;
+    const {
+      period,
+      requirement,
+      dateScope,
+      feedData,
+      template,
+      userId,
+      agentId,
+      onDelta,
+      onActivity,
+    } = options;
 
-    // Prepare feed data summary for prompt
-    const dataSummary = this.prepareDataSummary(feedData);
-    const platforms = [...new Set(feedData.map((r) => r.platform))].join("、");
+    // Render the REAL collected rows (FeedCollector already queried the DB
+    // with the gateway's credentials) into aggregates + detail lines. The
+    // agent has no database access of its own — everything it reports must
+    // come from this digest.
+    const dataDigest = buildDataDigest(feedData);
     const totalCount = feedData.length;
 
     logger.info(`[REPORT_GENERATOR] Generating ${period} report for requirement: ${requirement}`);
@@ -118,13 +111,25 @@ export class ReportGenerator {
       ? `agent:${agentId}:report-gen:${userId}:${Date.now()}`
       : `report-gen:${userId}:${Date.now()}`;
 
+    // Sanitized tool-activity narration: tool phases emit no assistant
+    // deltas, leaving the frontend stream dead. Tool starts surface as
+    // generic status lines (tool name only — args never leak).
+    const narrator = onActivity ? new ToolActivityNarrator({ push: onActivity }) : null;
+
     // Stream LLM text deltas to the caller and accumulate them as a fallback
     // source for the final report text. Events are filtered by sessionKey
     // (the agent runtime attaches it to every event of this run), so parallel
     // chat sessions never bleed into the report stream.
     let streamedText = "";
     const unsubscribe = this.runtime.events.onAgentEvent((evt) => {
-      if (evt.stream !== "assistant" || evt.sessionKey !== sessionKey) {
+      if (evt.sessionKey !== sessionKey) {
+        return;
+      }
+      if (evt.stream === "tool") {
+        narrator?.handleAgentEvent(evt);
+        return;
+      }
+      if (evt.stream !== "assistant") {
         return;
       }
       const delta = extractAssistantDelta(evt.data);
@@ -140,12 +145,10 @@ export class ReportGenerator {
         requirement,
         dateScope,
         totalCount,
-        platforms,
-        dataSummary,
+        dataDigest,
         template,
         topicId: options.topicId,
         slaveTopicId: options.slaveTopicId,
-        autonomous: Boolean(agentId),
       });
 
       const runResult = await this.runtime.subagent.run({
@@ -156,7 +159,7 @@ export class ReportGenerator {
 
       const waitResult = await this.runtime.subagent.waitForRun({
         runId: runResult.runId,
-        // Autonomous mode runs multi-turn SQL tool calls; allow more time.
+        // Per-user agents may run tools (template/workspace reads); allow more time.
         timeoutMs: agentId ? 300_000 : 120_000,
       });
 
@@ -239,90 +242,58 @@ export class ReportGenerator {
     }
   }
 
-  private prepareDataSummary(feedData: FeedRecord[]): string {
-    if (feedData.length === 0) {
-      return "暂无数据";
-    }
-
-    const items = feedData.slice(0, 20).map((r, i) => {
-      return `${i + 1}. [${r.platform}] ${r.title} (${new Date(r.date).toLocaleDateString("zh-CN")}) - 情感:${r.emotion}`;
-    });
-
-    return items.join("\n");
-  }
-
   private buildReportPrompt(data: {
     period: ReportPeriod;
     requirement: string;
     dateScope: string;
     totalCount: number;
-    platforms: string;
-    dataSummary: string;
+    dataDigest: string;
     template: string;
     topicId: number;
     slaveTopicId: number;
-    autonomous: boolean;
   }): string {
-    if (data.autonomous) {
-      const topicFilter =
-        data.slaveTopicId > 0
-          ? `slaveTopicId = ${data.slaveTopicId}（本专题使用从属专题匹配；主 topicId = ${data.topicId}）`
-          : `topicId = ${data.topicId}`;
+    const topicFilter =
+      data.slaveTopicId > 0
+        ? `slaveTopicId = ${data.slaveTopicId}（本专题使用从属专题匹配；主 topicId = ${data.topicId}）`
+        : `topicId = ${data.topicId}`;
 
-      return `你是一个专业的舆情分析报告生成助手。
-
-用户需求：${data.requirement}
-
-请生成一份${data.period}舆情报告。
-
-## 任务参数
-- 专题过滤条件：${topicFilter}
-- 统计时间范围：${data.dateScope}
-- 预统计参考：该范围内约 ${data.totalCount} 条数据，涉及平台：${data.platforms || "未知"}
-
-## 数据获取要求
-请利用你的数据库查询技能，参考下方表结构自主编写 SQL 查询本专题在统计时间范围内的舆情数据（按上述专题过滤条件和 date 范围过滤，并排除 skip = 1 的记录）。建议自主统计分析：
-- 数据总量、按平台分布、按情感(emotion)分布、按风险级别(level)分布、按日期走势
-- 高影响力条目（fansNumber、readCount、comments、topicInteractionCount 较高者）与重点内容摘要
-- 负面(Negative)/高风险(Red/Orange)信息识别
-
-## 数据表结构
-${FEED_TABLE_SCHEMA}
-
-## 报告模板
-${data.template}
-
-完成数据查询和分析后，严格按照模板格式生成报告，用查询到的实际数据替换模板中的占位符。不要省略任何部分。如果某项没有数据，请标注"暂无数据"。
-
-报告语言：中文
-报告格式：Markdown
-
-最后一条回复必须是完整的报告正文（以 # 标题开头），不要附加多余的说明文字。`;
-    }
+    // Template placeholders like {totalCount}/{dailyAvg} get exact
+    // code-computed values here, so the model copies numbers instead of
+    // doing arithmetic.
+    const daily = computeDailyAverage(data.dateScope, data.totalCount);
+    const dailyAvgLine = daily
+      ? `\n- 日均数据量（dailyAvg）：${daily.dailyAvg} 条/天（统计范围 ${daily.days} 天）`
+      : "";
 
     return `你是一个专业的舆情分析报告生成助手。
 
 用户需求：${data.requirement}
 
-请根据以下舆情数据生成一份${data.period}舆情报告。
+请生成一份${data.period}舆情报告。
 
-## 数据概览
-- 时间范围：${data.dateScope}
-- 数据总量：${data.totalCount} 条
-- 涉及平台：${data.platforms}
+## 任务参数（模板变量直接取用以下数值）
+- 专题过滤条件：${topicFilter}
+- 统计时间范围（dateScope）：${data.dateScope}
+- 数据总量（totalCount）：${data.totalCount} 条${dailyAvgLine}
 
-## 舆情数据（最新20条）
-${data.dataSummary}
+## 舆情数据（数据库真实查询结果，已按专题与时间过滤、排除 skip=1）
+${data.dataDigest}
+
+## 数据使用规则（必须遵守）
+- 以上就是本报告的全部数据来源，统计数字必须与"统计概览"完全一致
+- **严禁编造、推测或补充任何数据**（包括条目、数字、日期、平台、作者）
+- 不要尝试查询数据库——数据已经查好并完整提供在上方
+- 如果某项模板内容没有对应数据，如实标注"暂无数据"
 
 ## 报告模板
 ${data.template}
 
-请严格按照模板格式生成报告，将数据填入模板中的占位符。不要省略任何部分，用实际数据替换占位符。如果没有数据，请标注"暂无数据"。
+严格按照模板格式生成报告，用上方真实数据替换模板中的占位符，不要省略任何部分。
 
 报告语言：中文
 报告格式：Markdown
 
-请直接生成报告，不要有多余的说明文字。`;
+最后一条回复必须是完整的报告正文（以 # 标题开头），不要附加多余的说明文字。`;
   }
 
   private extractSummary(content: string): string {
