@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listBaselines } from "../baseline/capture.js";
+import { resetConfigRuntimeState } from "../config/config.js";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { listCachedProbes } from "../probes/cache.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildDiagnoseJson } from "./diagnose.js";
@@ -23,11 +25,13 @@ describe("diagnose command", () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-diagnose-test-"));
     process.env.OPENCLAW_STATE_DIR = tempDir;
+    resetConfigRuntimeState();
   });
 
   afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
     delete process.env.OPENCLAW_STATE_DIR;
+    resetConfigRuntimeState();
     vi.mocked(captureBaseline).mockClear();
   });
 
@@ -67,6 +71,34 @@ describe("diagnose command", () => {
         "openclaw plugins update --all",
       ]),
     );
+  });
+
+  it("redacts remote gateway URL userinfo and sensitive query params from diagnose JSON", async () => {
+    fs.writeFileSync(
+      path.join(tempDir, "openclaw.json"),
+      JSON.stringify({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "ws://user:pass@example.test/ws?token=superprivate&safe=visible",
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const payload = await buildDiagnoseJson({ timeoutMs: 0 }, {} as RuntimeEnv);
+    const serialized = JSON.stringify(payload);
+
+    expect(payload.status.gateway).toMatchObject({
+      mode: "remote",
+      remote: {
+        url: REDACTED_SENTINEL,
+      },
+    });
+    expect(serialized).not.toContain("user:pass");
+    expect(serialized).not.toContain("token=superprivate");
+    expect(serialized).not.toContain("superprivate");
   });
 
   it("threads diagnose timeout into baseline gateway probes", async () => {

@@ -27,6 +27,9 @@ export function isSensitiveUrlQueryParamName(name: string): boolean {
 }
 
 export function isSensitiveUrlConfigPath(path: string): boolean {
+  if (path === "gateway.remote.url" || path === "remote.url") {
+    return true;
+  }
   if (path.endsWith(".baseUrl") || path.endsWith(".httpUrl")) {
     return true;
   }
