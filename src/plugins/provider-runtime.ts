@@ -33,6 +33,7 @@ import {
   resolveProviderHookPlugin,
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePlugin,
+  resolveProviderToolSchemaNormalizeHookIdentity,
   type ProviderRuntimePluginHandle,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
@@ -166,6 +167,7 @@ export {
   resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
   resolveProviderRuntimePlugin,
+  resolveProviderToolSchemaNormalizeHookIdentity,
   wrapProviderStreamFn,
 };
 
