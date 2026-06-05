@@ -149,6 +149,52 @@ function resolveRoomEventTranscriptBody(params: ReplyPromptEnvelopeBaseParams): 
   );
 }
 
+function normalizeRuntimeContextString(value: unknown): string | undefined {
+  const normalized =
+    typeof value === "number" && Number.isFinite(value)
+      ? String(value)
+      : normalizeOptionalString(value);
+  return normalized?.replaceAll("\u0000", "") || undefined;
+}
+
+function buildCurrentReplyMetadata(
+  ctx: TemplateContext,
+): CurrentInboundPromptContext["reply"] | undefined {
+  const replyChain = Array.isArray(ctx.ReplyChain) ? ctx.ReplyChain : [];
+  const replyChainMessageIds = replyChain
+    .map((entry) => normalizeRuntimeContextString(entry.messageId))
+    .filter((entry): entry is string => Boolean(entry));
+  const replyChainPresent = replyChain.length > 0;
+  const replyToId = normalizeRuntimeContextString(ctx.ReplyToId);
+  const replyToIdFull = normalizeRuntimeContextString(ctx.ReplyToIdFull);
+  const replyTargetBodyPresent = Boolean(normalizeRuntimeContextString(ctx.ReplyToBody));
+  const quotePresent =
+    ctx.ReplyToIsQuote === true || Boolean(normalizeRuntimeContextString(ctx.ReplyToQuoteText));
+  const replyTargetPresent = Boolean(
+    replyToId ||
+    replyToIdFull ||
+    replyTargetBodyPresent ||
+    quotePresent ||
+    normalizeRuntimeContextString(ctx.ReplyToSender) ||
+    replyChainPresent,
+  );
+  if (!replyTargetPresent) {
+    return undefined;
+  }
+  return {
+    currentMessageId:
+      normalizeRuntimeContextString(ctx.MessageSid) ??
+      normalizeRuntimeContextString(ctx.MessageSidFull),
+    threadId: normalizeRuntimeContextString(ctx.MessageThreadId),
+    replyToId,
+    replyToIdFull,
+    replyTargetPresent: true,
+    quotePresent,
+    replyChainPresent,
+    replyChainMessageIds: replyChainMessageIds.length > 0 ? replyChainMessageIds : undefined,
+  };
+}
+
 function resolvePerTurnDeliveryDirective(params: {
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -238,13 +284,15 @@ export function buildReplyPromptEnvelopeBase(
         : params.hasUserBody
           ? params.baseBody
           : "[User sent media without caption]";
+  const currentReplyMetadata = buildCurrentReplyMetadata(params.sessionCtx);
   const currentInboundContext: CurrentInboundPromptContext | undefined =
-    !params.isBareSessionReset && currentInboundContextText
+    !params.isBareSessionReset && (currentInboundContextText || currentReplyMetadata)
       ? {
           text: currentInboundContextText,
           ...(resumableRoomEventContext ? { resumableText: resumableRoomEventContext } : {}),
           promptJoiner: params.inboundUserContextPromptJoiner,
           ...(params.activeGoalContext ? { injectedGoalContexts: [params.activeGoalContext] } : {}),
+          ...(currentReplyMetadata ? { reply: currentReplyMetadata } : {}),
         }
       : undefined;
 
