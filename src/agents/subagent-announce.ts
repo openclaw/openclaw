@@ -435,20 +435,27 @@ export async function runSubagentAnnounceFlow(params: {
       }
 
       if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
-        if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
-          logWarn(
-            `cron job completion for session=${targetRequesterSessionKey} ` +
-              `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
-              `the agent replied with the skip sentinel instead of delivering a result`,
-          );
-        }
         if (fallbackReply && !fallbackIsSilent) {
           const cleaned = stripAndClassifyReply(fallbackReply);
           if (cleaned === null) {
+            if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
+              logWarn(
+                `cron job completion for session=${targetRequesterSessionKey} ` +
+                  `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
+                  `the agent replied with the skip sentinel instead of delivering a result`,
+              );
+            }
             return true;
           }
           reply = cleaned;
         } else {
+          if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
+            logWarn(
+              `cron job completion for session=${targetRequesterSessionKey} ` +
+                `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
+                `the agent replied with the skip sentinel instead of delivering a result`,
+            );
+          }
           return true;
         }
       } else if (reply) {
