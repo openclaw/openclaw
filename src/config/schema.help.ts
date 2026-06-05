@@ -30,6 +30,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
   "diagnostics.memoryPressureSnapshot":
     "Whether critical memory pressure automatically captures a redacted stability snapshot. Default: false. Enable only when this host can tolerate the extra file-system scan and snapshot write during critical memory pressure.",
+  "diagnostics.memoryPressureThresholds":
+    "Override the gateway memory-pressure monitor thresholds. Byte fields (rssWarningBytes, rssCriticalBytes, heapUsedWarningBytes, heapUsedCriticalBytes, rssGrowthWarningBytes, rssGrowthCriticalBytes) set when warn/critical pressure fires; the ms fields (growthWindowMs, pressureRepeatMs) set the growth-detection window and how often a sustained pressure state re-emits. Any unset field uses the built-in default. Raise rssCriticalBytes on hosts that legitimately run hot so the monitor only signals genuine pre-OOM pressure.",
   "diagnostics.otel":
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
   "diagnostics.cacheTrace":

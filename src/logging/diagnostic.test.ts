@@ -1573,6 +1573,27 @@ describe("stuck session diagnostics threshold", () => {
     expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
   });
 
+  it("passes configured memory-pressure thresholds to the memory sampler", () => {
+    const emitMemorySample = createEmitMemorySampleMock();
+    const thresholds = { rssCriticalBytes: 6_815_744_000, pressureRepeatMs: 3_600_000 };
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          memoryPressureThresholds: thresholds,
+        },
+      },
+      { emitMemorySample, sampleLiveness: () => null },
+    );
+
+    vi.advanceTimersByTime(30_000);
+
+    // Without overrides the call is `{ emitSample }`; with config thresholds set
+    // they must reach the sampler (which falls back to defaults per unset field).
+    expect(emitMemorySample).toHaveBeenLastCalledWith(expect.objectContaining({ thresholds }));
+  });
+
   it("records idle liveness samples without warning in the gateway log", () => {
     const emitMemorySample = createEmitMemorySampleMock();
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);

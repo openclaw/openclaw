@@ -1052,11 +1052,18 @@ export function startDiagnosticHeartbeat(
     const shouldEmitLivenessReport = shouldEmitLivenessEvent || shouldEmitLivenessWarning;
     const shouldRecordMemorySample =
       shouldEmitLivenessReport || hasRecentDiagnosticActivity(now) || hasOpenDiagnosticWork(work);
+    // Spread thresholds only when configured so the no-override call stays
+    // `{ emitSample }` (keeps the injected-sampler call shape stable for tests).
+    const memoryPressureThresholds = heartbeatConfig?.diagnostics?.memoryPressureThresholds;
+    const memorySampleOptions = {
+      emitSample: shouldRecordMemorySample,
+      ...(memoryPressureThresholds ? { thresholds: memoryPressureThresholds } : {}),
+    };
     if (opts?.emitMemorySample) {
-      opts.emitMemorySample({ emitSample: shouldRecordMemorySample });
+      opts.emitMemorySample(memorySampleOptions);
     } else {
       emitDiagnosticMemorySample({
-        emitSample: shouldRecordMemorySample,
+        ...memorySampleOptions,
         writeCriticalBundle: shouldWriteCriticalMemoryPressureBundle(heartbeatConfig),
         resolveSessionStorePaths: () => resolveDiagnosticSessionStorePaths(heartbeatConfig),
       });

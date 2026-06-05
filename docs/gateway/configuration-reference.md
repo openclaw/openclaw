@@ -1028,6 +1028,10 @@ Notes:
     stuckSessionWarnMs: 30000,
     stuckSessionAbortMs: 300000,
     memoryPressureSnapshot: false,
+    memoryPressureThresholds: {
+      rssCriticalBytes: 6442450944, // only signal critical above ~6 GiB RSS on hot hosts
+      pressureRepeatMs: 3600000, // re-emit sustained pressure hourly instead of every 5 min
+    },
 
     otel: {
       enabled: false,
@@ -1069,6 +1073,7 @@ Notes:
 - `stuckSessionWarnMs`: no-progress age threshold in ms for classifying long-running processing sessions as `session.long_running`, `session.stalled`, or `session.stuck`. Reply, tool, status, block, and ACP progress reset the timer; repeated `session.stuck` diagnostics back off while unchanged.
 - `stuckSessionAbortMs`: no-progress age threshold in ms before eligible stalled active work may be abort-drained for recovery. When unset, OpenClaw uses the safer extended embedded-run window of at least 5 minutes and 3x `stuckSessionWarnMs`.
 - `memoryPressureSnapshot`: captures a redacted pre-OOM stability snapshot when memory pressure reaches `critical` (default: `false`). Set to `true` to add the stability bundle file scan/write while keeping normal memory pressure events.
+- `memoryPressureThresholds`: overrides for the memory-pressure monitor. Byte fields (`rssWarningBytes`, `rssCriticalBytes`, `heapUsedWarningBytes`, `heapUsedCriticalBytes`, `rssGrowthWarningBytes`, `rssGrowthCriticalBytes`) set when warn/critical pressure fires; `growthWindowMs` and `pressureRepeatMs` set the growth-detection window and how often a sustained pressure state re-emits. Any unset field uses its built-in default (RSS warn 1.5 GiB / critical 3 GiB, heap warn 1 GiB / critical 2 GiB, repeat 5 min). Raise `rssCriticalBytes` on hosts that legitimately run hot so the monitor only signals genuine pre-OOM pressure instead of paging on healthy steady-state usage.
 - `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`). For the full configuration, signal catalog, and privacy model, see [OpenTelemetry export](/gateway/opentelemetry).
 - `otel.endpoint`: collector URL for OTel export.
 - `otel.tracesEndpoint` / `otel.metricsEndpoint` / `otel.logsEndpoint`: optional signal-specific OTLP endpoints. When set, they override `otel.endpoint` for that signal only.

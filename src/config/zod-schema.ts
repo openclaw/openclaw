@@ -456,6 +456,19 @@ export const OpenClawSchema = z
         stuckSessionWarnMs: z.number().int().positive().optional(),
         stuckSessionAbortMs: z.number().int().positive().optional(),
         memoryPressureSnapshot: z.boolean().optional(),
+        memoryPressureThresholds: z
+          .object({
+            rssWarningBytes: z.number().int().positive().optional(),
+            rssCriticalBytes: z.number().int().positive().optional(),
+            heapUsedWarningBytes: z.number().int().positive().optional(),
+            heapUsedCriticalBytes: z.number().int().positive().optional(),
+            rssGrowthWarningBytes: z.number().int().positive().optional(),
+            rssGrowthCriticalBytes: z.number().int().positive().optional(),
+            growthWindowMs: z.number().int().positive().optional(),
+            pressureRepeatMs: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
         otel: z
           .object({
             enabled: z.boolean().optional(),

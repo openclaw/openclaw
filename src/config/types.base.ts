@@ -309,6 +309,23 @@ export type DiagnosticsCacheTraceConfig = {
   includeSystem?: boolean;
 };
 
+/**
+ * Overrides for the gateway memory-pressure monitor thresholds. Any unset field
+ * falls back to the built-in default in `src/logging/diagnostic-memory.ts`.
+ * Byte fields gate warn/critical pressure; the *Ms fields gate the growth window
+ * and how often a sustained pressure state re-emits.
+ */
+export type DiagnosticsMemoryPressureThresholdsConfig = {
+  rssWarningBytes?: number;
+  rssCriticalBytes?: number;
+  heapUsedWarningBytes?: number;
+  heapUsedCriticalBytes?: number;
+  rssGrowthWarningBytes?: number;
+  rssGrowthCriticalBytes?: number;
+  growthWindowMs?: number;
+  pressureRepeatMs?: number;
+};
+
 export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
@@ -319,6 +336,8 @@ export type DiagnosticsConfig = {
   stuckSessionAbortMs?: number;
   /** Capture a redacted stability snapshot when memory pressure reaches critical. Default: false. */
   memoryPressureSnapshot?: boolean;
+  /** Override the gateway memory-pressure warn/critical thresholds. Unset fields use built-in defaults. */
+  memoryPressureThresholds?: DiagnosticsMemoryPressureThresholdsConfig;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };
