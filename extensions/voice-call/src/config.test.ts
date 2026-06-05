@@ -30,6 +30,32 @@ function requireElevenLabsTtsConfig(config: Pick<VoiceCallConfig, "tts">) {
   return { tts, elevenlabs };
 }
 
+describe("VoiceCallConfigSchema allowFrom", () => {
+  const aad = "9a783a59-bf32-4d17-8b42-459e8383e8bb";
+
+  it("accepts E.164 phone numbers and Teams AAD object ids (either case)", () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "msteams",
+      inboundPolicy: "allowlist",
+      allowFrom: ["+15550001234", aad, aad.toUpperCase()],
+    });
+
+    expect(config.allowFrom).toEqual(["+15550001234", aad, aad.toUpperCase()]);
+  });
+
+  it("rejects allowFrom entries that are neither E.164 nor a GUID", () => {
+    expect(() =>
+      VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "msteams",
+        inboundPolicy: "allowlist",
+        allowFrom: ["not-a-number"],
+      }),
+    ).toThrow();
+  });
+});
+
 describe("validateProviderConfig", () => {
   const originalEnv = { ...process.env };
   const clearProviderEnv = () => {
