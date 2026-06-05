@@ -8,6 +8,7 @@ export type GatewayServiceEnv = Record<string, string | undefined>;
 export type GatewayServiceInstallArgs = {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
+  warn?: (message: string) => void;
   programArguments: string[];
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
