@@ -28,7 +28,7 @@ const SPEAKEASY_DAILY_GENERATION_CAP = 50;
 const SPEAKEASY_CACHE_LOCK_STALE_MS = 30_000;
 const SPEAKEASY_TTS_TIMEOUT_MS = 120_000;
 const SPEAKEASY_TTS_MAX_OUTPUT_CHARS = 1024 * 1024;
-const SPEAKEASY_VOICE_NOTE_EXTENSIONS = new Set([".oga", ".ogg", ".opus"]);
+const SPEAKEASY_VOICE_NOTE_EXTENSIONS = new Set([".m4a", ".mp3", ".oga", ".ogg", ".opus"]);
 const TELEGRAM_MAX_INLINE_BUTTON_ACTIONS = 100;
 const SPEAKEASY_STDIN_ARGV_WRAPPER = [
   "import os, runpy, sys",
@@ -358,7 +358,7 @@ function updateSpeakeasyCacheWithLock<T>(
   }
 }
 
-function createSpeakeasyCacheEntry(params: {
+function queueSpeakeasyCacheEntry(params: {
   cfg: OpenClawConfig;
   chatId: string;
   text: string;
@@ -369,9 +369,17 @@ function createSpeakeasyCacheEntry(params: {
     text: params.text,
     createdAt: Date.now(),
   };
-  updateSpeakeasyCacheWithLock(params.cfg, (latest) => {
-    latest.entries[id] = entry;
-  });
+  const timer = setTimeout(() => {
+    try {
+      updateSpeakeasyCacheWithLock(params.cfg, (latest) => {
+        latest.entries[id] = entry;
+      });
+    } catch {
+      // The Speakeasy button is optional; do not let background cache failures
+      // affect reply delivery on the Telegram send path.
+    }
+  }, 0);
+  timer.unref?.();
   return id;
 }
 
@@ -481,16 +489,11 @@ export function withSpeakeasyVoiceButton<T extends ReplyLike>(params: {
   if (!shouldAttachSpeakeasyVoiceButton(params)) {
     return params.reply;
   }
-  let id: string;
-  try {
-    id = createSpeakeasyCacheEntry({
-      cfg: params.cfg!,
-      chatId: params.chatId!,
-      text: params.reply.text!.trim(),
-    });
-  } catch {
-    return params.reply;
-  }
+  const id = queueSpeakeasyCacheEntry({
+    cfg: params.cfg!,
+    chatId: params.chatId!,
+    text: params.reply.text!.trim(),
+  });
   return {
     ...params.reply,
     channelData: {

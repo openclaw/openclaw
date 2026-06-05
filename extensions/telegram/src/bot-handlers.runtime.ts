@@ -1,4 +1,5 @@
 // Telegram plugin module implements bot handlers behavior.
+import { rm } from "node:fs/promises";
 import { InputFile } from "grammy";
 import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
@@ -162,6 +163,14 @@ const SPEAKEASY_VOICE_FALLBACK_TEXT =
 
 function isTelegramVoiceMessagesForbidden(err: unknown): boolean {
   return formatErrorMessage(err).includes(VOICE_MESSAGES_FORBIDDEN_MARKER);
+}
+
+async function cleanupSpeakeasyGeneratedAudio(audioPath: string): Promise<void> {
+  try {
+    await rm(audioPath, { force: true });
+  } catch (err) {
+    logVerbose(`telegram speakeasy audio cleanup failed: ${String(err)}`);
+  }
 }
 
 export const registerTelegramHandlers = ({
@@ -2240,6 +2249,7 @@ export const registerTelegramHandlers = ({
                 ...effectiveParams,
               }),
           });
+          await cleanupSpeakeasyGeneratedAudio(audioPath);
         } catch (err) {
           if (isTelegramVoiceMessagesForbidden(err)) {
             logVerbose(

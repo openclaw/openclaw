@@ -1254,6 +1254,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = getOnHandler("callback_query") as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
+    const audioPath = path.join(workspaceDir, "state", "speakeasy-generated.ogg");
+    await writeFile(audioPath, "voice bytes");
+    generateSpeakeasyVoiceNoteSpy.mockResolvedValueOnce(audioPath);
 
     try {
       await callbackHandler({
@@ -1292,6 +1295,7 @@ describe("createTelegramBot", () => {
         show_alert: false,
       });
       expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+      await expect(readFile(audioPath, "utf8")).rejects.toThrow();
     } finally {
       process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
       await rm(workspaceDir, { recursive: true, force: true });
@@ -1407,7 +1411,7 @@ describe("createTelegramBot", () => {
       await rm(workspaceDir, { recursive: true, force: true });
     }
   });
-  it("rejects non-voice-note Speakeasy output before sendVoice", async () => {
+  it("rejects unsupported Speakeasy output before sendVoice", async () => {
     const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
     const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
     process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
@@ -1436,7 +1440,7 @@ describe("createTelegramBot", () => {
     const callbackHandler = getOnHandler("callback_query") as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    generateSpeakeasyVoiceNoteSpy.mockResolvedValueOnce("/tmp/speakeasy.mp3");
+    generateSpeakeasyVoiceNoteSpy.mockResolvedValueOnce("/tmp/speakeasy.wav");
 
     try {
       await expect(
