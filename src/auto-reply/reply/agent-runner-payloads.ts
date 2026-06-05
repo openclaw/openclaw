@@ -338,7 +338,13 @@ export async function buildReplyPayloads(params: {
     }
     const reply = resolveSendableOutboundReplyParts(payload);
     if (!reply.hasMedia) {
-      return null;
+      // Drop text-only payloads only when the exact payload was already sent.
+      // A partial streamed block does not prove the final complete text was delivered,
+      // so keep the payload unless the pipeline confirms it sent this exact content.
+      if (params.blockReplyPipeline?.hasSentPayload(payload)) {
+        return null;
+      }
+      return payload;
     }
     if (!reply.trimmedText) {
       return payload;
