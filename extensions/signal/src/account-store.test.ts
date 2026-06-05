@@ -7,6 +7,8 @@ import {
   resolveSignalCliAccountsPath,
 } from "./account-store.js";
 
+type ReadFile = typeof import("node:fs/promises").readFile;
+
 describe("signal-cli account store", () => {
   const originalXdgDataHome = process.env.XDG_DATA_HOME;
   const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
@@ -101,7 +103,7 @@ describe("signal-cli account store", () => {
       discoverSignalAccountUuid({
         account: "+1 (555) 000-1111",
         configPath: "/tmp/signal-cli",
-        readFile: readFile as typeof import("node:fs/promises").readFile,
+        readFile: readFile as unknown as ReadFile,
       }),
     ).resolves.toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     expect(readFile).toHaveBeenCalledWith(
@@ -136,7 +138,7 @@ describe("signal-cli account store", () => {
     await expect(
       discoverSignalAccountUuid({
         account: "+15550001111",
-        readFile: readFile as typeof import("node:fs/promises").readFile,
+        readFile: readFile as unknown as ReadFile,
       }),
     ).resolves.toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     expect(readFile).toHaveBeenCalledWith("/etc/signal-cli/config.json", "utf8");
@@ -174,7 +176,7 @@ describe("signal-cli account store", () => {
     await expect(
       discoverSignalAccountUuid({
         account: "+15550001111",
-        readFile: readFile as typeof import("node:fs/promises").readFile,
+        readFile: readFile as unknown as ReadFile,
       }),
     ).resolves.toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     expect(readFile).toHaveBeenCalledWith(
@@ -203,7 +205,7 @@ describe("signal-cli account store", () => {
     await expect(
       discoverSignalAccountUuid({
         account: "+15550001111",
-        readFile: readFile as typeof import("node:fs/promises").readFile,
+        readFile: readFile as unknown as ReadFile,
       }),
     ).resolves.toBeUndefined();
   });
@@ -214,14 +216,14 @@ describe("signal-cli account store", () => {
         account: "+15550001111",
         readFile: vi.fn(async () => {
           throw new Error("missing");
-        }) as typeof import("node:fs/promises").readFile,
+        }) as unknown as ReadFile,
       }),
     ).resolves.toBeUndefined();
 
     await expect(
       discoverSignalAccountUuid({
         account: "+15550001111",
-        readFile: vi.fn(async () => "not-json") as typeof import("node:fs/promises").readFile,
+        readFile: vi.fn(async () => "not-json") as unknown as ReadFile,
       }),
     ).resolves.toBeUndefined();
   });

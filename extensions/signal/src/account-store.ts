@@ -15,6 +15,8 @@ type SignalCliGlobalConfig = {
   dataDir?: string | null;
 };
 
+const ambiguousAccountUuid = Symbol("ambiguousAccountUuid");
+
 function expandHome(raw: string): string {
   if (raw === "~") {
     return os.homedir();
@@ -109,7 +111,7 @@ export async function discoverSignalAccountUuid(params: {
   const readFile = params.readFile ?? fs.readFile;
   const readAccountStore = async (
     accountsPath: string,
-  ): Promise<"ambiguous" | string | undefined> => {
+  ): Promise<typeof ambiguousAccountUuid | string | undefined> => {
     try {
       const raw = await readFile(accountsPath, "utf8");
       const parsed = JSON.parse(raw) as SignalCliAccountStore;
@@ -126,7 +128,7 @@ export async function discoverSignalAccountUuid(params: {
         }
       }
       if (matchingUuids.size > 1) {
-        return "ambiguous";
+        return ambiguousAccountUuid;
       }
       return matchingUuids.size === 1 ? [...matchingUuids][0] : undefined;
     } catch {
@@ -144,7 +146,7 @@ export async function discoverSignalAccountUuid(params: {
       ];
   for (const accountsPath of candidatePaths) {
     const uuid = await readAccountStore(accountsPath);
-    if (uuid === "ambiguous") {
+    if (uuid === ambiguousAccountUuid) {
       return undefined;
     }
     if (uuid) {

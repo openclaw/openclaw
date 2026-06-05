@@ -1,28 +1,39 @@
 // Signal tests cover send plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const signalRpcRequestMock = vi.hoisted(() => vi.fn());
+const signalRpcRequestMock = vi.hoisted(() =>
+  vi.fn(async (_method?: unknown, _params?: unknown, _options?: unknown): Promise<unknown> => ({})),
+);
 const statMock = vi.hoisted(() => vi.fn(async () => ({ size: 4321 })));
 const rememberSignalSelfReplyEchoMock = vi.hoisted(() => vi.fn());
 const forgetSignalSelfReplyEchoMock = vi.hoisted(() => vi.fn());
-const discoverSignalAccountUuidMock = vi.hoisted(() => vi.fn(async () => undefined));
+const discoverSignalAccountUuidMock = vi.hoisted(() =>
+  vi.fn(async (_params?: unknown): Promise<string | undefined> => undefined),
+);
 const appendSignalApprovalReactionHintMock = vi.hoisted(() =>
   vi.fn((params: { text: string }) => params.text),
 );
 const registerSignalApprovalReactionTargetMock = vi.hoisted(() => vi.fn());
 const resolveOutboundAttachmentFromUrlMock = vi.hoisted(() =>
-  vi.fn(async (_params: unknown) => ({ path: "/tmp/image.png", contentType: "image/png" })),
+  vi.fn(
+    async (_params: unknown): Promise<{ path: string; contentType?: string }> => ({
+      path: "/tmp/image.png",
+      contentType: "image/png",
+    }),
+  ),
 );
 
 vi.mock("./client-adapter.js", () => ({
-  signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
+  signalRpcRequest: (...args: Parameters<typeof signalRpcRequestMock>) =>
+    signalRpcRequestMock(...args),
 }));
 
 vi.mock("./account-store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./account-store.js")>();
   return {
     ...actual,
-    discoverSignalAccountUuid: (...args: unknown[]) => discoverSignalAccountUuidMock(...args),
+    discoverSignalAccountUuid: (...args: Parameters<typeof discoverSignalAccountUuidMock>) =>
+      discoverSignalAccountUuidMock(...args),
   };
 });
 

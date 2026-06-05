@@ -40,9 +40,11 @@ const {
 });
 
 const approvalReactionMocks = vi.hoisted(() => ({
-  maybeResolveSignalApprovalReaction: vi.fn(async () => false),
+  maybeResolveSignalApprovalReaction: vi.fn(async (_params?: unknown) => false),
 }));
-const hasSignalSelfReplyEchoMock = vi.hoisted(() => vi.fn(async () => false));
+const hasSignalSelfReplyEchoMock = vi.hoisted(() =>
+  vi.fn(async (_params?: { messageId?: string }) => false),
+);
 const rememberSignalSelfReplyEchoMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../send.js", () => ({
@@ -104,7 +106,9 @@ vi.mock("../approval-reactions.js", async () => {
   return {
     ...actual,
     maybeResolveSignalApprovalReaction: approvalReactionMocks.maybeResolveSignalApprovalReaction,
-    resolveSignalApprovalReactionAttempt: async (...args: unknown[]) =>
+    resolveSignalApprovalReactionAttempt: async (
+      ...args: Parameters<typeof actual.maybeResolveSignalApprovalReaction>
+    ) =>
       (await approvalReactionMocks.maybeResolveSignalApprovalReaction(...args))
         ? "resolved"
         : "none",
@@ -1244,7 +1248,7 @@ describe("signal createSignalEventHandler inbound context", () => {
 
   it("accepts edited note-to-self sync messages after the original timestamp was processed", async () => {
     hasSignalSelfReplyEchoMock.mockImplementation(
-      async (params: { messageId?: string }) => params.messageId === "1700000000108",
+      async (params?: { messageId?: string }) => params?.messageId === "1700000000108",
     );
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({

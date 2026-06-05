@@ -183,7 +183,7 @@ function resolveSelfReplyEchoText(dataMessage: SignalDataMessage | null): string
   }
   if ((dataMessage?.attachments?.length ?? 0) > 1) {
     return formatAttachmentSummaryPlaceholder(
-      dataMessage?.attachments?.map((attachment) => attachment.contentType) ?? [],
+      dataMessage?.attachments?.map((attachment) => attachment.contentType ?? undefined) ?? [],
     );
   }
   const kind = kindFromMime(firstAttachment.contentType ?? undefined);

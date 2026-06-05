@@ -106,7 +106,8 @@ function materializeInheritedNoteToSelfAccounts(params: {
           }
           if (
             field === "accountUuid" &&
-            normalizeE164(String(materialized.account ?? "")) !== normalizeE164(rootAccount)
+            normalizeE164(typeof materialized.account === "string" ? materialized.account : "") !==
+              normalizeE164(rootAccount)
           ) {
             continue;
           }

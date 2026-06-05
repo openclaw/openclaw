@@ -366,7 +366,7 @@ export async function sendMessageSignal(
       ? uniqueEchoTexts([attachmentEchoText, attachmentFallbackEchoText])
       : uniqueEchoTexts([message]);
   const selfEchoAccountIdentities = uniqueEchoTexts([accountUuid ?? undefined, account]);
-  const rememberSelfEcho = async (params: {
+  const rememberSelfEcho = async (echo: {
     messageId: string;
     timestamp?: number;
     text?: string;
@@ -375,16 +375,16 @@ export async function sendMessageSignal(
       await rememberSignalSelfReplyEcho({
         accountId: accountInfo.accountId,
         accountIdentity,
-        ...params,
+        ...echo,
       });
     }
   };
-  const forgetSelfEcho = (params: { messageId: string; text?: string }) => {
+  const forgetSelfEcho = (echo: { messageId: string; text?: string }) => {
     for (const accountIdentity of selfEchoAccountIdentities) {
       forgetSignalSelfReplyEcho({
         accountId: accountInfo.accountId,
         accountIdentity,
-        ...params,
+        ...echo,
       });
     }
   };
