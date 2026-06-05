@@ -236,6 +236,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const requestedNodeId = opts.nodeId?.trim();
   const nodeId = requestedNodeId || config.nodeId;
   const nodeIdSource = requestedNodeId ? "user" : config.nodeIdSource;
+  // See config.ts for legacy UUID-like unmarked node.json handling:
+  // - If no explicit --node-id and legacy entry is UUID-like -> "generated" (unsigned).
+  // - Passing --node-id forces "user" (signed v4 instanceId).
+  // This documents the intentional compatibility tradeoff per ClawSweeper "Risk before merge" P1.
   if (nodeId !== config.nodeId || nodeIdSource !== config.nodeIdSource) {
     config.nodeId = nodeId;
     config.nodeIdSource = nodeIdSource;

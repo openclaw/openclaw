@@ -344,6 +344,10 @@ export function resolveDeviceSignaturePayloadVersion(params: {
     ...baseMetadataPayload,
     instanceId: params.connectParams.client.instanceId,
   });
+  // v4 payload includes client.instanceId for signed custom node ids (when user provides --node-id).
+  // This makes signed instanceId authoritative for node identity (the medium security concern
+  // flagged in ClawSweeper review at this location for #88374 "Risk before merge" P2).
+  // v3/v2 fallback preserved for compatibility. Only trusted when device-auth verifies.
   if (verifyDeviceSignature(params.device.publicKey, payloadV4, params.device.signature)) {
     return "v4";
   }
