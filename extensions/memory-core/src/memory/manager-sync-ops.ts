@@ -2275,6 +2275,7 @@ export abstract class MemoryManagerSyncOps {
     };
 
     this.db = tempDb;
+    this.lastMetaSerialized = null;
     this.resetVectorState();
     this.fts.available = false;
     this.fts.loadError = undefined;
