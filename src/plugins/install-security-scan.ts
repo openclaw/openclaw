@@ -1,3 +1,4 @@
+// Runs security checks over plugin install candidates before activation.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   InstallPolicyOrigin,

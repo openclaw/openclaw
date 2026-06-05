@@ -1,3 +1,6 @@
+/**
+ * Classifies incomplete terminal assistant turns and retry instructions.
+ */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -135,6 +138,8 @@ const POST_TOOL_DETAIL_CONTINUATION_RE =
   /\b(?:now\s+)?(?:let me|i(?:'ll| will)|i(?:'m| am)\s+going to)\b.{0,120}\b(?:get|fetch|grab|open|check|look(?:\s+up|\s+at)?|pull|retrieve)\b.{0,120}\b(?:details?|sources?|results?|pages?|urls?|links?|brief|report)\b/i;
 const LOOKUP_PROMISE_ONLY_RE =
   /\b(?:hold on|one sec(?:ond)?|let me|i(?:'ll| will)|i(?:'m| am)\s+going to)\b.{0,100}\b(?:look (?:that|this|it)?\s*up|search(?:\s+(?:for|the web))?|check(?:\s+(?:that|this|it|the current|latest))?)\b/i;
+const ACTION_PROMISE_RETRY_SAFE_TOOL_NAME_RE =
+  /(?:^|[_:-])(?:fetch|get|lookup|read|retrieve|search)(?:$|[_:-])/;
 const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "read",
   "search",
@@ -926,6 +931,21 @@ function hasSingleRetrySafeNonPlanTool(toolMetas?: PlanningOnlyAttempt["toolMeta
   );
 }
 
+function hasOnlyReplaySafeActionPromiseToolActivity(
+  toolMetas?: PlanningOnlyAttempt["toolMetas"],
+): boolean {
+  return normalizePlanningToolMetas(toolMetas)
+    .filter((entry) => entry.toolName !== "update_plan")
+    .every((entry) => {
+      const toolName = normalizeLowercaseStringOrEmpty(entry.toolName);
+      return (
+        toolName.length > 0 &&
+        (SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES.has(toolName) ||
+          ACTION_PROMISE_RETRY_SAFE_TOOL_NAME_RE.test(toolName))
+      );
+    });
+}
+
 /**
  * Treat a turn with exactly one non-plan tool call plus visible "I'll do X
  * next" prose as effectively planning-only from the user's perspective. This
@@ -954,7 +974,11 @@ function isSingleActionThenNarrativePattern(params: {
 }
 
 function isActionPromiseOnlyPattern(assistantTexts?: readonly string[]): boolean {
-  const text = (assistantTexts ?? []).join("\n\n").trim();
+  const text =
+    [...(assistantTexts ?? [])]
+      .reverse()
+      .find((entry) => entry.trim())
+      ?.trim() ?? "";
   if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT) {
     return false;
   }
@@ -962,6 +986,21 @@ function isActionPromiseOnlyPattern(assistantTexts?: readonly string[]): boolean
     return false;
   }
   return POST_TOOL_DETAIL_CONTINUATION_RE.test(text) || LOOKUP_PROMISE_ONLY_RE.test(text);
+}
+
+function hasCompletedReplaySafeLifecycle(attempt: PlanningOnlyAttempt): boolean {
+  const lifecycle = attempt.itemLifecycle;
+  if (!lifecycle) {
+    return true;
+  }
+  if (lifecycle.activeCount > 0) {
+    return false;
+  }
+  const completedToolMetaCount = normalizePlanningToolMetas(attempt.toolMetas).length;
+  return (
+    lifecycle.startedCount <= lifecycle.completedCount &&
+    lifecycle.startedCount <= completedToolMetaCount
+  );
 }
 
 /** Retry budget for plan-only recovery, higher for strict-agentic models. */
@@ -996,7 +1035,10 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   const allowSingleActionRetryBypass =
     singleActionNarrative && hasSingleRetrySafeNonPlanTool(params.attempt.toolMetas);
   const allowActionPromiseRetryBypass =
-    actionPromiseOnly && !resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects;
+    actionPromiseOnly &&
+    !resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects &&
+    hasOnlyReplaySafeActionPromiseToolActivity(params.attempt.toolMetas) &&
+    hasCompletedReplaySafeLifecycle(params.attempt);
   const planningOnlyGuardApplies = shouldApplyPlanningOnlyRetryGuard({
     provider: params.provider,
     modelId: params.modelId,

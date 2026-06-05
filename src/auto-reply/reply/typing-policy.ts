@@ -1,3 +1,4 @@
+// Resolves when reply runs should emit typing indicators.
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { TypingPolicy } from "../types.js";
 

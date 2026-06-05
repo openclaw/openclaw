@@ -1,3 +1,4 @@
+// Provides model selection, usage, and thinking-level utility helpers.
 import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */

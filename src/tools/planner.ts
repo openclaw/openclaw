@@ -1,3 +1,4 @@
+// Plans usable tools from descriptors, availability, and request constraints.
 import { evaluateToolAvailability } from "./availability.js";
 import { ToolPlanContractError } from "./diagnostics.js";
 import type {

@@ -1,3 +1,4 @@
+// Test runtime helpers for task registry state and deterministic cleanup.
 import {
   configureTaskRegistryRuntime,
   type TaskRegistryStore,

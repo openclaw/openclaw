@@ -1,3 +1,4 @@
+// Covers plugin install record normalization and config interactions.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildNpmResolutionInstallFields,

@@ -1,4 +1,4 @@
-// Reply threading policy helpers for channel replies and status notices.
+/** Reply threading policy helpers for channel replies and status notices. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";

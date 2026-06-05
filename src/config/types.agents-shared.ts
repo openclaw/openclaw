@@ -1,3 +1,4 @@
+// Defines shared agent configuration types across runtime schemas.
 import type {
   SandboxBrowserSettings,
   SandboxDockerSettings,

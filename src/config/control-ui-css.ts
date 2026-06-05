@@ -1,3 +1,4 @@
+// Normalizes Control UI CSS config values before runtime use.
 const CSS_WIDTH_KEYWORDS = new Set(["none", "min-content", "max-content"]);
 const CSS_WIDTH_FUNCTIONS = new Set(["calc", "clamp", "fit-content", "max", "min"]);
 const CSS_WIDTH_UNITS = new Set(["ch", "em", "rem", "vh", "vmax", "vmin", "vw", "px"]);

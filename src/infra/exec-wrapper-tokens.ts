@@ -1,3 +1,4 @@
+// Normalizes executable tokens used by wrapper and policy analysis.
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 

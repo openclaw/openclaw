@@ -1,3 +1,4 @@
+/** Audits configured secrets and reports plaintext/ref migration status. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -608,6 +609,7 @@ function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport[
 }
 
 /** Runs local storage/config audit and returns a structured report. */
+/** Runs a secrets audit over config/auth stores and returns structured findings. */
 export async function runSecretsAudit(
   params: {
     env?: NodeJS.ProcessEnv;

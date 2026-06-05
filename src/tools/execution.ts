@@ -1,3 +1,4 @@
+// Defines tool execution references used by the runtime dispatcher.
 import type { ToolExecutorRef } from "./types.js";
 
 /**

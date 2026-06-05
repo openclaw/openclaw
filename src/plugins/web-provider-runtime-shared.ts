@@ -1,3 +1,4 @@
+// Shares web provider runtime helpers across plugin-owned providers.
 import { withActivatedPluginIds } from "./activation-context.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { isPluginRegistryLoadInFlight, loadOpenClawPlugins } from "./loader.js";

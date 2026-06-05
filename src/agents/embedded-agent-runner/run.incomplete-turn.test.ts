@@ -1,3 +1,4 @@
+// Coverage for incomplete-turn safety, retry instructions, and liveness states.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -48,6 +49,8 @@ function resolveIncompleteTurnPayloadText(
     externalAbort?: boolean;
   },
 ): string | null {
+  // Most helper tests exercise internal abort behavior; external aborts opt in
+  // explicitly through params.
   return resolveIncompleteTurnPayloadTextCore({ externalAbort: false, ...params });
 }
 
@@ -74,6 +77,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   }
 
   function runAttemptCall(index: number): { prompt?: string } {
+    // Continuation prompt assertions read the exact prompt passed to the runner
+    // attempt rather than derived result metadata.
     const call = mockedRunEmbeddedAttempt.mock.calls[index];
     if (!call) {
       throw new Error(`Expected run embedded attempt call ${index}`);
@@ -108,6 +113,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("warns before retrying when an incomplete turn already sent a message", async () => {
+    // Delivery evidence means retrying could duplicate user-visible output, so
+    // the runner must surface a verify-before-retry payload instead.
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -170,6 +177,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("synthesizes a silent cron payload from a trailing current-attempt NO_REPLY tool result", () => {
+    // Cron no-reply can be represented by a tool result rather than assistant
+    // text, but only when it belongs to the current attempt.
     const payload = resolveSilentToolResultReplyPayload({
       isCronTrigger: true,
       payloadCount: 0,
@@ -1148,52 +1157,31 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
-  it("retries replay-safe post-tool narration without provider-specific tool names", () => {
-    const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "ollama",
-      modelId: "local-test-model",
+  it.each([
+    {
+      name: "post-tool narration with provider-specific tool names",
       prompt: "[cron:daily-summary] Prepare a short daily summary",
-      aborted: false,
-      timedOut: false,
-      attempt: makeAttemptResult({
-        assistantTexts: [
-          "Now let me get the details on the most significant items to flesh out the brief properly.",
-        ],
-        toolMetas: [
-          { toolName: "third_party_lookup", meta: "query=public news item" },
-          { toolName: "external_page_read", meta: "url=https://example.test/story" },
-        ],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [
-            {
-              type: "text",
-              text: "Now let me get the details on the most significant items to flesh out the brief properly.",
-            },
-          ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    });
-
-    expect(retryInstruction).toContain("Act now");
-  });
-
-  it("retries replay-safe no-tool lookup narration for Ollama turns", () => {
+      assistantTexts: [
+        "Now let me get the details on the most significant items to flesh out the brief properly.",
+      ],
+      toolMetas: [
+        { toolName: "third_party_lookup", meta: "query=public news item" },
+        { toolName: "external_page_read", meta: "url=https://example.test/story" },
+      ],
+    },
+    {
+      name: "no-tool lookup narration",
+      prompt: "What is the current public status?",
+      assistantTexts: ["Hold on — let me look that up."],
+    },
+  ])("retries replay-safe $name", ({ prompt, assistantTexts, toolMetas }) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "ollama",
       modelId: "local-test-model",
-      prompt: "What is the current public status?",
+      prompt,
       aborted: false,
       timedOut: false,
-      attempt: makeAttemptResult({
-        assistantTexts: ["Hold on — let me look that up."],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Hold on — let me look that up." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
+      attempt: makeAttemptResult({ assistantTexts, toolMetas }),
     });
 
     expect(retryInstruction).toContain("Act now");
@@ -1211,11 +1199,54 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         toolMetas: [{ toolName: "message", meta: "target=conversation" }],
         didSendViaMessagingTool: true,
         messagingToolSentTexts: ["partial report"],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Now let me send the finished report." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not retry post-tool narration while a lifecycle item is active", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "ollama",
+      modelId: "local-test-model",
+      prompt: "What is the current public status?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Hold on — let me look that up."],
+        itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not retry completed answers after an earlier lookup promise", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "ollama",
+      modelId: "local-test-model",
+      prompt: "What is the current public status?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Hold on — let me look that up.", "The current public status is active."],
+        toolMetas: [{ toolName: "external_page_read" }],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not retry post-tool narration after unclassified plugin tools", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "ollama",
+      modelId: "local-test-model",
+      prompt: "[cron:daily-summary] Prepare a short daily summary",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Now let me get the report details."],
+        toolMetas: [{ toolName: "vendor_widget" }],
       }),
     });
 
@@ -1607,11 +1638,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           role: "assistant",
           stopReason: "stop",
           provider: "openai",
-          model: "local-reasoning-model",
+          model: "qwen3.6-35b-a3b",
           content: [
             {
               type: "thinking",
               thinking: "let me plan the tool calls I need to make...",
+              // no signature — unsigned thinking block
             },
           ],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
@@ -1634,7 +1666,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           role: "assistant",
           stopReason: "stop",
           provider: "openai",
-          model: "local-reasoning-model",
+          model: "qwen3.6-35b-a3b",
           content: [
             {
               type: "thinking",
@@ -1820,7 +1852,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("retries unsigned thinking-only turns via the reasoning-only path (openai-completions)", () => {
     const retryInstruction = resolveReasoningOnlyRetryInstruction({
       provider: "openai",
-      modelId: "local-reasoning-model",
+      modelId: "qwen3.6-35b-a3b",
       modelApi: "openai-completions",
       aborted: false,
       timedOut: false,
@@ -1830,7 +1862,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           role: "assistant",
           stopReason: "stop",
           provider: "openai",
-          model: "local-reasoning-model",
+          model: "qwen3.6-35b-a3b",
           content: [
             {
               type: "thinking",

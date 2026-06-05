@@ -1,3 +1,4 @@
+// Maintains config metadata fields written alongside user config.
 import { VERSION } from "../version.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 

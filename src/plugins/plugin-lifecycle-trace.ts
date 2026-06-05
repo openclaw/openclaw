@@ -1,3 +1,4 @@
+// Records compact plugin lifecycle trace details for diagnostics.
 type TraceDetails = Record<string, boolean | number | string | undefined>;
 
 /** Checks the opt-in plugin lifecycle tracing environment flag. */

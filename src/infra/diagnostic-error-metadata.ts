@@ -1,3 +1,4 @@
+// Extracts provider diagnostic metadata from error objects and text.
 import crypto from "node:crypto";
 
 const HTTP_STATUS_MIN = 100;

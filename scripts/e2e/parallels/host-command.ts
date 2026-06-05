@@ -1,3 +1,4 @@
+// Host Command script supports OpenClaw repository automation.
 import { spawn, spawnSync, type SpawnOptions, type SpawnSyncReturns } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -519,7 +520,12 @@ export async function runStreaming(
         } else {
           resolve(code ?? (signal ? 128 : 1));
         }
-      })();
+      })().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        reject(
+          new Error(`failed to write Parallels host command log: ${message}`, { cause: error }),
+        );
+      });
     });
   });
 }

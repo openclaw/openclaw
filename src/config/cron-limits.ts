@@ -1,3 +1,4 @@
+// Computes cron scheduling limits from config.
 import type { CronConfig } from "./types.cron.js";
 
 /** Default maximum number of cron jobs allowed to run at once. */

@@ -1,3 +1,4 @@
+// Centralizes user-facing failure copy for external agent runner errors.
 export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
 

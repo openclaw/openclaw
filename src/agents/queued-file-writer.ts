@@ -1,7 +1,18 @@
+/**
+ * Per-path queued append writer for logs and transcripts.
+ *
+ * Serializes writes, bounds queue/file growth, and exposes diagnostics for stuck-write probes.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile, resolveRegularFileAppendFlags } from "../infra/fs-safe.js";
 
+/**
+ * Serializes append-only writes per file path.
+ *
+ * Callers can enqueue log/transcript lines without awaiting each write; the
+ * writer preserves order and exposes queue diagnostics for stuck-write probes.
+ */
 export type QueuedFileWriterDiagnostics = {
   pendingWrites: number;
   queuedBytes: number;
@@ -12,6 +23,7 @@ export type QueuedFileWriterDiagnostics = {
   yieldBeforeWrite: boolean;
 };
 
+/** Append writer handle shared by callers that target the same path. */
 export type QueuedFileWriter = {
   filePath: string;
   write: (line: string) => unknown;
@@ -25,6 +37,7 @@ type QueuedFileWriterOptions = {
   yieldBeforeWrite?: boolean;
 };
 
+/** Safe append flags used by queued writers. */
 export const resolveQueuedFileAppendFlags = resolveRegularFileAppendFlags;
 
 async function safeAppendFile(
@@ -46,6 +59,7 @@ function waitForImmediate(): Promise<void> {
   });
 }
 
+/** Returns the cached writer for a path or creates a new ordered append queue. */
 export function getQueuedFileWriter(
   writers: Map<string, QueuedFileWriter>,
   filePath: string,
@@ -72,6 +86,7 @@ export function getQueuedFileWriter(
         options.maxQueuedBytes !== undefined &&
         queuedBytes + lineBytes > options.maxQueuedBytes
       ) {
+        // Backpressure is lossy by design for diagnostics/log queues; callers can inspect "dropped".
         return "dropped";
       }
       pendingWrites += 1;
@@ -97,6 +112,7 @@ export function getQueuedFileWriter(
           pendingWrites = Math.max(0, pendingWrites - 1);
           queuedBytes = Math.max(0, queuedBytes - lineBytes);
           activeWriteBytes = undefined;
+          // Preserve the current operation while more writes are chained behind this one.
           activeOperation = pendingWrites > 0 ? activeOperation : "idle";
         });
       return "queued";

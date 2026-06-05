@@ -1,3 +1,4 @@
+// Test helpers for session conversation registry keys and thread suffixes.
 import { parseThreadSessionSuffix } from "../sessions/session-key-utils.js";
 import { createTestRegistry } from "./channel-plugins.js";
 

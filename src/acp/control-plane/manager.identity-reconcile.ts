@@ -1,3 +1,4 @@
+/** Reconciles ACP runtime identity observations back into persisted session metadata. */
 import {
   createIdentityFromHandleEvent,
   createIdentityFromStatus,

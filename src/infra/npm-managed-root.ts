@@ -1,3 +1,4 @@
+// Manages private npm package roots for plugin install flows.
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

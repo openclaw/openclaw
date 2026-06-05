@@ -1,3 +1,4 @@
+/** Waits for asynchronous tool tasks before final reply delivery. */
 const DEFAULT_PENDING_TOOL_DRAIN_IDLE_TIMEOUT_MS = 30_000;
 
 /** Result from waiting for pending tool tasks before final delivery. */

@@ -1,3 +1,4 @@
+// Covers install-policy checks for packages and plugin installs.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

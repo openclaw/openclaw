@@ -1,3 +1,4 @@
+/** Typing indicator lifecycle controller for reply runs. */
 import {
   finiteSecondsToTimerSafeMilliseconds,
   resolveTimerTimeoutMs,

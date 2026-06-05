@@ -1,3 +1,4 @@
+// Provides shared JSON schema helpers for generated config metadata.
 type JsonSchemaObject = {
   type?: string | string[];
   properties?: Record<string, JsonSchemaObject>;

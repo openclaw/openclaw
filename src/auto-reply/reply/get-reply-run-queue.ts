@@ -1,3 +1,4 @@
+/** Active-run queue admission for prepared reply turns. */
 import { logVerbose } from "../../globals.js";
 import type { ReplyPayload } from "../types.js";
 import type { ActiveRunQueueAction } from "./queue-policy.js";

@@ -1,3 +1,4 @@
+// Runs plugin hooks before outbound reply payloads are sent.
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import type { ReplyPayload } from "../reply-payload.js";

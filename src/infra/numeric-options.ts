@@ -1,3 +1,4 @@
+// Parses numeric CLI and config options with shared bounds.
 import {
   resolveIntegerOption as resolveSharedIntegerOption,
   resolveNonNegativeIntegerOption as resolveSharedNonNegativeIntegerOption,
