@@ -342,7 +342,8 @@ private fun OverviewScreen(
   val cronStatus by viewModel.cronStatus.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
   val channelsSummary by viewModel.channelsSummary.collectAsState()
-  val readyProviderCount = providers.count { modelProviderReady(it.status) }
+  val readyProviderCount = readyModelProviderCount(providers, models)
+  val expiringProviderCount = expiringModelProviderCount(providers)
   val attentionRows =
     homeAttentionRows(
       isConnected = isConnected,
@@ -350,7 +351,8 @@ private fun OverviewScreen(
       channelsSummary = channelsSummary,
       nodesDevicesSummary = nodesDevicesSummary,
       readyProviderCount = readyProviderCount,
-        modelsCount = models.size,
+      modelsCount = models.size,
+      expiringProviderCount = expiringProviderCount,
     )
 
   LaunchedEffect(isConnected) {
@@ -461,6 +463,7 @@ private fun OverviewScreen(
                     when {
                       !isConnected -> "Offline"
                       readyProviderCount > 0 -> "$readyProviderCount ready"
+                      expiringProviderCount > 0 -> "$expiringProviderCount expiring"
                       models.isNotEmpty() -> "${models.size} models"
                       else -> "Setup"
                     },
@@ -542,7 +545,8 @@ internal fun homeAttentionRows(
   channelsSummary: GatewayChannelsSummary,
   nodesDevicesSummary: GatewayNodesDevicesSummary,
   readyProviderCount: Int,
-    modelsCount: Int,
+  modelsCount: Int,
+  expiringProviderCount: Int = 0,
 ): List<HomeAttentionRow> =
   listOfNotNull(
     if (!isConnected) {
@@ -565,7 +569,12 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (isConnected && readyProviderCount == 0 && modelsCount == 0) {
+    if (isConnected && expiringProviderCount > 0) {
+      HomeAttentionRow("Providers", "Provider auth expires soon", Icons.Outlined.Inventory2, Tab.ProvidersModels)
+    } else {
+      null
+    },
+    if (isConnected && readyProviderCount == 0 && modelsCount == 0 && expiringProviderCount == 0) {
       HomeAttentionRow("Providers", "No ready providers", Icons.Outlined.Inventory2, Tab.ProvidersModels)
     } else {
       null

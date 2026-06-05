@@ -1,3 +1,4 @@
+// Anthropic provider adapts Anthropic streams and tool calls for the runtime.
 import Anthropic from "@anthropic-ai/sdk";
 import type {
   CacheControlEphemeral,

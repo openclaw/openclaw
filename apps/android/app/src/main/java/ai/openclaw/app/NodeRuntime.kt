@@ -2142,6 +2142,7 @@ class NodeRuntime(
           id = id,
           name = obj["name"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id,
           provider = provider,
+          available = obj.optionalBoolean("available"),
           supportsVision = "image" in inputTypes,
           supportsAudio = "audio" in inputTypes,
           supportsDocuments = "document" in inputTypes,
@@ -2774,6 +2775,7 @@ data class GatewayModelSummary(
   val id: String,
   val name: String,
   val provider: String,
+  val available: Boolean?,
   val supportsVision: Boolean,
   val supportsAudio: Boolean,
   val supportsDocuments: Boolean,
@@ -2955,6 +2957,15 @@ private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimi
 private fun JsonObject?.double(key: String): Double? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toDoubleOrNull()
 
 private fun JsonObject?.boolean(key: String): Boolean = (this?.get(key) as? JsonPrimitive)?.content?.trim() == "true"
+
+private fun JsonObject?.optionalBoolean(key: String): Boolean? =
+  (this?.get(key) as? JsonPrimitive)?.content?.trim()?.lowercase()?.let { value ->
+    when (value) {
+      "true" -> true
+      "false" -> false
+      else -> null
+    }
+  }
 
 internal fun cronJobLastRunStatus(state: JsonObject?): String? =
   state

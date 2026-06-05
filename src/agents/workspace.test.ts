@@ -1,9 +1,15 @@
+// Workspace tests cover bootstrap seeding, attestation safety, bootstrap file
+// filtering, and setup-completion state for agent workspaces.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -25,19 +31,18 @@ import {
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
 
-let testStateDir: string | undefined;
+let testState: OpenClawTestState | undefined;
 
 beforeEach(async () => {
-  testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-state-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", testStateDir);
+  testState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-workspace-state-",
+  });
 });
 
 afterEach(async () => {
-  vi.unstubAllEnvs();
-  if (testStateDir) {
-    await fs.rm(testStateDir, { recursive: true, force: true });
-    testStateDir = undefined;
-  }
+  await testState?.cleanup();
+  testState = undefined;
 });
 
 describe("resolveDefaultAgentWorkspaceDir", () => {
@@ -90,6 +95,8 @@ async function expectWorkspaceVanished(
   action: Promise<unknown>,
   expected?: { attestationPath?: string },
 ): Promise<void> {
+  // Recently attested generated workspaces must not be silently recreated after
+  // deletion or wipe; that could hide user data loss.
   await expect(action).rejects.toMatchObject({
     code: WORKSPACE_VANISHED_ERROR_CODE,
     name: "WorkspaceVanishedError",
@@ -221,6 +228,8 @@ describe("ensureAgentWorkspace", () => {
   });
 
   it("accepts a recently attested workspace when customized AGENTS.md survives", async () => {
+    // Custom instructions prove the directory is user-managed, so reseeding is
+    // skipped and the workspace is accepted.
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "custom instructions\n");
