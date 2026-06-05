@@ -16,6 +16,7 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
+import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
@@ -76,6 +77,38 @@ function formatTaskTimestamp(value: number | undefined): string {
 
 async function loadTaskCancelConfig() {
   return getRuntimeConfig();
+}
+
+type TaskCancelResult = {
+  found?: boolean;
+  cancelled?: boolean;
+  reason?: string;
+  task?: Pick<TaskRecord, "taskId" | "runtime" | "runId">;
+};
+
+async function cancelCronTaskThroughGateway(task: TaskRecord): Promise<TaskCancelResult> {
+  try {
+    return await callGateway<TaskCancelResult>({
+      method: "tasks.cancel",
+      params: {
+        taskId: task.taskId,
+        reason: "Cancelled by operator.",
+      },
+      timeoutMs: 5_000,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      found: true,
+      cancelled: false,
+      reason: [
+        "Cron task cancellation requires the live Gateway process that owns the cron run.",
+        `Gateway cancellation failed: ${message}`,
+        `Try ${formatCliCommand("openclaw gateway status --deep --require-rpc")} or restart the Gateway if the run is stuck.`,
+      ].join("\n"),
+      task,
+    };
+  }
 }
 
 function configureTaskMaintenanceFromConfig(): void {
@@ -498,10 +531,13 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const result = await cancelDetachedTaskRunById({
-    cfg: await loadTaskCancelConfig(),
-    taskId: task.taskId,
-  });
+  const result =
+    task.runtime === "cron"
+      ? await cancelCronTaskThroughGateway(task)
+      : await cancelDetachedTaskRunById({
+          cfg: await loadTaskCancelConfig(),
+          taskId: task.taskId,
+        });
   if (!result.found) {
     runtime.error(result.reason ?? formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
@@ -512,7 +548,7 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const updated = getTaskById(task.taskId);
+  const updated = result.task ?? getTaskById(task.taskId);
   runtime.log(
     `Cancelled ${updated?.taskId ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
   );

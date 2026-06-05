@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { registerActiveCronTaskRun } from "../../tasks/cron-task-cancel.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
@@ -808,11 +809,16 @@ async function finishPreparedManualRun(
   const jobId = prepared.jobId;
   const taskRunId = prepared.taskRunId;
   const runId = prepared.runId;
+  const runAbortController = new AbortController();
+  const releaseCronTaskRun = registerActiveCronTaskRun({
+    runId: executionJob.sessionTarget === "main" ? undefined : taskRunId,
+    controller: runAbortController,
+  });
 
   try {
     let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
     try {
-      coreResult = await executeJobCoreWithTimeout(state, executionJob);
+      coreResult = await executeJobCoreWithTimeout(state, executionJob, runAbortController);
     } catch (err) {
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
     }
@@ -899,6 +905,7 @@ async function finishPreparedManualRun(
       armTimer(state);
     });
   } finally {
+    releaseCronTaskRun?.();
     clearCronJobActive(jobId);
   }
 }

@@ -13,6 +13,7 @@ import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { registerActiveCronTaskRun } from "../../tasks/cron-task-cancel.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
@@ -121,13 +122,13 @@ type StartupCatchupPlan = {
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
   job: CronJob,
+  runAbortController = new AbortController(),
 ): Promise<Awaited<ReturnType<typeof executeJobCore>>> {
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   if (typeof jobTimeoutMs !== "number") {
-    return await executeJobCore(state, job);
+    return await executeJobCore(state, job, runAbortController.signal);
   }
 
-  const runAbortController = new AbortController();
   let timeoutReason: string | undefined;
   const timeoutMarker = Symbol("cron-timeout");
   let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
@@ -141,6 +142,8 @@ export async function executeJobCoreWithTimeout(
     job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
   const triggerTimeout = (reason: string) => {
     if (runAbortController.signal.aborted) {
+      timeoutReason = reason;
+      resolveTimeout?.(timeoutMarker);
       return;
     }
     timeoutReason = reason;
@@ -842,9 +845,14 @@ export async function onTimer(state: CronServiceState) {
       emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
       const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+      const runAbortController = new AbortController();
+      const releaseCronTaskRun = registerActiveCronTaskRun({
+        runId: job.sessionTarget === "main" ? undefined : taskRunId,
+        controller: runAbortController,
+      });
 
       try {
-        const result = await executeJobCoreWithTimeout(state, job);
+        const result = await executeJobCoreWithTimeout(state, job, runAbortController);
         return {
           jobId: id,
           job,
@@ -871,6 +879,8 @@ export async function onTimer(state: CronServiceState) {
           startedAt,
           endedAt: state.deps.nowMs(),
         };
+      } finally {
+        releaseCronTaskRun?.();
       }
     };
 
@@ -1231,6 +1241,11 @@ async function runStartupCatchupCandidate(
     job: candidate.job,
     startedAt,
   });
+  const runAbortController = new AbortController();
+  const releaseCronTaskRun = registerActiveCronTaskRun({
+    runId: candidate.job.sessionTarget === "main" ? undefined : taskRunId,
+    controller: runAbortController,
+  });
   emit(state, {
     jobId: candidate.job.id,
     action: "started",
@@ -1238,7 +1253,7 @@ async function runStartupCatchupCandidate(
     runAtMs: startedAt,
   });
   try {
-    const result = await executeJobCoreWithTimeout(state, candidate.job);
+    const result = await executeJobCoreWithTimeout(state, candidate.job, runAbortController);
     return {
       jobId: candidate.jobId,
       job: candidate.job,
@@ -1269,6 +1284,8 @@ async function runStartupCatchupCandidate(
       startedAt,
       endedAt: state.deps.nowMs(),
     };
+  } finally {
+    releaseCronTaskRun?.();
   }
 }
 
@@ -1418,7 +1435,7 @@ async function executeMainSessionCronJob(
     let heartbeatResult: HeartbeatRunResult;
     for (;;) {
       if (abortSignal?.aborted) {
-        return { status: "error", error: timeoutErrorMessage() };
+        return { status: "error", error: abortErrorMessage(abortSignal) };
       }
       heartbeatResult = await state.deps.runHeartbeatOnce({
         source: "cron",
@@ -1447,11 +1464,11 @@ async function executeMainSessionCronJob(
         return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
       }
       if (abortSignal?.aborted) {
-        return { status: "error", error: timeoutErrorMessage() };
+        return { status: "error", error: abortErrorMessage(abortSignal) };
       }
       if (state.deps.nowMs() - waitStartedAt > maxWaitMs) {
         if (abortSignal?.aborted) {
-          return { status: "error", error: timeoutErrorMessage() };
+          return { status: "error", error: abortErrorMessage(abortSignal) };
         }
         state.deps.requestHeartbeat({
           source: "cron",
@@ -1486,7 +1503,7 @@ async function executeMainSessionCronJob(
   }
 
   if (abortSignal?.aborted) {
-    return { status: "error", error: timeoutErrorMessage() };
+    return { status: "error", error: abortErrorMessage(abortSignal) };
   }
   state.deps.requestHeartbeat({
     source: "cron",

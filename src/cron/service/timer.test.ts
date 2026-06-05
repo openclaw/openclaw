@@ -4,10 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
-import { executeJobCore, onTimer } from "../../cron/service/timer.js";
+import { executeJobCore, executeJobCoreWithTimeout, onTimer } from "../../cron/service/timer.js";
 import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
+import { resetActiveCronTaskRunsForTests } from "../../tasks/cron-task-cancel.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
+import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 
@@ -48,6 +50,7 @@ function createDueIsolatedAgentJob(params: { now: number }): CronJob {
 }
 
 afterEach(() => {
+  resetActiveCronTaskRunsForTests();
   resetTaskRegistryForTests();
 });
 
@@ -269,6 +272,150 @@ describe("cron service timer seam coverage", () => {
     expect(formatTaskStatusDetail(task)).toBe("Running cron job.");
 
     resolveRun?.({ status: "ok", summary: "done" });
+    await timerRun;
+  });
+
+  it("cancels an active scheduled isolated cron task through the task ledger", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    let capturedAbortSignal: AbortSignal | undefined;
+    let resolveRun: ((value: { status: "ok"; summary: string }) => void) | undefined;
+    const runIsolatedAgentJob = vi.fn(
+      ({ abortSignal }: { abortSignal?: AbortSignal }) =>
+        new Promise<{ status: "ok"; summary: string }>((resolve) => {
+          capturedAbortSignal = abortSignal;
+          resolveRun = resolve;
+        }),
+    );
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createDueIsolatedAgentJob({ now })],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob,
+    });
+
+    const timerRun = onTimer(state);
+    await vi.waitFor(() => {
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    });
+
+    const task = findTaskByRunId(`cron:isolated-agent-job:${now}`);
+    if (!task) {
+      throw new Error("expected active cron task ledger record");
+    }
+
+    const cancelled = await cancelDetachedTaskRunById({
+      cfg: {} as never,
+      taskId: task.taskId,
+    });
+
+    expect(cancelled.cancelled).toBe(true);
+    expect(capturedAbortSignal?.aborted).toBe(true);
+    expect(findTaskByRunId(`cron:isolated-agent-job:${now}`)?.status).toBe("cancelled");
+
+    resolveRun?.({ status: "ok", summary: "done" });
+    await timerRun;
+    expect(findTaskByRunId(`cron:isolated-agent-job:${now}`)?.status).toBe("cancelled");
+  });
+
+  it("keeps timeout watchdog as a backstop after operator cancellation", async () => {
+    vi.useFakeTimers();
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const controller = new AbortController();
+    const runIsolatedAgentJob = vi.fn(({ onExecutionStarted }) => {
+      onExecutionStarted?.({ phase: "running" });
+      return new Promise<never>(() => {});
+    });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+      cleanupTimedOutAgentRun: vi.fn(async () => {}),
+    });
+    const job: CronJob = {
+      ...createDueIsolatedAgentJob({ now }),
+      payload: { kind: "agentTurn", message: "ignore abort", timeoutSeconds: 1 },
+    };
+
+    const resultPromise = executeJobCoreWithTimeout(state, job, controller);
+    await vi.waitFor(() => {
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    });
+    controller.abort("Cancelled by operator.");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(resultPromise).resolves.toMatchObject({
+      status: "error",
+      error: expect.stringContaining("timed out"),
+    });
+    expect(state.deps.cleanupTimedOutAgentRun).toHaveBeenCalled();
+  });
+
+  it("does not report main-session cron tasks as cancelled after enqueue", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    let resolveHeartbeat: ((value: { status: "ran"; durationMs: number }) => void) | undefined;
+    const runHeartbeatOnce = vi.fn(
+      () =>
+        new Promise<{ status: "ran"; durationMs: number }>((resolve) => {
+          resolveHeartbeat = resolve;
+        }),
+    );
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createDueMainJob({ now, wakeMode: "now" })],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runHeartbeatOnce,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    const timerRun = onTimer(state);
+    await vi.waitFor(() => {
+      expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    });
+
+    const task = findTaskByRunId(`cron:main-heartbeat-job:${now}`);
+    if (!task) {
+      throw new Error("expected active main-session cron task ledger record");
+    }
+
+    const cancelled = await cancelDetachedTaskRunById({
+      cfg: {} as never,
+      taskId: task.taskId,
+    });
+
+    expect(cancelled.cancelled).toBe(false);
+    expect(cancelled.reason).toContain("main-session cron jobs enqueue work");
+    expect(findTaskByRunId(`cron:main-heartbeat-job:${now}`)?.status).toBe("running");
+
+    resolveHeartbeat?.({ status: "ran", durationMs: 1 });
     await timerRun;
   });
 

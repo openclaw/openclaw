@@ -5,6 +5,7 @@ import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
+import { registerActiveCronTaskRun, resetActiveCronTaskRunsForTests } from "./cron-task-cancel.js";
 import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -126,6 +127,7 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
       resetAgentEventsForTest();
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryControlRuntimeForTests();
+      resetActiveCronTaskRunsForTests();
       resetAgentRunContextForTest();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
@@ -217,6 +219,7 @@ describe("task-executor", () => {
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryControlRuntimeForTests();
+    resetActiveCronTaskRunsForTests();
     resetAgentRunContextForTest();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
@@ -772,6 +775,64 @@ describe("task-executor", () => {
       expect(task?.taskId).toBe(child.taskId);
       expect(task?.status).toBe("running");
       expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("aborts active cron task runs before marking the task cancelled", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const controller = new AbortController();
+      const task = createRunningTaskRun({
+        runtime: "cron",
+        ownerKey: "",
+        scopeKind: "system",
+        runId: "cron:nightly:1",
+        task: "Nightly cron",
+        startedAt: 10,
+        deliveryStatus: "not_applicable",
+      });
+      const release = registerActiveCronTaskRun({
+        runId: task.runId,
+        controller,
+      });
+
+      try {
+        const cancelled = await cancelDetachedTaskRunById({
+          cfg: {} as never,
+          taskId: task.taskId,
+        });
+
+        expect(cancelled.found).toBe(true);
+        expect(cancelled.cancelled).toBe(true);
+        expect(controller.signal.aborted).toBe(true);
+        expect(controller.signal.reason).toBe("Cancelled by operator.");
+        expect(getTaskById(task.taskId)?.status).toBe("cancelled");
+      } finally {
+        release?.();
+      }
+    });
+  });
+
+  it("explains cron task cancellation when this process does not own the run", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const task = createRunningTaskRun({
+        runtime: "cron",
+        ownerKey: "",
+        scopeKind: "system",
+        runId: "cron:nightly:1",
+        task: "Nightly cron",
+        startedAt: 10,
+        deliveryStatus: "not_applicable",
+      });
+
+      const cancelled = await cancelDetachedTaskRunById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(cancelled.found).toBe(true);
+      expect(cancelled.cancelled).toBe(false);
+      expect(cancelled.reason).toContain("not currently cancellable by this Gateway process");
+      expect(getTaskById(task.taskId)?.status).toBe("running");
     });
   });
 

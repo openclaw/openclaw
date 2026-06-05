@@ -6,6 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  registerActiveCronTaskRun,
+  resetActiveCronTaskRunsForTests,
+} from "../../tasks/cron-task-cancel.js";
+import {
   createTaskRecord as createTaskRecordOrNull,
   markTaskTerminalById,
   recordTaskProgressByRunId,
@@ -37,10 +41,12 @@ beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tasks-"));
   process.env.OPENCLAW_STATE_DIR = stateDir;
   resetTaskRegistryForTests();
+  resetActiveCronTaskRunsForTests();
 });
 
 afterEach(async () => {
   resetTaskRegistryForTests();
+  resetActiveCronTaskRunsForTests();
   if (ORIGINAL_STATE_DIR === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
@@ -212,5 +218,40 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.id).toBe(task.taskId);
     expect(payload?.task?.status).toBe("cancelled");
     expect(payload?.task?.error).toBe("user stopped task");
+  });
+
+  it("cancels active cron task records through the owning Gateway process", async () => {
+    const controller = new AbortController();
+    const task = createTaskRecord({
+      runtime: "cron",
+      ownerKey: "",
+      scopeKind: "system",
+      childSessionKey: "agent:main:cron:daily:run:1",
+      runId: "cron:daily:1",
+      task: "Daily cron",
+      status: "running",
+      deliveryStatus: "not_applicable",
+    });
+    const release = registerActiveCronTaskRun({
+      runId: task.runId,
+      controller,
+    });
+
+    try {
+      const { calls, payload } = await runTaskHandler("tasks.cancel", {
+        taskId: task.taskId,
+        reason: "operator stopped cron",
+      });
+
+      expect(calls[0]?.[0]).toBe(true);
+      expect(payload?.found).toBe(true);
+      expect(payload?.cancelled).toBe(true);
+      expect(controller.signal.aborted).toBe(true);
+      expect(controller.signal.reason).toBe("operator stopped cron");
+      expect(payload?.task?.id).toBe(task.taskId);
+      expect(payload?.task?.status).toBe("cancelled");
+    } finally {
+      release?.();
+    }
   });
 });

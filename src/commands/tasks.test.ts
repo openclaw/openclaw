@@ -18,7 +18,20 @@ import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js"
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { tasksAuditCommand, tasksMaintenanceCommand, tasksShowCommand } from "./tasks.js";
+import {
+  tasksAuditCommand,
+  tasksCancelCommand,
+  tasksMaintenanceCommand,
+  tasksShowCommand,
+} from "./tasks.js";
+
+const gatewayMocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: gatewayMocks.callGateway,
+}));
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -96,6 +109,7 @@ describe("tasks commands", () => {
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
+    gatewayMocks.callGateway.mockReset();
   });
 
   it("keeps audit JSON stable and sorts combined findings before limiting", async () => {
@@ -166,6 +180,40 @@ describe("tasks commands", () => {
           flow: jsonRoundTrip(runningFlow),
         },
       ]);
+    });
+  });
+
+  it("routes cron task cancellation through the live Gateway", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cron",
+        ownerKey: "",
+        scopeKind: "system",
+        childSessionKey: "agent:main:cron:daily:run:1",
+        runId: "cron:daily:1",
+        task: "Daily cron",
+        status: "running",
+        deliveryStatus: "not_applicable",
+      });
+      gatewayMocks.callGateway.mockResolvedValueOnce({
+        found: true,
+        cancelled: true,
+        task: { ...task, status: "cancelled" },
+      });
+
+      const runtime = createRuntime();
+      await tasksCancelCommand({ lookup: task.taskId }, runtime);
+
+      expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
+        method: "tasks.cancel",
+        params: {
+          taskId: task.taskId,
+          reason: "Cancelled by operator.",
+        },
+        timeoutMs: 5_000,
+      });
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith(`Cancelled ${task.taskId} (cron) run cron:daily:1.`);
     });
   });
 
