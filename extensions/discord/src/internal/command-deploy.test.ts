@@ -1,4 +1,5 @@
 // Discord tests cover command deploy plugin behavior.
+/* oxlint-disable typescript/unbound-method -- vitest mocks of RequestClient methods (createRest) intentionally expose vi.fn refs via `restA.get`/`.post`; not unbound class methods. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
