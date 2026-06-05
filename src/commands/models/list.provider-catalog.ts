@@ -217,6 +217,65 @@ function modelFromProviderCatalog(params: {
   } as Model;
 }
 
+async function runProviderCatalogForList(params: {
+  provider: ProviderPlugin;
+  cfg: OpenClawConfig;
+  agentDir: string;
+  env: NodeJS.ProcessEnv;
+  staticOnly?: boolean;
+}): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | null> {
+  if (params.staticOnly === true) {
+    return (
+      (await runProviderStaticCatalog({
+        provider: params.provider,
+        config: params.cfg,
+        agentDir: params.agentDir,
+        env: params.env,
+      })) ?? null
+    );
+  }
+
+  const hasRuntimeCatalog =
+    typeof params.provider.catalog?.run === "function" ||
+    typeof params.provider.discovery?.run === "function";
+  if (hasRuntimeCatalog) {
+    const authStore = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
+    const resolveProviderApiKey = createProviderApiKeyResolver(params.env, authStore, params.cfg);
+    const resolveProviderAuth = createProviderAuthResolver(params.env, authStore, params.cfg);
+    try {
+      const runtimeResult = await runProviderCatalog({
+        provider: params.provider,
+        config: params.cfg,
+        agentDir: params.agentDir,
+        env: params.env,
+        resolveProviderApiKey: (providerId) =>
+          resolveProviderApiKey(providerId?.trim() || params.provider.id),
+        resolveProviderAuth: (providerId, options) =>
+          resolveProviderAuth(providerId?.trim() || params.provider.id, options),
+      });
+      if (runtimeResult) {
+        return runtimeResult;
+      }
+    } catch (error) {
+      log.warn(
+        `provider runtime catalog failed for ${params.provider.id}: ${formatErrorMessage(error)}`,
+      );
+    }
+  }
+
+  if (typeof params.provider.staticCatalog?.run !== "function") {
+    return null;
+  }
+  return (
+    (await runProviderStaticCatalog({
+      provider: params.provider,
+      config: params.cfg,
+      agentDir: params.agentDir,
+      env: params.env,
+    })) ?? null
+  );
+}
+
 /** Loads model rows from provider static/runtime catalog hooks for model-list output. */
 export async function loadProviderCatalogModelsForList(params: {
   cfg: OpenClawConfig;
@@ -280,28 +339,13 @@ export async function loadProviderCatalogModelsForList(params: {
       }
       let result: Awaited<ReturnType<typeof runProviderCatalog>> | null;
       try {
-        if (params.staticOnly === true || typeof provider.staticCatalog?.run === "function") {
-          result = await runProviderStaticCatalog({
-            provider,
-            config: params.cfg,
-            agentDir: params.agentDir,
-            env,
-          });
-        } else {
-          const authStore = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
-          const resolveProviderApiKey = createProviderApiKeyResolver(env, authStore, params.cfg);
-          const resolveProviderAuth = createProviderAuthResolver(env, authStore, params.cfg);
-          result = await runProviderCatalog({
-            provider,
-            config: params.cfg,
-            agentDir: params.agentDir,
-            env,
-            resolveProviderApiKey: (providerId) =>
-              resolveProviderApiKey(providerId?.trim() || provider.id),
-            resolveProviderAuth: (providerId, options) =>
-              resolveProviderAuth(providerId?.trim() || provider.id, options),
-          });
-        }
+        result = await runProviderCatalogForList({
+          provider,
+          cfg: params.cfg,
+          agentDir: params.agentDir,
+          env,
+          staticOnly: params.staticOnly,
+        });
       } catch (error) {
         log.warn(`provider catalog failed for ${provider.id}: ${formatErrorMessage(error)}`);
         result = null;
