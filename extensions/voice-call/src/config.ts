@@ -347,6 +347,12 @@ const VoiceCallRealtimeConfigSchema = z
     consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional(),
     /** Optional fast mode override for the regular agent behind realtime consults. */
     consultFastMode: z.boolean().optional(),
+    /**
+     * Suppress caller-leg input while assistant audio is playing (self-echo guard).
+     * Off by default: the msteams bridge delivers remote-participant audio (not our
+     * own playback), and gating input would also defeat the model's barge-in.
+     */
+    suppressInputDuringPlayback: z.boolean().optional(),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */

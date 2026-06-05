@@ -553,6 +553,9 @@
           "consultFastMode": {
             "type": "boolean"
           },
+          "suppressInputDuringPlayback": {
+            "type": "boolean"
+          },
           "tools": {
             "type": "array",
             "items": {
