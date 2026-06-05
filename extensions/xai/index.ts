@@ -14,7 +14,11 @@ import {
   createCodeExecutionToolDefinition,
 } from "./code-execution-tool-shared.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildLiveXaiProvider, buildXaiProvider } from "./provider-catalog.js";
+import {
+  buildLiveXaiOAuthProvider,
+  buildLiveXaiProvider,
+  buildXaiProvider,
+} from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
@@ -179,6 +183,34 @@ export default defineSingleProviderPluginEntry({
       order: "simple",
       run: async (ctx) => {
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        if (auth.mode === "oauth") {
+          try {
+            const { resolveApiKeyForProvider } =
+              await import("openclaw/plugin-sdk/provider-auth-runtime");
+            const runtimeAuth = await resolveApiKeyForProvider({
+              provider: PROVIDER_ID,
+              cfg: ctx.config,
+              ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+              ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+              ...(auth.profileId
+                ? {
+                    profileId: auth.profileId,
+                    lockedProfile: true,
+                  }
+                : {}),
+            });
+            if (runtimeAuth.mode === "oauth" && runtimeAuth.apiKey) {
+              return {
+                provider: await buildLiveXaiOAuthProvider({
+                  discoveryApiKey: runtimeAuth.apiKey,
+                }),
+              };
+            }
+          } catch {
+            // OAuth discovery is advisory; fall through so configured API-key
+            // auth can still publish the standard xAI catalog.
+          }
+        }
         if (auth.apiKey) {
           return {
             provider: await buildLiveXaiProvider({
