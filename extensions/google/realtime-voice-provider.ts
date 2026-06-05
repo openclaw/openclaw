@@ -63,6 +63,7 @@ const GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS = 60 * 1000;
 const GOOGLE_REALTIME_RECONNECT_MAX_ATTEMPTS = 3;
 const GOOGLE_REALTIME_RECONNECT_BASE_DELAY_MS = 250;
 const GOOGLE_REALTIME_RECONNECT_MAX_DELAY_MS = 2_000;
+const GOOGLE_REALTIME_TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
 
 for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
@@ -339,16 +340,25 @@ function buildRealtimeInputConfig(
 }
 
 function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): FunctionDeclaration[] {
-  return (tools ?? []).map((tool) => {
+  return (tools ?? []).flatMap((tool) => {
+    let name: unknown;
+    try {
+      name = (tool as { name?: unknown }).name;
+    } catch {
+      return [];
+    }
+    if (typeof name !== "string" || !GOOGLE_REALTIME_TOOL_NAME_RE.test(name)) {
+      return [];
+    }
     const declaration: FunctionDeclaration = {
-      name: tool.name,
+      name,
       description: tool.description,
       parametersJsonSchema: tool.parameters,
     };
-    if (tool.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+    if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       declaration.behavior = "NON_BLOCKING" as Behavior;
     }
-    return declaration;
+    return [declaration];
   });
 }
 

@@ -124,6 +124,7 @@ type SentRealtimeEvent = {
       };
     };
     item?: unknown;
+    tools?: Array<{ name?: string }>;
   };
 };
 
@@ -458,11 +459,39 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     if (!provider.createBrowserSession) {
       throw new Error("expected OpenAI realtime provider to support browser sessions");
     }
+    const unreadableToolName = Object.defineProperty(
+      {
+        type: "function",
+        description: "Unreadable",
+        parameters: { type: "object", properties: {} },
+      },
+      "name",
+      {
+        get() {
+          throw new Error("tool name getter exploded");
+        },
+      },
+    );
 
     const session = await provider.createBrowserSession({
       providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
       instructions: "Be concise.",
       voice: " Marin ",
+      tools: [
+        {
+          type: "function",
+          name: "1_lookup",
+          description: "OpenAI-compatible lookup",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          type: "function",
+          name: "calendar.lookup:next",
+          description: "Google-only lookup",
+          parameters: { type: "object", properties: {} },
+        },
+        unreadableToolName as never,
+      ],
     });
 
     expectRecordFields(requireFetchRequest(), "fetch request", {
@@ -489,6 +518,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       transcription: { model: "gpt-4o-mini-transcribe" },
     });
     expect(requireNestedRecord(bodySession, ["audio", "output"])).toEqual({ voice: "marin" });
+    expect(
+      (bodySession.tools as Array<{ name?: string }> | undefined)?.map((tool) => tool.name),
+    ).toEqual(["1_lookup"]);
     expect(bodySession).not.toHaveProperty("temperature");
     expectRecordFields(session, "browser session", {
       provider: "openai",
@@ -744,9 +776,43 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   it("waits for session.updated before draining audio and firing onReady", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onReady = vi.fn();
+    const unreadableToolName = Object.defineProperty(
+      {
+        type: "function",
+        description: "Unreadable",
+        parameters: { type: "object", properties: {} },
+      },
+      "name",
+      {
+        get() {
+          throw new Error("tool name getter exploded");
+        },
+      },
+    );
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
       instructions: "Be helpful.",
+      tools: [
+        {
+          type: "function",
+          name: "1_lookup",
+          description: "OpenAI-compatible lookup",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          type: "function",
+          name: "calendar.lookup:next",
+          description: "Google-only lookup",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          type: "function",
+          name: "x".repeat(65),
+          description: "Too long",
+          parameters: { type: "object", properties: {} },
+        },
+        unreadableToolName as never,
+      ],
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onReady,
@@ -777,6 +843,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       model: "gpt-realtime-2",
       output_modalities: ["audio"],
     });
+    expect(session.tools?.map((tool) => tool.name)).toEqual(["1_lookup"]);
     const inputAudio = requireNestedRecord(session, ["audio", "input"]);
     expectRecordFields(inputAudio, "session audio input", {
       format: { type: "audio/pcmu" },

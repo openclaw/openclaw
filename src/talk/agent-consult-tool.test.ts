@@ -115,4 +115,52 @@ describe("realtime voice agent consult tool", () => {
     ).toStrictEqual([REALTIME_VOICE_AGENT_CONSULT_TOOL, customTool]);
     expect(resolveRealtimeVoiceAgentConsultTools("none", [customTool])).toEqual([customTool]);
   });
+
+  it("skips malformed custom realtime tool names without dropping valid tools", () => {
+    const validTool = {
+      type: "function" as const,
+      name: "custom_lookup",
+      description: "Custom lookup",
+      parameters: { type: "object" as const, properties: {} },
+    };
+    const googleCompatibleTool = {
+      ...validTool,
+      name: "calendar.lookup:next",
+    };
+    const providerSpecificTool = {
+      ...validTool,
+      name: "bad/name",
+    };
+    const unreadableToolName = Object.defineProperty(
+      {
+        type: "function",
+        description: "Unreadable",
+        parameters: { type: "object", properties: {} },
+      },
+      "name",
+      {
+        get() {
+          throw new Error("tool name getter exploded");
+        },
+      },
+    );
+
+    expect(
+      resolveRealtimeVoiceAgentConsultTools("safe-read-only", [
+        { ...validTool, name: 123 } as never,
+        unreadableToolName as never,
+        { ...validTool, name: "" },
+        { ...validTool, name: " " },
+        { ...validTool, name: "bad name" },
+        validTool,
+        googleCompatibleTool,
+        providerSpecificTool,
+      ]),
+    ).toStrictEqual([
+      REALTIME_VOICE_AGENT_CONSULT_TOOL,
+      validTool,
+      googleCompatibleTool,
+      providerSpecificTool,
+    ]);
+  });
 });

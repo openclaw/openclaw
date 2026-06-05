@@ -93,6 +93,7 @@ const OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
 const OPENAI_REALTIME_MAX_SESSION_DURATION_FRAGMENT = "maximum duration";
 const OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
+const OPENAI_REALTIME_TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const OPENAI_REALTIME_VOICES = [
   "alloy",
   "ash",
@@ -344,6 +345,24 @@ function isOpenAIRealtimeMaxSessionDurationError(detail: string): boolean {
     normalized.includes("session") &&
     normalized.includes(OPENAI_REALTIME_MAX_SESSION_DURATION_FRAGMENT)
   );
+}
+
+function normalizeOpenAIRealtimeTools(
+  tools: RealtimeVoiceTool[] | undefined,
+): RealtimeVoiceTool[] | undefined {
+  const normalized: RealtimeVoiceTool[] = [];
+  for (const tool of tools ?? []) {
+    let name: unknown;
+    try {
+      name = (tool as { name?: unknown }).name;
+    } catch {
+      continue;
+    }
+    if (typeof name === "string" && OPENAI_REALTIME_TOOL_NAME_RE.test(name)) {
+      normalized.push({ ...tool, name });
+    }
+  }
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 async function resolveOpenAIRealtimeDefaultAuth(params: {
@@ -903,6 +922,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private buildGaSessionUpdate(): RealtimeGaSessionUpdate {
     const cfg = this.config;
+    const tools = normalizeOpenAIRealtimeTools(cfg.tools);
     const autoRespondToAudio = cfg.autoRespondToAudio ?? true;
     const interruptResponseOnInputAudio = cfg.interruptResponseOnInputAudio ?? autoRespondToAudio;
     return {
@@ -932,9 +952,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           },
         },
         ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort } } : {}),
-        ...(cfg.tools && cfg.tools.length > 0
+        ...(tools
           ? {
-              tools: cfg.tools,
+              tools,
               tool_choice: "auto",
             }
           : {}),
@@ -949,6 +969,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private buildAzureDeploymentSessionUpdate(): RealtimeAzureDeploymentSessionUpdate {
     const cfg = this.config;
     const format = this.resolveLegacyRealtimeAudioFormat();
+    const tools = normalizeOpenAIRealtimeTools(cfg.tools);
     return {
       type: "session.update",
       session: {
@@ -966,9 +987,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           create_response: cfg.autoRespondToAudio ?? true,
         },
         temperature: cfg.temperature ?? 0.8,
-        ...(cfg.tools && cfg.tools.length > 0
+        ...(tools
           ? {
-              tools: cfg.tools,
+              tools,
               tool_choice: "auto",
             }
           : {}),
@@ -1376,6 +1397,7 @@ async function createOpenAIRealtimeBrowserSession(
     model,
   });
   const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
+  const tools = normalizeOpenAIRealtimeTools(req.tools);
   const session: Record<string, unknown> = {
     type: "realtime",
     model,
@@ -1402,8 +1424,8 @@ async function createOpenAIRealtimeBrowserSession(
       output: { voice },
     },
   };
-  if (req.tools && req.tools.length > 0) {
-    session.tools = req.tools;
+  if (tools) {
+    session.tools = tools;
     session.tool_choice = "auto";
   }
   const reasoningEffort = trimToUndefined(req.reasoningEffort) ?? config.reasoningEffort;

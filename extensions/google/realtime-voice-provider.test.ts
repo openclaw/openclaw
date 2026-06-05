@@ -193,6 +193,19 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
   it("connects with Google Live setup config and tool declarations", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
+    const unreadableToolName = Object.defineProperty(
+      {
+        type: "function",
+        description: "Unreadable",
+        parameters: { type: "object", properties: {} },
+      },
+      "name",
+      {
+        get() {
+          throw new Error("tool name getter exploded");
+        },
+      },
+    );
     const bridge = provider.createBridge({
       providerConfig: {
         apiKey: "gemini-key",
@@ -218,6 +231,43 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
             required: ["query"],
           },
         },
+        {
+          type: "function",
+          name: "calendar.lookup:next",
+          description: "Google lookup",
+          parameters: {
+            type: "object",
+            properties: {},
+          },
+        },
+        {
+          type: "function",
+          name: "1_lookup",
+          description: "OpenAI-only lookup",
+          parameters: {
+            type: "object",
+            properties: {},
+          },
+        },
+        {
+          type: "function",
+          name: "bad/name",
+          description: "Malformed lookup",
+          parameters: {
+            type: "object",
+            properties: {},
+          },
+        },
+        {
+          type: "function",
+          name: `x${"a".repeat(128)}`,
+          description: "Too long",
+          parameters: {
+            type: "object",
+            properties: {},
+          },
+        },
+        unreadableToolName as never,
         {
           type: "function",
           name: "openclaw_agent_consult",
@@ -290,16 +340,18 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       },
       required: ["query"],
     });
-    expect(declarations[1]?.name).toBe("openclaw_agent_consult");
-    expect(declarations[1]?.description).toBe("Ask OpenClaw");
-    expect(declarations[1]?.parametersJsonSchema).toEqual({
+    expect(declarations[1]?.name).toBe("calendar.lookup:next");
+    expect(declarations[1]?.description).toBe("Google lookup");
+    expect(declarations[2]?.name).toBe("openclaw_agent_consult");
+    expect(declarations[2]?.description).toBe("Ask OpenClaw");
+    expect(declarations[2]?.parametersJsonSchema).toEqual({
       type: "object",
       properties: {
         question: { type: "string" },
       },
       required: ["question"],
     });
-    expect(declarations[1]?.behavior).toBe("NON_BLOCKING");
+    expect(declarations[2]?.behavior).toBe("NON_BLOCKING");
   });
 
   it("omits zero temperature for native audio responses", async () => {

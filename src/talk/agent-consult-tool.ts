@@ -80,6 +80,8 @@ const SAFE_READ_ONLY_TOOLS = [
   "memory_get",
 ] as const;
 
+const REALTIME_VOICE_TOOL_NAME_WHITESPACE_RE = /\s/u;
+
 /** Type guard for user/config supplied consult tool policies. */
 export function isRealtimeVoiceAgentConsultToolPolicy(
   value: unknown,
@@ -101,6 +103,20 @@ export function resolveRealtimeVoiceAgentConsultToolPolicy(
   return isRealtimeVoiceAgentConsultToolPolicy(normalized) ? normalized : fallback;
 }
 
+function readCustomRealtimeVoiceToolName(tool: RealtimeVoiceTool): string | undefined {
+  let name: unknown;
+  try {
+    name = (tool as { name?: unknown }).name;
+  } catch {
+    return undefined;
+  }
+  return typeof name === "string" &&
+    name.length > 0 &&
+    !REALTIME_VOICE_TOOL_NAME_WHITESPACE_RE.test(name)
+    ? name
+    : undefined;
+}
+
 /** Merge the shared consult tool with provider/plugin custom realtime tools. */
 export function resolveRealtimeVoiceAgentConsultTools(
   policy: RealtimeVoiceAgentConsultToolPolicy,
@@ -113,8 +129,9 @@ export function resolveRealtimeVoiceAgentConsultTools(
   // Keep the built-in consult tool first and prevent custom tools from
   // replacing its provider-facing contract by name.
   for (const tool of customTools) {
-    if (!tools.has(tool.name)) {
-      tools.set(tool.name, tool);
+    const name = readCustomRealtimeVoiceToolName(tool);
+    if (name && !tools.has(name)) {
+      tools.set(name, tool);
     }
   }
   return [...tools.values()];
