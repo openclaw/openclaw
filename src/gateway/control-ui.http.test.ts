@@ -1,3 +1,5 @@
+// Control UI HTTP tests cover static asset serving, bootstrap config, avatar and
+// assistant media routes, pairing helpers, and session-generation metadata.
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";

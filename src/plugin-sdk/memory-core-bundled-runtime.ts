@@ -1,3 +1,4 @@
+// Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 // Manual facade. Keep loader boundary explicit.
 import type {
