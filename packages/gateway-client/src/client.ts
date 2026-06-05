@@ -345,7 +345,7 @@ type AssembledConnect = {
   authApprovalRuntimeToken: string | undefined;
   resolvedDeviceToken: string | undefined;
   storedToken: string | undefined;
-  usingStoredDeviceToken: boolean;
+  usingStoredDeviceToken: boolean | undefined;
 };
 
 type FingerprintCheckingClientOptions = Omit<ClientOptions, "checkServerIdentity"> & {
