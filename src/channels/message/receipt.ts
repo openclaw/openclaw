@@ -14,6 +14,23 @@ type MessageReceiptInputResult = MessageReceiptSourceResult & {
   receipt?: MessageReceipt;
 };
 
+export type MessageReceiptDeliveryEvidence = {
+  /** Whether the receipt includes concrete platform ids from an accepted send. */
+  platformSendAccepted: boolean;
+  /** Timestamp when the channel adapter produced platform send-acceptance evidence. */
+  platformSendAcceptedAt: number | null;
+  /** Platform ids returned by the adapter/provider for the accepted send, if any. */
+  platformMessageIds: string[];
+  /** Explains whether the receipt contains platform evidence or only local receipt metadata. */
+  platformSendEvidence: "platform_message_ids" | "none";
+  /**
+   * Message receipts are not read receipts. Device-visible delivery must be
+   * confirmed by a channel-specific receipt/read path, not inferred from ids.
+   */
+  deviceDeliveryConfirmed: false;
+  deviceDeliveryEvidence: "not_tracked_by_message_receipt";
+};
+
 function resolveReceiptMessageId(result: MessageReceiptInputResult): string | undefined {
   return (
     result.messageId ||
@@ -127,4 +144,20 @@ export function resolveMessageReceiptPrimaryId(receipt: MessageReceipt): string 
     return primary;
   }
   return listMessageReceiptPlatformIds(receipt)[0];
+}
+
+/** Summarizes what a receipt proves without upgrading send acceptance into device delivery. */
+export function createMessageReceiptDeliveryEvidence(
+  receipt: MessageReceipt,
+): MessageReceiptDeliveryEvidence {
+  const platformMessageIds = listMessageReceiptPlatformIds(receipt);
+  const hasPlatformSendEvidence = platformMessageIds.length > 0;
+  return {
+    platformSendAccepted: hasPlatformSendEvidence,
+    platformSendAcceptedAt: hasPlatformSendEvidence ? receipt.sentAt : null,
+    platformMessageIds,
+    platformSendEvidence: hasPlatformSendEvidence ? "platform_message_ids" : "none",
+    deviceDeliveryConfirmed: false,
+    deviceDeliveryEvidence: "not_tracked_by_message_receipt",
+  };
 }

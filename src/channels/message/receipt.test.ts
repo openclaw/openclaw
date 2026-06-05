@@ -1,6 +1,7 @@
 // Message receipt tests cover receipt state and acknowledgement metadata for channel messages.
 import { describe, expect, it } from "vitest";
 import {
+  createMessageReceiptDeliveryEvidence,
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
   resolveMessageReceiptPrimaryId,
@@ -96,5 +97,40 @@ describe("createMessageReceiptFromOutboundResults", () => {
 
     expect(listMessageReceiptPlatformIds(receipt)).toEqual(["m1", "m2"]);
     expect(resolveMessageReceiptPrimaryId(receipt)).toBe("m1");
+  });
+
+  it("reports platform send acceptance without claiming device delivery", () => {
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [
+        { channel: "signal", messageId: "m1" },
+        { channel: "signal", messageId: "m2" },
+      ],
+      sentAt: 123,
+    });
+
+    expect(createMessageReceiptDeliveryEvidence(receipt)).toEqual({
+      platformSendAccepted: true,
+      platformSendAcceptedAt: 123,
+      platformMessageIds: ["m1", "m2"],
+      platformSendEvidence: "platform_message_ids",
+      deviceDeliveryConfirmed: false,
+      deviceDeliveryEvidence: "not_tracked_by_message_receipt",
+    });
+  });
+
+  it("does not claim platform send acceptance when a receipt has no platform ids", () => {
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [],
+      sentAt: 123,
+    });
+
+    expect(createMessageReceiptDeliveryEvidence(receipt)).toEqual({
+      platformSendAccepted: false,
+      platformSendAcceptedAt: null,
+      platformMessageIds: [],
+      platformSendEvidence: "none",
+      deviceDeliveryConfirmed: false,
+      deviceDeliveryEvidence: "not_tracked_by_message_receipt",
+    });
   });
 });
