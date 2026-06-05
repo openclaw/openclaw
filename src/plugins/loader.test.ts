@@ -2050,6 +2050,57 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
+      label:
+        "keeps resetSession callable after register closes while blocking registration-only APIs",
+      run: async () => {
+        const registerGatewayMethod = vi.fn();
+        const resetSession = vi.fn(async () => ({
+          ok: true as const,
+          key: "agent:main:main",
+          sessionId: "sid-reset",
+        }));
+        const api = buildPluginApi({
+          id: "late-reset-plugin",
+          name: "Late Reset Plugin",
+          source: "/tmp/late-reset-plugin/index.cjs",
+          registrationMode: "full",
+          config: {},
+          runtime: {} as never,
+          logger: {
+            info() {},
+            warn() {},
+            error() {},
+            debug() {},
+          },
+          resolvePath: (input) => input,
+          handlers: {
+            registerGatewayMethod,
+            resetSession,
+          },
+        });
+        let capturedApi: typeof api | undefined;
+
+        testing.runPluginRegisterSync((guardedApi) => {
+          capturedApi = guardedApi;
+          guardedApi.registerGatewayMethod("proofchat.reset", vi.fn() as never);
+        }, api);
+
+        expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
+        expect(
+          capturedApi?.registerGatewayMethod("proofchat.late-reset", vi.fn() as never),
+        ).toBeUndefined();
+        expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
+
+        await expect(capturedApi?.resetSession?.("main", "reset")).resolves.toEqual({
+          ok: true,
+          key: "agent:main:main",
+          sessionId: "sid-reset",
+        });
+        expect(resetSession).toHaveBeenCalledTimes(1);
+        expect(resetSession).toHaveBeenCalledWith("main", "reset");
+      },
+    },
+    {
       label: "limits imports to the requested plugin ids",
       run: () => {
         useNoBundledPlugins();
