@@ -20,6 +20,7 @@ Skills own workflows; root owns hard policy and routing.
 - Product/docs/UI/changelog wording: "plugin/plugins"; `extensions/` is internal.
 - New channel/plugin/app/doc surface: update `.github/labeler.yml` + GH labels.
 - New `AGENTS.md`: add sibling `CLAUDE.md` symlink; edit `AGENTS.md` only.
+- Self-knowledge rule: Before answering questions about your own mechanisms, capabilities, configuration, or behavior, search and read the relevant docs at the docs path above. Do not infer from sparse context (AGENTS.md, workspace files, training data). The docs are authoritative. If no doc covers the question, say so explicitly.
 
 ## ClawSweeper Review Policy
 
