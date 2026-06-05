@@ -808,19 +808,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return true;
     }
     const targets = deps.resolveSignalReactionTargets(params.reaction);
+    const notificationSender = params.conversationSender ?? params.sender;
     const shouldNotify = deps.shouldEmitSignalReactionNotification({
       mode: deps.reactionMode,
       account: deps.account,
       accountUuid: deps.accountUuid,
       targets,
-      sender: params.sender,
+      sender: notificationSender,
       allowlist: deps.reactionAllowlist,
     });
     if (!shouldNotify) {
       return true;
     }
 
-    const senderPeerId = resolveSignalPeerId(params.sender);
+    const senderPeerId = resolveSignalPeerId(notificationSender);
     const route = resolveSignalInboundRoute({
       cfg: deps.cfg,
       accountId: deps.accountId,
@@ -836,7 +837,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       targetLabel: targets[0]?.display,
       groupLabel,
     });
-    const senderId = formatSignalSenderId(params.sender);
+    const senderId = formatSignalSenderId(notificationSender);
     const contextKey = [
       "signal",
       "reaction",
@@ -962,6 +963,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       (await handleReactionOnlyInbound({
         envelope: resolvedEnvelope,
         sender,
+        conversationSender: noteToSelfDirectMessage
+          ? (resolveConfiguredSignalSelfSender({
+              account: deps.account,
+              accountUuid: deps.accountUuid,
+            }) ?? sender)
+          : undefined,
         senderDisplay,
         reaction,
         hasBodyContent,

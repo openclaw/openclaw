@@ -716,10 +716,6 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it("uses the account conversation key for UUID-only note-to-self approval reaction envelopes", async () => {
-    approvalReactionMocks.maybeResolveSignalApprovalReaction
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true);
     const accountUuid = "123E4567-E89B-12D3-A456-426614174000";
     const cfg = {
       messages: { inbound: { debounceMs: 0 } },
@@ -765,20 +761,18 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(approvalReactionMocks.maybeResolveSignalApprovalReaction).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        conversationKey: "123e4567e89b12d3a456426614174000",
-      }),
-    );
-    expect(approvalReactionMocks.maybeResolveSignalApprovalReaction).toHaveBeenNthCalledWith(
-      3,
+    expect(approvalReactionMocks.maybeResolveSignalApprovalReaction).toHaveBeenCalledWith(
       expect.objectContaining({
         conversationKey: "+15550001111",
         messageId: "1700000000002",
         reactionKey: "👍",
         actorId: "+15550001111",
         targetAuthor: "+15550001111",
+      }),
+    );
+    expect(approvalReactionMocks.maybeResolveSignalApprovalReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationKey: "123e4567e89b12d3a456426614174000",
       }),
     );
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
@@ -1129,6 +1123,53 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("self reaction added", {
       sessionKey: "agent:main:main",
       contextKey: "signal:reaction:added:1700000000100:+15550001111:❤️",
+    });
+  });
+
+  it("routes UUID-only note-to-self reaction notifications through the configured self sender", async () => {
+    const accountUuid = "123E4567-E89B-12D3-A456-426614174000";
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"], account: "+15550001111" } },
+        } as any,
+        account: "+15550001111",
+        accountUuid,
+        ingressMode: "note-to-self",
+        reactionMode: "own",
+        isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
+        shouldEmitSignalReactionNotification: () => true,
+        resolveSignalReactionTargets: () => [
+          { kind: "uuid", id: accountUuid.toLowerCase(), display: "self uuid" },
+        ],
+        buildSignalReactionSystemEventText: () => "self uuid reaction added",
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: undefined,
+        sourceUuid: accountUuid.toLowerCase(),
+        syncMessage: {
+          sentMessage: {
+            destinationUuid: accountUuid.toLowerCase(),
+            timestamp: 1700000000108,
+            reaction: {
+              emoji: "❤️",
+              targetAuthorUuid: accountUuid.toLowerCase(),
+              targetSentTimestamp: 1700000000101,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("self uuid reaction added", {
+      sessionKey: "agent:main:main",
+      contextKey: "signal:reaction:added:1700000000101:+15550001111:❤️",
     });
   });
 
