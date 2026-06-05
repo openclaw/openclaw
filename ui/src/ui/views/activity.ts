@@ -166,7 +166,9 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
             ? nothing
             : html`<span>${hiddenArgumentsLabel(entry.hiddenArgumentCount)}</span>`}
           <span class="mono"
-            >${entry.entryKind === "answer_candidate" ? "Item" : t("activity.toolCallId")}:
+            >${entry.entryKind === "answer_candidate"
+              ? t("activity.itemId")
+              : t("activity.toolCallId")}:
             ${entry.toolCallId}</span
           >
           <span class="mono">${t("activity.runId")}: ${entry.runId}</span>
