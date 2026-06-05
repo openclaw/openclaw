@@ -163,6 +163,8 @@ const DEFAULT_PRE_START_TIMEOUT_MS = 10_000;
 interface ConnectionMeta {
   ip: string;
   started: boolean;
+  /** Set once onSessionEnd has fired, so socket close does not double-deliver it. */
+  ended: boolean;
   preStartTimer: ReturnType<typeof setTimeout>;
 }
 
@@ -351,11 +353,21 @@ export class MsteamsMediaStream {
     if (typeof preStartTimer.unref === "function") {
       preStartTimer.unref();
     }
-    this.connectionMeta.set(callId, { ip, started: false, preStartTimer });
+    this.connectionMeta.set(callId, { ip, started: false, ended: false, preStartTimer });
     this.config.logger?.info(`MsteamsMediaStream: connection open ${callId}`);
 
     ws.on("message", (data) => this.handleMessage(callId, data));
     ws.on("close", () => {
+      // An abrupt socket close (worker crash, network loss, hangup without a
+      // session.end frame) must still tear down provider + manager state for a
+      // session that already started — otherwise the call record leaks until the
+      // stale-call reaper. The `ended` guard avoids double-delivery when the
+      // close follows an explicit session.end.
+      const meta = this.connectionMeta.get(callId);
+      if (meta?.started && !meta.ended) {
+        meta.ended = true;
+        this.config.onSessionEnd?.({ callId, reason: "socket-closed" });
+      }
       this.cleanupConnection(callId);
       this.config.logger?.info(`MsteamsMediaStream: connection closed ${callId}`);
     });
@@ -429,6 +441,10 @@ export class MsteamsMediaStream {
         break;
       }
       case "session.end": {
+        const meta = this.connectionMeta.get(callId);
+        if (meta) {
+          meta.ended = true;
+        }
         this.config.onSessionEnd?.({ callId, reason: parsed.reason });
         this.closeSession(callId, parsed.reason);
         break;
