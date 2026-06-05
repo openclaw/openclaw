@@ -31,7 +31,7 @@ export function parseCommandArgs(argsString: string): string[] {
   for (let i = 0; i < chars.length; i++) {
     const char = chars[i];
     if (inQuote) {
-      if (char === inQuote) {
+      if (char === inQuote && !isInWordApostrophe(chars, i)) {
         inQuote = null;
       } else {
         current += char;

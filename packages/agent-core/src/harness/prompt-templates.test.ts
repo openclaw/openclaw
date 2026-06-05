@@ -62,6 +62,13 @@ describe("prompt template argument substitution", () => {
     expect(substituteArgs("[$1][$2][$3]", args)).toBe("['review][don't][fail]");
   });
 
+  it("keeps a contraction inside a balanced quoted phrase", () => {
+    expect(parseCommandArgs("'it's a test' next")).toEqual(["it's a test", "next"]);
+    expect(parseCommandArgs(`"don't stop" now`)).toEqual(["don't stop", "now"]);
+    const args = parseCommandArgs("'it's a test' next");
+    expect(substituteArgs("[$1][$2]", args)).toBe("[it's a test][next]");
+  });
+
   it("rejects unsafe positional placeholders", () => {
     expect(substituteArgs("$9007199254740992", ["first", "second"])).toBe("");
   });
