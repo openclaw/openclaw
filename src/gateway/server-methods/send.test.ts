@@ -1603,6 +1603,48 @@ describe("gateway send mirroring", () => {
 
     expect(lastDispatchChannelMessageActionCall()?.requesterSenderId).toBeUndefined();
     expect(lastDispatchChannelMessageActionCall()?.senderIsOwner).toBe(false);
+    expect(
+      lastDispatchChannelMessageActionCall()?.toolContext?.requesterSourceProvider,
+    ).toBeUndefined();
+
+    mocks.dispatchChannelMessageAction.mockClear();
+    mocks.dispatchChannelMessageAction.mockImplementationOnce(async (ctx: Record<string, any>) => {
+      expect(ctx.requesterSenderId).toBeUndefined();
+      expect(ctx.toolContext?.requesterSourceProvider).toBeUndefined();
+      throw new Error(
+        "Trusted sender identity is required for discord:ban in tool-driven contexts.",
+      );
+    });
+
+    const spoofedSource = await runMessageActionRequest(
+      {
+        channel: "discord",
+        action: "ban",
+        params: {
+          guildId: "guild-1",
+          userId: "user-1",
+        },
+        requesterSenderId: "spoofed-user",
+        toolContext: {
+          currentChannelProvider: "discord",
+          requesterSourceProvider: "discord",
+          currentMessageId: "discord-message-1",
+        },
+        idempotencyKey: "idem-message-action-spoofed-source",
+      },
+      {
+        connect: {
+          scopes: ["operator.write"],
+        },
+      },
+    );
+
+    const spoofedSourceResponse = firstRespondCall(spoofedSource.respond);
+    expect(spoofedSourceResponse[0]).toBe(false);
+    expect(spoofedSourceResponse[2]?.message).toContain("Trusted sender identity is required");
+    expect(lastDispatchChannelMessageActionCall()?.toolContext?.currentMessageId).toBe(
+      "discord-message-1",
+    );
 
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.dispatchChannelMessageAction.mockResolvedValueOnce(

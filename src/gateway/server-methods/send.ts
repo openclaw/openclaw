@@ -57,6 +57,14 @@ type InflightResult = {
   meta?: Record<string, unknown>;
 };
 
+type MessageActionToolContext = {
+  currentChannelId?: string;
+  currentChannelProvider?: string;
+  requesterSourceProvider?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+};
+
 const inflightByContext = new WeakMap<
   GatewayRequestContext,
   Map<string, Promise<InflightResult>>
@@ -392,6 +400,18 @@ function createGatewayInflightUnavailableFailure(params: {
   };
 }
 
+function sanitizeGatewayMessageActionToolContext(params: {
+  toolContext?: MessageActionToolContext;
+  gatewayClientIsAdmin: boolean;
+}): MessageActionToolContext | undefined {
+  if (!params.toolContext || params.gatewayClientIsAdmin) {
+    return params.toolContext;
+  }
+  const toolContext = { ...params.toolContext };
+  delete toolContext.requesterSourceProvider;
+  return toolContext;
+}
+
 async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   context: GatewayRequestContext;
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
@@ -464,13 +484,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       sessionId?: string;
       inboundTurnKind?: "user_request" | "room_event";
       agentId?: string;
-      toolContext?: {
-        currentChannelId?: string;
-        currentChannelProvider?: string;
-        requesterSourceProvider?: string;
-        currentThreadTs?: string;
-        currentMessageId?: string | number;
-      };
+      toolContext?: MessageActionToolContext;
       idempotencyKey: string;
     };
     const inflight = resolveGatewayInflightRequest({
@@ -512,6 +526,10 @@ export const sendHandlers: GatewayRequestHandlers = {
         const gatewayClientIsAdmin = gatewayClientScopes.includes(ADMIN_SCOPE);
         const requesterSenderId = normalizeOptionalString(request.requesterSenderId) ?? undefined;
         const senderIsOwner = request.senderIsOwner === true;
+        const toolContext = sanitizeGatewayMessageActionToolContext({
+          toolContext: request.toolContext,
+          gatewayClientIsAdmin,
+        });
         const handled = await dispatchChannelMessageAction({
           channel,
           action: request.action as never,
@@ -528,7 +546,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             cfg,
             normalizeOptionalString(request.agentId) ?? undefined,
           ),
-          toolContext: request.toolContext,
+          toolContext,
           dryRun: false,
           gatewayClientScopes,
         });
@@ -554,7 +572,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             cfg,
             sessionKey,
             agentId,
-            toolContext: request.toolContext,
+            toolContext,
             idempotencyKey: request.idempotencyKey,
             deliveredPayload: payload,
           },
