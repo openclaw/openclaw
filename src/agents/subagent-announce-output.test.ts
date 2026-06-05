@@ -1,14 +1,22 @@
+// Subagent announce output tests cover transcript reads, completion extraction,
+// compact stats, and wait-outcome text used in announce messages.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
   applySubagentWaitOutcome,
+  buildCompactAnnounceStatsLine,
   buildChildCompletionFindings,
   readSubagentOutput,
 } from "./subagent-announce-output.js";
 
 type CallGateway = typeof import("../gateway/call.js").callGateway;
+type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
+type ReadSessionEntry = typeof import("./subagent-announce.runtime.js").readSessionEntry;
 type ReadSessionMessagesAsync =
   typeof import("./subagent-announce.runtime.js").readSessionMessagesAsync;
+type ResolveAgentIdFromSessionKey =
+  typeof import("./subagent-announce.runtime.js").resolveAgentIdFromSessionKey;
+type ResolveStorePath = typeof import("./subagent-announce.runtime.js").resolveStorePath;
 
 function installOutputDeps(params: {
   messages: Array<unknown>;
@@ -24,6 +32,8 @@ function installOutputDeps(params: {
 }
 
 function sessionsYieldTurn(message = "Waiting for subagent completion.") {
+  // sessions_yield is requester control flow, not child output; fixtures keep
+  // that wait turn adjacent to later assistant completions.
   return [
     {
       role: "assistant",
@@ -52,6 +62,33 @@ function sessionsYieldTurn(message = "Waiting for subagent completion.") {
     },
   ];
 }
+
+describe("buildCompactAnnounceStatsLine", () => {
+  afterEach(() => {
+    testing.setDepsForTest();
+  });
+
+  it("rolls one-decimal thousand token stats over to the million unit", async () => {
+    testing.setDepsForTest({
+      getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
+      readSessionEntry: (() => ({
+        sessionId: "child-session",
+        updatedAt: 0,
+        inputTokens: 999_999,
+        outputTokens: 0,
+        totalTokens: 999_999,
+      })) as ReadSessionEntry,
+      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
+      resolveStorePath: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
+    });
+
+    await expect(
+      buildCompactAnnounceStatsLine({
+        sessionKey: "agent:main:subagent:child",
+      }),
+    ).resolves.toBe("Stats: runtime n/a • tokens 1.0m (in 1.0m / out 0)");
+  });
+});
 
 describe("readSubagentOutput", () => {
   afterEach(() => {
@@ -171,6 +208,8 @@ describe("readSubagentOutput", () => {
       ],
     });
 
+    // Private transcript data is fresher for recovered runs and avoids exposing
+    // stale gateway-visible history after an internal completion is persisted.
     await expect(
       readSubagentOutput("agent:main:subagent:child", undefined, {
         sessionFile: "/tmp/openclaw-internal-run.jsonl",
@@ -235,6 +274,41 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain("ANNOUNCE_SKIP");
   });
 
+  it("uses frozen child completion text when normalized completion is absent", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:child",
+        task: "child task",
+        createdAt: 1,
+        frozenResultText: "final child output",
+        outcome: { status: "ok" },
+      },
+    ]);
+
+    expect(findings).toContain("final child output");
+    expect(findings).not.toContain("(no output)");
+  });
+
+  it("uses pending delivery payload text when completion text has been cleared", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:child",
+        task: "child task",
+        createdAt: 1,
+        completion: { resultText: null },
+        delivery: {
+          payload: {
+            frozenResultText: "delivery payload output",
+          },
+        },
+        outcome: { status: "ok" },
+      },
+    ]);
+
+    expect(findings).toContain("delivery payload output");
+    expect(findings).not.toContain("(no output)");
+  });
+
   it("numbers findings contiguously after skipped silent completions", () => {
     const findings = buildChildCompletionFindings([
       {
@@ -274,6 +348,67 @@ describe("applySubagentWaitOutcome", () => {
     expect(applied.outcome).toEqual({
       status: "error",
       error: "Context overflow: prompt too large for the model.",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it("keeps provider hard timeouts stronger than blocked wait metadata", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "error",
+        startedAt: 100,
+        endedAt: 150,
+        livenessState: "blocked",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "model timed out",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it("keeps rpc timeout wait snapshots as timeout outcomes", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+        stopReason: "rpc",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it("treats aborted ok wait snapshots as terminated subagent errors", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "ok",
+        startedAt: 100,
+        endedAt: 150,
+        stopReason: "aborted",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "error",
+      error: "subagent run terminated",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,

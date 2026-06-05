@@ -1,9 +1,15 @@
+// Verifies provider auth environment trust decisions.
 import { describe, expect, it, vi } from "vitest";
 
 const getProviderEnvVars = vi.hoisted(() => vi.fn(() => ["WHISPERX_API_KEY"]));
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   getProviderEnvVars,
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
 }));
 
 describe("provider auth env trust", () => {

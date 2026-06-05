@@ -1,8 +1,10 @@
+/** Bridges Gateway exec approval events into ACP request_permission payloads and outcomes. */
 import type {
   PermissionOption,
   RequestPermissionRequest,
   RequestPermissionResponse,
 } from "@agentclientprotocol/sdk";
+import { normalizeOptionalString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
 export type GatewayExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
@@ -23,10 +25,6 @@ export type GatewayExecApprovalDetails = {
 
 const FALLBACK_EXEC_APPROVAL_DECISIONS = ["allow-once", "deny"] as const;
 
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 function normalizeGatewayExecApprovalDecision(
   value: unknown,
 ): GatewayExecApprovalDecision | undefined {
@@ -36,6 +34,7 @@ function normalizeGatewayExecApprovalDecision(
   return undefined;
 }
 
+/** Normalizes allowed Gateway exec approval decisions with a conservative fallback set. */
 export function normalizeGatewayExecApprovalDecisions(
   value: unknown,
 ): GatewayExecApprovalDecision[] {
@@ -47,6 +46,7 @@ export function normalizeGatewayExecApprovalDecisions(
   return normalized.length > 0 ? normalized : [...FALLBACK_EXEC_APPROVAL_DECISIONS];
 }
 
+/** Converts Gateway exec decisions into ACP permission options. */
 export function buildAcpPermissionOptions(
   decisions: readonly GatewayExecApprovalDecision[],
 ): PermissionOption[] {
@@ -76,6 +76,7 @@ export function buildAcpPermissionOptions(
   return options.length > 0 ? options : buildAcpPermissionOptions(FALLBACK_EXEC_APPROVAL_DECISIONS);
 }
 
+/** Parses legacy Gateway approval event data into ACP relay state. */
 export function parseGatewayExecApprovalEventData(
   data: Record<string, unknown>,
 ): GatewayExecApprovalEvent | null {
@@ -95,6 +96,7 @@ export function parseGatewayExecApprovalEventData(
   };
 }
 
+/** Parses structured Gateway approval-request payloads into ACP relay state. */
 export function parseGatewayExecApprovalRequestEventPayload(
   payload: Record<string, unknown>,
 ): GatewayExecApprovalEvent | null {
@@ -112,6 +114,7 @@ export function parseGatewayExecApprovalRequestEventPayload(
   };
 }
 
+/** Builds the ACP request_permission payload shown to a client. */
 export function buildAcpPermissionRequest(params: {
   sessionId: string;
   event: GatewayExecApprovalEvent;
@@ -153,6 +156,7 @@ export function buildAcpPermissionRequest(params: {
   };
 }
 
+/** Maps an ACP permission response back to the Gateway exec approval decision. */
 export function resolveGatewayDecisionFromPermissionOutcome(
   response: RequestPermissionResponse | undefined,
   options: readonly PermissionOption[],

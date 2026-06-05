@@ -1,3 +1,4 @@
+// Payload fallback tests cover fallback prompt payloads for isolated cron runs.
 import { describe, expect, it } from "vitest";
 import {
   makeIsolatedAgentTurnJob,
@@ -9,9 +10,10 @@ import {
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   resolveConfiguredModelRefMock,
+  resolveCliRuntimeExecutionProviderMock,
   resolveAgentModelFallbacksOverrideMock,
   runCliAgentMock,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -34,23 +36,8 @@ function requireModelFallbackRequest(): {
   }
   return request;
 }
-
-function requireEmbeddedRunRequest(): {
-  modelFallbacksOverride?: string[];
-} {
-  const request = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
-    | {
-        modelFallbacksOverride?: string[];
-      }
-    | undefined;
-  if (!request) {
-    throw new Error("Expected embedded run request");
-  }
-  return request;
-}
-
 describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
-  setupRunCronIsolatedAgentTurnSuite();
+  setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
   it.each([
     {
@@ -92,13 +79,16 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
 
   it("plans Anthropic fallbacks canonically while executing compatible attempts through Claude CLI", async () => {
     isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+    resolveCliRuntimeExecutionProviderMock.mockImplementation(
+      ({ provider }: { provider: string }) => (provider === "anthropic" ? "claude-cli" : undefined),
+    );
     resolveConfiguredModelRefMock.mockReturnValue({
       provider: "anthropic",
       model: "claude-opus-4-6",
     });
     runCliAgentMock.mockResolvedValue({
       payloads: [{ text: "fallback ok" }],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      meta: { agentMeta: {} },
     });
     runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
       const firstResult = await run(provider, model);
@@ -156,7 +146,7 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.2", "zai/glm-5"],
+                  fallbacks: ["openai/gpt-5.2", "zai/glm-5"],
                 },
               },
             },
@@ -167,12 +157,12 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
 
     expect(result.status).toBe("ok");
     expect(requireModelFallbackRequest().fallbacksOverride).toEqual([
-      "openai-codex/gpt-5.2",
+      "openai/gpt-5.2",
       "zai/glm-5",
     ]);
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      modelFallbacksOverride: ["openai-codex/gpt-5.2", "zai/glm-5"],
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      modelFallbacksOverride: ["openai/gpt-5.2", "zai/glm-5"],
     });
   });
 });

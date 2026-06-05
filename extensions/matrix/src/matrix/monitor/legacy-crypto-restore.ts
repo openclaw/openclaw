@@ -1,3 +1,4 @@
+// Matrix plugin module implements legacy crypto restore behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -64,7 +65,7 @@ async function resolvePendingMigrationStatePath(params: {
   }
 
   const accountStorageDir = path.dirname(rootDir);
-  let siblingEntries: string[] = [];
+  let siblingEntries: string[];
   try {
     siblingEntries = (await fs.readdir(accountStorageDir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())

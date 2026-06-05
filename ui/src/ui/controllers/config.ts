@@ -1,3 +1,4 @@
+// Control UI controller manages config gateway state.
 import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
@@ -39,6 +40,7 @@ export type ConfigState = {
   pendingUpdateExpectedVersion: string | null;
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   lastError: string | null;
+  chatError?: string | null;
 };
 
 const autoAllowlistedPluginIdsByState = new WeakMap<ConfigState, Set<string>>();
@@ -53,6 +55,7 @@ export async function loadConfig(state: ConfigState, options: LoadConfigOptions 
   }
   state.configLoading = true;
   state.lastError = null;
+  state.chatError = null;
   try {
     const res = await state.client.request<ConfigSnapshot>("config.get", {});
     applyConfigSnapshot(state, res, options);
@@ -113,7 +116,8 @@ export function applyConfigSnapshot(
   const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   state.configSnapshot = snapshot;
   const editableConfig = resolveEditableSnapshotConfig(snapshot);
-  const rawAvailable = typeof snapshot.raw === "string";
+  const rawAvailable =
+    typeof snapshot.raw === "string" || Boolean(editableConfig) || Boolean(state.configForm);
   if (!rawAvailable && state.configFormMode === "raw") {
     state.configFormMode = "form";
   }
@@ -123,11 +127,11 @@ export function applyConfigSnapshot(
       : editableConfig
         ? serializeConfigForm(editableConfig)
         : state.configRaw;
-  if (!preservePendingChanges || state.configFormMode === "raw") {
+  if (!preservePendingChanges) {
     state.configRaw = rawFromSnapshot;
-  } else if (state.configForm) {
+  } else if (state.configFormMode !== "raw" && state.configForm) {
     state.configRaw = serializeConfigForm(state.configForm);
-  } else {
+  } else if (state.configFormMode !== "raw") {
     state.configRaw = rawFromSnapshot;
   }
   state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
@@ -161,9 +165,6 @@ function asJsonSchema(value: unknown): JsonSchema | null {
  * gateway's Zod validation always sees correctly typed values.
  */
 function serializeFormForSubmit(state: ConfigState): string {
-  if (state.configFormMode === "raw" && typeof state.configSnapshot?.raw !== "string") {
-    throw new Error("Raw config editing is unavailable for this snapshot. Switch to Form mode.");
-  }
   if (state.configFormMode !== "form" || !state.configForm) {
     return state.configRaw;
   }
@@ -227,6 +228,7 @@ async function submitConfigChange(
   }
   state[busyKey] = true;
   state.lastError = null;
+  state.chatError = null;
   try {
     const raw = serializeFormForSubmit(state);
     const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
@@ -275,6 +277,7 @@ export async function runUpdate(state: ConfigState) {
   }
   state.updateRunning = true;
   state.lastError = null;
+  state.chatError = null;
   state.updateStatusBanner = null;
   try {
     const res = await state.client.request<{
@@ -393,6 +396,16 @@ export function updateConfigFormValue(
   });
 }
 
+export function updateConfigRawValue(state: ConfigState, value: string) {
+  state.configRaw = value;
+  state.configFormDirty = value !== state.configRawOriginal;
+  if (state.configFormDirty) {
+    state.configDraftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
+  } else {
+    state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
+  }
+}
+
 export function stageConfigPreset(state: ConfigState, patch: Record<string, unknown>) {
   const snapshotConfig = resolveEditableSnapshotConfig(state.configSnapshot);
   const baseSource = state.configForm ?? snapshotConfig;
@@ -420,6 +433,24 @@ export function resetConfigPendingChanges(state: ConfigState) {
 
 export function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {
   mutateConfigForm(state, (draft) => removePathValue(draft, path));
+}
+
+export function updateMcpServerEnabled(state: ConfigState, name: string, enabled: boolean) {
+  mutateConfigForm(state, (draft) => {
+    const serverPath = ["mcp", "servers", name];
+    if (!enabled) {
+      setPathValue(draft, [...serverPath, "enabled"], false);
+      return;
+    }
+
+    removePathValue(draft, [...serverPath, "enabled"]);
+    const mcp = asConfigRecord(draft.mcp);
+    const servers = asConfigRecord(mcp?.servers);
+    const server = asConfigRecord(servers?.[name]);
+    if (server && Object.keys(server).length === 0) {
+      removePathValue(draft, serverPath);
+    }
+  });
 }
 
 export function findAgentConfigEntryIndex(
@@ -494,9 +525,27 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
   if (!state.client || !state.connected) {
     return;
   }
+  state.lastError = null;
+  state.chatError = null;
   try {
-    await state.client.request("config.openFile", {});
-  } catch {
+    const res = await state.client.request<{ ok: boolean; path?: string; error?: string }>(
+      "config.openFile",
+      {},
+    );
+    if (!res.ok) {
+      const errorMessage = res.error || "Failed to open config file";
+      state.lastError = errorMessage;
+      const path = res.path || state.configSnapshot?.path;
+      if (path) {
+        try {
+          await navigator.clipboard.writeText(path);
+          state.lastError += `\n\nFile path copied to clipboard: ${path}`;
+        } catch {
+          state.lastError += `\n\nFile path: ${path}`;
+        }
+      }
+    }
+  } catch (err) {
     const path = state.configSnapshot?.path;
     if (path) {
       try {
@@ -505,5 +554,6 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
         // ignore
       }
     }
+    state.lastError = String(err);
   }
 }

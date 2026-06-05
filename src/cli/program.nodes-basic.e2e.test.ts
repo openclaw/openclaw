@@ -1,3 +1,4 @@
+// Program nodes basic e2e tests cover node command registration through the full CLI program.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createIosNodeListResponse } from "./program.nodes-test-helpers.js";
@@ -195,7 +196,8 @@ describe("cli program (nodes basics)", () => {
     expect(JSON.stringify(json)).not.toContain("paired-token");
     expect(JSON.stringify(json)).not.toContain("pair-only-token");
     const output = getRuntimeOutput();
-    expect(output).toContain("Pending: 1 · Paired: 3");
+    expect(output).toMatch(/^\{/);
+    expect(output).not.toContain("Pending: 1 · Paired: 3");
     expect(output).not.toContain("Effective Only Unknown");
     expect(output).not.toContain("unpaired-live");
   });

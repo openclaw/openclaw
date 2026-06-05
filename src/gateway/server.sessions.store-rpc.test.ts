@@ -1,7 +1,10 @@
+/**
+ * Gateway session store RPC tests.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { piSdkMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq as directSessionHandlerReq,
   setupGatewaySessionsTestHarness,
@@ -100,8 +103,8 @@ test("lists and patches session store via sessions.* RPC", async () => {
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     getSessionMessageSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },
-    loadGatewayModelCatalog: async () => piSdkMock.models,
-    getRuntimeConfig: getRuntimeConfig,
+    loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
+    getRuntimeConfig,
   } as never;
   async function directSessionReq<TPayload = unknown>(
     method: keyof typeof sessionsHandlers,
@@ -344,8 +347,8 @@ test("lists and patches session store via sessions.* RPC", async () => {
     "agent:main:subagent:one",
   );
 
-  piSdkMock.enabled = true;
-  piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
   const modelPatched = await directSessionReq<{
     ok: true;
     entry: {
@@ -553,4 +556,24 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
     "agent:main:main",
     "agent:local:main",
   ]);
+});
+
+test("sessions.list hides phantom agent store placeholder rows", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      sessions: {},
+      main: {
+        sessionId: "sess-main",
+        updatedAt: 20,
+      },
+    },
+  });
+
+  const listed = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    { includeGlobal: false, includeUnknown: false },
+  );
+  expect(listed.ok).toBe(true);
+  expect(listed.payload?.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
 });

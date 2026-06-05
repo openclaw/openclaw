@@ -1,4 +1,6 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+// Resolves bundled plugin source metadata from package manifests.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifest } from "./manifest.js";
 
@@ -81,10 +83,6 @@ export function resolveBundledPluginSources(params: {
   }
 
   return bundled;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function pluginConfigSchemaHasRequiredFields(schema: unknown): boolean {

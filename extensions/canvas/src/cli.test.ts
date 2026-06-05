@@ -1,3 +1,4 @@
+// Canvas tests cover cli plugin behavior.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { registerNodesCanvasCommands, type CanvasCliDependencies } from "./cli.js";
@@ -87,9 +88,9 @@ describe("canvas CLI", () => {
     expect(writtenFile.filePath).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
     expect(writtenFile.base64).toBe("aGk=");
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    const mediaMessage = runtime.log.mock.calls[0]?.[0];
-    expect(mediaMessage?.startsWith("MEDIA:")).toBe(true);
-    expect(mediaMessage?.endsWith(".png")).toBe(true);
+    const savedPath = runtime.log.mock.calls[0]?.[0];
+    expect(savedPath?.startsWith("MEDIA:")).toBe(false);
+    expect(savedPath?.endsWith(".png")).toBe(true);
   });
 
   it("rejects node-controlled snapshot formats before writing", async () => {
@@ -112,5 +113,62 @@ describe("canvas CLI", () => {
       }),
     ).rejects.toThrow(/invalid canvas\.snapshot payload/i);
     expect(writtenFiles).toHaveLength(0);
+  });
+
+  it("rejects unsupported snapshot formats before invoking the node", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, writtenFiles } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node", "--format", "gif"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/invalid format: gif/i);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+    expect(writtenFiles).toHaveLength(0);
+  });
+
+  it.each([
+    ["--max-width", "640px", "--max-width must be a positive integer."],
+    ["--quality", "0.8x", "--quality must be a number."],
+  ])("rejects partial numeric snapshot %s values", async (flag, value, message) => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node", flag, value], {
+        from: "user",
+      }),
+    ).rejects.toThrow(message);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["--x", "1x"],
+    ["--y", "2px"],
+    ["--width", "800wide"],
+    ["--height", "600tall"],
+  ])("rejects partial numeric present %s values", async (flag, value) => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "present", "--node", "ios-node", flag, value], {
+        from: "user",
+      }),
+    ).rejects.toThrow(`${flag} must be a number.`);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
   });
 });

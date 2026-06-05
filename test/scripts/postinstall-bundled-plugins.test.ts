@@ -1,3 +1,4 @@
+// Postinstall Bundled Plugins tests cover postinstall bundled plugins script behavior.
 import { existsSync as existsSyncOriginal, readFileSync as readFileSyncOriginal } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,14 +20,6 @@ import { writePackageDistInventory } from "../../src/infra/package-dist-inventor
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
-
-async function createExtensionsDir() {
-  const root = await createTempDirAsync("openclaw-postinstall-");
-  const extensionsDir = path.join(root, "dist", "extensions");
-  await fs.mkdir(extensionsDir, { recursive: true });
-  return extensionsDir;
-}
-
 async function expectPathExists(filePath: string) {
   await expect(fs.access(filePath)).resolves.toBeUndefined();
 }
@@ -593,6 +586,34 @@ describe("bundled plugin postinstall", () => {
 
     await expectPathExists(currentFile);
     await expectPathMissing(staleFile);
+  });
+
+  it("omits unpacked plugin-sdk test helpers from the package dist inventory", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-inventory-");
+    const runtimeFile = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
+    const testHelperFile = path.join(packageRoot, "dist", "plugin-sdk", "testing.js");
+    const nestedTestHelperFile = path.join(
+      packageRoot,
+      "dist",
+      "plugin-sdk",
+      "src",
+      "plugin-sdk",
+      "test-helpers",
+      "provider-contract.d.ts",
+    );
+    await fs.mkdir(path.dirname(nestedTestHelperFile), { recursive: true });
+    await fs.mkdir(path.dirname(runtimeFile), { recursive: true });
+    await fs.writeFile(runtimeFile, "export {};\n");
+    await fs.writeFile(testHelperFile, "export {};\n");
+    await fs.writeFile(nestedTestHelperFile, "export {};\n");
+
+    const inventory = await writePackageDistInventory(packageRoot);
+
+    expect(inventory).toContain("dist/plugin-sdk/runtime.js");
+    expect(inventory).not.toContain("dist/plugin-sdk/testing.js");
+    expect(inventory).not.toContain(
+      "dist/plugin-sdk/src/plugin-sdk/test-helpers/provider-contract.d.ts",
+    );
   });
 
   it("prunes legacy plugin runtime deps state during packaged postinstall", async () => {

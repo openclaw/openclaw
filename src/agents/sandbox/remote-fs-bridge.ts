@@ -1,4 +1,10 @@
+/**
+ * Remote shell-backed sandbox filesystem bridge.
+ *
+ * Resolves sandbox paths against uploaded remote mounts and performs guarded operations through backend shell commands.
+ */
 import path from "node:path";
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import type {
   SandboxBackendCommandParams,
@@ -7,6 +13,7 @@ import type {
 } from "./backend-handle.types.js";
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
+import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   isPathInsideContainerRoot,
@@ -23,6 +30,14 @@ type ResolvedRemotePath = SandboxResolvedPath & {
   source: RemoteMountSource;
 };
 
+function hasMultipleHardlinks(raw: string): boolean {
+  const linkCount = parseStrictNonNegativeInteger(raw);
+  if (linkCount !== undefined) {
+    return linkCount > 1;
+  }
+  return /^\d+$/.test(raw);
+}
+
 type MountInfo = {
   localRoot: string;
   containerRoot: string;
@@ -30,12 +45,14 @@ type MountInfo = {
   source: RemoteMountSource;
 };
 
+/** Minimal remote shell contract used by the SSH filesystem bridge. */
 export type RemoteShellSandboxHandle = {
   remoteWorkspaceDir: string;
   remoteAgentWorkspaceDir: string;
   runRemoteShellScript(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
 };
 
+/** Create the filesystem bridge for remote shell-backed sandbox runtimes. */
 export function createRemoteShellSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;
   runtime: RemoteShellSandboxHandle;
@@ -235,7 +252,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       signal: params.signal,
     });
     const result = await this.runRemoteScript({
-      script: 'set -eu\nstat -c "%F|%s|%Y" -- "$1"',
+      script: 'set -eu\nstat -c "%F|%s|%y" -- "$1"',
       args: [canonical],
       signal: params.signal,
     });
@@ -243,8 +260,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const [kindRaw = "", sizeRaw = "0", mtimeRaw = "0"] = output.split("|");
     return {
       type: kindRaw === "directory" ? "directory" : kindRaw === "regular file" ? "file" : "other",
-      size: Number(sizeRaw),
-      mtimeMs: Number(mtimeRaw) * 1000,
+      size: parseSandboxStatSize(sizeRaw),
+      mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
     };
   }
 
@@ -273,6 +290,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       });
     }
     if (this.sandbox.workspaceAccess === "rw") {
+      // Skill directories inside writable remote workspaces stay protected when
+      // the original host mount exists, matching local bridge read-only rules.
       mounts.push(
         ...buildRemoteProtectedSkillMounts({
           localRoot: agentRoot,
@@ -460,6 +479,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     allowFinalSymlinkForUnlink?: boolean;
     signal?: AbortSignal;
   }): Promise<string> {
+    // Canonicalize the nearest existing ancestor and append the missing suffix.
+    // This lets create/write operations validate paths that do not exist yet.
     const script = [
       "set -eu",
       'target="$1"',
@@ -497,6 +518,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     action: string;
     signal?: AbortSignal;
   }): Promise<void> {
+    // Remote mutation helpers pin by parent path. Rejecting hardlinked regular
+    // files avoids editing another mount-visible name through the same inode.
     const result = await this.runRemoteScript({
       script: [
         'if [ ! -e "$1" ] && [ ! -L "$1" ]; then exit 0; fi',
@@ -512,7 +535,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       return;
     }
     const [kind = "", linksRaw = "1"] = output.split("|");
-    if (kind === "regular file" && Number(linksRaw) > 1) {
+    if (kind === "regular file" && hasMultipleHardlinks(linksRaw)) {
       throw new Error(
         `Hardlinked path is not allowed under sandbox mount root: ${params.containerPath}`,
       );

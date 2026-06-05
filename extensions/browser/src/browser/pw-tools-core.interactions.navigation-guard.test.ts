@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.interactions.navigation guard plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   getPwToolsCoreNavigationGuardMocks,
@@ -967,6 +968,35 @@ describe("pw-tools-core interaction navigation guard", () => {
           targetId: "T1",
         },
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defaults non-finite keypress delays before calling Playwright", async () => {
+    vi.useFakeTimers();
+    try {
+      const press = vi.fn(async () => {});
+      const page = {
+        keyboard: { press },
+        on: vi.fn(),
+        off: vi.fn(),
+        url: vi.fn(() => "http://127.0.0.1:9222/json/version"),
+      };
+      setPwToolsCoreCurrentPage(page);
+
+      const task = mod.pressKeyViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        key: "Enter",
+        delayMs: Number.NaN,
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+
+      await vi.advanceTimersByTimeAsync(250);
+      await task;
+
+      expect(press).toHaveBeenCalledWith("Enter", { delay: 0 });
     } finally {
       vi.useRealTimers();
     }

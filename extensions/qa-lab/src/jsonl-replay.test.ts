@@ -1,3 +1,4 @@
+// Qa Lab tests cover jsonl replay plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -103,7 +104,7 @@ describe("jsonl replay", () => {
         return {
           scenarioStatus: "pass",
           cell: makeCell(runtime, {
-            toolCalls: [makeToolCall(runtime === "pi" ? {} : { argsHash: "args-codex" })],
+            toolCalls: [makeToolCall(runtime === "openclaw" ? {} : { argsHash: "args-codex" })],
           }),
         };
       }
@@ -111,7 +112,7 @@ describe("jsonl replay", () => {
         return {
           scenarioStatus: "pass",
           cell: makeCell(runtime, {
-            finalText: runtime === "pi" ? "pi wording" : "codex wording",
+            finalText: runtime === "openclaw" ? "openclaw wording" : "codex wording",
           }),
         };
       }
@@ -124,7 +125,7 @@ describe("jsonl replay", () => {
     const result = await runJsonlReplay(
       {
         directory: transcriptDir,
-        runtimePair: ["pi", "codex"],
+        runtimePair: ["openclaw", "codex"],
         providerMode: "mock-openai",
       },
       { runCell },
@@ -138,7 +139,7 @@ describe("jsonl replay", () => {
         firstDriftAtTurn: 2,
       }),
     );
-    expect(result.transcripts[0]?.cells.pi).toHaveLength(3);
+    expect(result.transcripts[0]?.cells.openclaw).toHaveLength(3);
     expect(result.transcripts[0]?.cells.codex).toHaveLength(3);
   });
 
@@ -148,7 +149,7 @@ describe("jsonl replay", () => {
     const result = await runJsonlReplay(
       {
         directory: fixtureDir,
-        runtimePair: ["pi", "codex"],
+        runtimePair: ["openclaw", "codex"],
         providerMode: "mock-openai",
       },
       { runCell: createMockJsonlReplayCellRunner() },
@@ -161,7 +162,7 @@ describe("jsonl replay", () => {
       renderJsonlReplayMarkdownReport({
         generatedAt: "2026-05-10T00:00:00.000Z",
         providerMode: "mock-openai",
-        runtimePair: ["pi", "codex"],
+        runtimePair: ["openclaw", "codex"],
         transcripts: result.transcripts,
       }),
     ).toContain("| plan-mode-boundaries.jsonl | 3 |  | none, none, none |");

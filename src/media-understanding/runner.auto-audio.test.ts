@@ -1,3 +1,5 @@
+// Auto-audio runner tests cover provider fallback selection and local binary
+// discovery for audio transcription.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -152,8 +154,8 @@ describe("runCapability auto audio entries", () => {
 
     await withAudioFixture("openclaw-auto-audio-codex", async ({ ctx, media, cache }) => {
       const providerRegistry = createProviderRegistry({
-        "openai-codex": {
-          id: "openai-codex",
+        openai: {
+          id: "openai",
           capabilities: ["image", "audio"],
           defaultModels: { image: "gpt-5.5", audio: "gpt-4o-transcribe" },
           transcribeAudio: async (req) => {
@@ -165,7 +167,7 @@ describe("runCapability auto audio entries", () => {
       const cfg = {
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               apiKey: "codex-test-key", // pragma: allowlist secret
               models: [],
             },
@@ -180,7 +182,7 @@ describe("runCapability auto audio entries", () => {
         attachments: cache,
         media,
         providerRegistry,
-        activeModel: { provider: "openai-codex", model: "gpt-5.5" },
+        activeModel: { provider: "openai", model: "gpt-5.5" },
       });
     });
 
@@ -190,7 +192,7 @@ describe("runCapability auto audio entries", () => {
     expect(requireCapabilityOutput(runResult, 0)).toEqual({
       kind: "audio.transcription",
       attachmentIndex: 0,
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-4o-transcribe",
       text: "codex audio",
     });
@@ -321,7 +323,6 @@ describe("runCapability auto audio entries", () => {
           GOOGLE_API_KEY: undefined,
           MISTRAL_API_KEY: "mistral-test-key", // pragma: allowlist secret
           OPENCLAW_AGENT_DIR: isolatedAgentDir,
-          PI_CODING_AGENT_DIR: isolatedAgentDir,
         },
         async () => {
           await withAudioFixture("openclaw-auto-audio-mistral", async ({ ctx, media, cache }) => {

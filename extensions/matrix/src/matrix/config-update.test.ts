@@ -1,3 +1,4 @@
+// Matrix tests cover config update plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { CoreConfig } from "../types.js";
 import { resolveMatrixConfigFieldPath, updateMatrixAccountConfig } from "./config-update.js";
@@ -52,6 +53,27 @@ describe("updateMatrixAccountConfig", () => {
     expect(account?.encryption).toBe(false);
     expect(account?.password).toBeUndefined();
     expect(account?.userId).toBeUndefined();
+  });
+
+  it("does not store non-finite initial sync limits", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              initialSyncLimit: 20,
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    const updated = updateMatrixAccountConfig(cfg, "default", {
+      initialSyncLimit: Number.NaN,
+    });
+
+    expect(updated.channels?.matrix?.initialSyncLimit).toBeUndefined();
+    expect(updated.channels?.matrix?.accounts?.default?.initialSyncLimit).toBeUndefined();
   });
 
   it("preserves SecretRef auth inputs when updating config", () => {

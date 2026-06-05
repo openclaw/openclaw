@@ -1,28 +1,36 @@
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+/**
+ * Runtime access-group resolution for channel ingress.
+ *
+ * Preserves symbolic access-group entries until dynamic membership facts are available.
+ */
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { parseAccessGroupAllowFromEntry } from "../allow-from.js";
 import type { ChannelIngressAdapter, ResolveChannelMessageIngressParams } from "./runtime-types.js";
 import type { AccessGroupMembershipFact, ChannelIngressChannelId } from "./types.js";
 
-function uniqueValues<T extends string | number>(values: readonly T[]): T[] {
-  return Array.from(new Set(values));
-}
-
 function accessGroupNames(entries: readonly (string | number)[]): string[] {
-  return Array.from(
-    new Set(
-      entries
-        .map((entry) => parseAccessGroupAllowFromEntry(String(entry)))
-        .filter((entry): entry is string => entry != null),
-    ),
+  return uniqueStrings(
+    entries
+      .map((entry) => parseAccessGroupAllowFromEntry(String(entry)))
+      .filter((entry): entry is string => entry != null),
   );
 }
 
+/**
+ * Lists every access-group name referenced by grouped allowFrom entry arrays.
+ */
 export function allReferencedAccessGroupNames(
   entries: Array<readonly (string | number)[]>,
 ): string[] {
-  return Array.from(new Set(entries.flatMap((entryGroup) => accessGroupNames(entryGroup))));
+  return uniqueStrings(entries.flatMap((entryGroup) => accessGroupNames(entryGroup)));
 }
 
+/**
+ * Normalizes direct sender entries while preserving access-group references for runtime lookup.
+ */
 export async function normalizeEffectiveEntries(params: {
   adapter: ChannelIngressAdapter;
   accountId: string;
@@ -37,14 +45,22 @@ export async function normalizeEffectiveEntries(params: {
   if (directEntries.length === 0) {
     return accessGroupEntries;
   }
+  // Direct entries need adapter normalization for the current channel/account; access-group
+  // entries stay symbolic until membership facts are resolved.
   const normalized = await params.adapter.normalizeEntries({
     entries: directEntries,
     context: params.context,
     accountId: params.accountId,
   });
-  return uniqueValues([...accessGroupEntries, ...normalized.matchable.map((entry) => entry.value)]);
+  return uniqueStrings([
+    ...accessGroupEntries,
+    ...normalized.matchable.map((entry) => entry.value),
+  ]);
 }
 
+/**
+ * Resolves dynamic access-group membership facts for referenced runtime access groups.
+ */
 export async function resolveRuntimeAccessGroupMembershipFacts(params: {
   input: ResolveChannelMessageIngressParams;
   channelId: ChannelIngressChannelId;
@@ -56,6 +72,8 @@ export async function resolveRuntimeAccessGroupMembershipFacts(params: {
   const facts: AccessGroupMembershipFact[] = [];
   for (const name of params.names) {
     const group = params.input.accessGroups?.[name];
+    // Static message.senders groups are expanded during allowlist normalization; runtime
+    // membership hooks only evaluate dynamic/non-sender access-group types.
     if (!group || group.type === "message.senders") {
       continue;
     }

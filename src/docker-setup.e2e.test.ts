@@ -1,3 +1,4 @@
+// E2E tests for Docker setup script behavior and generated commands.
 import { spawnSync } from "node:child_process";
 import { chmod, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -76,6 +77,10 @@ async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   await copyFile(
     join(repoRoot, "scripts", "lib", "docker-e2e-logs.sh"),
     join(rootDir, "scripts", "lib", "docker-e2e-logs.sh"),
+  );
+  await copyFile(
+    join(repoRoot, "scripts", "lib", "docker-e2e-container.sh"),
+    join(rootDir, "scripts", "lib", "docker-e2e-container.sh"),
   );
   await chmod(scriptPath, 0o755);
   await writeFile(dockerfilePath, "FROM scratch\n");
@@ -204,14 +209,14 @@ async function runDockerSetupWithUnsetGatewayToken(
 
 async function withUnixSocket<T>(socketPath: string, run: () => Promise<T>): Promise<T> {
   const server = createServer();
-  await new Promise<void>((resolve, reject) => {
+  await new Promise<void>((resolveValue, reject) => {
     const onError = (error: Error) => {
       server.off("listening", onListening);
       reject(error);
     };
     const onListening = () => {
       server.off("error", onError);
-      resolve();
+      resolveValue();
     };
     server.once("error", onError);
     server.once("listening", onListening);
@@ -221,7 +226,9 @@ async function withUnixSocket<T>(socketPath: string, run: () => Promise<T>): Pro
   try {
     return await run();
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolveLocal) => {
+      server.close(() => resolveLocal());
+    });
     await rm(socketPath, { force: true });
   }
 }
@@ -482,6 +489,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
+    expect(log).toContain("chown node:node /home/node/.config");
   });
 
   it("precreates auth profile secret key dir outside the mounted state dir", async () => {

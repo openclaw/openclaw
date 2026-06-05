@@ -1,3 +1,4 @@
+// Clickclack tests cover accounts plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   listClickClackAccountIds,
@@ -156,5 +157,27 @@ describe("ClickClack account resolution", () => {
       toolsAllow: ["web_search"],
       workspace: "wsp_1",
     });
+  });
+
+  it("normalizes reconnect intervals to the public config bounds", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          token: "ccb_global",
+          workspace: "wsp_1",
+          reconnectMs: 1,
+          accounts: {
+            slow: {
+              reconnectMs: 1_000_000,
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(resolveClickClackAccount({ cfg }).reconnectMs).toBe(100);
+    expect(resolveClickClackAccount({ cfg, accountId: "slow" }).reconnectMs).toBe(60_000);
   });
 });

@@ -1,3 +1,6 @@
+/**
+ * Canvas node CLI command registration and runtime dependency wiring.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { Command } from "commander";
@@ -8,6 +11,10 @@ import {
   resolveNodeFromNodeList,
   type NodeMatchCandidate,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -17,6 +24,7 @@ import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildA2UITextJsonl, validateA2UIJsonl } from "./a2ui-jsonl.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 
+/** Runtime output surface used by Canvas CLI commands. */
 export type CanvasCliRuntime = {
   log: (message: string) => void;
   error: (message: string) => void;
@@ -24,6 +32,7 @@ export type CanvasCliRuntime = {
   writeJson: (value: unknown) => void;
 };
 
+/** Parent node/gateway options consumed by Canvas CLI commands. */
 export type CanvasNodesRpcOpts = {
   url?: string;
   token?: string;
@@ -44,6 +53,7 @@ export type CanvasNodesRpcOpts = {
   quality?: string;
 };
 
+/** Dependency bundle used to keep Canvas CLI commands testable. */
 export type CanvasCliDependencies = {
   defaultRuntime: CanvasCliRuntime;
   nodesCallOpts: (cmd: Command, defaults?: { timeoutMs?: number }) => Command;
@@ -68,18 +78,48 @@ export type CanvasCliDependencies = {
 };
 
 type CanvasNodeCandidate = NodeMatchCandidate;
+type CanvasSnapshotRequestFormat = "png" | "jpeg";
+
+function parseCanvasSnapshotRequestFormat(raw: unknown): CanvasSnapshotRequestFormat {
+  const format = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "jpg");
+  switch (format) {
+    case "png":
+      return "png";
+    case "jpg":
+    case "jpeg":
+      return "jpeg";
+    default:
+      throw new Error(`invalid format: ${String(raw)} (expected png|jpg|jpeg)`);
+  }
+}
 
 function parseTimeoutMs(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
-  const value =
-    typeof raw === "number" || typeof raw === "bigint"
-      ? Number(raw)
-      : typeof raw === "string" && raw.trim()
-        ? Number.parseInt(raw.trim(), 10)
-        : Number.NaN;
-  return Number.isFinite(value) ? value : undefined;
+  return parseStrictPositiveInteger(raw);
+}
+
+function parseCanvasPositiveIntOption(raw: string | undefined, flag: string): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseCanvasFiniteNumberOption(raw: string | undefined, flag: string): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a number.`);
+  }
+  return parsed;
 }
 
 function parseNodeCandidates(raw: unknown): CanvasNodeCandidate[] {
@@ -139,6 +179,7 @@ function unauthorizedHintForMessage(message: string): string | null {
   return null;
 }
 
+/** Creates the default Canvas CLI dependency bundle backed by the OpenClaw gateway CLI. */
 export function createDefaultCanvasCliDependencies(): CanvasCliDependencies {
   const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
     cmd
@@ -218,6 +259,7 @@ async function invokeCanvas(
   );
 }
 
+/** Registers Canvas subcommands under the nodes CLI command group. */
 export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDependencies) {
   const canvas = nodes
     .command("canvas")
@@ -226,7 +268,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
   deps.nodesCallOpts(
     canvas
       .command("snapshot")
-      .description("Capture a canvas snapshot (prints MEDIA:<path>)")
+      .description("Capture a canvas snapshot (prints the saved path)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--format <png|jpg|jpeg>", "Image format", "jpg")
       .option("--max-width <px>", "Max width in px (optional)")
@@ -234,19 +276,11 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: CanvasNodesRpcOpts) => {
         await deps.runNodesCommand("canvas snapshot", async () => {
-          const formatOpt = normalizeLowercaseStringOrEmpty(
-            normalizeOptionalString(opts.format) ?? "jpg",
-          );
-          const formatForParams =
-            formatOpt === "jpg" ? "jpeg" : formatOpt === "jpeg" ? "jpeg" : "png";
-          if (formatForParams !== "png" && formatForParams !== "jpeg") {
-            throw new Error(`invalid format: ${String(opts.format)} (expected png|jpg|jpeg)`);
-          }
-
-          const maxWidth = opts.maxWidth ? Number.parseInt(opts.maxWidth, 10) : undefined;
-          const quality = opts.quality ? Number.parseFloat(opts.quality) : undefined;
+          const format = parseCanvasSnapshotRequestFormat(opts.format);
+          const maxWidth = parseCanvasPositiveIntOption(opts.maxWidth, "--max-width");
+          const quality = parseCanvasFiniteNumberOption(opts.quality, "--quality");
           const raw = await invokeCanvas(deps, opts, "canvas.snapshot", {
-            format: formatForParams,
+            format,
             maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
             quality: Number.isFinite(quality) ? quality : undefined,
           });
@@ -261,7 +295,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
             deps.defaultRuntime.writeJson({ file: { path: filePath, format: payload.format } });
             return;
           }
-          deps.defaultRuntime.log(`MEDIA:${deps.shortenHomePath(filePath)}`);
+          deps.defaultRuntime.log(deps.shortenHomePath(filePath));
         });
       }),
     { timeoutMs: 60_000 },
@@ -281,10 +315,10 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
       .action(async (opts: CanvasNodesRpcOpts) => {
         await deps.runNodesCommand("canvas present", async () => {
           const placement = {
-            x: opts.x ? Number.parseFloat(opts.x) : undefined,
-            y: opts.y ? Number.parseFloat(opts.y) : undefined,
-            width: opts.width ? Number.parseFloat(opts.width) : undefined,
-            height: opts.height ? Number.parseFloat(opts.height) : undefined,
+            x: parseCanvasFiniteNumberOption(opts.x, "--x"),
+            y: parseCanvasFiniteNumberOption(opts.y, "--y"),
+            width: parseCanvasFiniteNumberOption(opts.width, "--width"),
+            height: parseCanvasFiniteNumberOption(opts.height, "--height"),
           };
           const params: Record<string, unknown> = {};
           if (opts.target) {

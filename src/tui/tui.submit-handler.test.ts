@@ -1,3 +1,4 @@
+// Covers TUI submit handler behavior for chat input and slash commands.
 import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -64,6 +65,16 @@ describe("createEditorSubmitHandler", () => {
     expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
     expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead");
+  });
+
+  it("passes the submitted text to the busy gate", () => {
+    const canSubmitMessage = vi.fn((value: string) => value === "please stop");
+    const { sendMessage, onSubmit } = createSubmitHarness({ canSubmitMessage });
+
+    onSubmit("please stop");
+
+    expect(canSubmitMessage).toHaveBeenCalledWith("please stop");
+    expect(sendMessage).toHaveBeenCalledWith("please stop");
   });
 
   it("restores the real editor value after pi-tui clears a busy submit", () => {

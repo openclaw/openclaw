@@ -1,3 +1,5 @@
+// Video runner tests cover provider request wiring, auth/config precedence, and
+// provider output handling for video attachments.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
@@ -114,7 +116,6 @@ describe("runCapability video provider wiring", () => {
           GOOGLE_API_KEY: undefined,
           MOONSHOT_API_KEY: undefined,
           OPENCLAW_AGENT_DIR: isolatedAgentDir,
-          PI_CODING_AGENT_DIR: isolatedAgentDir,
         },
         async () => {
           await withVideoFixture("openclaw-video-auto-moonshot", async ({ ctx, media, cache }) => {

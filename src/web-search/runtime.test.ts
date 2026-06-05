@@ -1,3 +1,4 @@
+// Web search runtime tests cover provider resolution and search execution.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +17,6 @@ type TestPluginWebSearchConfig = {
 };
 
 type WebSearchProviderResolverParams = {
-  bundledAllowlistCompat?: boolean;
   config?: OpenClawConfig;
   onlyPluginIds?: readonly string[];
   origin?: string;

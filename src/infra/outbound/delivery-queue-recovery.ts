@@ -1,3 +1,9 @@
+// Delivery queue recovery drains pending outbound sends with backoff, crash
+// replay protection, unknown-send reconciliation, and failed-entry pruning.
+import {
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type {
   ChannelMessageSendCommitContext,
   ChannelMessageUnknownSendReconciliationResult,
@@ -80,6 +86,17 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
 
+function resolveRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
+  const durationMs =
+    typeof maxRecoveryMs === "number" && Number.isFinite(maxRecoveryMs)
+      ? Math.max(0, Math.trunc(maxRecoveryMs))
+      : 60_000;
+  if (durationMs <= 0) {
+    return resolveDateTimestampMs(Date.now());
+  }
+  return resolveExpiresAtMsFromDurationMs(durationMs) ?? resolveDateTimestampMs(Date.now());
+}
+
 function getErrnoCode(err: unknown): string | null {
   return err && typeof err === "object" && "code" in err
     ? String((err as { code?: unknown }).code)
@@ -138,6 +155,7 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig, 
     bestEffort: entry.bestEffort,
     gifPlayback: entry.gifPlayback,
     forceDocument: entry.forceDocument,
+    replyPayloadSendingHook: entry.replyPayloadSendingHook,
     silent: entry.silent,
     mirror: entry.mirror,
     session: entry.session,
@@ -371,6 +389,8 @@ async function drainQueuedEntry(opts: {
     entry.recoveryState === "send_attempt_started" ||
     entry.recoveryState === "unknown_after_send"
   ) {
+    // A crash after platform send start cannot be blindly replayed; adapters
+    // must reconcile whether the platform already committed the message.
     const reconciliation = await reconcileUnknownQueuedDelivery({
       entry,
       cfg: opts.cfg,
@@ -601,7 +621,7 @@ export async function recoverPendingDeliveries(opts: {
   pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
   opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
 
-  const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
+  const deadline = resolveRecoveryDeadlineMs(opts.maxRecoveryMs);
   const summary = createEmptyRecoverySummary();
 
   for (let i = 0; i < pending.length; i++) {

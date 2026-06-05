@@ -47,6 +47,7 @@ import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.VoiceConversationEntry
+import ai.openclaw.app.voice.VoiceConversationRole
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -64,6 +65,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -73,11 +75,17 @@ import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
+/**
+ * Process runtime that owns gateway sessions, node command handlers, capture managers, and UI-facing state.
+ */
 class NodeRuntime(
   context: Context,
   val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
   private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
 ) {
+  /**
+   * Authentication material supplied by setup/manual connect flows before gateway session routing.
+   */
   data class GatewayConnectAuth(
     val token: String?,
     val bootstrapToken: String?,
@@ -181,8 +189,6 @@ class NodeRuntime(
     A2UIHandler(
       canvas = canvas,
       json = json,
-      getNodeCanvasHostUrl = { nodeSession.currentCanvasHostUrl() },
-      getOperatorCanvasHostUrl = { operatorSession.currentCanvasHostUrl() },
     )
 
   private val connectionManager: ConnectionManager =
@@ -199,6 +205,7 @@ class NodeRuntime(
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       photosAvailable = { SensitiveFeatureConfig.photosEnabled },
       hasRecordAudioPermission = { hasRecordAudioPermission() },
+      installedAppsSharingEnabled = { installedAppsSharingEnabled.value },
       manualTls = { manualTls.value },
     )
 
@@ -237,6 +244,7 @@ class NodeRuntime(
       smsTelephonyAvailable = { sms.hasTelephonyFeature() },
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       photosAvailable = { SensitiveFeatureConfig.photosEnabled },
+      installedAppsSharingEnabled = { installedAppsSharingEnabled.value },
       debugBuild = { BuildConfig.DEBUG },
       onCanvasA2uiPush = {
         _canvasA2uiHydrated.value = true
@@ -244,16 +252,30 @@ class NodeRuntime(
         _canvasRehydrateErrorText.value = null
       },
       onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
-      refreshCanvasHostUrl = { nodeSession.refreshCanvasHostUrl() },
       motionActivityAvailable = { motionHandler.isActivityAvailable() },
       motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
     )
 
+  /**
+   * Pending TLS trust decision when a gateway certificate is new or has changed.
+   */
   data class GatewayTrustPrompt(
     val endpoint: GatewayEndpoint,
     val fingerprintSha256: String,
     val auth: GatewayConnectAuth,
     val previousFingerprintSha256: String? = null,
+  )
+
+  data class VoiceE2eSliceResult(
+    val mode: String,
+    val status: String,
+    val userText: String?,
+    val assistantText: String?,
+  )
+
+  data class VoiceE2eResult(
+    val normal: VoiceE2eSliceResult?,
+    val realtime: VoiceE2eSliceResult?,
   )
 
   private val _isConnected = MutableStateFlow(false)
@@ -268,6 +290,9 @@ class NodeRuntime(
   val pendingGatewayTrust: StateFlow<GatewayTrustPrompt?> = _pendingGatewayTrust.asStateFlow()
   private val connectAttemptSeq = AtomicLong(0)
 
+  /**
+   * Builds the node-owned session key from stable device identity plus optional active agent.
+   */
   private fun resolveNodeMainSessionKey(agentId: String? = null): String {
     val deviceId = identityStore.loadOrCreate().deviceId
     return buildNodeMainSessionKey(deviceId, agentId)
@@ -490,7 +515,6 @@ class NodeRuntime(
       scope = scope,
       session = operatorSession,
       json = json,
-      supportsChatSubscribe = false,
     ).also {
       it.applyMainSessionKey(_mainSessionKey.value)
     }
@@ -502,8 +526,7 @@ class NodeRuntime(
         context = appContext,
         scope = scope,
         session = operatorSession,
-        supportsChatSubscribe = false,
-        isConnected = { operatorConnected },
+        isConnected = { _isConnected.value },
         onBeforeSpeak = { micCapture.pauseForTts() },
         onAfterSpeak = { micCapture.resumeAfterTts() },
       ).also { speaker ->
@@ -610,8 +633,7 @@ class NodeRuntime(
       context = appContext,
       scope = scope,
       session = operatorSession,
-      supportsChatSubscribe = true,
-      isConnected = { operatorConnected },
+      isConnected = { _isConnected.value },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
       onStoppedByRelay = { finishTalkModeAfterRelayClose() },
@@ -830,6 +852,7 @@ class NodeRuntime(
 
   fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
 
+  /** Clears setup credentials plus paired device tokens for both Android gateway roles. */
   fun resetGatewaySetupAuth() {
     prefs.clearGatewaySetupAuth()
     val deviceId = identityStore.loadOrCreate().deviceId
@@ -837,10 +860,12 @@ class NodeRuntime(
     deviceAuthStore.clearToken(deviceId, "operator")
   }
 
+  /** Persists onboarding state; callers decide whether runtime startup is needed first. */
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
 
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+  val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
   val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> =
     prefs.notificationForwardingMode
@@ -858,6 +883,7 @@ class NodeRuntime(
   val chatSessionKey: StateFlow<String> = chat.sessionKey
   val chatSessionId: StateFlow<String?> = chat.sessionId
   val chatMessages: StateFlow<List<ChatMessage>> = chat.messages
+  val chatHistoryLoading: StateFlow<Boolean> = chat.historyLoading
   val chatError: StateFlow<String?> = chat.errorText
   val chatHealthOk: StateFlow<Boolean> = chat.healthOk
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
@@ -905,6 +931,7 @@ class NodeRuntime(
     updateHomeCanvasState()
   }
 
+  /** Updates foreground state and triggers reconnect/presence behavior on app visibility changes. */
   fun setForeground(value: Boolean) {
     _isForeground.value = value
     if (value) {
@@ -994,6 +1021,8 @@ class NodeRuntime(
     if (didAutoConnect) return
     if (_isConnected.value) return
     val endpoint = resolvePreferredGatewayEndpoint() ?: return
+    // Only attempt the stored preferred gateway once per runtime lifetime; users
+    // can still reconnect explicitly from the UI after a failed auto attempt.
     didAutoConnect = true
     connect(endpoint)
   }
@@ -1046,6 +1075,12 @@ class NodeRuntime(
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
+  }
+
+  fun setInstalledAppsSharingEnabled(value: Boolean) {
+    if (prefs.installedAppsSharingEnabled.value == value) return
+    prefs.setInstalledAppsSharingEnabled(value)
+    refreshNodeSurfaceAfterSharingChange()
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
@@ -1150,7 +1185,7 @@ class NodeRuntime(
     NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
     talkMode.ttsOnAllResponses = true
     talkMode.setPlaybackEnabled(speakerEnabled.value)
-    talkMode.ensureChatSubscribed()
+    talkMode.refreshConfig()
     externalAudioCaptureActive.value = true
   }
 
@@ -1189,6 +1224,115 @@ class NodeRuntime(
     talkMode.setPlaybackEnabled(value)
   }
 
+  suspend fun runVoiceE2e(
+    mode: String,
+    transcript: String,
+    realtimeAssistantText: String,
+    timeoutMs: Long,
+  ): VoiceE2eResult {
+    if (!BuildConfig.DEBUG) {
+      throw IllegalStateException("voice e2e is debug-only")
+    }
+    if (!_isConnected.value) {
+      throw IllegalStateException("gateway not connected")
+    }
+    if (!hasRecordAudioPermission()) {
+      throw IllegalStateException("microphone permission missing")
+    }
+
+    val normalizedMode = mode.trim().lowercase().ifEmpty { "both" }
+    val runNormal = normalizedMode == "both" || normalizedMode == "normal" || normalizedMode == "dictation"
+    val runRealtime = normalizedMode == "both" || normalizedMode == "realtime" || normalizedMode == "talk"
+    if (!runNormal && !runRealtime) {
+      throw IllegalArgumentException("unknown voice e2e mode: $mode")
+    }
+
+    val previousSpeakerEnabled = speakerEnabled.value
+    setSpeakerEnabled(false)
+    var completed = false
+    return try {
+      VoiceE2eResult(
+        normal =
+          if (runNormal) {
+            runNormalVoiceE2e(transcript = transcript, timeoutMs = timeoutMs)
+          } else {
+            null
+          },
+        realtime =
+          if (runRealtime) {
+            runRealtimeVoiceE2e(
+              transcript = transcript,
+              assistantText = realtimeAssistantText,
+              timeoutMs = timeoutMs,
+            )
+          } else {
+            null
+          },
+      ).also { completed = true }
+    } finally {
+      if (!completed) {
+        stopActiveVoiceSession()
+      }
+      setSpeakerEnabled(previousSpeakerEnabled)
+    }
+  }
+
+  private suspend fun runNormalVoiceE2e(
+    transcript: String,
+    timeoutMs: Long,
+  ): VoiceE2eSliceResult {
+    stopActiveVoiceSession()
+    setVoiceCaptureMode(VoiceCaptureMode.ManualMic)
+    micCapture.submitTranscribedMessage(transcript)
+    awaitVoiceConversation(timeoutMs = timeoutMs) {
+      micCapture.conversation.value.any { it.role == VoiceConversationRole.Assistant && !it.isStreaming }
+    }
+    val entries = micCapture.conversation.value
+    return VoiceE2eSliceResult(
+      mode = "normal",
+      status = micCapture.statusText.value,
+      userText = entries.lastOrNull { it.role == VoiceConversationRole.User }?.text,
+      assistantText = entries.lastOrNull { it.role == VoiceConversationRole.Assistant }?.text,
+    )
+  }
+
+  private suspend fun runRealtimeVoiceE2e(
+    transcript: String,
+    assistantText: String,
+    timeoutMs: Long,
+  ): VoiceE2eSliceResult {
+    stopActiveVoiceSession()
+    setVoiceCaptureMode(VoiceCaptureMode.TalkMode)
+    talkMode.runE2eRealtimeTurn(
+      userText = transcript,
+      assistantText = assistantText,
+      timeoutMs = timeoutMs,
+    )
+    awaitVoiceConversation(timeoutMs = timeoutMs) {
+      val entries = talkMode.conversation.value
+      entries.any { it.role == VoiceConversationRole.User && !it.isStreaming } &&
+        entries.any { it.role == VoiceConversationRole.Assistant && !it.isStreaming }
+    }
+    val entries = talkMode.conversation.value
+    return VoiceE2eSliceResult(
+      mode = "realtime",
+      status = talkMode.statusText.value,
+      userText = entries.lastOrNull { it.role == VoiceConversationRole.User }?.text,
+      assistantText = entries.lastOrNull { it.role == VoiceConversationRole.Assistant }?.text,
+    )
+  }
+
+  private suspend fun awaitVoiceConversation(
+    timeoutMs: Long,
+    ready: () -> Boolean,
+  ) {
+    withTimeout(timeoutMs) {
+      while (!ready()) {
+        delay(100L)
+      }
+    }
+  }
+
   private fun setVoiceCaptureMode(
     mode: VoiceCaptureMode,
     persistManualMic: Boolean = true,
@@ -1222,7 +1366,7 @@ class NodeRuntime(
         }
         // Tapping mic on interrupts any active TTS (barge-in).
         stopVoicePlayback()
-        scope.launch { talkMode.ensureChatSubscribed() }
+        scope.launch { talkMode.refreshConfig() }
         micCapture.setMicEnabled(true)
         externalAudioCaptureActive.value = true
       }
@@ -1235,7 +1379,7 @@ class NodeRuntime(
         NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
         talkMode.ttsOnAllResponses = true
         talkMode.setPlaybackEnabled(speakerEnabled.value)
-        scope.launch { talkMode.ensureChatSubscribed() }
+        scope.launch { talkMode.refreshConfig() }
         talkMode.setEnabled(true)
         externalAudioCaptureActive.value = true
       }
@@ -1273,6 +1417,11 @@ class NodeRuntime(
       }
     operatorStatusText = "Connecting…"
     updateStatus()
+    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(), reconnect = true)
+  }
+
+  private fun refreshNodeSurfaceAfterSharingChange() {
+    val endpoint = connectedEndpoint ?: return
     connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(), reconnect = true)
   }
 
@@ -1446,7 +1595,7 @@ class NodeRuntime(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
-    if (operatorConnected || operatorStatusText == "Connecting…") {
+    if (operatorConnected) {
       return
     }
     val operatorAuth =
@@ -1936,6 +2085,7 @@ class NodeRuntime(
           id = id,
           name = obj["name"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id,
           provider = provider,
+          available = obj.optionalBoolean("available"),
           supportsVision = "image" in inputTypes,
           supportsAudio = "audio" in inputTypes,
           supportsDocuments = "document" in inputTypes,
@@ -2552,6 +2702,7 @@ data class GatewayModelSummary(
   val id: String,
   val name: String,
   val provider: String,
+  val available: Boolean?,
   val supportsVision: Boolean,
   val supportsAudio: Boolean,
   val supportsDocuments: Boolean,
@@ -2734,6 +2885,15 @@ private fun JsonObject?.double(key: String): Double? = (this?.get(key) as? JsonP
 
 private fun JsonObject?.boolean(key: String): Boolean = (this?.get(key) as? JsonPrimitive)?.content?.trim() == "true"
 
+private fun JsonObject?.optionalBoolean(key: String): Boolean? =
+  (this?.get(key) as? JsonPrimitive)?.content?.trim()?.lowercase()?.let { value ->
+    when (value) {
+      "true" -> true
+      "false" -> false
+      else -> null
+    }
+  }
+
 internal fun cronJobLastRunStatus(state: JsonObject?): String? =
   state
     .cronStatus("lastStatus")
@@ -2750,7 +2910,7 @@ fun providerDisplayName(provider: String): String =
   when (provider.trim().lowercase()) {
     "openai" -> "OpenAI"
     "openrouter" -> "OpenRouter"
-    "openai-codex", "codex" -> "Codex"
+    "codex" -> "Codex"
     "ollama", "ollama-local" -> "Ollama Local"
     else ->
       provider

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements scenario catalog behavior.
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
@@ -318,8 +319,8 @@ function extractQaScenarioFlow(content: string, relativePath: string) {
   return parseQaYamlWithContext(qaFlowSchema, YAML.parse(match[1]) as unknown, relativePath);
 }
 
-function formatZodIssuePath(path: PropertyKey[]) {
-  return path.length ? path.map(String).join(".") : "<root>";
+function formatZodIssuePath(pathLocal: PropertyKey[]) {
+  return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
 }
 
 function parseQaYamlWithContext<T>(schema: z.ZodType<T>, value: unknown, label: string): T {

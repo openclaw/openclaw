@@ -1,3 +1,4 @@
+// Link detection extracts unique safe bare HTTP(S) URLs from inbound text while filtering SSRF targets.
 import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { DEFAULT_MAX_LINKS } from "./defaults.js";
 
@@ -31,6 +32,10 @@ function isAllowedUrl(raw: string): boolean {
   }
 }
 
+/**
+ * Extracts unique, SSRF-filtered bare HTTP(S) links from inbound text.
+ * Markdown links are ignored so display-only citations do not trigger fetches.
+ */
 export function extractLinksFromMessage(message: string, opts?: { maxLinks?: number }): string[] {
   const source = message?.trim();
   if (!source) {

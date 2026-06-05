@@ -1,6 +1,7 @@
+// Isolated agent test setup centralizes common mocks for cron agent tests.
 import { vi } from "vitest";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type {
   ChannelOutboundAdapter,
@@ -12,6 +13,7 @@ import { buildChannelOutboundSessionRoute } from "../plugin-sdk/core.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 
+// Test-only outbound registry for isolated cron turns.
 type TestSendFn = (
   to: string,
   text: string,
@@ -153,7 +155,7 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
   if (params?.fast) {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   }
-  vi.mocked(runEmbeddedPiAgent).mockReset();
+  vi.mocked(runEmbeddedAgent).mockReset();
   vi.mocked(loadModelCatalog).mockResolvedValue([]);
   vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue(true);
   vi.mocked(callGateway).mockReset().mockResolvedValue({ ok: true, deleted: true });

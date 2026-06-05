@@ -1,3 +1,5 @@
+// Lifecycle retry-grace e2e tests cover completion delivery retry behavior when
+// lifecycle events race gateway waits or transient announce failures.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
@@ -220,6 +222,8 @@ describe("subagent registry lifecycle error grace", () => {
   };
 
   const waitForCleanupHandledFalse = async (runId: string) => {
+    // Cleanup can be released asynchronously after announce failure; poll fake
+    // time until the retry-grace state is observable.
     for (let attempt = 0; attempt < 40; attempt += 1) {
       const run = mod
         .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
@@ -521,6 +525,57 @@ describe("subagent registry lifecycle error grace", () => {
       "[truncated: frozen completion output exceeded 100KB",
     );
     expect(run.completion?.capturedAt).toBeTypeOf("number");
+  });
+
+  it("completes with timeout status when aborted end event fires after grace window", async () => {
+    registerCompletionRun("run-timeout", "timeout", "timeout test");
+    setAssistantOutput("agent:main:subagent:timeout", "Partial output before timeout");
+
+    // Emit an end event with aborted=true which triggers the timeout grace path
+    emitLifecycleEvent("run-timeout", {
+      phase: "end",
+      aborted: true,
+      endedAt: 3_000,
+    } as LifecycleData & { aborted: boolean });
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(0);
+
+    // Advance past the lifecycle timeout retry grace window
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+
+    await waitForAgentCallCount(1);
+
+    const run = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((candidate) => candidate.runId === "run-timeout");
+    expect(run?.outcome?.status).toBe("timeout");
+  });
+
+  it("cancels timeout grace when a successful end event arrives before the grace window expires", async () => {
+    registerCompletionRun("run-timeout-cancel", "timeout-cancel", "timeout cancel test");
+    setAssistantOutput("agent:main:subagent:timeout-cancel", "Final answer after recovery");
+
+    // Emit an aborted end event (starts timeout grace)
+    emitLifecycleEvent("run-timeout-cancel", {
+      phase: "end",
+      aborted: true,
+      endedAt: 4_000,
+    } as LifecycleData & { aborted: boolean });
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(0);
+
+    // Before the grace window, the run successfully ends (non-aborted)
+    emitLifecycleEvent("run-timeout-cancel", { phase: "end", endedAt: 4_500 });
+    await flushAsync();
+
+    await waitForAgentCallCount(1);
+    expect(readFirstAnnounceOutcome()?.status).toBe("ok");
+
+    // Advance past the original grace window; no timeout should fire
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(1);
   });
 
   it("keeps parallel child completion results frozen even when late traffic arrives", async () => {

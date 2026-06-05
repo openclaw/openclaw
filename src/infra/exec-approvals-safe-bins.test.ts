@@ -1,3 +1,4 @@
+// Covers safe-bin allowlist behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -463,21 +464,23 @@ describe("exec approvals safe bins", () => {
       argv: ["echo", "hello"],
       resolution: {
         rawExecutable: "echo",
-        resolvedPath: "/bin/echo",
+        resolvedPath: "/opt/openclaw-test/bin/echo",
         executableName: "echo",
       },
       safeBins: normalizeSafeBins(["echo"]),
       safeBinProfiles,
+      trustedSafeBinDirs: new Set(["/opt/openclaw-test/bin"]),
     });
     const deny = isSafeBinUsage({
       argv: ["echo", "hello", "world"],
       resolution: {
         rawExecutable: "echo",
-        resolvedPath: "/bin/echo",
+        resolvedPath: "/opt/openclaw-test/bin/echo",
         executableName: "echo",
       },
       safeBins: normalizeSafeBins(["echo"]),
       safeBinProfiles,
+      trustedSafeBinDirs: new Set(["/opt/openclaw-test/bin"]),
     });
     expect(allow).toBe(true);
     expect(deny).toBe(false);

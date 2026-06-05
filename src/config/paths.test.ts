@@ -1,3 +1,4 @@
+// Covers config path resolution across env, home, and agent roots.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -85,6 +86,24 @@ describe("gateway port resolution", () => {
         envWith({ OPENCLAW_GATEWAY_PORT: "127.0.0.1:not-a-port" }),
       ),
     ).toBe(19003);
+  });
+
+  it("falls back to config when env ports exceed TCP bounds", () => {
+    expect(
+      resolveGatewayPort({ gateway: { port: 19003 } }, envWith({ OPENCLAW_GATEWAY_PORT: "65536" })),
+    ).toBe(19003);
+    expect(
+      resolveGatewayPort(
+        { gateway: { port: 19004 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "127.0.0.1:65536" }),
+      ),
+    ).toBe(19004);
+    expect(
+      resolveGatewayPort(
+        { gateway: { port: 19005 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "[::1]:65536" }),
+      ),
+    ).toBe(19005);
   });
 
   it("falls back when malformed IPv6 inputs do not provide an explicit port", () => {

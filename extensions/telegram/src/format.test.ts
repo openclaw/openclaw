@@ -1,3 +1,4 @@
+// Telegram tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   markdownToTelegramChunks,
@@ -68,6 +69,15 @@ describe("markdownToTelegramHtml", () => {
     expect(renderTelegramHtmlText('<b class="x">bad</b>', { textMode: "html" })).toBe(
       '&lt;b class="x"&gt;bad&lt;/b&gt;',
     );
+  });
+
+  it("normalizes raw code language HTML without leaking tags", () => {
+    const commandBlock = '<code class="language-text">/queue followup debounce:0\n</code>';
+
+    expect(markdownToTelegramHtml(commandBlock)).toBe("<code>/queue followup debounce:0\n</code>");
+    expect(
+      markdownToTelegramHtml('<pre><code class="language-python">print(1)\n</code></pre>'),
+    ).toBe('<pre><code class="language-python">print(1)\n</code></pre>');
   });
 
   it("renders blockquotes as native Telegram blockquote tags", () => {

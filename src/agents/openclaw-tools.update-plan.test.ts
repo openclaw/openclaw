@@ -1,12 +1,13 @@
+// Verifies update_plan registration gates and base OpenClaw tool inclusion policy.
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
   isUpdatePlanToolEnabledForOpenClawTools,
   shouldIncludeUpdatePlanToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
-import { isToolWrappedWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 
 type UpdatePlanGatingParams = Parameters<typeof isUpdatePlanToolEnabledForOpenClawTools>[0];
@@ -21,6 +22,7 @@ function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
 }
 
 function createFastToolNames(options: CreateOpenClawToolsOptions): string[] {
+  // Disable unrelated dynamic surfaces so registration assertions stay deterministic.
   return toolNames(
     createOpenClawTools({
       disableMessageTool: true,
@@ -46,6 +48,7 @@ function openAiGpt5Params(
   config: OpenClawConfig,
   overrides: Partial<UpdatePlanGatingParams> = {},
 ): UpdatePlanGatingParams {
+  // Common OpenAI GPT-5 selection used by model-aware update_plan gates.
   const params: UpdatePlanGatingParams = {
     config,
     agentSessionKey: "agent:main:main",
@@ -112,6 +115,18 @@ describe("openclaw-tools update_plan gating", () => {
     });
 
     expect(toolNames(tools)).toContain("message");
+  });
+
+  it("requires explicit transcripts enablement before registering the transcripts tool", () => {
+    const defaultTools = createFastToolNames({
+      config: {} as OpenClawConfig,
+    });
+    const enabledTools = createFastToolNames({
+      config: { transcripts: { enabled: true } } as OpenClawConfig,
+    });
+
+    expect(defaultTools).not.toContain("transcripts");
+    expect(enabledTools).toContain("transcripts");
   });
 
   it("keeps explicitly allowed message tool in embedded completions", () => {
@@ -226,7 +241,6 @@ describe("openclaw-tools update_plan gating", () => {
     } as OpenClawConfig;
 
     expectUpdatePlanEnabled(openAiGpt5Params(cfg), true);
-    expectUpdatePlanEnabled(openAiGpt5Params(cfg, { modelProvider: "openai-codex" }), true);
   });
 
   it("respects explicit default contract opt-out on GPT-5 runs", () => {
@@ -235,7 +249,7 @@ describe("openclaw-tools update_plan gating", () => {
     const cfg = {
       agents: {
         defaults: {
-          embeddedPi: {
+          embeddedAgent: {
             executionContract: "default",
           },
         },
@@ -264,7 +278,7 @@ describe("openclaw-tools update_plan gating", () => {
     const cfg = {
       agents: {
         defaults: {
-          embeddedPi: {
+          embeddedAgent: {
             executionContract: "strict-agentic",
           },
         },
@@ -279,7 +293,7 @@ describe("openclaw-tools update_plan gating", () => {
     const cfg = {
       agents: {
         defaults: {
-          embeddedPi: {
+          embeddedAgent: {
             executionContract: "strict-agentic",
           },
         },
@@ -303,7 +317,7 @@ describe("openclaw-tools update_plan gating", () => {
       },
       agents: {
         defaults: {
-          embeddedPi: {
+          embeddedAgent: {
             executionContract: "strict-agentic",
           },
         },
@@ -318,7 +332,7 @@ describe("openclaw-tools update_plan gating", () => {
     const cfg = {
       agents: {
         defaults: {
-          embeddedPi: {
+          embeddedAgent: {
             executionContract: "default",
           },
         },
@@ -326,7 +340,7 @@ describe("openclaw-tools update_plan gating", () => {
           { id: "main" },
           {
             id: "research",
-            embeddedPi: {
+            embeddedAgent: {
               executionContract: "strict-agentic",
             },
           },
@@ -341,14 +355,14 @@ describe("openclaw-tools update_plan gating", () => {
     const cfg = {
       agents: {
         defaults: {
-          embeddedPi: {
+          embeddedAgent: {
             executionContract: "strict-agentic",
           },
         },
         list: [
           {
             id: "main",
-            embeddedPi: {
+            embeddedAgent: {
               executionContract: "default",
             },
           },

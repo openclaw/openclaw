@@ -1,4 +1,5 @@
-import type { Model } from "@earendil-works/pi-ai";
+// Verifies provider auth resolution, synthetic auth, and auth header behavior.
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -30,6 +31,7 @@ vi.mock("../plugins/plugin-registry.js", () => ({
 
 vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForProvider: () => [],
+  resolveOwningPluginIdsForProviderRef: () => [],
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
@@ -44,7 +46,11 @@ vi.mock("../plugins/provider-runtime.js", async () => {
     ...actual,
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
     resolveExternalAuthProfilesWithPlugins: () => [],
-    shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
+    shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
+      context?: { resolvedApiKey?: string };
+    }) => params.context?.resolvedApiKey === "synthetic-defer",
+    // Synthetic auth is provider-owned. Tests model local/no-key and plugin
+    // config credentials without depending on real plugins.
     resolveProviderSyntheticAuthWithPlugin: (params: {
       provider: string;
       config?: {
@@ -169,6 +175,14 @@ afterEach(() => {
 });
 
 describe("createRuntimeProviderAuthLookup", () => {
+  it("marks env auth maps as authoritative so hot checks skip setup runtime fallback", () => {
+    expect(
+      createRuntimeProviderAuthLookup({
+        env: {},
+      }).envApiKey.skipSetupProviderFallback,
+    ).toBe(true);
+  });
+
   it("omits synthetic auth refs when plugin synthetic auth is disabled", () => {
     expect(
       createRuntimeProviderAuthLookup({
@@ -212,6 +226,7 @@ function createCustomProviderConfig(
   modelId = "llama3",
   modelName = "Llama 3",
 ): ModelProviderConfig {
+  // Minimal custom OpenAI-compatible provider used across auth tests.
   return {
     baseUrl,
     api: "openai-completions" as const,
@@ -338,15 +353,15 @@ describe("resolveModelAuthMode", () => {
     ).toBe("aws-sdk");
   });
 
-  it("returns aws-sdk for bedrock alias without explicit auth override", () => {
+  it("does not infer aws-sdk for bedrock alias without explicit auth override", () => {
     expect(resolveModelAuthMode("bedrock", undefined, { version: 1, profiles: {} })).toBe(
-      "aws-sdk",
+      "unknown",
     );
   });
 
-  it("returns aws-sdk for aws-bedrock alias without explicit auth override", () => {
+  it("does not infer aws-sdk for aws-bedrock alias without explicit auth override", () => {
     expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
-      "aws-sdk",
+      "unknown",
     );
   });
 
@@ -355,7 +370,7 @@ describe("resolveModelAuthMode", () => {
       .spyOn(cliCredentials, "readCodexCliCredentialsCached")
       .mockReturnValue({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "token",
         refresh: "refresh",
         expires: Date.now() + 60_000,
@@ -413,6 +428,28 @@ describe("requireApiKey", () => {
     ).toThrow(
       'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
     );
+  });
+
+  it("throws typed missing auth errors with source metadata", () => {
+    let thrown: unknown;
+    try {
+      requireApiKey(
+        {
+          source: "env: OPENAI_API_KEY",
+          mode: "api-key",
+        },
+        "openai",
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({
+      name: "MissingProviderAuthError",
+      code: "missing-api-key",
+      provider: "openai",
+      mode: "api-key",
+      source: "env: OPENAI_API_KEY",
+    });
   });
 });
 
@@ -884,6 +921,34 @@ describe("resolveApiKeyForProvider", () => {
     });
   });
 
+  it("reuses the loaded auth profile store after deferring an explicit synthetic profile", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "custom-auth",
+      profileId: "custom-auth:synthetic",
+      store: {
+        version: 1,
+        profiles: {
+          "custom-auth:synthetic": {
+            type: "api_key",
+            provider: "custom-auth",
+            key: "synthetic-defer", // pragma: allowlist secret
+          },
+          "custom-auth:real": {
+            type: "api_key",
+            provider: "custom-auth",
+            key: "sk-real", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "sk-real",
+      source: "profile:custom-auth:real",
+      mode: "api-key",
+    });
+  });
+
   it("prefers explicit api-key provider config over ambient auth profiles", async () => {
     const resolved = await resolveApiKeyForProvider({
       provider: "openai",
@@ -1315,7 +1380,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     ).rejects.toThrow('No API key found for provider "custom"');
   });
 
-  it("keeps built-in aws-sdk fallback for local baseUrl overrides", async () => {
+  it("uses explicit aws-sdk auth for local baseUrl overrides", async () => {
     const auth = await resolveApiKeyForProvider({
       provider: "amazon-bedrock",
       cfg: {
@@ -1324,10 +1389,32 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
             "amazon-bedrock": {
               baseUrl: "http://127.0.0.1:8080/v1",
               models: [],
+              auth: "aws-sdk",
             },
           },
         },
       },
+    });
+
+    expect(auth.mode).toBe("aws-sdk");
+    expect(auth.apiKey).toBeUndefined();
+  });
+
+  it("uses implicit aws-sdk auth for built-in Bedrock Converse models", async () => {
+    const auth = await getApiKeyForModel({
+      model: {
+        id: "us.anthropic.claude-sonnet-4-6-v1",
+        name: "Claude Sonnet",
+        provider: "amazon-bedrock",
+        api: "bedrock-converse-stream",
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      },
+      store: { version: 1, profiles: {} },
     });
 
     expect(auth.mode).toBe("aws-sdk");
@@ -1369,8 +1456,8 @@ describe("applyLocalNoAuthHeaderOverride", () => {
 
 describe("applyAuthHeaderOverride", () => {
   const baseModel: Model<"openai-completions"> = {
-    id: "gemini-3.1-flash-lite-preview",
-    name: "gemini-3.1-flash-lite-preview",
+    id: "gemini-3.1-flash-lite",
+    name: "gemini-3.1-flash-lite",
     api: "openai-completions" as const,
     provider: "google",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",

@@ -1,7 +1,13 @@
+/**
+ * Sandbox filesystem mount and path resolution helpers.
+ *
+ * Builds the container-to-host mount table and maps requested sandbox paths to writable/read-only host targets.
+ */
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { isPathInside } from "../../infra/path-guards.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveSandboxInputPath, resolveSandboxPath } from "../sandbox-paths.js";
 import type { SandboxFsBridgeContext } from "./backend-handle.types.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
@@ -51,12 +57,7 @@ export function parseSandboxBindMount(spec: string): ParsedBindMount | null {
     return null;
   }
   const optionsToken = normalizeOptionalLowercaseString(parsed.options) ?? "";
-  const optionParts = optionsToken
-    ? optionsToken
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
-    : [];
+  const optionParts = optionsToken ? normalizeStringEntries(optionsToken.split(",")) : [];
   const writable = !optionParts.includes("ro");
   return {
     hostRoot: path.resolve(hostToken),

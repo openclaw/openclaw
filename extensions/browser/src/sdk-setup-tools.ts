@@ -1,3 +1,6 @@
+/**
+ * Browser-local SDK setup/tooling bridge for CLI, media, and action helpers.
+ */
 export {
   callGatewayTool,
   listNodes,
@@ -8,6 +11,7 @@ export type { AnyAgentTool, NodeListNode } from "openclaw/plugin-sdk/agent-harne
 export {
   imageResultFromFile,
   jsonResult,
+  readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 export { optionalStringEnum, stringEnum } from "openclaw/plugin-sdk/channel-actions";
@@ -28,4 +32,5 @@ export {
 } from "openclaw/plugin-sdk/media-runtime";
 export { detectMime } from "openclaw/plugin-sdk/media-mime";
 export { ensureMediaDir, saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+export { describeImageFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 export { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";

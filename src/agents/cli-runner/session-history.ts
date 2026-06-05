@@ -1,7 +1,9 @@
+/**
+ * Loads and renders persisted session history for CLI session reseeding and
+ * context-engine synchronization.
+ */
 import fsp from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { migrateSessionEntries, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -13,10 +15,19 @@ import {
   limitAgentHookHistoryMessages,
   MAX_AGENT_HOOK_HISTORY_MESSAGES,
 } from "../harness/hook-history.js";
+import type { AgentMessage } from "../runtime/index.js";
+import { migrateSessionEntries, parseSessionEntries } from "../sessions/session-manager.js";
 
+/** Maximum transcript size read for CLI session history. */
 export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
+/** Maximum transcript messages exposed to CLI hook history. */
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
+/** Minimum reseed-history prompt budget for fresh CLI sessions. */
 export const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
+/** Maximum automatic reseed-history prompt budget derived from context size. */
+export const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
+const CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE = 0.08;
+const CHARS_PER_TOKEN_ESTIMATE = 4;
 
 type HistoryMessage = {
   role?: unknown;
@@ -42,16 +53,34 @@ type RawTranscriptReseedReason =
   | "auth-profile"
   | "auth-epoch"
   | "system-prompt"
+  | "cwd"
   | "mcp"
   | "missing-transcript"
+  | "orphaned-tool-use"
   | "session-expired";
 
 const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
   "missing-transcript",
+  "orphaned-tool-use",
   "system-prompt",
+  "cwd",
   "mcp",
   "session-expired",
 ]);
+
+/** Resolves how much prior transcript text may reseed a fresh CLI session. */
+export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {
+  if (!Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
+    return MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
+  }
+  const contextShareChars = Math.floor(
+    contextWindowTokens * CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE * CHARS_PER_TOKEN_ESTIMATE,
+  );
+  return Math.max(
+    MAX_CLI_SESSION_RESEED_HISTORY_CHARS,
+    Math.min(MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS, contextShareChars),
+  );
+}
 
 function coerceHistoryText(content: unknown): string {
   if (typeof content === "string") {
@@ -137,6 +166,7 @@ function renderHistoryMessage(message: unknown): string | undefined {
   return text ? `${role}: ${text}` : undefined;
 }
 
+/** Builds a reseed prompt that carries prior OpenClaw transcript context. */
 export function buildCliSessionHistoryPrompt(params: {
   messages: unknown[];
   prompt: string;
@@ -152,7 +182,7 @@ export function buildCliSessionHistoryPrompt(params: {
   // alone exceeds the cap.
   const firstEntry = params.messages[0];
   const firstIsCompaction =
-    !!firstEntry &&
+    Boolean(firstEntry) &&
     typeof firstEntry === "object" &&
     (firstEntry as HistoryMessage).role === "compactionSummary";
   const summaryRendered = firstIsCompaction ? renderHistoryMessage(firstEntry) : undefined;
@@ -305,6 +335,7 @@ async function loadCliSessionEntries(params: {
   }
 }
 
+/** Checks whether a safe, bounded transcript file exists for a CLI session. */
 export async function hasCliSessionTranscript(params: {
   sessionId: string;
   sessionFile: string;
@@ -334,6 +365,7 @@ export async function hasCliSessionTranscript(params: {
   }
 }
 
+/** Loads transcript messages for CLI lifecycle hook context. */
 export async function loadCliSessionHistoryMessages(params: {
   sessionId: string;
   sessionFile: string;
@@ -348,6 +380,7 @@ export async function loadCliSessionHistoryMessages(params: {
   return limitAgentHookHistoryMessages(history, MAX_CLI_SESSION_HISTORY_MESSAGES);
 }
 
+/** Loads transcript messages formatted for context-engine updates. */
 export async function loadCliSessionContextEngineMessages(params: {
   sessionId: string;
   sessionFile: string;
@@ -391,6 +424,7 @@ export async function loadCliSessionContextEngineMessages(params: {
   ];
 }
 
+/** Loads compacted/raw transcript messages eligible for CLI session reseeding. */
 export async function loadCliSessionReseedMessages(params: {
   sessionId: string;
   sessionFile: string;

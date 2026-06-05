@@ -1,3 +1,4 @@
+// Session transcript hit tests cover transcript match formatting and path resolution.
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -205,6 +206,23 @@ describe("resolveTranscriptStemToSessionKeys", () => {
 
   it("matches QMD-slugified stems to unique session ids with safe punctuation", () => {
     const store: Record<string, SessionEntry> = {
+      "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),
+    };
+
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store,
+        stem: "foo-bar-v1",
+        allowQmdSlugFallback: true,
+      }),
+    ).toEqual(["agent:main:s1"]);
+  });
+
+  it("ignores store entries without session ids during QMD-slugified fallback", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:non-session": {
+        updatedAt: 1,
+      } as SessionEntry,
       "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),
     };
 

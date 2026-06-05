@@ -1,5 +1,6 @@
+// Shared schedule option resolver for cron create/edit commands.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronSchedule } from "../../cron/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { parseAt, parseCronStaggerMs, parseDurationMs } from "./shared.js";
 
 type ScheduleOptionInput = {
@@ -11,6 +12,10 @@ type ScheduleOptionInput = {
   tz?: unknown;
 };
 
+type PositionalScheduleInput = {
+  positionalSchedule?: unknown;
+};
+
 type NormalizedScheduleOptions = {
   at: string;
   cronExpr: string;
@@ -19,11 +24,13 @@ type NormalizedScheduleOptions = {
   tz: string | undefined;
 };
 
+/** Normalized schedule edit request, including patch-only updates for cron metadata. */
 export type CronEditScheduleRequest =
   | { kind: "direct"; schedule: CronSchedule }
   | { kind: "patch-existing-cron"; staggerMs: number | undefined; tz: string | undefined }
   | { kind: "none" };
 
+/** Resolve explicit `--at`, `--every`, or `--cron` options for cron creation. */
 export function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSchedule {
   const normalized = normalizeScheduleOptions(options);
   const chosen = countChosenSchedules(normalized);
@@ -37,6 +44,32 @@ export function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSch
   return schedule;
 }
 
+/** Resolve cron creation schedule from either a positional shorthand or explicit flags. */
+export function resolveCronCreateScheduleFromArgs(
+  options: ScheduleOptionInput & PositionalScheduleInput,
+): CronSchedule {
+  const positionalSchedule = normalizeOptionalString(options.positionalSchedule);
+  if (!positionalSchedule) {
+    return resolveCronCreateSchedule(options);
+  }
+  const normalized = normalizeScheduleOptions(options);
+  if (countChosenSchedules(normalized) > 0) {
+    throw new Error("Choose a positional schedule or one of --at, --every, or --cron.");
+  }
+  const every = parseEverySchedule(positionalSchedule);
+  return resolveCronCreateSchedule({
+    ...options,
+    at: every
+      ? undefined
+      : looksLikeCronExpression(positionalSchedule)
+        ? undefined
+        : positionalSchedule,
+    cron: looksLikeCronExpression(positionalSchedule) ? positionalSchedule : undefined,
+    every,
+  });
+}
+
+/** Resolve a cron edit request, allowing at most one direct schedule replacement. */
 export function resolveCronEditScheduleRequest(
   options: ScheduleOptionInput,
 ): CronEditScheduleRequest {
@@ -59,6 +92,7 @@ export function resolveCronEditScheduleRequest(
   return { kind: "none" };
 }
 
+/** Apply `--tz`, `--stagger`, or `--exact` metadata changes to an existing cron schedule. */
 export function applyExistingCronSchedulePatch(
   existingSchedule: CronSchedule,
   request: Extract<CronEditScheduleRequest, { kind: "patch-existing-cron" }>,
@@ -92,6 +126,16 @@ function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedSched
 function countChosenSchedules(options: NormalizedScheduleOptions): number {
   return [Boolean(options.at), Boolean(options.every), Boolean(options.cronExpr)].filter(Boolean)
     .length;
+}
+
+function parseEverySchedule(value: string): string | undefined {
+  const match = /^every\s+(.+)$/iu.exec(value.trim());
+  return match?.[1]?.trim() || undefined;
+}
+
+function looksLikeCronExpression(value: string): boolean {
+  const parts = value.trim().split(/\s+/u);
+  return parts.length === 5 || parts.length === 6;
 }
 
 function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule | undefined {

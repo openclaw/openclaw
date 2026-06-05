@@ -1,3 +1,4 @@
+// Tests media path normalization and attachment metadata generation.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -250,6 +251,28 @@ describe("createReplyMediaPathNormalizer", () => {
 
     expectNoMedia(result);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("stages absolute workspace media paths before sandbox mapping", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    const absolutePath = "/Users/peter/.openclaw/workspace/reports/screenshot.png";
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: [absolutePath],
+    });
+
+    expectMedia(result, "/tmp/outbound-media/screenshot.png", [
+      "/tmp/outbound-media/screenshot.png",
+    ]);
+    expectOutboundAttachmentCall(0, absolutePath, 5 * 1024 * 1024);
   });
 
   it("stages absolute workspace media paths so the PR scenario now works", async () => {

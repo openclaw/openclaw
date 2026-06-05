@@ -1,3 +1,4 @@
+// Amazon Bedrock tests cover discovery plugin behavior.
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -195,6 +196,58 @@ describe("bedrock discovery", () => {
     });
   });
 
+  it("uses 1M context window for dotted Claude Opus 4.8 Bedrock refs", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [
+          {
+            modelId: "anthropic.claude-opus-4.8-v1:0",
+            modelName: "Claude Opus 4.8",
+            providerName: "anthropic",
+            inputModalities: ["TEXT"],
+            outputModalities: ["TEXT"],
+            responseStreamingSupported: true,
+            modelLifecycle: { status: "ACTIVE" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "us.anthropic.claude-opus-4.8-v1:0",
+            inferenceProfileName: "US Claude Opus 4.8",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [
+              {
+                modelArn:
+                  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4.8-v1:0",
+              },
+            ],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expectModelFields(
+      models.find((model) => model.id === "anthropic.claude-opus-4.8-v1:0"),
+      {
+        contextWindow: 1_000_000,
+        reasoning: true,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      },
+    );
+    expectModelFields(
+      models.find((model) => model.id === "us.anthropic.claude-opus-4.8-v1:0"),
+      {
+        contextWindow: 1_000_000,
+        reasoning: true,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      },
+    );
+  });
+
   it("caches results when refreshInterval is enabled", async () => {
     mockSingleActiveSummary();
 
@@ -202,6 +255,28 @@ describe("bedrock discovery", () => {
     await discoverBedrockModels({ region: "us-east-1", clientFactory });
     // 2 calls on first discovery (ListFoundationModels + ListInferenceProfiles), 0 on cached second.
     expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips cache when refreshInterval expiry overflows", async () => {
+    sendMock
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+      .mockResolvedValueOnce({ inferenceProfileSummaries: [] })
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+      .mockResolvedValueOnce({ inferenceProfileSummaries: [] });
+
+    await discoverBedrockModels({
+      region: "us-east-1",
+      config: { refreshInterval: 1 },
+      now: () => 8_640_000_000_000_000,
+      clientFactory,
+    });
+    await discoverBedrockModels({
+      region: "us-east-1",
+      config: { refreshInterval: 1 },
+      now: () => 8_640_000_000_000_000,
+      clientFactory,
+    });
+    expect(sendMock).toHaveBeenCalledTimes(4);
   });
 
   it("skips cache when refreshInterval is 0", async () => {
@@ -502,18 +577,10 @@ describe("bedrock discovery", () => {
     ).toEqual(["amazon.nova-micro-v1:0"]);
   });
 
-  it("prefers plugin-owned discovery config and still honors legacy fallback", async () => {
+  it("uses plugin-owned discovery config without runtime legacy fallback", async () => {
     mockSingleActiveSummary();
 
     const pluginEnabled = await resolveImplicitBedrockProvider({
-      config: {
-        models: {
-          bedrockDiscovery: {
-            enabled: false,
-            region: "us-west-2",
-          },
-        },
-      },
       pluginConfig: {
         discovery: {
           enabled: true,
@@ -527,24 +594,6 @@ describe("bedrock discovery", () => {
     expect(pluginEnabled?.baseUrl).toBe("https://bedrock-runtime.us-east-1.amazonaws.com");
     // 2 calls per discovery (ListFoundationModels + ListInferenceProfiles).
     expect(sendMock).toHaveBeenCalledTimes(2);
-
-    mockSingleActiveSummary();
-
-    const legacyEnabled = await resolveImplicitBedrockProvider({
-      config: {
-        models: {
-          bedrockDiscovery: {
-            enabled: true,
-            region: "us-west-2",
-          },
-        },
-      },
-      env: {} as NodeJS.ProcessEnv,
-      clientFactory,
-    });
-
-    expect(legacyEnabled?.baseUrl).toBe("https://bedrock-runtime.us-west-2.amazonaws.com");
-    expect(sendMock).toHaveBeenCalledTimes(4);
   });
 
   // Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix

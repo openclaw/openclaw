@@ -1,3 +1,4 @@
+// Codex tests cover index plugin behavior.
 import fs from "node:fs";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
@@ -118,7 +119,7 @@ describe("codex plugin", () => {
     expect((mockCallArg(registerProvider) as { id?: string } | undefined)?.id).toBe("codex");
   });
 
-  it("only claims the codex provider by default", () => {
+  it("claims the Codex routing providers by default", () => {
     const harness = createCodexAppServerAgentHarness();
 
     expect(harness.deliveryDefaults?.sourceVisibleReplies).toBe("message_tool");
@@ -126,8 +127,14 @@ describe("codex plugin", () => {
       harness.supports({ provider: "codex", modelId: "gpt-5.4", requestedRuntime: "auto" })
         .supported,
     ).toBe(true);
+    const openAiCodex = harness.supports({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      requestedRuntime: "auto",
+    });
+    expect(openAiCodex.supported).toBe(true);
     const unsupported = harness.supports({
-      provider: "openai-codex",
+      provider: "9router",
       modelId: "gpt-5.4",
       requestedRuntime: "auto",
     });
@@ -210,7 +217,7 @@ describe("codex plugin", () => {
 
   it("enables the native hook relay for public Codex side questions", async () => {
     const harness = createCodexAppServerAgentHarness({ pluginConfig: { appServer: {} } });
-    const runSideQuestion = harness.runSideQuestion;
+    const runSideQuestion = harness["runSideQuestion"];
     const result = { text: "ok" };
     runCodexAppServerSideQuestionMock.mockResolvedValueOnce(result);
 

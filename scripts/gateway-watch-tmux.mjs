@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Starts gateway watch in tmux while preserving useful dev environment state.
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -19,7 +20,12 @@ const TMUX_CWD_OPTION_KEY = "@openclaw.gateway_watch.cwd";
 const TMUX_CHILD_ENV_KEYS = [
   "NODE_OPTIONS",
   "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_DIAGNOSTICS",
+  "OPENCLAW_DIAGNOSTICS_EVENT_LOOP",
+  "OPENCLAW_DIAGNOSTICS_TIMELINE_PATH",
   "OPENCLAW_GATEWAY_PORT",
+  "OPENCLAW_GATEWAY_RESTART_TRACE",
+  "OPENCLAW_GATEWAY_STARTUP_TRACE",
   "OPENCLAW_HOME",
   "OPENCLAW_PROFILE",
   RUN_NODE_CPU_PROF_DIR_ENV,
@@ -133,6 +139,9 @@ const resolveGatewayWatchBenchmarkArgs = ({ args = [], env = process.env } = {})
   };
 };
 
+/**
+ * Resolves the tmux session name for gateway watch arguments/environment.
+ */
 export const resolveGatewayWatchTmuxSessionName = ({ args = [], env = process.env } = {}) => {
   const profile =
     env.OPENCLAW_PROFILE ||
@@ -164,6 +173,9 @@ const resolveColorEnv = (env) => {
   return { assignments: [`FORCE_COLOR=${forceColor}`], options: [] };
 };
 
+/**
+ * Builds the shell command executed inside the tmux gateway watch session.
+ */
 export const buildGatewayWatchTmuxCommand = ({
   args = [],
   cwd = process.cwd(),
@@ -254,6 +266,9 @@ const setTmuxSessionMetadata = ({ cwd, sessionName, spawnSyncImpl, stderr }) => 
   }
 };
 
+/**
+ * Runs the gateway-watch tmux wrapper main flow.
+ */
 export const runGatewayWatchTmuxMain = (params = {}) => {
   const resolvedArgs = resolveGatewayWatchBenchmarkArgs({
     args: params.args ?? process.argv.slice(2),

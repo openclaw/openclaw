@@ -1,6 +1,11 @@
+// Memory Host SDK module implements batch runner behavior.
+import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { splitBatchRequests } from "./batch-utils.js";
 import { runWithConcurrency } from "./internal.js";
 
+// Shared runner for splitting and executing remote embedding batch groups.
+
+/** Execution controls for provider embedding batch submissions and polling. */
 export type EmbeddingBatchExecutionParams = {
   wait: boolean;
   pollIntervalMs: number;
@@ -9,6 +14,22 @@ export type EmbeddingBatchExecutionParams = {
   debug?: (message: string, data?: Record<string, unknown>) => void;
 };
 
+/** Clamp polling to both configured poll interval and total timeout budget. */
+function resolveEmbeddingBatchPollIntervalMs(params: {
+  pollIntervalMs: number;
+  timeoutMs: number;
+}): number {
+  const safePollIntervalMs = resolveSafeTimeoutDelayMs(params.pollIntervalMs);
+  const safeTimeoutMs =
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? resolveSafeTimeoutDelayMs(params.timeoutMs)
+      : safePollIntervalMs;
+  return Math.min(safePollIntervalMs, safeTimeoutMs);
+}
+
+/** Run request groups with bounded concurrency and return embeddings by custom id. */
 export async function runEmbeddingBatchGroups<TRequest>(params: {
   requests: TRequest[];
   maxRequests: number;
@@ -23,6 +44,8 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
     groupIndex: number;
     groups: number;
     byCustomId: Map<string, number[]>;
+    pollIntervalMs: number;
+    timeoutMs: number;
   }) => Promise<void>;
 }): Promise<Map<string, number[]>> {
   if (params.requests.length === 0) {
@@ -30,8 +53,16 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
   }
   const groups = splitBatchRequests(params.requests, params.maxRequests);
   const byCustomId = new Map<string, number[]>();
+  const pollIntervalMs = resolveEmbeddingBatchPollIntervalMs(params);
   const tasks = groups.map((group, groupIndex) => async () => {
-    await params.runGroup({ group, groupIndex, groups: groups.length, byCustomId });
+    await params.runGroup({
+      group,
+      groupIndex,
+      groups: groups.length,
+      byCustomId,
+      pollIntervalMs,
+      timeoutMs: params.timeoutMs,
+    });
   });
 
   params.debug?.(params.debugLabel, {
@@ -39,7 +70,7 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
     groups: groups.length,
     wait: params.wait,
     concurrency: params.concurrency,
-    pollIntervalMs: params.pollIntervalMs,
+    pollIntervalMs,
     timeoutMs: params.timeoutMs,
   });
 
@@ -47,15 +78,17 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
   return byCustomId;
 }
 
+/** Build normalized batch-group options for provider-specific runners. */
 export function buildEmbeddingBatchGroupOptions<TRequest>(
   params: { requests: TRequest[] } & EmbeddingBatchExecutionParams,
   options: { maxRequests: number; debugLabel: string },
 ) {
+  const pollIntervalMs = resolveEmbeddingBatchPollIntervalMs(params);
   return {
     requests: params.requests,
     maxRequests: options.maxRequests,
     wait: params.wait,
-    pollIntervalMs: params.pollIntervalMs,
+    pollIntervalMs,
     timeoutMs: params.timeoutMs,
     concurrency: params.concurrency,
     debug: params.debug,

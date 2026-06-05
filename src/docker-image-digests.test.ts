@@ -1,3 +1,4 @@
+// Tests Docker image digest metadata and lockfile consistency.
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +17,7 @@ const DIGEST_PINNED_DOCKERFILES = [
   "scripts/docker/install-sh-smoke/Dockerfile",
   "scripts/e2e/Dockerfile",
   "scripts/e2e/Dockerfile.qr-import",
+  "scripts/e2e/plugin-binding-command-escape.Dockerfile",
 ] as const;
 
 type DependabotDockerGroup = {

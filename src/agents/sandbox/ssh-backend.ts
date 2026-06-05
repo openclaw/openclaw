@@ -1,5 +1,10 @@
+/**
+ * SSH sandbox backend implementation.
+ *
+ * Creates remote workspace copies, builds remote exec specs, and exposes a backend-neutral filesystem bridge.
+ */
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
@@ -16,9 +21,9 @@ import {
 } from "./remote-fs-bridge.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 import {
-  buildExecRemoteCommand,
   buildRemoteCommand,
   buildSshSandboxArgv,
+  buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   runSshSandboxCommand,
@@ -37,6 +42,7 @@ type ResolvedSshRuntimePaths = {
   remoteAgentWorkspaceDir: string;
 };
 
+/** SSH backend lifecycle hooks for probing and removing remote sandbox copies. */
 export const sshSandboxBackendManager: SandboxBackendManager = {
   async describeRuntime({ entry, config, agentId }) {
     const cfg = resolveSandboxConfigForAgent(config, agentId);
@@ -100,6 +106,7 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
   },
 };
 
+/** Create an SSH sandbox backend that mirrors the workspace to a remote target. */
 export async function createSshSandboxBackend(
   params: CreateSandboxBackendParams,
 ): Promise<SandboxBackendHandle> {
@@ -143,13 +150,13 @@ class SshSandboxBackendImpl {
       remoteWorkspaceDir: this.params.runtimePaths.remoteWorkspaceDir,
       remoteAgentWorkspaceDir: this.params.runtimePaths.remoteAgentWorkspaceDir,
       buildExecSpec: async ({ command, workdir, env, usePty }) => {
-        await this.ensureRuntime();
-        const sshSession = await this.createSession();
-        const remoteCommand = buildExecRemoteCommand({
+        const remoteCommand = buildValidatedExecRemoteCommand({
           command,
           workdir: workdir ?? this.params.runtimePaths.remoteWorkspaceDir,
           env,
         });
+        await this.ensureRuntime();
+        const sshSession = await this.createSession();
         return {
           argv: buildSshSandboxArgv({
             session: sshSession,
@@ -188,6 +195,8 @@ class SshSandboxBackendImpl {
     if (this.ensurePromise) {
       return await this.ensurePromise;
     }
+    // Concurrent exec/fs calls share one remote copy bootstrap; failures reset
+    // the promise so the next call can retry after transient SSH errors.
     this.ensurePromise = this.ensureRuntimeInner();
     try {
       await this.ensurePromise;
@@ -294,6 +303,8 @@ function resolveSshRuntimePaths(workspaceRoot: string, scopeKey: string): Resolv
 
 function buildSshSandboxRuntimeId(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
+  // Keep the path human-readable while hashing the original scope to avoid
+  // collisions after normalization and truncation.
   const safe = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")

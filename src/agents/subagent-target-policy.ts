@@ -1,3 +1,11 @@
+/**
+ * Subagent spawn target policy. Requesters can self-spawn by default, or opt
+ * into a configured allowlist that is still intersected with known agents.
+ */
+import {
+  normalizeUniqueStringEntries,
+  sortUniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
@@ -22,14 +30,14 @@ function normalizeAllowAgents(allowAgents: readonly string[] | undefined): {
   return {
     configured: true,
     allowAny: allowAgents.some((value) => value.trim() === "*"),
-    allowedIds: Array.from(new Set(allowedIds)).toSorted((a, b) => a.localeCompare(b)),
+    allowedIds: sortUniqueStrings(allowedIds),
   };
 }
 
 function normalizeConfiguredAgentIds(
   configuredAgentIds: readonly string[] | undefined,
 ): Set<string> {
-  return new Set((configuredAgentIds ?? []).map((id) => normalizeAgentId(id)).filter(Boolean));
+  return new Set(normalizeUniqueStringEntries((configuredAgentIds ?? []).map(normalizeAgentId)));
 }
 
 function filterConfiguredAllowedIds(params: {
@@ -40,6 +48,7 @@ function filterConfiguredAllowedIds(params: {
   return params.allowedIds.filter((id) => configuredIds.has(id));
 }
 
+/** Resolve the normalized agent IDs a requester may target with sessions_spawn. */
 export function resolveSubagentAllowedTargetIds(params: {
   requesterAgentId: string;
   allowAgents?: readonly string[];
@@ -60,7 +69,7 @@ export function resolveSubagentAllowedTargetIds(params: {
     }
     return {
       allowAny: true,
-      allowedIds: Array.from(new Set(configuredIds)).toSorted((a, b) => a.localeCompare(b)),
+      allowedIds: sortUniqueStrings(configuredIds),
     };
   }
   return {
@@ -72,6 +81,7 @@ export function resolveSubagentAllowedTargetIds(params: {
   };
 }
 
+/** Validate one requested target against subagent spawn policy. */
 export function resolveSubagentTargetPolicy(params: {
   requesterAgentId: string;
   targetAgentId: string;

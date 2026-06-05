@@ -1,15 +1,26 @@
+// Builds PATH values for OpenClaw child processes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
 
 type EnsureOpenClawPathOpts = {
+  /** Executable whose directory should stay first for shebang-compatible child processes. */
   execPath?: string;
+  /** Working directory used only when project-local bin fallback is explicitly enabled. */
   cwd?: string;
+  /** Home directory used for package-manager and user-bin fallback candidates. */
   homeDir?: string;
+  /** Platform override for tests and platform-specific candidate filtering. */
   platform?: NodeJS.Platform;
+  /** Existing PATH value to merge with; defaults to process.env.PATH. */
   pathEnv?: string;
+  /** Opt-in to append cwd/node_modules/.bin after trusted system paths. */
   allowProjectLocalBin?: boolean;
 };
 
@@ -31,12 +42,7 @@ function isDirectory(dirPath: string): boolean {
 }
 
 function splitPathParts(pathEnv: string): Set<string> {
-  return new Set(
-    pathEnv
-      .split(path.delimiter)
-      .map((part) => part.trim())
-      .filter(Boolean),
-  );
+  return new Set(normalizeStringEntries(pathEnv.split(path.delimiter)));
 }
 
 function isKnownPathDir(existingPathParts: ReadonlySet<string>, dirPath: string): boolean {
@@ -62,22 +68,11 @@ function resolvePathBootstrapBrewDirs(params: {
 }
 
 function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
-  const partsExisting = params.existing
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const partsPrepend = (params.prepend ?? []).map((part) => part.trim()).filter(Boolean);
-  const partsAppend = (params.append ?? []).map((part) => part.trim()).filter(Boolean);
-
-  const seen = new Set<string>();
-  const merged: string[] = [];
-  for (const part of [...partsPrepend, ...partsExisting, ...partsAppend]) {
-    if (!seen.has(part)) {
-      seen.add(part);
-      merged.push(part);
-    }
-  }
-  return merged.join(path.delimiter);
+  return normalizeUniqueStringEntries([
+    ...(params.prepend ?? []),
+    ...params.existing.split(path.delimiter),
+    ...(params.append ?? []),
+  ]).join(path.delimiter);
 }
 
 function candidateBinDirs(
@@ -165,6 +160,8 @@ export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
   if (isTruthyEnvValue(process.env.OPENCLAW_PATH_BOOTSTRAPPED)) {
     return;
   }
+  // Mark before filesystem probing so repeated calls from nested bootstraps do
+  // not keep reshuffling PATH.
   process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
 
   const existing = opts.pathEnv ?? process.env.PATH ?? "";
