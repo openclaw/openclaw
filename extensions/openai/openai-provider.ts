@@ -233,18 +233,20 @@ function resolveCodexModelInput(
   if (rawModalities.length === 0) {
     return fallback?.input ?? ["text", "image"];
   }
-  const modalities = rawModalities.map((modality) => normalizeLowercaseStringOrEmpty(modality));
+  const modalities = new Set(
+    rawModalities.map((modality) => normalizeLowercaseStringOrEmpty(modality)),
+  );
   const input = new Set<ModelDefinitionConfig["input"][number]>();
-  if (modalities.includes("text")) {
+  if (modalities.has("text")) {
     input.add("text");
   }
-  if (modalities.includes("image") || modalities.includes("vision")) {
+  if (modalities.has("image") || modalities.has("vision")) {
     input.add("image");
   }
-  if (modalities.includes("audio")) {
+  if (modalities.has("audio")) {
     input.add("audio");
   }
-  if (modalities.includes("video")) {
+  if (modalities.has("video")) {
     input.add("video");
   }
   return input.size > 0 ? [...input] : (fallback?.input ?? ["text", "image"]);
