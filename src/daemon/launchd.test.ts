@@ -884,6 +884,43 @@ describe("launchd install", () => {
     expect(state.files.get(wrapperPath)).toBe(generatedWrapper);
   });
 
+  it("warns before overwriting a customized generated LaunchAgent env wrapper during restart rewrite", async () => {
+    const env = createDefaultLaunchdEnv();
+    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+    });
+    const generatedWrapper = state.files.get(wrapperPath);
+    if (!generatedWrapper) {
+      throw new Error("expected generated wrapper");
+    }
+    state.files.set(
+      wrapperPath,
+      generatedWrapper.replace('exec "$@"', 'echo "custom-secret-provider-marker"\nexec "$@"'),
+    );
+    state.launchctlCalls.length = 0;
+
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+    });
+
+    await restartLaunchAgent({
+      env,
+      stdout,
+    });
+
+    expect(output).toContain("Warning:");
+    expect(output).toContain("contains custom behavior and will be overwritten");
+    expect(output).toContain("openclaw gateway install --wrapper <path>");
+    expect(output).toContain("OPENCLAW_WRAPPER");
+    expect(state.files.get(wrapperPath)).toBe(generatedWrapper);
+  });
+
   it("repairs a mangled label-derived service-env wrapper path on restart", async () => {
     const callerEnv = createDefaultLaunchdEnv();
     const serviceEnv = {
