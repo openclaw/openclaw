@@ -433,13 +433,15 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     if (!query) {
       throw new Error("Discord search requires query text. Provide query or content.");
     }
-    // Fall back to the current session channel when no explicit channelId or
-    // channelIds is provided. This lets the runtime resolve guildId from the
-    // channel without broadening explicitly-filtered searches.
+    // Fall back to the current session channel when no explicit channelId,
+    // channelIds, or guildId is provided. This lets the runtime resolve
+    // guildId from the channel without broadening explicitly-filtered or
+    // explicitly guild-scoped searches.
     const explicitChannelIds = readStringArrayParam(actionParams, "channelIds");
     const channelId =
       readStringParam(actionParams, "channelId") ??
-      (!explicitChannelIds?.length &&
+      (!guildId &&
+      !explicitChannelIds?.length &&
       ctx.toolContext?.currentChannelProvider?.trim().toLowerCase() === "discord"
         ? ctx.toolContext?.currentChannelId?.trim() || undefined
         : undefined);
