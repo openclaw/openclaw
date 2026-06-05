@@ -1,6 +1,7 @@
 /** Loads capability providers from bundled plugin public runtime artifacts. */
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -196,6 +197,69 @@ function recordCapabilityLoadError(
   log.error(`[plugins] ${record.id} failed to load from ${record.source}: ${message}`);
 }
 
+function readCapturedCapabilityToolName(tool: unknown): string | undefined {
+  try {
+    const name = (tool as { name?: unknown }).name;
+    return typeof name === "string" && name.trim() ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function recordMalformedCapabilityTool(
+  registry: Pick<PluginRegistry, "diagnostics">,
+  record: Pick<PluginRecord, "id" | "source">,
+  index: number,
+): void {
+  registry.diagnostics.push({
+    level: "error",
+    pluginId: record.id,
+    source: record.source,
+    message: `plugin tool is malformed (${record.id}): tool[${index}] missing readable name`,
+  });
+}
+
+export function captureBundledCapabilityTools(params: {
+  registry: Pick<PluginRegistry, "diagnostics" | "tools">;
+  record: Pick<PluginRecord, "id" | "name" | "source" | "rootDir">;
+  tools: readonly AnyAgentTool[];
+  declaredToolNames: readonly string[];
+}): string[] {
+  const capturedToolNames: string[] = [];
+  params.tools.forEach((tool, index) => {
+    const toolName = readCapturedCapabilityToolName(tool);
+    if (!toolName) {
+      recordMalformedCapabilityTool(params.registry, params.record, index);
+      return;
+    }
+    capturedToolNames.push(toolName);
+    const undeclared = findUndeclaredPluginToolNames({
+      declaredNames: params.declaredToolNames,
+      toolNames: [toolName],
+    });
+    if (undeclared.length > 0) {
+      params.registry.diagnostics.push({
+        level: "error",
+        pluginId: params.record.id,
+        source: params.record.source,
+        message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+      });
+      return;
+    }
+    params.registry.tools.push({
+      pluginId: params.record.id,
+      pluginName: params.record.name,
+      factory: () => tool,
+      names: [toolName],
+      declaredNames: [...params.declaredToolNames],
+      optional: false,
+      source: params.record.source,
+      rootDir: params.record.rootDir,
+    });
+  });
+  return capturedToolNames;
+}
+
 export function loadBundledCapabilityRuntimeRegistry(params: {
   pluginIds: readonly string[];
   env?: PluginLoadOptions["env"];
@@ -353,7 +417,6 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
         ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
       );
       record.agentHarnessIds.push(...captured.agentHarnesses.map((entry) => entry.id));
-      record.toolNames.push(...captured.tools.map((entry) => entry.name));
 
       registry.cliBackends?.push(
         ...captured.cliBackends.map((backend) => ({
@@ -509,31 +572,14 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
         })),
       );
       const declaredToolNames = normalizePluginToolContractNames(record.contracts);
-      for (const tool of captured.tools) {
-        const undeclared = findUndeclaredPluginToolNames({
-          declaredNames: declaredToolNames,
-          toolNames: [tool.name],
-        });
-        if (undeclared.length > 0) {
-          registry.diagnostics.push({
-            level: "error",
-            pluginId: record.id,
-            source: record.source,
-            message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
-          });
-          continue;
-        }
-        registry.tools.push({
-          pluginId: record.id,
-          pluginName: record.name,
-          factory: () => tool,
-          names: [tool.name],
-          declaredNames: declaredToolNames,
-          optional: false,
-          source: record.source,
-          rootDir: record.rootDir,
-        });
-      }
+      record.toolNames.push(
+        ...captureBundledCapabilityTools({
+          registry,
+          record,
+          tools: captured.tools,
+          declaredToolNames,
+        }),
+      );
       registry.plugins.push(record);
     } catch (error) {
       recordCapabilityLoadError(registry, record, String(error));
