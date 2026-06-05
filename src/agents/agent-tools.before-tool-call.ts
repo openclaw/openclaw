@@ -52,6 +52,7 @@ import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
 import { isPlainObject } from "../utils.js";
 import { adjustedParamsByToolCallId } from "./agent-tools.before-tool-call.state.js";
+import { createWrappedAgentToolDescriptor } from "./agent-tools.wrapper-descriptor.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
 import {
   getCodeModeExecBeforeHookMetadata,
@@ -1117,9 +1118,9 @@ export function wrapToolWithBeforeToolCallHook(
     ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
     emitDiagnostics: options.emitDiagnostics !== false,
   };
-  const wrappedTool: AnyAgentTool = {
-    ...tool,
-    execute: async (toolCallId, params, signal, onUpdate) => {
+  const wrappedTool = createWrappedAgentToolDescriptor(
+    tool,
+    async (toolCallId, params, signal, onUpdate) => {
       const prepare = (tool as BeforeToolCallPreparingTool).prepareBeforeToolCallParams;
       const preparedParams = prepare
         ? await prepare(params, {
@@ -1264,7 +1265,7 @@ export function wrapToolWithBeforeToolCallHook(
         throw err;
       }
     },
-  };
+  );
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
