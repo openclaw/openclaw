@@ -90,6 +90,13 @@ function resolveVcInviter(event: FeishuVcMeetingInvitedEvent): ResolvedVcInviter
   };
 }
 
+function buildJoinPrompt(params: { meetingNo: string; callId?: string }): string {
+  const base = `Use the available tool to join the meeting with meeting number ${params.meetingNo} immediately. Do not ask for confirmation.`;
+  return params.callId
+    ? `${base} If the join tool supports a call_id parameter, pass call_id="${params.callId}"; otherwise join by meeting number only.`
+    : base;
+}
+
 export function resolveVcMeetingInvitedTurn(
   event: FeishuVcMeetingInvitedEvent,
   uuid: () => string = () => crypto.randomUUID(),
@@ -108,7 +115,7 @@ export function resolveVcMeetingInvitedTurn(
   const messageId = eventId
     ? `vc-invited:event:${eventId}`
     : `vc-invited:${meetingNo}:${inviteTime ?? uuid()}`;
-  const prompt = `Use the available tool to join the meeting with meeting number ${meetingNo} immediately. Do not ask for confirmation.`;
+  const prompt = buildJoinPrompt({ meetingNo, callId });
 
   return {
     eventType: "vc.bot.meeting_invited_v1",
@@ -150,6 +157,27 @@ function createNoopReplyDispatcher(): {
     getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
     markComplete: () => {},
   };
+}
+
+async function sendVcInviteAcceptedReply(params: {
+  cfg: ClawdbotConfig;
+  accountId: string;
+  turn: VcMeetingInvitedTurn;
+  log: (message: string) => void;
+}): Promise<void> {
+  const target = params.turn.inviter.openId ?? params.turn.inviter.senderId;
+  try {
+    await sendMessageFeishu({
+      cfg: params.cfg,
+      to: `user:${target}`,
+      text: `已收到会议邀请，正在加入会议 ${params.turn.meetingNo}。`,
+      accountId: params.accountId,
+    });
+  } catch (err) {
+    params.log(
+      `feishu[${params.accountId}]: vc meeting accepted reply failed for ${target}: ${String(err)}`,
+    );
+  }
 }
 
 async function dispatchVcMeetingInvitedTurn(params: {
@@ -218,6 +246,13 @@ async function dispatchVcMeetingInvitedTurn(params: {
     }
     return;
   }
+
+  await sendVcInviteAcceptedReply({
+    cfg: params.cfg,
+    accountId: account.accountId,
+    turn: params.turn,
+    log,
+  });
 
   let effectiveCfg = params.cfg;
   let route = core.channel.routing.resolveAgentRoute({

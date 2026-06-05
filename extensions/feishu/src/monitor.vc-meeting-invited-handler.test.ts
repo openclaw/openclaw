@@ -253,7 +253,7 @@ describe("resolveVcMeetingInvitedTurn", () => {
         name: "Alice",
       },
       prompt:
-        "Use the available tool to join the meeting with meeting number 123456789 immediately. Do not ask for confirmation.",
+        'Use the available tool to join the meeting with meeting number 123456789 immediately. Do not ask for confirmation. If the join tool supports a call_id parameter, pass call_id="call_vc_123"; otherwise join by meeting number only.',
     });
   });
 
@@ -336,6 +336,9 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     expect(finalizedContext?.BodyForAgent).toContain(
       "Use the available tool to join the meeting with meeting number 123456789 immediately.",
     );
+    expect(finalizedContext?.BodyForAgent).toContain(
+      'If the join tool supports a call_id parameter, pass call_id="call_vc_123"; otherwise join by meeting number only.',
+    );
     const sessionRecord = mockCallArg(recordInboundSession, "recordInboundSession") as
       | { updateLastRoute?: unknown }
       | undefined;
@@ -351,7 +354,12 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     );
     expect(withReplyDispatcher).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(sendMessageFeishuMock, "sendMessageFeishu")).toMatchObject({
+      to: "user:ou_inviter_1",
+      accountId: "default",
+      text: "已收到会议邀请，正在加入会议 123456789。",
+    });
   });
 
   it("sends a pairing challenge to the inviter when pairing mode blocks dispatch", async () => {
