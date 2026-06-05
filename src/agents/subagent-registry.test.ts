@@ -2218,6 +2218,67 @@ describe("subagent registry seam flow", () => {
     expect(run?.cleanupCompletedAt).toBeTypeOf("number");
   });
 
+  it("completes stale active runs as ok when child session has readable output", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "# ARCHITECTURE.md\nrelease readiness design" }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 1,
+        status: "running",
+      },
+    });
+
+    const createdAt = Date.parse("2026-03-24T11:00:00Z");
+    vi.setSystemTime(createdAt);
+    mod.registerSubagentRun({
+      runId: "run-lost-context-with-output",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver architecture doc",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    vi.setSystemTime(createdAt + 65_000);
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      const announceParams = findRecordCallArg(
+        mocks.runSubagentAnnounceFlow,
+        0,
+        "lost context recovered announce",
+        (record) => record.childRunId === "run-lost-context-with-output",
+      );
+      expectRecordFields(
+        announceParams.outcome,
+        { status: "ok" },
+        "lost context recovered announce outcome",
+      );
+    });
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-lost-context-with-output");
+    expectRecordFields(run?.outcome, { status: "ok" }, "lost context recovered run outcome");
+    expect(run?.outcome?.error).toBeUndefined();
+  });
+
   it("uses session-store start time when sweeping stale explicit-timeout runs", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
