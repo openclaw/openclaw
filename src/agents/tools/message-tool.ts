@@ -918,6 +918,7 @@ function buildScopedMessageToolSchemaProps(
   options: {
     includePresentation: boolean;
     includeDeliveryPin: boolean;
+    includeBestEffort: boolean;
     extraProperties?: Record<string, TSchema>;
   },
 ): Record<string, TSchema> {
