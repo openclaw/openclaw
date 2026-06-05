@@ -454,7 +454,6 @@ import {
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import {
-  buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
@@ -3816,18 +3815,13 @@ export async function runEmbeddedAttempt(
             modelPrompt: hasPromptBuildContext
               ? promptForModelBeforeRuntimeContextSplit
               : undefined,
+            currentInboundContext: params.currentInboundContext,
             emptyTranscriptMode: params.suppressNextUserMessagePersistence
               ? "model-prompt"
               : "runtime-event",
           });
-          const promptForSession = buildCurrentInboundPrompt({
-            context: params.currentInboundContext,
-            prompt: promptSubmission.prompt,
-          });
-          const promptForModel = buildCurrentInboundPrompt({
-            context: params.currentInboundContext,
-            prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
-          });
+          const promptForSession = promptSubmission.prompt;
+          const promptForModel = promptSubmission.modelPrompt ?? promptSubmission.prompt;
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
           if (promptSubmission.runtimeOnly && runtimeSystemContext) {
             const runtimeSystemPrompt = composeSystemPromptWithHookContext({
