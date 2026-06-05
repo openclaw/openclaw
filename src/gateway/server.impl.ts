@@ -1667,6 +1667,7 @@ export async function startGatewayServer(
       initialConfig: cfgAtStart,
       initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
       initialInternalWriteHash: startupInternalWriteHash,
+      initialSnapshot: startupLastGoodSnapshot,
       watchPath: configSnapshot.path,
       readSnapshot: readConfigFileSnapshot,
       promoteSnapshot: promoteConfigSnapshotToLastKnownGood,
