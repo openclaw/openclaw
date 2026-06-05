@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillsChangeEvent } from "./refresh.js";
 
-type WatchEvent = "add" | "change" | "unlink" | "unlinkDir" | "error";
+type WatchEvent = "add" | "change" | "unlink" | "addDir" | "unlinkDir" | "error";
 type WatchCallback = (watchPath: string) => void;
 
 function createMockWatcher() {
@@ -42,6 +42,24 @@ vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillDirs: vi.fn(() => []),
 }));
 
+// Stub sync-fs methods used by the new SKILL.md polling infrastructure so
+// the mock-chokidar tests stay isolated from the real filesystem.
+const fsWatchFileMock = vi.fn();
+const fsUnwatchFileMock = vi.fn();
+const fsReaddirSyncMock = vi.fn().mockReturnValue([]);
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<{ default: typeof import("node:fs") }>("node:fs");
+  return {
+    ...actual,
+    default: {
+      ...actual.default,
+      readdirSync: fsReaddirSyncMock,
+      watchFile: fsWatchFileMock,
+      unwatchFile: fsUnwatchFileMock,
+    },
+  };
+});
+
 describe("ensureSkillsWatcher", () => {
   beforeAll(async () => {
     refreshModule = await import("./refresh.js");
@@ -49,6 +67,9 @@ describe("ensureSkillsWatcher", () => {
 
   beforeEach(() => {
     watchMock.mockClear();
+    fsWatchFileMock.mockClear();
+    fsUnwatchFileMock.mockClear();
+    fsReaddirSyncMock.mockReset().mockReturnValue([]);
     createdWatchers.length = 0;
   });
 
@@ -100,12 +121,14 @@ describe("ensureSkillsWatcher", () => {
       expect(ignored("/tmp/workspace/skills/build/output.js")).toBe(true);
       expect(ignored("/tmp/workspace/skills/.cache/data.json")).toBe(true);
 
-      // Should NOT ignore normal skill files
+      // Directories and symlinks are watched; all regular files are ignored
       expect(ignored("/tmp/.hidden/skills/index.md")).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill", { isDirectory: () => true })).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill", { isSymbolicLink: () => true })).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill/README.md", {})).toBe(true);
-      expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(false);
+      // SKILL.md is also ignored at file level; addDir/unlinkDir on the skill
+      // directory detect add/remove without holding one FD per SKILL.md.
+      expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(true);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -131,8 +154,19 @@ describe("ensureSkillsWatcher", () => {
       const firstIndex = calls.findIndex(([p]) => p.replaceAll("\\", "/") === workspaceSkillsRoot);
       expect(calls[firstIndex]?.[1]?.depth).toBe(7);
 
-      const changedPath = path.join(workspaceDir, "skills", "group", "demo", "SKILL.md");
-      createdWatchers[firstIndex]?.emit("change", changedPath);
+      // SKILL.md is ignored by chokidar; addDir registers a fs.watchFile poll instead.
+      // Invoke the stored listener with changed stats to verify SkillsChangeEvent fires.
+      const groupDemoDir = path.join(workspaceDir, "skills", "group", "demo");
+      const changedPath = path.join(groupDemoDir, "SKILL.md");
+      createdWatchers[firstIndex]?.emit("addDir", groupDemoDir);
+      const pollListener = fsWatchFileMock.mock.calls.find(([p]) => p === changedPath)?.[2] as
+        | ((
+            curr: { mtimeMs: number; size: number; ino: number },
+            prev: { mtimeMs: number; size: number; ino: number },
+          ) => void)
+        | undefined;
+      expect(pollListener).toBeDefined();
+      pollListener?.({ mtimeMs: 2000, size: 100, ino: 1 }, { mtimeMs: 1000, size: 100, ino: 1 });
       await vi.advanceTimersByTimeAsync(10);
 
       expect(seen).toEqual([
@@ -529,7 +563,7 @@ describe("ensureSkillsWatcher", () => {
     },
   );
 
-  it.each(["add", "change", "unlink", "unlinkDir"] as const)(
+  it.each(["add", "change", "unlink", "addDir", "unlinkDir"] as const)(
     "refreshes skills snapshots on %s",
     async (event) => {
       vi.useFakeTimers();
@@ -542,18 +576,144 @@ describe("ensureSkillsWatcher", () => {
         config: { skills: { load: { watchDebounceMs: 10 } } },
       });
 
-      createdWatchers[0]?.emit(event, "/tmp/workspace/skills/demo/SKILL.md");
+      const changedPath =
+        event === "addDir" || event === "unlinkDir"
+          ? path.join("/tmp/workspace", "skills", "demo")
+          : path.join("/tmp/workspace", "skills", "demo", "SKILL.md");
+      const skillMdPath = path.join("/tmp/workspace", "skills", "demo", "SKILL.md");
+
+      // unlinkDir needs a prior addDir so the poll listener is registered first.
+      if (event === "unlinkDir") {
+        createdWatchers[0]?.emit("addDir", changedPath);
+        await vi.advanceTimersByTimeAsync(10);
+        seen.length = 0;
+        fsWatchFileMock.mockClear();
+      }
+
+      createdWatchers[0]?.emit(event, changedPath);
       await vi.advanceTimersByTimeAsync(10);
 
       expect(seen).toEqual([
         {
           workspaceDir: "/tmp/workspace",
           reason: "watch",
-          changedPath: "/tmp/workspace/skills/demo/SKILL.md",
+          changedPath,
         },
       ]);
+
+      // addDir must register a fs.watchFile poll; unlinkDir must deregister it.
+      if (event === "addDir") {
+        expect(fsWatchFileMock).toHaveBeenCalledWith(
+          skillMdPath,
+          expect.objectContaining({ persistent: false }),
+          expect.any(Function),
+        );
+      } else if (event === "unlinkDir") {
+        expect(fsUnwatchFileMock).toHaveBeenCalledWith(skillMdPath, expect.any(Function));
+      }
     },
   );
+
+  it("registers fs.watchFile for skill dirs that exist at watcher start (initial scan)", async () => {
+    vi.useFakeTimers();
+    // Simulate a pre-existing skill directory in /tmp/workspace/skills only.
+    const mockDirEntry = { name: "demo", isDirectory: () => true, isFile: () => false };
+    const skillsRoot = path.join("/tmp/workspace", "skills");
+    fsReaddirSyncMock.mockImplementation((dir: string) =>
+      dir === skillsRoot ? [mockDirEntry] : [],
+    );
+
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => {
+      seen.push(change);
+    });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    // scanExistingSkillFiles must have registered a poll for the pre-existing skill's SKILL.md.
+    const skillMdPath = path.join("/tmp/workspace", "skills", "demo", "SKILL.md");
+    expect(fsWatchFileMock).toHaveBeenCalledWith(
+      skillMdPath,
+      expect.objectContaining({ persistent: false }),
+      expect.any(Function),
+    );
+
+    // Invoking the stored listener with changed stats must propagate a SkillsChangeEvent.
+    const listener = fsWatchFileMock.mock.calls.find(([p]) => p === skillMdPath)?.[2] as
+      | ((
+          curr: { mtimeMs: number; size: number; ino: number },
+          prev: { mtimeMs: number; size: number; ino: number },
+        ) => void)
+      | undefined;
+    expect(listener).toBeDefined();
+    listener?.({ mtimeMs: 2000, size: 100, ino: 1 }, { mtimeMs: 1000, size: 100, ino: 1 });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(seen).toEqual([
+      { workspaceDir: "/tmp/workspace", reason: "watch", changedPath: skillMdPath },
+    ]);
+  });
+
+  it("polls the watched root's own SKILL.md for direct-root skill directories", async () => {
+    vi.useFakeTimers();
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => {
+      seen.push(change);
+    });
+    // Direct-root skill: extraDir points directly at the skill directory, not a parent.
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config: { skills: { load: { extraDirs: ["/tmp/myskill"], watchDebounceMs: 10 } } },
+    });
+
+    const rootSkillMd = path.join("/tmp/myskill", "SKILL.md");
+    expect(fsWatchFileMock).toHaveBeenCalledWith(
+      rootSkillMd,
+      expect.objectContaining({ persistent: false }),
+      expect.any(Function),
+    );
+
+    // Invoking the stored listener with changed stats must propagate a SkillsChangeEvent.
+    const listener = fsWatchFileMock.mock.calls.find(([p]) => p === rootSkillMd)?.[2] as
+      | ((
+          curr: { mtimeMs: number; size: number; ino: number },
+          prev: { mtimeMs: number; size: number; ino: number },
+        ) => void)
+      | undefined;
+    expect(listener).toBeDefined();
+    listener?.({ mtimeMs: 2000, size: 100, ino: 1 }, { mtimeMs: 1000, size: 100, ino: 1 });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(seen).toEqual([
+      { workspaceDir: "/tmp/workspace", reason: "watch", changedPath: rootSkillMd },
+    ]);
+  });
+
+  it("does not schedule a refresh when fs.watchFile fires on access-only stat changes", async () => {
+    vi.useFakeTimers();
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => {
+      seen.push(change);
+    });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config: { skills: { load: { extraDirs: ["/tmp/myskill"], watchDebounceMs: 10 } } },
+    });
+
+    const rootSkillMd = path.join("/tmp/myskill", "SKILL.md");
+    const listener = fsWatchFileMock.mock.calls.find(([p]) => p === rootSkillMd)?.[2] as
+      | ((
+          curr: { mtimeMs: number; size: number; ino: number },
+          prev: { mtimeMs: number; size: number; ino: number },
+        ) => void)
+      | undefined;
+    expect(listener).toBeDefined();
+    // Access-only: all stat fields identical — must not trigger a snapshot refresh.
+    const stat = { mtimeMs: 1000, size: 42, ino: 7 };
+    listener?.(stat, stat);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(seen).toHaveLength(0);
+  });
 
   it("refreshes skills snapshots when watched skill roots change", () => {
     const seen: SkillsChangeEvent[] = [];

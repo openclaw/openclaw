@@ -29,6 +29,9 @@ type SkillsPathWatchState = {
   timer?: ReturnType<typeof setTimeout>;
   pendingPath?: string;
   readonly subscribers: Set<string>;
+  // SKILL.md paths tracked via fs.watchFile. Stores the listener reference so
+  // fs.unwatchFile removes only this state's listener, not sibling watchers'.
+  readonly polledSkillFiles: Map<string, (curr: fs.Stats, prev: fs.Stats) => void>;
 };
 
 type WatchTarget = {
@@ -398,10 +401,12 @@ export function shouldIgnoreSkillsWatchPath(
     return false;
   }
   if (!stats) {
+    // Unknown type during initial discovery; resolve stats before deciding.
     return false;
   }
-  const normalized = watchPath.replaceAll("\\", "/");
-  return path.posix.basename(normalized) !== "SKILL.md";
+  // Ignore all regular files. Skill directory watches detect add/remove via
+  // addDir/unlinkDir without holding one inotify FD per SKILL.md file.
+  return true;
 }
 
 function resolveWatchDebounceMs(config?: OpenClawConfig): number {
@@ -442,6 +447,7 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
     depth: target.depth,
     debounceMs,
     subscribers: new Set<string>(),
+    polledSkillFiles: new Map<string, (curr: fs.Stats, prev: fs.Stats) => void>(),
   };
 
   const schedule = (changedPath?: string) => {
@@ -466,10 +472,74 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
     }, debounceMs);
   };
 
+  // fs.watchFile polls without holding a per-file inotify/kqueue FD; supplements
+  // addDir/unlinkDir with SKILL.md content-change detection.
+  const pollInterval = Math.max(500, debounceMs);
+  const watchSkillFile = (skillFilePath: string): void => {
+    if (state.polledSkillFiles.has(skillFilePath)) {
+      return;
+    }
+    const listener = (curr: fs.Stats, prev: fs.Stats): void => {
+      // fs.watchFile fires on access too; only schedule on real create/delete/modify.
+      if (curr.mtimeMs !== prev.mtimeMs || curr.size !== prev.size || curr.ino !== prev.ino) {
+        schedule(skillFilePath);
+      }
+    };
+    state.polledSkillFiles.set(skillFilePath, listener);
+    fs.watchFile(skillFilePath, { persistent: false, interval: pollInterval }, listener);
+  };
+  const unwatchSkillFile = (skillFilePath: string): void => {
+    const listener = state.polledSkillFiles.get(skillFilePath);
+    if (!listener) {
+      return;
+    }
+    fs.unwatchFile(skillFilePath, listener);
+    state.polledSkillFiles.delete(skillFilePath);
+  };
+
+  // Direct-root skill directories (extraDirs/plugin dirs pointing at a skill, not a
+  // skills/ parent) need the root's own SKILL.md polled. fs.watchFile fires for
+  // non-existent files too, so this covers create-after-start as well.
+  watchSkillFile(path.join(target.path, "SKILL.md"));
+
+  // Poll SKILL.md in every subdirectory that exists when the watcher starts so
+  // content changes to skills installed before the gateway launched are caught.
+  const scanExistingSkillFiles = (dir: string, remainingDepth: number): void => {
+    if (remainingDepth <= 0) {
+      return;
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const childPath = path.join(dir, entry.name);
+      if (DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(childPath))) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        watchSkillFile(path.join(childPath, "SKILL.md"));
+        scanExistingSkillFiles(childPath, remainingDepth - 1);
+      }
+    }
+  };
+  scanExistingSkillFiles(target.path, target.depth);
+
+  // Regular files are filtered by shouldIgnoreSkillsWatchPath; these fire only
+  // when stats are not yet resolved (initial discovery edge case) or for symlinks.
   watcher.on("add", (p) => schedule(p));
   watcher.on("change", (p) => schedule(p));
   watcher.on("unlink", (p) => schedule(p));
-  watcher.on("unlinkDir", (p) => schedule(p));
+  watcher.on("addDir", (dirPath) => {
+    watchSkillFile(path.join(dirPath, "SKILL.md"));
+    schedule(dirPath);
+  });
+  watcher.on("unlinkDir", (dirPath) => {
+    unwatchSkillFile(path.join(dirPath, "SKILL.md"));
+    schedule(dirPath);
+  });
   watcher.on("error", (err) => {
     log.warn(`skills watcher error (${target.path}): ${String(err)}`);
   });
@@ -481,6 +551,10 @@ function teardownSkillsPathWatcher(state: SkillsPathWatchState): void {
   if (state.timer) {
     clearTimeout(state.timer);
   }
+  for (const [skillFile, listener] of state.polledSkillFiles) {
+    fs.unwatchFile(skillFile, listener);
+  }
+  state.polledSkillFiles.clear();
   void state.watcher.close().catch(() => {});
 }
 
@@ -623,6 +697,10 @@ export async function resetSkillsRefreshForTest(): Promise<void> {
       if (state.timer) {
         clearTimeout(state.timer);
       }
+      for (const [skillFile, listener] of state.polledSkillFiles) {
+        fs.unwatchFile(skillFile, listener);
+      }
+      state.polledSkillFiles.clear();
       try {
         await state.watcher.close();
       } catch {
