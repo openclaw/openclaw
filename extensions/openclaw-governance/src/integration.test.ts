@@ -10,12 +10,7 @@ import { AibomSigner } from "./aibom/signer.js";
 import { verifyStoredEntry } from "./aibom/verifier.js";
 import { CostLedger } from "./cost/ledger.js";
 import { DlpScanner } from "./dlp/scanner.js";
-import type {
-  AibomRow,
-  CostEntryRow,
-  DlpFindingRow,
-  GovernanceStore,
-} from "./store/sqlite.js";
+import type { AibomRow, CostEntryRow, DlpFindingRow, GovernanceStore } from "./store/sqlite.js";
 
 class InMemoryGovernanceStore {
   readonly aibom: AibomRow[] = [];
@@ -146,5 +141,29 @@ describe("governance integration — INFERENCE_END round-trip", () => {
     const rows = (store as unknown as InMemoryGovernanceStore).listCostEntries();
     expect(rows).toHaveLength(1);
     expect(rows[0].runId).toBe("run-12345");
+  });
+
+  it("CostLedger prices cache-read and cache-write tokens", () => {
+    const store = new InMemoryGovernanceStore() as unknown as GovernanceStore;
+    const ledger = new CostLedger(store);
+    const now = 1_700_000_000_000;
+    const entry = ledger.record({
+      runId: "run-cache-1",
+      sessionKey: "agent:main:test:cache",
+      provider: "anthropic",
+      modelId: "claude-opus-4-7",
+      startedAtMs: now - 5_000,
+      endedAtMs: now,
+      usage: {
+        inputTokens: 1_000,
+        outputTokens: 500,
+        cacheReadTokens: 2_000,
+        cacheWriteTokens: 1_000,
+      },
+    });
+    expect(entry.cacheReadTokens).toBe(2_000);
+    expect(entry.cacheWriteTokens).toBe(1_000);
+    const expected = 15 * 0.001 + 75 * 0.0005 + 1.5 * 0.002 + 18.75 * 0.001;
+    expect(entry.costUsd).toBeCloseTo(expected, 6);
   });
 });

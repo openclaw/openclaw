@@ -53,18 +53,52 @@ export type CostSummary = {
 export type PricePerMillion = {
   inputUsd: number;
   outputUsd: number;
+  cacheReadUsd?: number;
+  cacheWriteUsd?: number;
 };
 
+// Cache prices below are list-price approximations; operators with a custom
+// rate card should override via CostLedgerOptions.pricesPerMillion.
 const DEFAULT_PRICES: Record<string, PricePerMillion> = {
-  "anthropic/claude-opus-4-8": { inputUsd: 15, outputUsd: 75 },
-  "anthropic/claude-opus-4-7": { inputUsd: 15, outputUsd: 75 },
-  "anthropic/claude-opus-4-6": { inputUsd: 15, outputUsd: 75 },
-  "anthropic/claude-sonnet-4-6": { inputUsd: 3, outputUsd: 15 },
-  "openai/gpt-5": { inputUsd: 1.25, outputUsd: 10 },
-  "openai/gpt-4o": { inputUsd: 2.5, outputUsd: 10 },
-  "openai/gpt-4o-mini": { inputUsd: 0.15, outputUsd: 0.6 },
-  "google/gemini-2.5-pro": { inputUsd: 1.25, outputUsd: 10 },
-  "google/gemini-2.5-flash": { inputUsd: 0.3, outputUsd: 2.5 },
+  "anthropic/claude-opus-4-8": {
+    inputUsd: 15,
+    outputUsd: 75,
+    cacheReadUsd: 1.5,
+    cacheWriteUsd: 18.75,
+  },
+  "anthropic/claude-opus-4-7": {
+    inputUsd: 15,
+    outputUsd: 75,
+    cacheReadUsd: 1.5,
+    cacheWriteUsd: 18.75,
+  },
+  "anthropic/claude-opus-4-6": {
+    inputUsd: 15,
+    outputUsd: 75,
+    cacheReadUsd: 1.5,
+    cacheWriteUsd: 18.75,
+  },
+  "anthropic/claude-sonnet-4-6": {
+    inputUsd: 3,
+    outputUsd: 15,
+    cacheReadUsd: 0.3,
+    cacheWriteUsd: 3.75,
+  },
+  "openai/gpt-5": { inputUsd: 1.25, outputUsd: 10, cacheReadUsd: 0.125, cacheWriteUsd: 0 },
+  "openai/gpt-4o": { inputUsd: 2.5, outputUsd: 10, cacheReadUsd: 1.25, cacheWriteUsd: 0 },
+  "openai/gpt-4o-mini": { inputUsd: 0.15, outputUsd: 0.6, cacheReadUsd: 0.075, cacheWriteUsd: 0 },
+  "google/gemini-2.5-pro": {
+    inputUsd: 1.25,
+    outputUsd: 10,
+    cacheReadUsd: 0.3125,
+    cacheWriteUsd: 0,
+  },
+  "google/gemini-2.5-flash": {
+    inputUsd: 0.3,
+    outputUsd: 2.5,
+    cacheReadUsd: 0.075,
+    cacheWriteUsd: 0,
+  },
 };
 
 export type CostLedgerOptions = {
@@ -157,7 +191,9 @@ export class CostLedger {
     }
     const inputCost = (tokens.inputTokens / 1_000_000) * price.inputUsd;
     const outputCost = (tokens.outputTokens / 1_000_000) * price.outputUsd;
-    return Math.max(0, inputCost + outputCost);
+    const cacheReadCost = (tokens.cacheReadTokens / 1_000_000) * (price.cacheReadUsd ?? 0);
+    const cacheWriteCost = (tokens.cacheWriteTokens / 1_000_000) * (price.cacheWriteUsd ?? 0);
+    return Math.max(0, inputCost + outputCost + cacheReadCost + cacheWriteCost);
   }
 
   record(input: CostRecordInput): CostEntryRow {
