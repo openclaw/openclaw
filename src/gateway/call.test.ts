@@ -1001,13 +1001,13 @@ describe("buildGatewayConnectionDetails", () => {
     getRuntimeConfig.mockReturnValue({
       gateway: { mode: "local", bind: "loopback", port: 18799 },
     });
-    resolveGatewayPort.mockImplementation((cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => {
-      const envPortRaw = env?.OPENCLAW_GATEWAY_PORT?.trim();
+    resolveGatewayPort.mockImplementation((cfg, env) => {
+      const envPortRaw = (env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_GATEWAY_PORT?.trim();
       const envPort = envPortRaw ? Number(envPortRaw) : Number.NaN;
       if (Number.isInteger(envPort) && envPort > 0 && envPort <= 65_535) {
         return envPort;
       }
-      const configPort = cfg?.gateway?.port;
+      const configPort = (cfg as OpenClawConfig | undefined)?.gateway?.port;
       return typeof configPort === "number" && configPort > 0 ? configPort : 18789;
     });
     const previousPort = process.env.OPENCLAW_GATEWAY_PORT;

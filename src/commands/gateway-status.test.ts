@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => {
     })),
     resolveGatewayPort: vi.fn((cfg?: unknown, env?: NodeJS.ProcessEnv) => {
       const envPortRaw = env?.OPENCLAW_GATEWAY_PORT?.trim();
-      const envPort = envPortRaw ? Number(envPortRaw) : NaN;
+      const envPort = envPortRaw ? Number(envPortRaw) : Number.NaN;
       if (Number.isInteger(envPort) && envPort > 0 && envPort <= 65_535) {
         return envPort;
       }
