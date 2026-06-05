@@ -875,7 +875,7 @@ describe("cron service timer regressions", () => {
         runIsolatedAgentJob: vi.fn(async ({ abortSignal, onExecutionStarted }) => {
           onExecutionStarted?.();
           runnerStarted.resolve(abortSignal);
-          await new Promise<never>(() => {});
+          return await new Promise<never>(() => {});
         }),
       });
 
