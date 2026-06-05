@@ -460,19 +460,43 @@ export function toTrajectoryToolDefinitions(
 ): TrajectoryToolDefinition[] {
   return tools
     .flatMap((tool) => {
-      const name = tool.name?.trim();
+      const name = readTrajectoryToolStringField(tool, "name")?.trim();
       if (!name) {
         return [];
       }
       return [
         {
           name,
-          description: tool.description,
-          parameters: sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(tool.parameters)),
+          description: readTrajectoryToolStringField(tool, "description"),
+          parameters: sanitizeDiagnosticPayload(
+            limitTrajectoryPayloadValue(readTrajectoryToolParameters(tool)),
+          ),
         },
       ];
     })
     .toSorted((left, right) => left.name.localeCompare(right.name));
+}
+
+function readTrajectoryToolStringField(
+  tool: Readonly<{ name?: string; description?: string; parameters?: unknown }>,
+  key: "name" | "description",
+): string | undefined {
+  try {
+    const value = tool[key];
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readTrajectoryToolParameters(
+  tool: Readonly<{ name?: string; description?: string; parameters?: unknown }>,
+): unknown {
+  try {
+    return tool.parameters;
+  } catch {
+    return undefined;
+  }
 }
 
 export function createTrajectoryRuntimeRecorder(
