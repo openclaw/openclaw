@@ -44,7 +44,7 @@ describe("tui session actions", () => {
         finalizeAssistant: vi.fn(),
         clearPendingUsers: vi.fn(),
         clearAll: vi.fn(),
-        reconcilePendingUsers: vi.fn(),
+        reconcilePendingUsers: vi.fn().mockReturnValue([]),
         restorePendingUsers: vi.fn(),
       } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
@@ -508,7 +508,7 @@ describe("tui session actions", () => {
       clearPendingUsers: vi.fn(),
       addUser: vi.fn(),
       finalizeAssistant: vi.fn(),
-      reconcilePendingUsers: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
       restorePendingUsers: vi.fn(),
       updateAssistant,
       startTool: vi.fn(),
@@ -543,7 +543,7 @@ describe("tui session actions", () => {
       clearPendingUsers: vi.fn(),
       addUser: vi.fn(),
       finalizeAssistant: vi.fn(),
-      reconcilePendingUsers: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
       restorePendingUsers: vi.fn(),
       updateAssistant,
       startTool: vi.fn(),
@@ -575,7 +575,7 @@ describe("tui session actions", () => {
       clearPendingUsers: vi.fn(),
       addUser: vi.fn(),
       finalizeAssistant: vi.fn(),
-      reconcilePendingUsers: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
       restorePendingUsers: vi.fn(),
       updateAssistant,
       startTool: vi.fn(),
@@ -900,6 +900,58 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("aborted");
   });
 
+  it("drops the optimistic pending row when aborting a not-yet-registered submit", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    const dropPendingUser = vi.fn();
+    const state = createBaseState({
+      activeChatRunId: null,
+      pendingChatRunId: "run-1",
+      pendingOptimisticUserMessage: true,
+      pendingSubmitDraft: { runId: "run-1", text: "hello" },
+    });
+
+    const { abortActive } = createTestSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      chatLog: {
+        addSystem: vi.fn(),
+        clearAll: vi.fn(),
+        dropPendingUser,
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      state,
+    });
+
+    await abortActive();
+
+    expect(dropPendingUser).toHaveBeenCalledWith("run-1");
+    expect(state.pendingSubmitDraft).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+  });
+
+  it("keeps the optimistic row when aborting a run that already registered", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    const dropPendingUser = vi.fn();
+    const state = createBaseState({
+      activeChatRunId: null,
+      pendingChatRunId: "run-1",
+      pendingOptimisticUserMessage: true,
+      pendingSubmitDraft: null,
+    });
+
+    const { abortActive } = createTestSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      chatLog: {
+        addSystem: vi.fn(),
+        clearAll: vi.fn(),
+        dropPendingUser,
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      state,
+    });
+
+    await abortActive();
+
+    expect(dropPendingUser).not.toHaveBeenCalled();
+  });
+
   it("passes the selected agent when aborting selected global runs", async () => {
     const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
     const state = createBaseState({
@@ -1133,7 +1185,7 @@ describe("tui session actions", () => {
       finalizeAssistant: vi.fn(),
       clearAll: vi.fn(),
       clearPendingUsers: vi.fn(),
-      reconcilePendingUsers: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
       restorePendingUsers: vi.fn(),
     };
 

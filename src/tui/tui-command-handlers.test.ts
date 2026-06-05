@@ -89,6 +89,7 @@ function createHarness(params?: {
   currentSessionKey?: string;
   abortActive?: AbortActiveMock;
   consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
+  isRunObserved?: (runId: string) => boolean;
   flushPendingHistoryRefreshIfIdle?: FlushPendingHistoryRefreshMock;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
@@ -104,6 +105,7 @@ function createHarness(params?: {
   const addUser = vi.fn();
   const addPendingUser = vi.fn();
   const dropPendingUser = vi.fn();
+  const rekeyPendingUser = vi.fn();
   const addSystem = vi.fn();
   const clearTools = vi.fn();
   const reserveAssistantSlot = vi.fn();
@@ -134,6 +136,7 @@ function createHarness(params?: {
     activeChatRunId: params?.activeChatRunId ?? null,
     pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
     pendingChatRunId: params?.pendingChatRunId ?? null,
+    pendingSubmitDraft: null as { runId: string; text: string } | null,
     activityStatus: params?.activityStatus ?? "idle",
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
@@ -153,6 +156,7 @@ function createHarness(params?: {
       addUser,
       addPendingUser,
       dropPendingUser,
+      rekeyPendingUser,
       addSystem,
       clearTools,
       reserveAssistantSlot,
@@ -178,6 +182,7 @@ function createHarness(params?: {
     forgetLocalRunId,
     forgetLocalBtwRunId: vi.fn(),
     consumeCompletedRunForPendingSend: params?.consumeCompletedRunForPendingSend,
+    isRunObserved: params?.isRunObserved,
     flushPendingHistoryRefreshIfIdle: params?.flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
@@ -200,6 +205,7 @@ function createHarness(params?: {
     addUser,
     addPendingUser,
     dropPendingUser,
+    rekeyPendingUser,
     addSystem,
     clearTools,
     reserveAssistantSlot,
@@ -274,8 +280,7 @@ describe("tui command handlers", () => {
   });
 
   it("forwards unknown slash commands to the gateway", async () => {
-    const { handleCommand, sendChat, addPendingUser, addSystem, requestRender } =
-      createHarness();
+    const { handleCommand, sendChat, addPendingUser, addSystem, requestRender } = createHarness();
 
     await handleCommand("/unregistered-command");
 
@@ -286,6 +291,49 @@ describe("tui command handlers", () => {
       message: "/unregistered-command",
     });
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("re-keys the optimistic pending row to the gateway-accepted runId in place", async () => {
+    const sendChat = vi.fn().mockResolvedValue({ runId: "r-accepted" });
+    const harness = createHarness({ sendChat });
+
+    await harness.handleCommand("hello");
+
+    const localRunId = harness.addPendingUser.mock.calls[0]?.[0];
+    expect(localRunId).toEqual(expect.any(String));
+    expect(localRunId).not.toBe("r-accepted");
+    // Re-key happens in place (no drop/re-add) so the row keeps its position.
+    expect(harness.rekeyPendingUser).toHaveBeenCalledWith(localRunId, "r-accepted");
+    expect(harness.addPendingUser).toHaveBeenCalledTimes(1);
+    expect(harness.dropPendingUser).not.toHaveBeenCalled();
+    expect(harness.state.pendingSubmitDraft).toEqual({ runId: "r-accepted", text: "hello" });
+  });
+
+  it("does not re-arm the submit draft when the accepted run already emitted events", async () => {
+    const sendChat = vi.fn().mockResolvedValue({ runId: "r-accepted" });
+    const isRunObserved = vi.fn((runId: string) => runId === "r-accepted");
+    const harness = createHarness({ sendChat, isRunObserved });
+
+    await harness.handleCommand("hello");
+
+    // The accepted run already registered, so the draft must not be re-armed —
+    // otherwise a later abort would drop a row whose reply already rendered.
+    expect(harness.rekeyPendingUser).toHaveBeenCalledWith(expect.any(String), "r-accepted");
+    expect(harness.state.pendingSubmitDraft).toBeNull();
+  });
+
+  it("clears the submit draft when the accepted run already completed", async () => {
+    const sendChat = vi.fn().mockResolvedValue({ runId: "r-accepted" });
+    const consumeCompletedRunForPendingSend = vi
+      .fn()
+      .mockReturnValue(true) as ConsumeCompletedRunMock;
+    const harness = createHarness({ sendChat, consumeCompletedRunForPendingSend });
+
+    await harness.handleCommand("hello");
+
+    expect(harness.addPendingUser).toHaveBeenCalledTimes(1);
+    expect(harness.dropPendingUser).not.toHaveBeenCalled();
+    expect(harness.state.pendingSubmitDraft).toBeNull();
   });
 
   it("passes the current backing session id when sending to the gateway", async () => {
@@ -620,7 +668,12 @@ describe("tui command handlers", () => {
 
   it("clears the pending runId if sendChat fails", async () => {
     const sendChat = vi.fn().mockRejectedValue(new Error("boom"));
-    const { handleCommand, sendChat: sendChatMock, dropPendingUser, state } = createHarness({
+    const {
+      handleCommand,
+      sendChat: sendChatMock,
+      dropPendingUser,
+      state,
+    } = createHarness({
       sendChat,
     });
 

@@ -517,7 +517,10 @@ export function createSessionActions(context: SessionActionContext) {
           );
         }
       }
-      chatLog.reconcilePendingUsers(historyUsers);
+      const reconciledRunIds = chatLog.reconcilePendingUsers(historyUsers);
+      if (state.pendingSubmitDraft && reconciledRunIds.includes(state.pendingSubmitDraft.runId)) {
+        state.pendingSubmitDraft = null;
+      }
       chatLog.restorePendingUsers();
       // Restore a run still streaming for this session+agent that the gateway
       // reports as in-flight. Its live deltas were delivered to a per-agent key
@@ -552,6 +555,7 @@ export function createSessionActions(context: SessionActionContext) {
     state.activeChatRunId = null;
     state.pendingChatRunId = null;
     state.pendingOptimisticUserMessage = false;
+    state.pendingSubmitDraft = null;
     setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
@@ -573,6 +577,7 @@ export function createSessionActions(context: SessionActionContext) {
     state.activeChatRunId = null;
     state.pendingChatRunId = null;
     state.pendingOptimisticUserMessage = false;
+    state.pendingSubmitDraft = null;
     setActivityStatus("idle");
     state.currentSessionId = null;
     const defaults = lastSessionDefaults;
@@ -623,6 +628,7 @@ export function createSessionActions(context: SessionActionContext) {
     const abortsPendingRun = Boolean(
       state.pendingChatRunId && runIds.includes(state.pendingChatRunId),
     );
+    const pendingRunId = state.pendingChatRunId;
     try {
       for (const runId of runIds) {
         await client.abortChat({
@@ -634,6 +640,10 @@ export function createSessionActions(context: SessionActionContext) {
       state.pendingChatRunId = null;
       if (abortsPendingRun) {
         state.pendingOptimisticUserMessage = false;
+        if (pendingRunId && state.pendingSubmitDraft?.runId === pendingRunId) {
+          chatLog.dropPendingUser(pendingRunId);
+          state.pendingSubmitDraft = null;
+        }
       }
       setActivityStatus("aborted");
     } catch (err) {

@@ -62,6 +62,7 @@ type CommandHandlerContext = {
   forgetLocalRunId?: (runId: string) => void;
   forgetLocalBtwRunId?: (runId: string) => void;
   consumeCompletedRunForPendingSend?: (runId: string) => boolean;
+  isRunObserved?: (runId: string) => boolean;
   flushPendingHistoryRefreshIfIdle?: () => void;
   runAuthFlow?: (params: {
     provider?: string;
@@ -118,6 +119,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     forgetLocalRunId,
     forgetLocalBtwRunId,
     consumeCompletedRunForPendingSend,
+    isRunObserved,
     flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
@@ -748,6 +750,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.reserveAssistantSlot(state.activeChatRunId);
         }
         chatLog.addPendingUser(runId, text);
+        state.pendingSubmitDraft = { runId, text };
         noteLocalRunId?.(runId);
         state.pendingOptimisticUserMessage = true;
         setActivityStatus("sending");
@@ -774,9 +777,21 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           if (!acceptedRunAlreadyCompleted) {
             noteLocalRunId?.(acceptedRunId);
           }
+          if (state.pendingSubmitDraft?.runId === runId) {
+            // If the accepted run already emitted events, it is registered;
+            // re-arming the draft would let a later abort drop a row whose
+            // reply already rendered.
+            state.pendingSubmitDraft = isRunObserved?.(acceptedRunId)
+              ? null
+              : { runId: acceptedRunId, text };
+          }
+          chatLog.rekeyPendingUser(runId, acceptedRunId);
         }
         if (state.pendingOptimisticUserMessage) {
           if (acceptedRunAlreadyCompleted) {
+            if (state.pendingSubmitDraft?.runId === acceptedRunId) {
+              state.pendingSubmitDraft = null;
+            }
             state.pendingOptimisticUserMessage = false;
             state.pendingChatRunId = null;
             setActivityStatus("idle");
@@ -802,6 +817,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         state.pendingOptimisticUserMessage = false;
         state.pendingChatRunId = null;
         state.activeChatRunId = null;
+        if (state.pendingSubmitDraft?.runId === runId) {
+          state.pendingSubmitDraft = null;
+        }
         chatLog.dropPendingUser(runId);
       }
       chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);

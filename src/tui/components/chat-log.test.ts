@@ -173,6 +173,21 @@ describe("ChatLog", () => {
     expect(chatLog.render(120).join("\n")).toContain("queued hello");
   });
 
+  it("re-keys a pending user in place without moving its position", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("local", "queued hello", 1_000);
+    chatLog.startAssistant("hi there", "r-accepted");
+
+    expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered.indexOf("queued hello")).toBeLessThan(rendered.indexOf("hi there"));
+    // The row is now addressable by the gateway-assigned runId.
+    expect(chatLog.dropPendingUser("r-accepted")).toBe(true);
+    expect(chatLog.countPendingUsers()).toBe(0);
+  });
+
   it("reconciles pending users against rebuilt history using timestamps", () => {
     const chatLog = new ChatLog(40);
 
