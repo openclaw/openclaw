@@ -1,4 +1,4 @@
-"""Tests for the rockie-gpu CLI tenant/api-base resolution + `list` alias.
+"""Tests for the rockie-gpu CLI tenant/api-base resolution.
 
 The CLI file lives at ``overlay/multitenant/rockie-gpu`` (no ``.py``
 extension, hyphen in name), so we load it via ``SourceFileLoader``
@@ -139,7 +139,7 @@ def test_build_request_sends_auth_token_and_tenant_id(cli, monkeypatch):
     # on the request object.
     monkeypatch.setenv("ROCKIELAB_TENANT_TOKEN", "service-token")
     monkeypatch.setenv("ROCKIELAB_TENANT_ID", "t-aaa")
-    req = cli._build_request("GET", "/api/gpu/prices", None)
+    req = cli._build_request("GET", "/api/gpu/market", None)
     # urllib title-cases header keys internally; get_header() re-titles
     # the lookup key so this comparison is case-stable.
     assert req.get_header("X-tenant-token") == "service-token"
@@ -198,18 +198,17 @@ def test_missing_config_returns_empty_dict(cli):
 
 
 # ---------------------------------------------------------------------------
-# argparse `list` alias dispatches to the same handler as `list-prices`
+# argparse rejects the removed list-prices/list command surface
 # ---------------------------------------------------------------------------
 
 
-def test_list_alias_dispatches_to_list_prices_handler(cli):
+@pytest.mark.parametrize("verb", ["list-prices", "list"])
+def test_removed_price_list_verbs_are_rejected(cli, verb, capsys):
     parser = cli.build_parser()
-    canonical = parser.parse_args(["list-prices"])
-    alias = parser.parse_args(["list"])
-    # `is` equality — not a string match — per Phase-3.5 audit fix:
-    # argparse aliases display the canonical name in --help, so a
-    # textual comparison would be misleading.
-    assert alias.func is canonical.func
+    with pytest.raises(SystemExit) as excinfo:
+        parser.parse_args([verb])
+    assert excinfo.value.code == 2
+    assert "market" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

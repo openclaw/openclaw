@@ -385,8 +385,8 @@ RUN chmod 755 /usr/local/bin/broker
 
 # Drop in the rockie-gpu CLI — the agent-facing handle on the GPU
 # broker (Phase 5 step 5 of the active MVP plan). Symlinked into
-# /usr/local/bin so `rockie-gpu list-prices ...` works from any cwd
-# inside the runtime, the same shape as `gh` or `flyctl`.
+# /usr/local/bin so `rockie-gpu market ...` and other `rockie-gpu`
+# commands are available from any cwd inside the runtime.
 RUN install -d -m 0755 /opt/rockie-gpu
 COPY --chown=root:root overlay/multitenant/rockie-gpu /opt/rockie-gpu/rockie-gpu
 RUN chmod 755 /opt/rockie-gpu/rockie-gpu && \

@@ -33,8 +33,6 @@ Subcommands:
                    [--spot | --on-demand] [--dry-run] [--human]
                    [--admin-debug [--provider P]]
   audit-open-spend [--demo-safe] [--tenant T] [--human] [--admin-debug]
-  list-prices      [--gpu GPU] [--spot] [--provider P] [--human]
-                     (DEPRECATED — use ``market``)
   status           POD_ID [--provider P]
   spent
   teardown         POD_ID [--provider P]
@@ -558,31 +556,6 @@ def cmd_audit_open_spend(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Subcommand: list-prices (DEPRECATED — use market)
-# ---------------------------------------------------------------------------
-
-
-def cmd_list_prices(args: argparse.Namespace) -> int:
-    # Deprecation advisory goes to STDERR so it never pollutes the JSON-lines
-    # stdout an agent parses. The command keeps working — it just routes to
-    # the deidentified /prices surface and nudges the caller toward `market`.
-    sys.stderr.write(
-        "rockie-gpu: list-prices is deprecated; use rockie-gpu market\n"
-    )
-    query: dict[str, str] = {}
-    if args.gpu:
-        query["gpu"] = args.gpu
-    if args.spot:
-        query["spot"] = "true"
-    if args.provider:
-        query["provider"] = args.provider
-    qs = ("?" + urllib.parse.urlencode(query)) if query else ""
-    rows = _http("GET", f"/api/gpu/prices{qs}")
-    _emit(rows or [], human=args.human)
-    return 0
-
-
-# ---------------------------------------------------------------------------
 # Subcommand: status
 # ---------------------------------------------------------------------------
 
@@ -766,20 +739,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_human(p_audit)
     p_audit.set_defaults(func=cmd_audit_open_spend)
-
-    # ---- list-prices (DEPRECATED) ----
-    p_prices = sub.add_parser(
-        "list-prices",
-        aliases=["list"],
-        help="DEPRECATED — use `market`. Ranked deidentified price list.",
-    )
-    p_prices.add_argument("--gpu", help="Filter by gpu_type (e.g. A100_80GB).")
-    p_prices.add_argument(
-        "--spot", action="store_true", help="Show spot/preemptible quotes."
-    )
-    p_prices.add_argument("--provider", default=None, help="Filter to one provider.")
-    _add_human(p_prices)
-    p_prices.set_defaults(func=cmd_list_prices)
 
     p_status = sub.add_parser("status", help="Pod status + utilization.")
     p_status.add_argument("pod_id")
