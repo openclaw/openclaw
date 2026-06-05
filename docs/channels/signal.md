@@ -97,6 +97,7 @@ Recommended config:
       enabled: true,
       account: "+15551234567",
       cliPath: "signal-cli",
+      receiveMode: "on-start",
       ingressMode: "note-to-self",
       dmPolicy: "disabled",
       groupPolicy: "disabled",
@@ -108,6 +109,7 @@ Recommended config:
 Behavior:
 
 - Your Note to Self messages are accepted even when your own account would be ignored in `standard` mode.
+- Use `receiveMode: "on-start"` with native `signal-cli` so the daemon starts receiving self-chat sync events immediately.
 - Use `dmPolicy: "disabled"` if no external Signal user should be able to request pairing.
 - Use the default `dmPolicy: "pairing"` only when external Signal users should be able to request pairing with this account.
 - Use native `signal-cli` mode when possible. Container wrappers have historically lagged behind native `signal-cli` on Note to Self receive payloads.
