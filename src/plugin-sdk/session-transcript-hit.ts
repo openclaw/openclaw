@@ -40,6 +40,7 @@ function normalizeQmdSessionStem(stem: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/** Canonical session identity parsed from a transcript search-hit path. */
 export type SessionTranscriptHitIdentity = {
   stem: string;
   liveStem?: string;
@@ -71,6 +72,7 @@ export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): str
   return extractTranscriptIdentityFromSessionsMemoryHit(hitPath)?.stem ?? null;
 }
 
+/** Parse live/archive ownership metadata from a sessions-memory hit path. */
 export function extractTranscriptIdentityFromSessionsMemoryHit(
   hitPath: string,
 ): SessionTranscriptHitIdentity | null {

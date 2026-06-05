@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
+/** Browser control credentials resolved from config, env, or generated setup state. */
 export type BrowserControlAuth = {
   /** Bearer token accepted by the browser control HTTP surface. */
   token?: string;

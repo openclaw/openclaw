@@ -25,6 +25,7 @@ export {
   listImportedBundledPluginFacadeIds,
 } from "./facade-loader.js";
 
+/** Create a lazy value/function proxy for one property of a facade module. */
 export function createLazyFacadeValue<TFacade extends object, K extends keyof TFacade>(
   loadFacadeModule: () => TFacade,
   key: K,
@@ -188,6 +189,7 @@ function buildFacadeActivationCheckParams(
   };
 }
 
+/** Load a bundled or registry-backed plugin public surface, tracking activation ownership. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
   params: BundledPluginPublicSurfaceParams,
@@ -213,6 +215,7 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
   });
 }
 
+/** Check whether an activated bundled plugin public surface may be loaded. */
 export function canLoadActivatedBundledPluginPublicSurface(params: {
   dirName: string;
   artifactBasename: string;
@@ -223,6 +226,7 @@ export function canLoadActivatedBundledPluginPublicSurface(params: {
   ).allowed;
 }
 
+/** Load an activated plugin public surface or throw when activation policy blocks access. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
@@ -235,6 +239,7 @@ export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends obje
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);
 }
 
+/** Load an activated plugin public surface, returning null when activation policy blocks access. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
@@ -250,12 +255,14 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);
 }
 
+/** Reset facade runtime caches and activation-check test overrides. */
 export function resetFacadeRuntimeStateForTest(): void {
   resetFacadeLoaderStateForTest();
   facadeActivationCheckRuntimeModule = undefined;
   facadeActivationCheckRuntimeLoaders.clear();
 }
 
+/** Test-only hooks for facade activation and resolution checks. */
 export const testing = {
   setFacadeActivationCheckRuntimeForTest,
   loadFacadeModuleAtLocationSync,

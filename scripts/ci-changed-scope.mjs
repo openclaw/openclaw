@@ -1,3 +1,4 @@
+// Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -63,6 +64,9 @@ const NODE_FAST_SCOPE_RE = new RegExp(
 /**
  * @param {string[]} changedPaths
  * @returns {ChangedScope}
+ */
+/**
+ * Detects high-level CI scope from changed file paths.
  */
 export function detectChangedScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
@@ -158,6 +162,9 @@ export function detectChangedScope(changedPaths) {
  * @param {string[]} changedPaths
  * @returns {NodeFastScope}
  */
+/**
+ * Detects whether node-fast CI can cover the changed paths.
+ */
 export function detectNodeFastScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
     return { runFastOnly: false, runPluginContracts: false, runCiRouting: false };
@@ -207,6 +214,9 @@ function detectInstallSmokeScopeForPath(path) {
  * @param {string[]} changedPaths
  * @returns {InstallSmokeScope}
  */
+/**
+ * Detects whether install-smoke CI should run for changed paths.
+ */
 export function detectInstallSmokeScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
     return { runFastInstallSmoke: true, runFullInstallSmoke: true };
@@ -231,6 +241,9 @@ export function detectInstallSmokeScope(changedPaths) {
  * @param {string} [head]
  * @param {string} [cwd]
  * @returns {string[]}
+ */
+/**
+ * Lists changed paths for CI base/head inputs.
  */
 export function listChangedPaths(
   base,
@@ -262,6 +275,9 @@ export function listChangedPaths(
  * @param {ChangedScope} scope
  * @param {string} [outputPath]
  * @param {InstallSmokeScope} [installSmokeScope]
+ */
+/**
+ * Writes CI scope decisions to GitHub Actions output.
  */
 export function writeGitHubOutput(
   scope,

@@ -44,6 +44,7 @@ type ToolPayloadTextBlock = {
   text: string;
 };
 
+/** Minimal tool-result-like object shape accepted by payload extraction helpers. */
 export type ToolPayloadCarrier = {
   /** Structured payload preferred over content text when present. */
   details?: unknown;

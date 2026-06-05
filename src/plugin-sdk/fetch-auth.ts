@@ -4,6 +4,7 @@ import {
   normalizeRequestInitHeadersForFetch,
 } from "../infra/fetch-headers.js";
 
+/** Token source used by scoped bearer-auth fetch retries. */
 export type ScopeTokenProvider = {
   /** Return a bearer token for the requested OAuth/API scope. */
   getAccessToken: (scope: string) => Promise<string>;

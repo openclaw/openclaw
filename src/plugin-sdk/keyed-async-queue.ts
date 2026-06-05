@@ -1,4 +1,5 @@
 // Keyed async queue helpers serialize async plugin work by key while preserving parallelism.
+/** Optional lifecycle hooks fired around each queued task. */
 export type KeyedAsyncQueueHooks = {
   onEnqueue?: () => void;
   onSettle?: () => void;
@@ -33,6 +34,7 @@ export function enqueueKeyedTask<T>(params: {
   return current;
 }
 
+/** Small per-key async queue wrapper for plugin runtimes that need serialized work. */
 export class KeyedAsyncQueue {
   private readonly tails = new Map<string, Promise<void>>();
 
