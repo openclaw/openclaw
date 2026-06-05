@@ -9,6 +9,7 @@ export { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 export { agentCommandFromIngress } from "../commands/agent.js";
 export { getRuntimeConfig } from "../config/io.js";
 export { updateSessionStore } from "../config/sessions.js";
+export { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
 export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 export { requestHeartbeat } from "../infra/heartbeat-wake.js";
 export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -18,8 +19,10 @@ export { enqueueSystemEvent } from "../infra/system-events.js";
 export { deleteMediaBuffer } from "../media/store.js";
 export { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 export { defaultRuntime } from "../runtime.js";
+export { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 export { parseMessageWithAttachments, resolveChatAttachmentMaxBytes } from "./chat-attachments.js";
 export { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
+export { buildChatSendUserTurnMedia, persistChatSendImages } from "./server-methods/chat.js";
 export {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,

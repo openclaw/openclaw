@@ -8,6 +8,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
@@ -114,6 +115,8 @@ export type AgentCommandOpts = {
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
+  /** Prepared user-turn transcript persistence for caller-owned text/media metadata. */
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Internal runs can execute against a session without updating visible status/model/usage. */
   sessionEffects?: "visible" | "internal";
   /** Internal handoffs can write transcript turns without changing user-facing model/usage state. */

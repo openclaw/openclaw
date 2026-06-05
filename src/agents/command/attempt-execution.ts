@@ -579,6 +579,7 @@ export function runAgentAttempt(params: {
         runId: params.runId,
         extraSystemPrompt: params.opts.extraSystemPrompt,
         inputProvenance: params.opts.inputProvenance,
+        userTurnTranscriptRecorder: params.opts.userTurnTranscriptRecorder,
         cliSessionId: nextCliSessionId,
         cliSessionBinding:
           nextCliSessionId === activeCliSessionBinding?.sessionId
@@ -697,6 +698,7 @@ export function runAgentAttempt(params: {
     toolsAllow: params.opts.toolsAllow,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
+    userTurnTranscriptRecorder: params.opts.userTurnTranscriptRecorder,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
     disableMessageTool: params.opts.disableMessageTool,
     streamParams: params.opts.streamParams,

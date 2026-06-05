@@ -1094,7 +1094,7 @@ function normalizeOptionalChatSystemReceipt(
   return { ok: true, receipt: receipt || undefined };
 }
 
-function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): boolean {
+function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"] | undefined): boolean {
   const info = client?.connect?.client;
   return (
     info?.id === GATEWAY_CLIENT_NAMES.CLI &&
@@ -1109,12 +1109,12 @@ function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"
   return scopes.includes(ADMIN_SCOPE);
 }
 
-async function persistChatSendImages(params: {
+export async function persistChatSendImages(params: {
   images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
   offloadedRefs: OffloadedRef[];
-  client: GatewayRequestHandlerOptions["client"];
-  logGateway: GatewayRequestContext["logGateway"];
+  client: GatewayRequestHandlerOptions["client"] | undefined;
+  logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
 }): Promise<SavedMedia[]> {
   if (
     (params.images.length === 0 && params.offloadedRefs.length === 0) ||
@@ -1355,7 +1355,9 @@ function applyChatSendManagedMediaFields(ctx: MsgContext, fields: ChatSendManage
   }
 }
 
-function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserTurnInput["media"]> {
+export function buildChatSendUserTurnMedia(
+  savedMedia: SavedMedia[],
+): NonNullable<UserTurnInput["media"]> {
   return savedMedia.map((entry) => ({
     path: entry.path,
     contentType: entry.contentType,

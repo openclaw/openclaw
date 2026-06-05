@@ -68,13 +68,49 @@ const sanitizeInboundSystemTagsMock = vi.hoisted(() =>
 );
 const updatePairedDeviceMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const updatePairedNodeMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const persistChatSendImagesMock = vi.hoisted(() =>
+  vi.fn(async () => [
+    {
+      id: "saved-offload-1",
+      path: "/tmp/openclaw/media/offloaded-image.png",
+      contentType: "image/png",
+      size: 0,
+    },
+  ]),
+);
+const buildChatSendUserTurnMediaMock = vi.hoisted(() =>
+  vi.fn((savedMedia: Array<{ path: string; contentType?: string }>) =>
+    savedMedia.map((entry) => ({
+      path: entry.path,
+      contentType: entry.contentType,
+    })),
+  ),
+);
+const nodeUserTurnTranscriptRecorder = vi.hoisted(() => ({
+  message: undefined,
+  resolveMessage: vi.fn(),
+  markRuntimePersistencePending: vi.fn(),
+  markRuntimePersisted: vi.fn(),
+  markBlocked: vi.fn(),
+  hasPersisted: vi.fn(() => false),
+  isBlocked: vi.fn(() => false),
+  hasRuntimePersistencePending: vi.fn(() => false),
+  waitForRuntimePersistence: vi.fn(async () => {}),
+  persistApproved: vi.fn(async () => undefined),
+  persistFallback: vi.fn(async () => undefined),
+}));
+const createUserTurnTranscriptRecorderMock = vi.hoisted(() =>
+  vi.fn(() => nodeUserTurnTranscriptRecorder),
+);
 
 const runtimeMocks = vi.hoisted(() => ({
   agentCommandFromIngress: ingressAgentCommandMock,
+  buildChatSendUserTurnMedia: buildChatSendUserTurnMediaMock,
   buildOutboundSessionContext: vi.fn(({ sessionKey }: { sessionKey: string }) => ({
     key: sessionKey,
     agentId: "main",
   })),
+  createUserTurnTranscriptRecorder: createUserTurnTranscriptRecorderMock,
   createOutboundSendDeps: vi.fn((deps: unknown) => deps),
   defaultRuntime: {},
   deleteMediaBuffer: vi.fn(async () => {}),
@@ -95,6 +131,7 @@ const runtimeMocks = vi.hoisted(() => ({
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
+  persistChatSendImages: persistChatSendImagesMock,
   registerApnsRegistration: registerApnsRegistrationMock,
   requestHeartbeat: vi.fn(),
   resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
@@ -128,6 +165,7 @@ const runtimeMocks = vi.hoisted(() => ({
       model: entry?.model ?? "default-model",
     }),
   ),
+  runAgentHarnessBeforeMessageWriteHook: vi.fn(({ message }: { message: unknown }) => message),
   sanitizeInboundSystemTags: sanitizeInboundSystemTagsMock,
   scopedHeartbeatWakeOptions: vi.fn((sessionKey?: string, opts?: { reason: string }) => {
     const wakeOptions = { reason: opts?.reason };
@@ -1105,6 +1143,12 @@ describe("notifications changed events", () => {
 describe("agent request events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
+    buildChatSendUserTurnMediaMock.mockClear();
+    createUserTurnTranscriptRecorderMock.mockClear();
+    persistChatSendImagesMock.mockClear();
+    nodeUserTurnTranscriptRecorder.markRuntimePersistencePending.mockClear();
+    nodeUserTurnTranscriptRecorder.markBlocked.mockClear();
+    nodeUserTurnTranscriptRecorder.persistFallback.mockClear();
     parseMessageWithAttachmentsMock.mockReset();
     updateSessionStoreMock.mockClear();
     loadSessionEntryMock.mockClear();
@@ -1222,6 +1266,198 @@ describe("agent request events", () => {
     expect(parseCall?.[0]).toBe("describe");
     expect(Array.isArray(parseCall?.[1])).toBe(true);
     expectFields(parseCall?.[2], { supportsInlineImages: false });
+  });
+
+  it("preserves parsed offloaded refs for node request user-turn transcripts", async () => {
+    const ctx = buildCtx();
+    loadSessionEntryMock.mockReturnValue({
+      ...buildSessionLookup("agent:main:main", {
+        sessionId: "sid-node-share",
+      }),
+      canonicalKey: "agent:main:main",
+    });
+    const offloadedRef = {
+      id: "offload-node-image",
+      mediaRef: "media://inbound/offload-node-image",
+      path: "/tmp/openclaw/media/offloaded-image.png",
+      mimeType: "image/png",
+    };
+    parseMessageWithAttachmentsMock.mockResolvedValueOnce({
+      message: "parsed message\n[media attached: media://inbound/offload-node-image]",
+      images: [],
+      imageOrder: ["offloaded"],
+      offloadedRefs: [offloadedRef],
+    });
+
+    await handleNodeEvent(ctx, "node-share", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "describe this",
+        sessionKey: "agent:main:main",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "share.png",
+            content: "AAAA",
+          },
+        ],
+      }),
+    });
+
+    expect(persistChatSendImagesMock).toHaveBeenCalledWith({
+      images: [],
+      imageOrder: ["offloaded"],
+      offloadedRefs: [offloadedRef],
+      client: undefined,
+      logGateway: ctx.logGateway,
+    });
+    expect(buildChatSendUserTurnMediaMock).toHaveBeenCalledWith([
+      {
+        id: "saved-offload-1",
+        path: "/tmp/openclaw/media/offloaded-image.png",
+        contentType: "image/png",
+        size: 0,
+      },
+    ]);
+    expect(createUserTurnTranscriptRecorderMock).toHaveBeenCalledTimes(1);
+    const recorderArg = mockCallArg(createUserTurnTranscriptRecorderMock, 0) as {
+      input?: unknown;
+      target?: () => unknown;
+    };
+    expect(recorderArg.input).toEqual({
+      text: "describe this",
+      timestamp: expect.any(Number),
+      idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}:user$/),
+      media: [
+        {
+          path: "/tmp/openclaw/media/offloaded-image.png",
+          contentType: "image/png",
+        },
+      ],
+      mediaOnlyText: "[User sent media without caption]",
+    });
+    expect(recorderArg.target?.()).toMatchObject({
+      sessionId: "sid-node-share",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+    });
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    const agentCommandOpts = mockCallArg(agentCommandMock) as {
+      message?: unknown;
+      userTurnTranscriptRecorder?: unknown;
+    };
+    expect(agentCommandOpts.message).toBe(
+      "parsed message\n[media attached: media://inbound/offload-node-image]",
+    );
+    expect(agentCommandOpts.userTurnTranscriptRecorder).toBe(nodeUserTurnTranscriptRecorder);
+    await vi.waitFor(() =>
+      expect(nodeUserTurnTranscriptRecorder.persistFallback).toHaveBeenCalledTimes(1),
+    );
+    expect(nodeUserTurnTranscriptRecorder.markRuntimePersistencePending).toHaveBeenCalledTimes(1);
+    expect(nodeUserTurnTranscriptRecorder.markRuntimePersistencePending).toHaveBeenCalledWith(
+      expect.any(Promise),
+    );
+    expect(nodeUserTurnTranscriptRecorder.markBlocked).not.toHaveBeenCalled();
+
+    parseMessageWithAttachmentsMock.mockResolvedValueOnce({
+      message: "parsed followup\n[media attached: media://inbound/offload-node-image-2]",
+      images: [],
+      imageOrder: ["offloaded"],
+      offloadedRefs: [
+        {
+          ...offloadedRef,
+          id: "offload-node-image-2",
+          mediaRef: "media://inbound/offload-node-image-2",
+        },
+      ],
+    });
+
+    await handleNodeEvent(ctx, "node-share", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "describe another",
+        sessionKey: "agent:main:main",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "share-2.png",
+            content: "BBBB",
+          },
+        ],
+      }),
+    });
+
+    expect(createUserTurnTranscriptRecorderMock).toHaveBeenCalledTimes(2);
+    const secondRecorderArg = mockCallArg(createUserTurnTranscriptRecorderMock, 1) as {
+      input?: { idempotencyKey?: string; text?: string };
+    };
+    const firstInput = recorderArg.input as { idempotencyKey?: string };
+    expect(secondRecorderArg.input?.text).toBe("describe another");
+    expect(secondRecorderArg.input?.idempotencyKey).toEqual(
+      expect.stringMatching(/^[0-9a-f-]{36}:user$/),
+    );
+    expect(secondRecorderArg.input?.idempotencyKey).not.toBe(firstInput.idempotencyKey);
+    await vi.waitFor(() =>
+      expect(nodeUserTurnTranscriptRecorder.persistFallback).toHaveBeenCalledTimes(2),
+    );
+    expect(nodeUserTurnTranscriptRecorder.markRuntimePersistencePending).toHaveBeenCalledTimes(2);
+    expect(nodeUserTurnTranscriptRecorder.markBlocked).not.toHaveBeenCalled();
+  });
+
+  it("marks before_agent_run block results before node request transcript fallback", async () => {
+    const ctx = buildCtx();
+    loadSessionEntryMock.mockReturnValue({
+      ...buildSessionLookup("agent:main:main", {
+        sessionId: "sid-node-blocked",
+      }),
+      canonicalKey: "agent:main:main",
+    });
+    const offloadedRef = {
+      id: "offload-blocked-image",
+      mediaRef: "media://inbound/offload-blocked-image",
+      path: "/tmp/openclaw/media/offloaded-blocked-image.png",
+      mimeType: "image/png",
+    };
+    parseMessageWithAttachmentsMock.mockResolvedValueOnce({
+      message: "parsed blocked\n[media attached: media://inbound/offload-blocked-image]",
+      images: [],
+      imageOrder: ["offloaded"],
+      offloadedRefs: [offloadedRef],
+    });
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        error: { kind: "hook_block", message: "blocked" },
+      },
+    } as never);
+
+    await handleNodeEvent(ctx, "node-blocked", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "describe blocked media",
+        sessionKey: "agent:main:main",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "blocked.png",
+            content: "AAAA",
+          },
+        ],
+      }),
+    });
+
+    await vi.waitFor(() =>
+      expect(nodeUserTurnTranscriptRecorder.persistFallback).toHaveBeenCalledTimes(1),
+    );
+    expect(nodeUserTurnTranscriptRecorder.markBlocked).toHaveBeenCalledTimes(1);
+    expect(nodeUserTurnTranscriptRecorder.markBlocked.mock.invocationCallOrder[0]).toBeLessThan(
+      nodeUserTurnTranscriptRecorder.persistFallback.mock.invocationCallOrder[0],
+    );
   });
 
   it("declines non-image attachments cleanly when parse throws UnsupportedAttachmentError", async () => {

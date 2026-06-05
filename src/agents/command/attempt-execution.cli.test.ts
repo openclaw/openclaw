@@ -92,6 +92,24 @@ function makeCliResult(text: string): EmbeddedAgentRunResult {
   };
 }
 
+function makeUserTurnTranscriptRecorder() {
+  return {
+    message: undefined,
+    resolveMessage: vi.fn(),
+    markRuntimePersistencePending: vi.fn(),
+    markRuntimePersisted: vi.fn(),
+    markBlocked: vi.fn(),
+    hasPersisted: vi.fn(() => false),
+    isBlocked: vi.fn(() => false),
+    hasRuntimePersistencePending: vi.fn(() => false),
+    waitForRuntimePersistence: vi.fn(async () => {}),
+    persistApproved: vi.fn(async () => undefined),
+    persistFallback: vi.fn(async () => undefined),
+  } satisfies NonNullable<
+    Parameters<typeof runAgentAttempt>[0]["opts"]["userTurnTranscriptRecorder"]
+  >;
+}
+
 async function readSessionMessages(sessionFile: string) {
   return (await readSessionFileJsonLines<{ type?: string; message?: unknown }>(sessionFile))
     .filter((entry) => entry.type === "message")
@@ -1319,6 +1337,102 @@ describe("CLI attempt execution", () => {
       provider: "openai",
       model: "gpt-5.4",
     });
+  });
+
+  it("forwards prepared user-turn transcript recorders to embedded runs", async () => {
+    const sessionKey = "agent:main:direct:prepared-user-turn";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-prepared-user-turn",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const userTurnTranscriptRecorder = makeUserTurnTranscriptRecorder();
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1, executionTrace: { runner: "embedded" } },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "use prepared transcript media",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-prepared-user-turn",
+      opts: {
+        message: "use prepared transcript media",
+        userTurnTranscriptRecorder,
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "node",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(firstEmbeddedAgentArg().userTurnTranscriptRecorder).toBe(userTurnTranscriptRecorder);
+  });
+
+  it("forwards prepared user-turn transcript recorders to CLI runs", async () => {
+    const sessionKey = "agent:main:direct:prepared-user-turn-cli";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-prepared-user-turn-cli",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const userTurnTranscriptRecorder = makeUserTurnTranscriptRecorder();
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("prepared cli response"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "use prepared transcript media",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-prepared-user-turn-cli",
+      opts: {
+        message: "use prepared transcript media",
+        userTurnTranscriptRecorder,
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "node",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(firstRunCliAgentArg().userTurnTranscriptRecorder).toBe(userTurnTranscriptRecorder);
   });
 
   it("forwards user-pinned OpenAI API-key backup profiles to Codex harness runs", async () => {

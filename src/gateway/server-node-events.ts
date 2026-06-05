@@ -19,10 +19,13 @@ import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
+import type { OffloadedRef } from "./chat-attachments.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
+  buildChatSendUserTurnMedia,
   buildOutboundSessionContext,
+  createUserTurnTranscriptRecorder,
   createOutboundSendDeps,
   defaultRuntime,
   deleteMediaBuffer,
@@ -36,6 +39,7 @@ import {
   normalizeMainKey,
   normalizeRpcAttachmentsToChatAttachments,
   parseMessageWithAttachments,
+  persistChatSendImages,
   registerApnsRegistration,
   requestHeartbeat,
   resolveChatAttachmentMaxBytes,
@@ -43,6 +47,7 @@ import {
   resolveOutboundTarget,
   resolveSessionAgentId,
   resolveSessionModelRef,
+  runAgentHarnessBeforeMessageWriteHook,
   sanitizeInboundSystemTags,
   sendDurableMessageBatch,
   updateSessionStore,
@@ -69,6 +74,7 @@ export type NodeEventHandleResult = {
 };
 
 type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
+type NodeAgentCommandResult = Awaited<ReturnType<typeof agentCommandFromIngress>>;
 
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
@@ -78,10 +84,15 @@ function dispatchNodeAgentCommand(
   ctx: NodeEventContext,
   nodeId: string,
   input: NodeAgentCommandInput,
-): void {
-  void agentCommandFromIngress(input, defaultRuntime, ctx.deps).catch((err: unknown) => {
+): Promise<NodeAgentCommandResult | undefined> {
+  return agentCommandFromIngress(input, defaultRuntime, ctx.deps).catch((err: unknown) => {
     ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+    return undefined;
   });
+}
+
+function isBeforeAgentRunBlockedCommandResult(result: NodeAgentCommandResult | undefined): boolean {
+  return result?.meta?.error?.kind === "hook_block";
 }
 
 function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
@@ -429,7 +440,7 @@ export const handleNodeEvent = async (
         clientRunId: `voice-${randomUUID()}`,
       });
 
-      dispatchNodeAgentCommand(ctx, nodeId, {
+      void dispatchNodeAgentCommand(ctx, nodeId, {
         runId,
         message: text,
         sessionId,
@@ -480,13 +491,16 @@ export const handleNodeEvent = async (
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+      const sessionAgentId = resolveSessionAgentId({ sessionKey: canonicalKey, config: cfg });
 
-      let message = (link?.message ?? "").trim();
+      const rawMessage = (link?.message ?? "").trim();
+      let message = rawMessage;
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
         link?.attachments ?? undefined,
       );
       let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
       let imageOrder: PromptImageOrderEntry[] = [];
+      let offloadedRefs: OffloadedRef[] = [];
       if (!message && normalizedAttachments.length === 0) {
         return undefined;
       }
@@ -494,7 +508,6 @@ export const handleNodeEvent = async (
         return undefined;
       }
       if (normalizedAttachments.length > 0) {
-        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
         const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
         const supportsInlineImages = await resolveGatewayModelSupportsImages({
           loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
@@ -514,6 +527,7 @@ export const handleNodeEvent = async (
           message = parsed.message.trim();
           images = parsed.images;
           imageOrder = parsed.imageOrder;
+          offloadedRefs = parsed.offloadedRefs;
           if (message.length > 20_000) {
             ctx.logGateway.warn(
               `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
@@ -552,7 +566,50 @@ export const handleNodeEvent = async (
 
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
+      const userTurnTranscriptId = randomUUID();
       await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
+      let userTurnTranscriptRecorder: NodeAgentCommandInput["userTurnTranscriptRecorder"];
+      if (normalizedAttachments.length > 0) {
+        const persistedMedia = await persistChatSendImages({
+          images,
+          imageOrder,
+          offloadedRefs,
+          client: undefined,
+          logGateway: ctx.logGateway,
+        });
+        const userTurnMedia = buildChatSendUserTurnMedia(persistedMedia);
+        if (userTurnMedia.length > 0) {
+          userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+            input: {
+              text: rawMessage,
+              timestamp: now,
+              idempotencyKey: `${userTurnTranscriptId}:user`,
+              media: userTurnMedia,
+              mediaOnlyText: "[User sent media without caption]",
+            },
+            target: () => {
+              const latest = loadSessionEntry(canonicalKey);
+              const latestEntry = latest.entry ?? entry;
+              return {
+                sessionId: latestEntry?.sessionId ?? sessionId,
+                sessionKey: latest.canonicalKey,
+                sessionEntry: latestEntry,
+                sessionStore: latest.store,
+                storePath: latest.storePath,
+                agentId: sessionAgentId,
+                config: cfg,
+              };
+            },
+            errorContext: "node request user turn transcript",
+            beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+            onPersistenceError: (err) => {
+              ctx.logGateway.warn(
+                `agent.request user turn transcript persistence failed node=${nodeId}: ${formatForLog(err)}`,
+              );
+            },
+          });
+        }
+      }
 
       if (deliverRequested && (!channel || !to)) {
         const entryChannel =
@@ -593,7 +650,7 @@ export const handleNodeEvent = async (
         );
       }
 
-      dispatchNodeAgentCommand(ctx, nodeId, {
+      const dispatchPromise = dispatchNodeAgentCommand(ctx, nodeId, {
         runId: sessionId,
         message,
         images,
@@ -607,8 +664,25 @@ export const handleNodeEvent = async (
         timeout:
           typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
         messageChannel: "node",
+        ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
         allowModelOverride: false,
       });
+      if (userTurnTranscriptRecorder) {
+        userTurnTranscriptRecorder.markRuntimePersistencePending(dispatchPromise.then(() => {}));
+        void dispatchPromise
+          .then((result) => {
+            if (isBeforeAgentRunBlockedCommandResult(result)) {
+              userTurnTranscriptRecorder.markBlocked();
+            }
+          })
+          .finally(() => {
+            void userTurnTranscriptRecorder.persistFallback().catch((err: unknown) => {
+              ctx.logGateway.warn(
+                `agent.request user turn transcript fallback failed node=${nodeId}: ${formatForLog(err)}`,
+              );
+            });
+          });
+      }
       return undefined;
     }
     case "notifications.changed": {
