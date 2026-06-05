@@ -919,11 +919,18 @@ function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
   return withoutSuffix.split("/").pop();
 }
 
+// Covers canonical "microsoft-foundry" and configured alias profiles (e.g. "microsoft-foundry-9433").
+// Foundry rejects top-level `thinking` on all openai-completions DeepSeek V4 paths; aliases share
+// that behavior. Without this, alias-backed Foundry models receive a 400 from the endpoint.
+function isMicrosoftFoundryProvider(provider: string): boolean {
+  return provider === "microsoft-foundry" || provider.startsWith("microsoft-foundry-");
+}
+
 function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
     model.api === "openai-completions" &&
-    model.provider !== "microsoft-foundry" &&
+    !isMicrosoftFoundryProvider(model.provider) &&
     (normalizedModelId === "deepseek-v4-flash" || normalizedModelId === "deepseek-v4-pro")
   );
 }
