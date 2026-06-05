@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginLogger, PluginRuntime } from "../api.js";
 import { processChatMessage } from "./chat-pipeline.js";
 import type { HistoryManager } from "./history-manager.js";
+import type { TopicResolver } from "./topic-resolver.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
 
 type AgentEventListener = (evt: {
@@ -53,6 +54,7 @@ function createRuntimeMock(options: {
   workspaceDir: string;
   onRun: (listener: AgentEventListener | undefined) => void;
   sessionMessages?: unknown[];
+  onRunArgs?: (args: { message: string }) => void;
 }): PluginRuntime {
   let listener: AgentEventListener | undefined;
   return {
@@ -65,7 +67,8 @@ function createRuntimeMock(options: {
       },
     },
     subagent: {
-      run: async () => {
+      run: async (args: { message: string }) => {
+        options.onRunArgs?.(args);
         options.onRun(listener);
         return { runId: "r1" };
       },
@@ -193,5 +196,98 @@ describe("processChatMessage", () => {
 
     expect(result).toBe("full canonical answer");
     expect(updateResponse).toHaveBeenCalledWith(1, "full canonical answer");
+  });
+
+  it("injects the resolved topic ownership into the subagent message", async () => {
+    // Regression: the chat path used to pass only [userId:...], forcing the
+    // agent to guess project ownership from the DB (it once reused a stale
+    // hardcoded topic-id list). entity_auth is the source of truth.
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const topicResolver = {
+      getTopicIdsByUser: async (uid: string) => {
+        expect(uid).toBe(USER_ID);
+        return { topicId: 585, useSlaveTopic: true, masterId: 270 };
+      },
+    } as unknown as TopicResolver;
+
+    await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      topicResolver,
+    );
+
+    expect(capturedMessage).toBe(`[userId:${USER_ID}] [topicId:585 useSlaveTopic:true] hi there`);
+  });
+
+  it("falls back to the plain userId prefix when topic resolution fails", async () => {
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const topicResolver = {
+      getTopicIdsByUser: async () => {
+        throw new Error("db down");
+      },
+    } as unknown as TopicResolver;
+
+    const result = await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      topicResolver,
+    );
+
+    expect(result).toBe("ok");
+    expect(capturedMessage).toBe(`[userId:${USER_ID}] hi there`);
+  });
+
+  it("omits topic context when the user has no topic mapping", async () => {
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const topicResolver = {
+      getTopicIdsByUser: async () => ({ topicId: null, useSlaveTopic: false, masterId: 0 }),
+    } as unknown as TopicResolver;
+
+    await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      topicResolver,
+    );
+
+    expect(capturedMessage).toBe(`[userId:${USER_ID}] hi there`);
   });
 });

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import mysql from "mysql2/promise";
 import type { ReportPeriod } from "./report-trigger.js";
 import type { HistoryDbConfig, WriterDbConfig } from "./types.js";
@@ -67,6 +68,8 @@ export class DownloadManager {
     dateScope: { start: string; end: string };
     title?: string;
     useSlaveTopic?: boolean;
+    /** Master topic id from entity_auth; stored as topicId when useSlaveTopic. */
+    masterId?: number;
     /** Mercure topic for streaming generation progress to the requesting frontend. */
     mercureTopic?: string;
     /** Agent id whose workspace/skills the report subagent should run under. */
@@ -90,7 +93,8 @@ export class DownloadManager {
       )
     `;
 
-    const slug = `report_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    // 32-char hex slug (matches the legacy frontend's expected slug format).
+    const slug = crypto.randomBytes(16).toString("hex");
     const category = "Report";
     const siteId = "legal";
     const periodDbValue: Record<string, string> = {
@@ -101,7 +105,10 @@ export class DownloadManager {
     const period = periodDbValue[params.period] ?? params.period;
     const entityId = 0;
     const originalTopicId = params.topicId;
-    const finalTopicId = params.useSlaveTopic ? 328 : originalTopicId;
+    // Slave mode: topicId column holds the master topic (entity_auth.masterId),
+    // slaveTopicId holds the resolved slave topic (entity_auth.slaveId).
+    const masterId = params.masterId ?? 0;
+    const finalTopicId = params.useSlaveTopic ? masterId : originalTopicId;
     const slaveTopicId = params.useSlaveTopic ? originalTopicId : 0;
     const paramsJson = JSON.stringify({
       dateScope: `${params.dateScope.start},${params.dateScope.end}`,

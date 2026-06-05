@@ -1,26 +1,13 @@
 import mysql from "mysql2/promise";
 import type { HistoryDbConfig } from "./types.js";
 
-/** A single project mapping candidate, used when disambiguation is needed. */
-export interface ProjectCandidate {
-  projectName: string;
-  topicId: number;
-  useSlaveTopic: boolean;
-}
-
 export interface TopicResolution {
   topicId: number | null;
+  /** True when the topicId came from slaveId and matches slaveTopicId downstream. */
   useSlaveTopic: boolean;
-  /** True when the user has multiple project mappings and the message did not pin one down. */
-  needsDisambiguation?: boolean;
-  /** Candidate projects (name + resolved topicId) to present to the user. */
-  candidates?: ProjectCandidate[];
+  /** Master topic id from entity_auth (0 when absent). */
+  masterId: number;
 }
-
-/** TopicIds in range 328-349 use slaveId as the resolved topicId. */
-const SLAVE_TOPIC_RANGE = new Set(
-  Array.from({ length: 22 }, (_, i) => 328 + i), // 328-349
-);
 
 interface TopicResolverConfig {
   host: string;
@@ -30,9 +17,44 @@ interface TopicResolverConfig {
   database: string;
 }
 
+interface TopicCacheEntry {
+  resolution: TopicResolution;
+  expiresAt: number;
+}
+
+/**
+ * uid -> topic mappings change rarely, so a short TTL keeps every chat
+ * message from hitting the DB while staying fresh enough for re-binding.
+ * A stable resolution also keeps the injected message prefix deterministic
+ * (prompt-cache friendly) across consecutive turns.
+ */
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Map an entity_auth row to a TopicResolution:
+ * - slaveId > 0: topicId = slaveId (matches slaveTopicId downstream)
+ * - masterId > 0 and slaveId == 0: topicId = masterId
+ * - otherwise: no mapping (topicId null)
+ */
+function resolveFromRow(row: mysql.RowDataPacket | undefined): TopicResolution {
+  if (!row) {
+    return { topicId: null, useSlaveTopic: false, masterId: 0 };
+  }
+  const masterId = Number(row.masterId) || 0;
+  const slaveId = Number(row.slaveId) || 0;
+  if (slaveId > 0) {
+    return { topicId: slaveId, useSlaveTopic: true, masterId };
+  }
+  if (masterId > 0) {
+    return { topicId: masterId, useSlaveTopic: false, masterId };
+  }
+  return { topicId: null, useSlaveTopic: false, masterId: 0 };
+}
+
 export class TopicResolver {
   private readonly config: TopicResolverConfig;
   private pool: mysql.Pool | null = null;
+  private readonly cache = new Map<string, TopicCacheEntry>();
 
   constructor(historyDbConfig: HistoryDbConfig) {
     this.config = {
@@ -62,77 +84,43 @@ export class TopicResolver {
   }
 
   /**
-   * Look up topicId and useSlaveTopic for a given userId.
-   * Queries the user_topic_mapping table.
-   *
-   * - 0 rows: no mapping (topicId null).
-   * - 1 row: used directly, no disambiguation.
-   * - 2+ rows: the message must uniquely match one project's name; if exactly
-   *   one matches it is used, otherwise the result is flagged
-   *   `needsDisambiguation` with the candidate `projectNames` so the caller can
-   *   ask the user which project they mean.
-   *
-   * TopicIds 328-349 match against slaveTopicId downstream (useSlaveTopic).
+   * Look up topicId and useSlaveTopic for a given userId (entity_auth.uid).
+   * Results are cached per uid for CACHE_TTL_MS; on a DB failure a stale
+   * entry (if any) is served instead of throwing. Row-to-resolution mapping
+   * lives in resolveFromRow.
    */
-  async getTopicIdsByUser(userId: string, message?: string): Promise<TopicResolution> {
+  async getTopicIdsByUser(userId: string): Promise<TopicResolution> {
     if (!userId) {
-      return { topicId: null, useSlaveTopic: false };
+      return { topicId: null, useSlaveTopic: false, masterId: 0 };
+    }
+
+    const cached = this.cache.get(userId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.resolution;
     }
 
     const pool = await this.getPool();
-    const sql =
-      "SELECT topicId, masterId, slaveId, projectName FROM user_topic_mapping WHERE userId = ?";
+    const sql = "SELECT masterId, slaveId FROM entity_auth WHERE uid = ? LIMIT 1";
 
     try {
       const [rows] = await pool.execute<mysql.RowDataPacket[]>(sql, [userId]);
-
-      if (!rows || rows.length === 0) {
-        return { topicId: null, useSlaveTopic: false };
-      }
-
-      // Single mapping: no ambiguity, use it directly.
-      if (rows.length === 1) {
-        return this.resolveRow(rows[0]);
-      }
-
-      // Multiple mappings: try to pin down a unique project from the message.
-      const text = message ?? "";
-      const matches = rows.filter((row) => {
-        const name = String(row.projectName ?? "").trim();
-        return name.length > 0 && text.includes(name);
-      });
-
-      if (matches.length === 1) {
-        return this.resolveRow(matches[0]);
-      }
-
-      // Zero or 2+ matches across multiple rows: ask the user which project.
-      const candidates: ProjectCandidate[] = rows
-        .map((row) => {
-          const topicId = Number(row.topicId);
-          return {
-            projectName: String(row.projectName ?? "").trim(),
-            topicId,
-            useSlaveTopic: SLAVE_TOPIC_RANGE.has(topicId),
-          };
-        })
-        .filter((candidate) => candidate.projectName.length > 0);
-
-      return { topicId: null, useSlaveTopic: false, needsDisambiguation: true, candidates };
+      const resolution = resolveFromRow(rows?.[0]);
+      this.cache.set(userId, { resolution, expiresAt: Date.now() + CACHE_TTL_MS });
+      return resolution;
     } catch (error) {
+      // Serve a stale entry over failing the message on a DB blip; ownership
+      // mappings change rarely, so a stale resolution beats none at all.
+      if (cached) {
+        return cached.resolution;
+      }
       throw new Error(`Failed to look up topicId for user ${userId}: ${String(error)}`, {
         cause: error,
       });
     }
   }
 
-  private resolveRow(row: mysql.RowDataPacket): TopicResolution {
-    const topicId = Number(row.topicId);
-    const useSlaveTopic = SLAVE_TOPIC_RANGE.has(topicId);
-    return { topicId, useSlaveTopic };
-  }
-
   async close(): Promise<void> {
+    this.cache.clear();
     if (this.pool) {
       await this.pool.end();
       this.pool = null;

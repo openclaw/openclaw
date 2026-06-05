@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { PluginRuntime, PluginLogger } from "../api.js";
 import type { DownloadManager } from "./download-manager.js";
 import type { FeedCounter } from "./feed-counter.js";
@@ -7,182 +5,8 @@ import type { HistoryManager } from "./history-manager.js";
 import { MercurePusher, StreamingMercurePusher } from "./mercure-pusher.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import { detectReportRequest, type ReportPeriod } from "./report-trigger.js";
-import type { ProjectCandidate, TopicResolver } from "./topic-resolver.js";
+import type { TopicResolver } from "./topic-resolver.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
-
-/**
- * Automatically export session context to workspace after conversation completes.
- */
-async function autoExportContext(
-  chatMsg: ChatMessage,
-  runtime: PluginRuntime,
-  logger: PluginLogger,
-): Promise<void> {
-  try {
-    const agentId = `rabbitmq-${chatMsg.userId}`;
-    const sessionKey = `agent:${agentId}:rabbitmq:${chatMsg.userId}:${chatMsg.sessionId}`;
-
-    // Use the main agent's workspace directory (where all configs live)
-    const workspaceDir = runtime.agent.resolveAgentWorkspaceDir({}, "main");
-
-    // Ensure workspace directory exists
-    await fs.mkdir(workspaceDir, { recursive: true });
-
-    // Get session messages
-    const sessionMessages = await runtime.subagent.getSessionMessages({
-      sessionKey,
-      limit: 100,
-    });
-
-    // Load workspace bootstrap files
-    const bootstrapFiles = await loadWorkspaceBootstrapFiles(workspaceDir);
-    const systemPrompt = buildContextFromBootstrap(bootstrapFiles);
-
-    // Format messages as markdown
-    const sessionHistory = formatMessagesAsMarkdown(sessionMessages.messages || []);
-
-    // Build export document
-    const outputPath = path.join(workspaceDir, "exported-context.md");
-    const markdown = buildMarkdownDocument({
-      agentId,
-      sessionKey,
-      systemPrompt,
-      sessionHistory,
-    });
-
-    await fs.writeFile(outputPath, markdown, "utf-8");
-    logger.info(`[CHAT_PIPELINE] Context exported to: ${outputPath}`);
-  } catch (err) {
-    logger.warn(`[CHAT_PIPELINE] Auto-export failed: ${String(err)}`);
-  }
-}
-
-async function loadWorkspaceBootstrapFiles(
-  workspaceDir: string,
-): Promise<Array<{ path: string; content: string }>> {
-  const fileNames = [
-    "AGENTS.md",
-    "SOUL.md",
-    "IDENTITY.md",
-    "USER.md",
-    "TOOLS.md",
-    "BOOTSTRAP.md",
-    "MEMORY.md",
-  ];
-  const files: Array<{ path: string; content: string }> = [];
-
-  for (const name of fileNames) {
-    const filePath = path.join(workspaceDir, name);
-    try {
-      const content = await fs.readFile(filePath, "utf-8");
-      files.push({ path: name, content });
-    } catch {
-      // File doesn't exist, skip
-    }
-  }
-
-  return files;
-}
-
-function buildContextFromBootstrap(
-  bootstrapFiles: Array<{ path: string; content: string }>,
-): string {
-  const sections: string[] = [];
-  const order: Record<string, number> = {
-    agents: 10,
-    soul: 20,
-    identity: 30,
-    user: 40,
-    tools: 50,
-    bootstrap: 60,
-    memory: 70,
-  };
-
-  const sorted = [...bootstrapFiles].toSorted((a, b) => {
-    const getOrder = (name: string) => order[name.toLowerCase().replace(".md", "")] ?? 99;
-    return getOrder(a.path) - getOrder(b.path);
-  });
-
-  for (const file of sorted) {
-    sections.push(`## ${file.path}`, "", file.content, "");
-  }
-
-  return sections.join("\n");
-}
-
-function formatMessagesAsMarkdown(messages: unknown[]): string {
-  const lines: string[] = [];
-
-  for (const msg of messages) {
-    if (!msg || typeof msg !== "object") {
-      continue;
-    }
-    const entry = msg as Record<string, unknown>;
-    const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "unknown";
-    const content = extractContentText(entry.content);
-    if (!content) {
-      continue;
-    }
-
-    const timestamp = entry.timestamp ? new Date(Number(entry.timestamp)).toISOString() : "";
-    lines.push(
-      `### ${role.charAt(0).toUpperCase() + role.slice(1)}${timestamp ? ` (${timestamp})` : ""}`,
-      "",
-      content,
-      "",
-    );
-  }
-
-  return lines.length > 0 ? lines.join("\n") : "(no messages)";
-}
-
-function extractContentText(content: unknown): string | null {
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-  const texts = content
-    .filter((b) => b && typeof b === "object" && "text" in b)
-    .map((b) => (b as { text: unknown }).text)
-    .filter((t) => typeof t === "string");
-  return texts.length > 0 ? texts.join("\n").trim() : null;
-}
-
-function buildMarkdownDocument(params: {
-  agentId: string;
-  sessionKey: string;
-  systemPrompt: string;
-  sessionHistory: string;
-}): string {
-  const sections = [
-    "# Exported Context",
-    "",
-    `> **Agent:** ${params.agentId}`,
-    `> **Session:** ${params.sessionKey}`,
-    `> **Exported:** ${new Date().toISOString()}`,
-    "",
-    "---",
-    "",
-    "# System Prompt",
-    "",
-    "```system",
-    "",
-    params.systemPrompt,
-    "",
-    "```",
-    "",
-    "---",
-    "",
-    "# Session History",
-    "",
-    params.sessionHistory,
-    "",
-  ];
-
-  return sections.join("\n");
-}
 
 /**
  * Resolve the assistant text delta from an agent event payload.
@@ -201,62 +25,8 @@ function extractAssistantDelta(data: Record<string, unknown>): string {
 }
 
 /**
- * Pending report disambiguation state, keyed by userId. When a user asks for a
- * report but has multiple project mappings, we store the resolved request here
- * and ask which project; their next message (an option number or a project name)
- * is matched against `candidates` to continue without re-stating intent.
- * In-memory + per-process: entries are short-lived, cleared on use or expiry.
- */
-interface PendingReport {
-  period: ReportPeriod;
-  requirement: string;
-  dateScope: { start: string; end: string };
-  candidates: ProjectCandidate[];
-  createdAt: number;
-}
-
-const pendingDisambiguation = new Map<string, PendingReport>();
-const PENDING_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-/**
- * Match a user's disambiguation reply to one of the pending candidates.
- * Accepts a project name (unique substring) or a 1-based option number such as
- * "2" / "选 2". Name matching is tried first so project names containing digits
- * are not misread as an option index. Returns null if nothing matches.
- */
-function matchPendingChoice(
-  message: string,
-  candidates: ProjectCandidate[],
-): ProjectCandidate | null {
-  const text = message.trim();
-  if (!text || candidates.length === 0) {
-    return null;
-  }
-
-  // 1. Unique project-name substring match.
-  const nameMatches = candidates.filter(
-    (c) => c.projectName.length > 0 && text.includes(c.projectName),
-  );
-  if (nameMatches.length === 1) {
-    return nameMatches[0];
-  }
-
-  // 2. Bare option number (e.g. "2", "选 2", "第2个").
-  const digits = text.match(/\d+/);
-  if (digits) {
-    const idx = parseInt(digits[0], 10) - 1;
-    if (idx >= 0 && idx < candidates.length) {
-      return candidates[idx];
-    }
-  }
-
-  return null;
-}
-
-/**
  * Pre-count feed data, then queue a report task and reply (or report "no data").
- * Always emits a Mercure `done` so the frontend unlocks. Shared by the direct
- * report path and the disambiguation-reply path.
+ * Always emits a Mercure `done` so the frontend unlocks.
  */
 async function createReportTaskAndRespond(args: {
   period: ReportPeriod;
@@ -264,6 +34,8 @@ async function createReportTaskAndRespond(args: {
   dateScope: { start: string; end: string };
   topicId: number;
   useSlaveTopic: boolean;
+  /** Master topic id from entity_auth; stored as download.topicId in slave mode. */
+  masterId: number;
   chatMsg: ChatMessage;
   mercure: MercurePusher;
   mercureTopic: string;
@@ -279,6 +51,7 @@ async function createReportTaskAndRespond(args: {
     dateScope,
     topicId,
     useSlaveTopic,
+    masterId,
     chatMsg,
     mercure,
     mercureTopic,
@@ -294,7 +67,12 @@ async function createReportTaskAndRespond(args: {
   let feedCount = -1;
   if (feedCounter && topicId > 0) {
     try {
-      feedCount = await feedCounter.countFeedData(topicId, dateScope.start, dateScope.end);
+      feedCount = await feedCounter.countFeedData(
+        topicId,
+        dateScope.start,
+        dateScope.end,
+        useSlaveTopic,
+      );
       logger.info(
         `[CHAT_PIPELINE] Feed pre-count=${feedCount} for topicId=${topicId} ` +
           `(${dateScope.start} ~ ${dateScope.end})`,
@@ -322,6 +100,7 @@ async function createReportTaskAndRespond(args: {
     dateScope,
     title: `${period}舆情报告`,
     useSlaveTopic,
+    masterId,
     mercureTopic,
     // Same per-user agent the chat runs under, so the report subagent
     // inherits its workspace, DB skills, and schema knowledge.
@@ -415,85 +194,26 @@ export async function processChatMessage(
       return "Error: Empty message";
     }
 
-    // Step 2.4: If we previously asked this user which project, interpret their
-    // reply (an option number or a project name) and continue the report flow.
-    if (downloadManager) {
-      const pending = pendingDisambiguation.get(userId);
-      if (pending && Date.now() - pending.createdAt > PENDING_TTL_MS) {
-        pendingDisambiguation.delete(userId);
-      } else if (pending) {
-        const choice = matchPendingChoice(userMessage, pending.candidates);
-        if (choice) {
-          pendingDisambiguation.delete(userId);
-          logger.info(
-            `[CHAT_PIPELINE] User ${userId} picked project "${choice.projectName}" ` +
-              `for pending ${pending.period}`,
-          );
-          return await createReportTaskAndRespond({
-            period: pending.period,
-            requirement: pending.requirement,
-            dateScope: pending.dateScope,
-            topicId: choice.topicId,
-            useSlaveTopic: choice.useSlaveTopic,
-            chatMsg,
-            mercure,
-            mercureTopic,
-            historyManager,
-            downloadManager,
-            feedCounter,
-            reportTaskPublisher,
-            logger,
-          });
-        }
-        // Unrecognized reply: drop stale state and fall through to normal handling.
-        pendingDisambiguation.delete(userId);
-        logger.info(
-          `[CHAT_PIPELINE] User ${userId} reply did not match pending candidates, clearing`,
-        );
-      }
-    }
-
     // Step 2.5: Check if this is a report generation request
     const triggerResult = detectReportRequest(userMessage, logger);
     if (triggerResult.isReportRequest && downloadManager) {
       logger.info(`[CHAT_PIPELINE] Report request detected: ${triggerResult.period}`);
 
-      // Resolve topicId from userId via user_topic_mapping
+      // Resolve topicId from userId via entity_auth (uid -> masterId/slaveId)
       let resolvedTopicId = 0;
       let useSlaveTopic = false;
+      let masterId = 0;
       if (topicResolver) {
-        const resolution = await topicResolver.getTopicIdsByUser(chatMsg.userId, userMessage);
-
-        // Multiple project mappings and the message did not pin one down: remember
-        // the request and ask which project instead of silently picking the first.
-        if (resolution.needsDisambiguation) {
-          const candidates = resolution.candidates ?? [];
-          pendingDisambiguation.set(userId, {
-            period: triggerResult.period!,
-            requirement: triggerResult.requirement,
-            dateScope: triggerResult.dateScope!,
-            candidates,
-            createdAt: Date.now(),
-          });
-          const listText = candidates.map((c, i) => `${i + 1}. ${c.projectName}`).join("\n");
-          const askResponse =
-            `您名下有多个项目，请问要查询哪一个项目的${triggerResult.period}？\n${listText}\n` +
-            `直接回复序号（如「1」）或项目名即可。`;
-          await mercure.pushText(mercureTopic, askResponse);
-          // Signal completion so the frontend unlocks its input for the reply.
-          await mercure.pushDone(mercureTopic);
-          await historyManager.updateResponse(chatMsg.historyId, askResponse);
-          logger.info(
-            `[CHAT_PIPELINE] Multiple projects for user ${userId}, asking to disambiguate ` +
-              `(${candidates.length} candidates)`,
-          );
-          return askResponse;
-        }
+        // Use the fallback-resolved userId (chatMsg.userId || record.userId),
+        // same as the chat-path injection below.
+        const resolution = await topicResolver.getTopicIdsByUser(userId);
 
         resolvedTopicId = resolution.topicId ?? 0;
         useSlaveTopic = resolution.useSlaveTopic;
+        masterId = resolution.masterId;
         logger.info(
-          `[CHAT_PIPELINE] Resolved topicId=${resolvedTopicId}, useSlaveTopic=${useSlaveTopic} for userId=${userId}`,
+          `[CHAT_PIPELINE] Resolved topicId=${resolvedTopicId}, useSlaveTopic=${useSlaveTopic}, ` +
+            `masterId=${masterId} for userId=${userId}`,
         );
       }
 
@@ -503,6 +223,7 @@ export async function processChatMessage(
         dateScope: triggerResult.dateScope!,
         topicId: resolvedTopicId,
         useSlaveTopic,
+        masterId,
         chatMsg,
         mercure,
         mercureTopic,
@@ -512,6 +233,27 @@ export async function processChatMessage(
         reportTaskPublisher,
         logger,
       });
+    }
+
+    // Resolve the user's topic ownership up front (entity_auth: uid ->
+    // masterId/slaveId) and inject it into the message, so the agent never
+    // has to guess which feed_topic belongs to this user. Resolution failure
+    // degrades to the plain [userId:...] prefix instead of failing the chat.
+    let topicContext = "";
+    if (topicResolver) {
+      try {
+        const resolution = await topicResolver.getTopicIdsByUser(userId);
+        if (resolution.topicId && resolution.topicId > 0) {
+          topicContext = ` [topicId:${resolution.topicId} useSlaveTopic:${resolution.useSlaveTopic}]`;
+          logger.info(
+            `[CHAT_PIPELINE] Injecting topic context for userId=${userId}:${topicContext}`,
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          `[CHAT_PIPELINE] Topic resolution failed, continuing without topic context: ${String(err)}`,
+        );
+      }
     }
 
     // Per-user agent isolation. Resolved before the event subscription so the
@@ -550,7 +292,7 @@ export async function processChatMessage(
 
       const runResult = await runtime.subagent.run({
         sessionKey,
-        message: `[userId:${userId}] ${userMessage}`,
+        message: `[userId:${userId}]${topicContext} ${userMessage}`,
         deliver: false,
       });
 
@@ -599,9 +341,6 @@ export async function processChatMessage(
 
       // Step 8: Finish streaming — flush remaining buffer + push done signal
       await streamPusherCtx.streamPusher.finish();
-
-      // Step 9: Auto-export session context to workspace
-      await autoExportContext(chatMsg, runtime, logger);
 
       logger.info(
         `[CHAT_PIPELINE] Completed: historyId=${chatMsg.historyId}, ` +

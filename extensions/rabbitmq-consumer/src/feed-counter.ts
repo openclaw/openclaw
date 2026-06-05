@@ -1,11 +1,6 @@
 import mysql from "mysql2/promise";
 import type { HistoryDbConfig } from "./types.js";
 
-/** TopicIds in range 328-349 match against slaveTopicId (mirrors topic-resolver). */
-const SLAVE_TOPIC_RANGE = new Set(
-  Array.from({ length: 22 }, (_, i) => 328 + i), // 328-349
-);
-
 /**
  * Counts available feed records for a topic + date range. Used to give the user
  * an up-front data-volume hint (and catch the empty case) before a report task
@@ -41,11 +36,17 @@ export class FeedCounter {
 
   /**
    * Count feed records for a topicId within [startDate, endDate).
-   * TopicIds in 328-349 match on slaveTopicId instead of topicId.
+   * When useSlaveTopic is set (topicId came from entity_auth.slaveId), match
+   * on slaveTopicId instead of topicId.
    */
-  async countFeedData(topicId: number, startDate: string, endDate: string): Promise<number> {
+  async countFeedData(
+    topicId: number,
+    startDate: string,
+    endDate: string,
+    useSlaveTopic = false,
+  ): Promise<number> {
     const pool = await this.getPool();
-    const topicField = SLAVE_TOPIC_RANGE.has(topicId) ? "f.slaveTopicId" : "f.topicId";
+    const topicField = useSlaveTopic ? "f.slaveTopicId" : "f.topicId";
 
     const sql = `
       SELECT COUNT(*) AS cnt
