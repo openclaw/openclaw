@@ -23,6 +23,7 @@ import { doctorHandlers } from "./server-methods/doctor.js";
 import { environmentsHandlers } from "./server-methods/environments.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { healthHandlers } from "./server-methods/health.js";
+import { kalshiDashboardHandlers } from "./server-methods/kalshi-dashboard.js";
 import { logsHandlers } from "./server-methods/logs.js";
 import { modelsAuthStatusHandlers } from "./server-methods/models-auth-status.js";
 import { modelsHandlers } from "./server-methods/models.js";
@@ -91,6 +92,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...voicewakeHandlers,
   ...voicewakeRoutingHandlers,
   ...healthHandlers,
+  ...kalshiDashboardHandlers,
   ...channelsHandlers,
   ...chatHandlers,
   ...commandsHandlers,

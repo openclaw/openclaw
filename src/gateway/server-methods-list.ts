@@ -16,6 +16,7 @@ const BASE_METHODS = [
   "doctor.memory.repairDreamingArtifacts",
   "doctor.memory.dedupeDreamDiary",
   "doctor.memory.remHarness",
+  "kalshi.dashboard.snapshot",
   "logs.tail",
   "channels.status",
   "channels.start",
