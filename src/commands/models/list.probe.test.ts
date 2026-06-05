@@ -1,3 +1,4 @@
+// Model list probe tests cover runtime probing while listing configured models.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -48,9 +49,9 @@ describe("runAuthProbes", () => {
       ensureAuthProfileStore: () => ({
         version: 1,
         profiles: {
-          "openai-codex:profile": {
+          "openai:profile": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
@@ -58,17 +59,17 @@ describe("runAuthProbes", () => {
         },
         order: {},
       }),
-      listProfilesForProvider: () => ["openai-codex:profile"],
+      listProfilesForProvider: () => ["openai:profile"],
       resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
       resolveAuthProfileEligibility: () => ({ eligible: true }),
-      resolveAuthProfileOrder: () => ["openai-codex:profile"],
+      resolveAuthProfileOrder: () => ["openai:profile"],
     }));
     vi.doMock("../../agents/model-auth.js", () => ({
       hasUsableCustomProviderApiKey: () => false,
       resolveEnvApiKey: () => null,
     }));
     vi.doMock("../../agents/model-catalog.js", () => ({
-      loadModelCatalog: async () => [{ provider: "openai-codex", id: "gpt-5.5" }],
+      loadModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
     }));
     try {
       const module = await importFreshModule<typeof import("./list.probe.js")>(
@@ -80,11 +81,11 @@ describe("runAuthProbes", () => {
         agentId: "probe-agent",
         agentDir: "/tmp/openclaw-probe-agent",
         workspaceDir: "/tmp/openclaw-probe-workspace",
-        providers: ["openai-codex"],
-        modelCandidates: ["openai-codex/gpt-5.5"],
+        providers: ["openai"],
+        modelCandidates: ["openai/gpt-5.5"],
         options: {
-          provider: "openai-codex",
-          profileIds: ["openai-codex:profile"],
+          provider: "openai",
+          profileIds: ["openai:profile"],
           timeoutMs: 5_000,
           concurrency: 1,
           maxTokens: 8,
@@ -94,11 +95,9 @@ describe("runAuthProbes", () => {
       expect(result.results[0]?.status).toBe("ok");
       expect(runEmbeddedAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          agentHarnessId: "openclaw",
-          agentHarnessRuntimeOverride: "openclaw",
           modelRun: true,
           disableTools: true,
-          authProfileId: "openai-codex:profile",
+          authProfileId: "openai:profile",
           authProfileIdSource: "user",
         }),
       );

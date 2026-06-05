@@ -1,3 +1,4 @@
+/** Builds dry-run cron delivery labels for CLI/UI list surfaces. */
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasExplicitCronDeliveryTarget, resolveCronDeliveryPlan } from "./delivery-plan.js";
@@ -34,6 +35,7 @@ function formatDeliveryDetail(params: {
   return params.resolved ? "explicit" : (params.error ?? "unresolved");
 }
 
+/** Builds the user-visible cron delivery preview for one job without sending anything. */
 export async function resolveCronDeliveryPreview(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;
@@ -44,6 +46,7 @@ export async function resolveCronDeliveryPreview(params: {
     return { label: "not requested", detail: "not requested" };
   }
   if (plan.mode === "webhook") {
+    // Webhook previews do not resolve channel targets; runtime only needs the configured URL.
     const target = plan.to ? `webhook:${plan.to}` : "webhook";
     return { label: target, detail: plan.to ? "webhook" : "webhook target missing" };
   }
@@ -65,6 +68,8 @@ export async function resolveCronDeliveryPreview(params: {
     { dryRun: true },
   );
   if (!resolved.ok) {
+    // Preview mirrors runtime fail-closed behavior for "last" delivery so the
+    // UI can show unresolved routes before the cron job actually runs.
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
       detail:
@@ -88,6 +93,7 @@ export async function resolveCronDeliveryPreview(params: {
   };
 }
 
+/** Builds cron delivery previews keyed by job id. */
 export async function resolveCronDeliveryPreviews(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;

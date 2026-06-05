@@ -1,3 +1,4 @@
+// OC Path tests cover roundtrip property plugin behavior.
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../../emit.js";
 import { parseMd } from "../../parse.js";
@@ -82,7 +83,6 @@ describe("roundtrip-property", () => {
   });
 });
 
-
 function generateCorpus(count: number): string[] {
   const corpus: string[] = [];
   // Deterministic seed so flaky failures don't surface differently each run.
@@ -123,7 +123,7 @@ function generateCorpus(count: number): string[] {
       parts.push(`## ${choose(headings)}`);
       parts.push("");
       const itemCount = Math.floor(rand() * 4);
-      for (let it = 0; it < itemCount; it++) {
+      for (let itLocal = 0; itLocal < itemCount; itLocal++) {
         parts.push(`- ${choose(itemTexts)}`);
       }
       if (rand() < 0.2) {

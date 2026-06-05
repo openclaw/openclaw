@@ -1,3 +1,4 @@
+// Device Pair plugin module implements notify behavior.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
@@ -504,11 +505,11 @@ export function createPairingNotifierService(api: OpenClawPluginApi): OpenClawPl
         await notifyPendingPairingRequests({ api, statePath });
       };
 
-      await tick().catch((err) => {
+      await tick().catch((err: unknown) => {
         api.logger.warn(`device-pair: initial notify poll failed: ${formatErrorMessage(err)}`);
       });
       notifyInterval = setInterval(() => {
-        tick().catch((err) => {
+        tick().catch((err: unknown) => {
           api.logger.warn(`device-pair: notify poll failed: ${formatErrorMessage(err)}`);
         });
       }, NOTIFY_POLL_INTERVAL_MS);

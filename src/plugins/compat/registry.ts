@@ -1,3 +1,4 @@
+// Plugin compatibility registry exposes known plugin compatibility metadata to doctor/update flows.
 import type { PluginCompatRecord } from "./types.js";
 
 const CHANNEL_RUNTIME_SDK_SURFACE = ["openclaw/plugin-sdk/channel", "runtime"].join("-");
@@ -38,6 +39,28 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: ["src/plugins/loader.test.ts"],
     releaseNote:
       '`api.on("deactivate", ...)` remains wired as a deprecated compatibility alias while plugins migrate to `gateway_stop`.',
+  },
+  {
+    code: "legacy-subagent-spawning-hook",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-30",
+    deprecated: "2026-05-30",
+    warningStarts: "2026-05-30",
+    removeAfter: "2026-08-30",
+    replacement:
+      "`subagent_spawned` for post-launch observation; core session-binding adapters for thread routing",
+    docsPath: "/plugins/hooks#upcoming-deprecations",
+    surfaces: [
+      'api.on("subagent_spawning", ...)',
+      "PluginHookSubagentSpawningEvent",
+      "PluginHookSubagentSpawningResult",
+      "SubagentLifecycleHookRunner.runSubagentSpawning",
+    ],
+    diagnostics: ["plugin runtime compatibility warning"],
+    tests: ["src/plugins/loader.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      '`api.on("subagent_spawning", ...)` remains wired only for older plugins; core now owns thread-bound subagent routing.',
   },
   {
     code: "hook-only-plugin-shape",
@@ -490,7 +513,10 @@ export const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: ["manifest/catalog execution policy", "runtime selection"],
     diagnostics: ["agent runtime compatibility warning"],
-    tests: ["src/plugins/provider-runtime.test.ts", "src/web/provider-runtime-shared.test.ts"],
+    tests: [
+      "src/plugins/provider-runtime.test.ts",
+      "packages/web-content-core/src/provider-runtime-shared.test.ts",
+    ],
   },
   {
     code: "generated-bundled-channel-config-fallback",
@@ -543,7 +569,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     deprecated: "2026-04-26",
     warningStarts: "2026-04-26",
     removeAfter: "2026-07-26",
-    replacement: "state-managed `plugins/installs.json` install ledger",
+    replacement: "shared SQLite `installed_plugin_index` install ledger",
     docsPath: "/cli/plugins#registry",
     surfaces: ["plugins.installs authored config", "plugin install/update migration"],
     diagnostics: ["config write migration warning", "doctor registry migration"],

@@ -1,3 +1,4 @@
+// Browser tests cover cdp.internal plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
@@ -79,7 +80,9 @@ function replyToViewportCommandOrScreenshot(
 
 async function startMockWsServer(handle: CdpReplyHandler) {
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-  await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+  await new Promise<void>((resolve) => {
+    wss.once("listening", () => resolve());
+  });
   const port = (wss.address() as { port: number }).port;
   wss.on("connection", (socket) => {
     socket.on("message", (raw) => {
@@ -113,7 +116,9 @@ describe("cdp internal", () => {
 
   afterEach(async () => {
     if (wss) {
-      await new Promise<void>((resolve) => wss?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.close(() => resolve());
+      });
       wss = null;
     }
   });
@@ -223,9 +228,7 @@ describe("cdp internal", () => {
           );
           return;
         }
-        if (replyToViewportCommandOrScreenshot(msg, socket, "FULL")) {
-          return;
-        }
+        replyToViewportCommandOrScreenshot(msg, socket, "FULL");
       });
       wss = server.wss;
       const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
@@ -1060,9 +1063,7 @@ describe("cdp internal", () => {
           socket.send(JSON.stringify({ id: msg.id, result: { result: { value: {} } } }));
           return;
         }
-        if (replyToViewportCommandOrScreenshot(msg, socket, "C")) {
-          return;
-        }
+        replyToViewportCommandOrScreenshot(msg, socket, "C");
       });
       wss = server.wss;
       const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
@@ -1076,7 +1077,9 @@ describe("cdp internal", () => {
       // in createTargetViaCdp — the bare-ws root triggers discovery.
       const http = await import("node:http");
       const wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-      await new Promise<void>((resolve) => wsServer.once("listening", () => resolve()));
+      await new Promise<void>((resolve) => {
+        wsServer.once("listening", () => resolve());
+      });
       const wsPort = (wsServer.address() as { port: number }).port;
       wsServer.on("connection", (socket) => {
         socket.on("message", (raw) => {
@@ -1114,7 +1117,9 @@ describe("cdp internal", () => {
         }
         res.writeHead(404).end();
       });
-      await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", () => resolve()));
+      await new Promise<void>((resolve) => {
+        httpServer.listen(0, "127.0.0.1", () => resolve());
+      });
       const httpPort = (httpServer.address() as { port: number }).port;
       try {
         const out = await createTargetViaCdp({
@@ -1123,8 +1128,12 @@ describe("cdp internal", () => {
         });
         expect(out.targetId).toBe("T_BARE_WS");
       } finally {
-        await new Promise<void>((resolve) => wsServer.close(() => resolve()));
-        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          wsServer.close(() => resolve());
+        });
+        await new Promise<void>((resolve) => {
+          httpServer.close(() => resolve());
+        });
       }
     });
 

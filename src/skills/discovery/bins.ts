@@ -1,6 +1,8 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+// Skill binary discovery helpers normalize executable metadata from skill manifests.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SkillEntry } from "../types.js";
 
+/** Collects all binary names a set of skills may require or install. */
 export function collectSkillBins(entries: SkillEntry[]): string[] {
   const bins = new Set<string>();
   for (const entry of entries) {

@@ -1,7 +1,12 @@
+/**
+ * Parses output from CLI-backed model providers. It supports plain text, JSON,
+ * JSONL streaming, Claude stream-json dialects, usage metadata, and tool event
+ * reconstruction.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { CliBackendConfig } from "../config/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 
 type CliUsage = {
@@ -12,6 +17,7 @@ type CliUsage = {
   total?: number;
 };
 
+/** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
   rawText?: string;
@@ -20,6 +26,7 @@ export type CliOutput = {
   finalPromptText?: string;
 };
 
+/** Incremental assistant text emitted while parsing a streaming CLI response. */
 export type CliStreamingDelta = {
   text: string;
   delta: string;
@@ -27,12 +34,14 @@ export type CliStreamingDelta = {
   usage?: CliUsage;
 };
 
+/** Tool-call start event reconstructed from CLI stream output. */
 export type CliToolUseStartDelta = {
   toolCallId: string;
   name: string;
   args: Record<string, unknown>;
 };
 
+/** Tool-call result event reconstructed from CLI stream output. */
 export type CliToolResultDelta = {
   toolCallId: string;
   name: string;
@@ -82,6 +91,7 @@ function parseJsonRecordCandidates(raw: string): Record<string, unknown>[] {
     // Fall back to scanning for top-level JSON objects embedded in mixed output.
   }
 
+  // Some CLIs prefix JSON with banners/logs; balanced scanning recovers structured records.
   for (const candidate of extractJsonObjectCandidates(trimmed)) {
     try {
       const parsed = JSON.parse(candidate);
@@ -238,6 +248,7 @@ function unwrapNestedCliResultText(raw: string): string {
       ) {
         return text;
       }
+      // Claude can wrap a result payload inside repeated JSON-string result envelopes.
       text = parsed.result;
     } catch {
       return text;
@@ -304,6 +315,8 @@ function shouldUnwrapNestedCliResultText(params: {
   return !Object.hasOwn(params.parsed, "type") || params.parsed.type === "result";
 }
 
+/** Parses JSON CLI output, including mixed stdout that contains embedded JSON objects. */
+/** Parses a single JSON payload emitted by a CLI backend. */
 export function parseCliJson(
   raw: string,
   backend: CliBackendConfig,
@@ -436,6 +449,7 @@ function emitToolStartOnce(
   args: Record<string, unknown>,
   onToolUseStart?: (delta: CliToolUseStartDelta) => void,
 ): void {
+  // Streaming and final assistant records may both describe the same tool call.
   if (tracker.startedIds.has(toolCallId)) {
     return;
   }
@@ -451,6 +465,7 @@ function emitToolResultOnce(
   result: unknown,
   onToolResult?: (delta: CliToolResultDelta) => void,
 ): void {
+  // Tool results can arrive as assistant result blocks or echoed user tool_result blocks.
   if (tracker.resultDeliveredIds.has(toolCallId)) {
     return;
   }
@@ -606,10 +621,11 @@ function dispatchClaudeCliStreamingToolEvent(params: {
         params.onToolResult,
       );
     }
-    return;
   }
 }
 
+/** Creates an incremental JSONL parser for CLI streaming responses and tool events. */
+/** Creates a stateful parser for streaming JSONL CLI backend output. */
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -736,6 +752,8 @@ export function createCliJsonlStreamingParser(params: {
   };
 }
 
+/** Parses complete JSONL CLI output into the final assistant result and metadata. */
+/** Parses complete JSONL output from a CLI backend into normalized text and metadata. */
 export function parseCliJsonl(
   raw: string,
   backend: CliBackendConfig,
@@ -787,6 +805,8 @@ export function parseCliJsonl(
   return { text, sessionId, usage };
 }
 
+/** Parses CLI output according to the backend output mode with text fallback. */
+/** Parses CLI backend output using the configured JSON/JSONL/plain-text mode. */
 export function parseCliOutput(params: {
   raw: string;
   backend: CliBackendConfig;
@@ -814,6 +834,8 @@ export function parseCliOutput(params: {
   );
 }
 
+/** Extracts the most specific structured CLI error message from mixed or JSON output. */
+/** Extracts a human-readable error message from mixed CLI stderr/stdout text. */
 export function extractCliErrorMessage(raw: string): string | null {
   const parsedRecords = parseJsonRecordCandidates(raw);
   if (parsedRecords.length === 0) {

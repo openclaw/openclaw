@@ -1729,7 +1729,7 @@ export class AgentSession {
    * Check if current model supports thinking/reasoning.
    */
   supportsThinking(): boolean {
-    return !!this.model?.reasoning;
+    return Boolean(this.model?.reasoning);
   }
 
   private getThinkingLevelForModelSwitch(explicitLevel?: ThinkingLevel): ThinkingLevel {
@@ -2291,7 +2291,7 @@ export class AgentSession {
     runner.bindCore(
       {
         sendMessage: (message, options) => {
-          this.sendCustomMessage(message, options).catch((err) => {
+          this.sendCustomMessage(message, options).catch((err: unknown) => {
             runner.emitError({
               extensionPath: "<runtime>",
               event: "send_message",
@@ -2300,7 +2300,7 @@ export class AgentSession {
           });
         },
         sendUserMessage: (content, options) => {
-          this.sendUserMessage(content, options).catch((err) => {
+          this.sendUserMessage(content, options).catch((err: unknown) => {
             runner.emitError({
               extensionPath: "<runtime>",
               event: "send_user_message",

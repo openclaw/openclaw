@@ -1,3 +1,4 @@
+// Message program helper tests cover message command helper behavior and mocks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const messageCommandMock = vi.fn(async () => {});
@@ -22,7 +23,7 @@ const { ensurePluginRegistryLoaded } = await import("../../plugin-registry.js");
 
 const hasHooksMock = vi.fn((_hookName: string) => false);
 const runGatewayStopMock = vi.fn(
-  async (eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
+  async (_eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
 );
 const runGlobalGatewayStopSafelyMock = vi.fn(
   async (params: {
@@ -445,7 +446,7 @@ describe("runMessageAction", () => {
     vi.useFakeTimers();
     try {
       hasHooksMock.mockReturnValueOnce(true);
-      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => undefined));
+      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => {}));
       const runMessageAction = createRunMessageAction();
 
       const pending = expect(runMessageAction("send", baseSendOptions)).rejects.toThrow("exit");

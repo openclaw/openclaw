@@ -1,3 +1,11 @@
+/**
+ * Parses Codex account rate-limit payloads into user-facing usage summaries,
+ * reset hints, and enriched usage-limit error messages.
+ */
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
@@ -21,6 +29,7 @@ type RateLimitWindowEntry = {
   window: RateLimitReset;
 };
 
+/** Human-readable Codex account usage state derived from rate-limit snapshots. */
 export type CodexAccountUsageSummary = {
   usageLine?: string;
   blocked: boolean;
@@ -31,6 +40,7 @@ export type CodexAccountUsageSummary = {
   blockingReason?: string;
 };
 
+/** Enriches Codex usage-limit failures with reset timing and recovery guidance. */
 export function formatCodexUsageLimitErrorMessage(params: {
   message?: string | null;
   codexErrorInfo?: JsonValue | null;
@@ -70,6 +80,7 @@ export function formatCodexUsageLimitErrorMessage(params: {
   return parts.join(" ");
 }
 
+/** Detects usage-limit messages that need a fresh rate-limit query before display. */
 export function shouldRefreshCodexRateLimitsForUsageLimitMessage(
   message: string | null | undefined,
 ): boolean {
@@ -80,6 +91,7 @@ export function shouldRefreshCodexRateLimitsForUsageLimitMessage(
   );
 }
 
+/** Formats compact summaries for raw Codex rate-limit snapshot payloads. */
 export function summarizeCodexRateLimits(
   value: JsonValue | undefined,
   nowMs = Date.now(),
@@ -95,10 +107,12 @@ export function summarizeCodexRateLimits(
   return summaries.length > 0 ? summaries.join("; ") : undefined;
 }
 
+/** Returns true when a value contains any recognizable Codex rate-limit snapshots. */
 export function hasCodexRateLimitSnapshots(value: JsonValue | undefined): boolean {
   return collectCodexRateLimitSnapshots(value).length > 0;
 }
 
+/** Builds short account availability lines suitable for status surfaces. */
 export function summarizeCodexAccountRateLimits(
   value: JsonValue | undefined,
   nowMs = Date.now(),
@@ -120,6 +134,7 @@ export function summarizeCodexAccountRateLimits(
   ];
 }
 
+/** Returns the reset timestamp for the currently blocking Codex usage limit. */
 export function resolveCodexUsageLimitResetAtMs(
   value: JsonValue | undefined,
   nowMs = Date.now(),
@@ -127,6 +142,7 @@ export function resolveCodexUsageLimitResetAtMs(
   return selectBlockingRateLimitReset(value, nowMs)?.resetsAtMs;
 }
 
+/** Summarizes account availability, blocking reason, and reset time from rate-limit data. */
 export function summarizeCodexAccountUsage(
   value: JsonValue | undefined,
   nowMs = Date.now(),
@@ -325,10 +341,10 @@ function readRateLimitWindow(
     return undefined;
   }
   const resetsAt = readNumber(window, "resetsAt") ?? readNumber(window, "resets_at");
+  const resetsAtMs =
+    resolveExpiresAtMsFromEpochSeconds(resetsAt, { maxMs: MAX_DATE_TIMESTAMP_MS }) ?? 0;
   return {
-    ...(typeof resetsAt === "number" && Number.isFinite(resetsAt) && resetsAt > 0
-      ? { resetsAtMs: resetsAt * 1000 }
-      : { resetsAtMs: 0 }),
+    resetsAtMs,
     ...readOptionalNumberField(window, "usedPercent", "used_percent"),
     ...readOptionalNumberField(
       window,

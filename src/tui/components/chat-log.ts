@@ -1,3 +1,4 @@
+// Chat log component lays out conversation messages for the TUI viewport.
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.js";
@@ -6,6 +7,7 @@ import { BtwInlineMessage } from "./btw-inline-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
+// Tolerates history timestamps slightly before locally pending messages.
 const PENDING_HISTORY_CLOCK_SKEW_TOLERANCE_MS = 60_000;
 
 type RepeatableSystemMessage = {
@@ -15,6 +17,7 @@ type RepeatableSystemMessage = {
   count: number;
 };
 
+/** Scrollback container that tracks pending users, streaming assistant runs, tools, and notices. */
 export class ChatLog extends Container {
   private readonly maxComponents: number;
   private toolById = new Map<string, ToolExecutionComponent>();
@@ -37,6 +40,7 @@ export class ChatLog extends Container {
     this.maxComponents = Math.max(20, Math.floor(maxComponents));
   }
 
+  // Pruning must clear side maps so future stream/tool updates do not target detached components.
   private dropComponentReferences(component: Component) {
     for (const [toolId, tool] of this.toolById.entries()) {
       if (tool === component) {
@@ -97,6 +101,13 @@ export class ChatLog extends Container {
     if (!opts?.preservePendingUsers) {
       this.pendingUsers.clear();
     }
+  }
+
+  clearTools() {
+    for (const tool of this.toolById.values()) {
+      this.removeChild(tool);
+    }
+    this.toolById.clear();
   }
 
   restorePendingUsers() {
@@ -211,6 +222,7 @@ export class ChatLog extends Container {
       timestamp?: number | null;
     }>,
   ) {
+    // Gateway history may echo a just-submitted local message; remove pending rows when it does.
     const normalizedHistory = historyUsers
       .map((entry) => ({
         text: entry.text.trim(),

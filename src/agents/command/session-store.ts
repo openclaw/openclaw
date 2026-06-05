@@ -1,4 +1,8 @@
+/**
+ * Updates persisted session metadata after agent command runs.
+ */
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   canonicalizeAbsoluteSessionFilePath,
   mergeSessionEntry,
@@ -13,7 +17,6 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
@@ -52,6 +55,7 @@ function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntr
   return next;
 }
 
+/** Applies run result metadata, usage, and CLI bindings to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
   contextTokensOverride?: number;
@@ -102,6 +106,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
+  const activeSessionFile = normalizeOptionalString(result.meta.agentMeta?.sessionFile);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextTokens =
@@ -136,6 +141,22 @@ export async function updateSessionStoreAfterAgentRun(params: {
           contextTokens,
         }),
   };
+  if (entry.sessionId !== sessionId) {
+    next.sessionFile =
+      activeSessionFile ??
+      resolveCompactionSessionFile({
+        entry,
+        sessionKey,
+        storePath,
+        newSessionId: sessionId,
+      });
+    next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
+    next.usageFamilySessionIds = Array.from(
+      new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, sessionId]),
+    );
+  } else if (activeSessionFile) {
+    next.sessionFile = activeSessionFile;
+  }
   if (preserveRuntimeModel) {
     // Keep the pre-existing runtime model and context window so a background
     // heartbeat turn using a different model does not bleed into the main
@@ -172,7 +193,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
     if (isCliProvider(providerUsed, cfg)) {
       const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
-      if (cliSessionBinding?.sessionId?.trim()) {
+      if (result.meta.agentMeta?.clearCliSessionBinding === true) {
+        clearCliSession(next, providerUsed);
+      } else if (cliSessionBinding?.sessionId?.trim()) {
         setCliSessionBinding(next, providerUsed, cliSessionBinding);
       } else {
         const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
@@ -280,13 +303,19 @@ export async function updateSessionStoreAfterAgentRun(params: {
       store[sessionKey] = merged;
       return merged;
     },
-    { takeCacheOwnership: true, maintenanceConfig },
+    {
+      takeCacheOwnership: true,
+      maintenanceConfig,
+      resolveSingleEntryPersistence: (entryLocal) =>
+        entryLocal ? { sessionKey, entry: entryLocal } : undefined,
+    },
   );
   if (persisted) {
     sessionStore[sessionKey] = persisted;
   }
 }
 
+/** Clears a stored CLI session binding after a failed or invalidated run. */
 export async function clearCliSessionInStore(params: {
   provider: string;
   sessionKey: string;
@@ -312,6 +341,7 @@ export async function clearCliSessionInStore(params: {
   return persisted;
 }
 
+/** Records CLI compaction metadata on the persisted session entry. */
 export async function recordCliCompactionInStore(params: {
   provider: string;
   sessionKey: string;

@@ -1,11 +1,12 @@
+// Root --profile/--dev parsing and environment projection for profile-specific state.
 import os from "node:os";
 import path from "node:path";
-import { isValueToken } from "../infra/cli-root-options.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { isValueToken } from "../infra/cli-root-options.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
@@ -21,6 +22,7 @@ function isCommandLocalProfileOption(out: string[]): boolean {
 }
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
+  // Root profile flags are stripped before Commander sees argv, except command-local cases.
   let profile: string | null = null;
   let sawDev = false;
 

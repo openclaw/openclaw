@@ -1,3 +1,5 @@
+// Gateway call tests cover connection detail resolution, local/remote URL choice,
+// auth token assembly, device identity, and client command metadata.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -168,6 +170,7 @@ vi.mock("./event-loop-ready.js", () => ({
 const {
   testing,
   buildGatewayConnectionDetails,
+  buildGatewayProbeConnectionDetails,
   callGateway,
   callGatewayCli,
   callGatewayScoped,
@@ -869,6 +872,33 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.message).toContain("Source: cli --url");
   });
 
+  it("reuses gateway call TLS resolution for local probe connection details", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        tls: { enabled: true },
+        handshakeTimeoutMs: 4321,
+      },
+    } satisfies OpenClawConfig;
+    resolveGatewayPort.mockReturnValue(18800);
+    testing.setDepsForTests({
+      getRuntimeConfig: () => config,
+      resolveGatewayPort: () => 18800,
+      loadGatewayTlsRuntime: async () => ({
+        enabled: true,
+        fingerprintSha256: "sha256:test-local-gateway-fingerprint",
+        required: true,
+      }),
+    });
+
+    const details = await buildGatewayProbeConnectionDetails({ config });
+
+    expect(details.url).toBe("wss://127.0.0.1:18800");
+    expect(details.tlsFingerprint).toBe("sha256:test-local-gateway-fingerprint");
+    expect(details.preauthHandshakeTimeoutMs).toBe(4321);
+  });
+
   it("redacts credential-bearing target URLs from connection messages", () => {
     setLocalLoopbackGatewayConfig(18800);
 
@@ -1130,7 +1160,7 @@ describe("callGateway error details", () => {
     setLocalLoopbackGatewayConfig();
 
     let err: unknown;
-    await callGateway({ method: "health", timeoutMs: 10_000 }).catch((caught) => {
+    await callGateway({ method: "health", timeoutMs: 10_000 }).catch((caught: unknown) => {
       err = caught;
     });
 
@@ -1145,7 +1175,7 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
@@ -1164,7 +1194,7 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let err: unknown;
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       err = caught;
     });
 
@@ -1185,7 +1215,7 @@ describe("callGateway error details", () => {
     setLocalLoopbackGatewayConfig();
 
     let err: unknown;
-    await callGateway({ method: "health" }).catch((caught) => {
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
       err = caught;
     });
 
@@ -1213,7 +1243,7 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
@@ -1241,7 +1271,7 @@ describe("callGateway error details", () => {
     };
 
     let err: unknown;
-    await callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    await callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       err = caught;
     });
     expect(isGatewayTransportError(err)).toBe(true);
@@ -1264,7 +1294,7 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health" }).catch((caught) => {
+    const promise = callGateway({ method: "health" }).catch((caught: unknown) => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
@@ -1285,7 +1315,7 @@ describe("callGateway error details", () => {
 
       vi.useFakeTimers();
       let errMessage = "";
-      const promise = callGateway({ method: "health" }).catch((caught) => {
+      const promise = callGateway({ method: "health" }).catch((caught: unknown) => {
         errMessage = caught instanceof Error ? caught.message : String(caught);
       });
 
@@ -1306,9 +1336,11 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 2_592_010_000 }).catch((caught) => {
-      errMessage = caught instanceof Error ? caught.message : String(caught);
-    });
+    const promise = callGateway({ method: "health", timeoutMs: 2_592_010_000 }).catch(
+      (caught: unknown) => {
+        errMessage = caught instanceof Error ? caught.message : String(caught);
+      },
+    );
 
     await vi.advanceTimersByTimeAsync(1);
     expect(errMessage).toBe("");

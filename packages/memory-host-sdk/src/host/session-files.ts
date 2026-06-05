@@ -1,3 +1,4 @@
+// Memory Host SDK module implements session files behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -20,6 +21,7 @@ import {
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
+import { retryTransientMemoryRead } from "./read-retry.js";
 
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // Keep the historical one-line-per-message export shape for normal turns, but
@@ -28,6 +30,7 @@ const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // This limit applies to content only; the role label adds up to 11 chars.
 const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const SESSION_ENTRY_PARSE_YIELD_LINES = 250;
+const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
 
 export type SessionFileEntry = {
@@ -509,7 +512,7 @@ function parseSessionTimestampMs(
   for (const value of candidates) {
     if (typeof value === "number" && Number.isFinite(value)) {
       const ms = value > 0 && value < 1e11 ? value * 1000 : value;
-      if (Number.isFinite(ms) && ms > 0) {
+      if (Number.isFinite(ms) && ms > 0 && ms <= MAX_DATE_TIMESTAMP_MS) {
         return ms;
       }
     }
@@ -564,7 +567,12 @@ export async function buildSessionEntry(
         messageTimestampsMs: [],
       };
     }
-    const raw = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
+    const raw = (
+      await retryTransientMemoryRead(
+        () => readRegularFile({ filePath: absPath }),
+        `read session transcript ${absPath}`,
+      )
+    ).buffer.toString("utf-8");
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];

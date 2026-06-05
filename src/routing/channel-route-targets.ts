@@ -1,11 +1,14 @@
+// Channel route target helpers normalize channel route targets for delivery.
+import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isRecord as hasRecord } from "../shared/record-coerce.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAgentRoute } from "./resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId, normalizeAgentId } from "./session-key.js";
 
+// Agent-to-channel coverage summary for diagnostics and background checks. It
+// samples configured channels/accounts and explicit bindings.
 export type ChannelRouteTarget = {
   agentId: string;
   channels: string[];
@@ -74,6 +77,8 @@ export function collectChannelRouteTargets(cfg: OpenClawConfig): ChannelRouteTar
 
   for (const channel of listConfiguredChannelIds(cfg)) {
     const accountIds = listConfiguredChannelAccountIds(cfg, channel);
+    // Channels with no explicit accounts still have an implicit default account
+    // route, so sample it to discover the effective agent target.
     const sampledAccountIds = accountIds.length > 0 ? accountIds : [DEFAULT_ACCOUNT_ID];
     for (const accountId of sampledAccountIds) {
       const route = resolveAgentRoute({

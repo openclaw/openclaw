@@ -1,8 +1,9 @@
+// Root help tests cover top-level help rendering and command visibility.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderRootHelpText } from "./root-help.js";
 
 const getPluginCliCommandDescriptorsMock = vi.fn(
-  async (configForTest?: unknown, _env?: unknown, _loaderOptions?: unknown) => [
+  async (_configForTest?: unknown, _env?: unknown, _loaderOptions?: unknown) => [
     {
       name: "matrix",
       description: "Matrix channel utilities",

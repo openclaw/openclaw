@@ -1,3 +1,9 @@
+// Skill loading config helpers resolve configured skill sources and enablement.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillConfig } from "../../config/types.skills.js";
 import {
@@ -7,11 +13,6 @@ import {
   resolveConfigPath,
   resolveRuntimePlatform,
 } from "../../shared/config-eval.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { SkillEligibilityContext, SkillEntry, SkillsInstallPreferences } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { resolveSkillSource } from "./source.js";
@@ -21,6 +22,7 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.evaluateEnabled": true,
 };
 
+/** Platform helpers re-exported for skill loading callers and tests. */
 export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
 
 export function resolveSkillsInstallPreferences(config?: OpenClawConfig): SkillsInstallPreferences {
@@ -53,7 +55,7 @@ export function resolveSkillConfig(
   return entry;
 }
 
-function normalizeAllowlist(input: unknown): string[] | undefined {
+function normalizeAllowlist(input: unknown): ReadonlySet<string> | undefined {
   if (!input) {
     return undefined;
   }
@@ -61,7 +63,7 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
     return undefined;
   }
   const normalized = normalizeStringEntries(input);
-  return normalized.length > 0 ? normalized : undefined;
+  return normalized.length > 0 ? new Set(normalized) : undefined;
 }
 
 const BUNDLED_SOURCES = new Set(["openclaw-bundled"]);
@@ -70,35 +72,35 @@ function isBundledSkill(entry: SkillEntry): boolean {
   return BUNDLED_SOURCES.has(resolveSkillSource(entry.skill));
 }
 
-export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {
+export function resolveBundledAllowlist(config?: OpenClawConfig): ReadonlySet<string> | undefined {
   return normalizeAllowlist(config?.skills?.allowBundled);
 }
 
-export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {
-  if (!allowlist || allowlist.length === 0) {
+export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: ReadonlySet<string>): boolean {
+  if (!allowlist || allowlist.size === 0) {
     return true;
   }
   if (!isBundledSkill(entry)) {
     return true;
   }
   const key = resolveSkillKey(entry.skill, entry);
-  return allowlist.includes(key) || allowlist.includes(entry.skill.name);
+  return allowlist.has(key) || allowlist.has(entry.skill.name);
 }
 
 export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: OpenClawConfig;
+  bundledAllowlist: ReadonlySet<string> | undefined;
   eligibility?: SkillEligibilityContext;
 }): boolean {
-  const { entry, config, eligibility } = params;
+  const { entry, config, bundledAllowlist, eligibility } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
-  const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
 
   if (skillConfig?.enabled === false) {
     return false;
   }
-  if (!isBundledSkillAllowed(entry, allowBundled)) {
+  if (!isBundledSkillAllowed(entry, bundledAllowlist)) {
     return false;
   }
   return evaluateRuntimeEligibility({

@@ -1,3 +1,10 @@
+// Source reply mirroring records successful same-conversation message-tool
+// sends back into the owning session transcript.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
@@ -6,11 +13,6 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeOptionalTrimmedStringList } from "../../shared/string-normalization.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 
 type SourceReplyTranscriptMirrorParams = {
@@ -29,6 +31,7 @@ type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams &
   sessionKey: string;
 };
 
+// Mirror only enough delivered payload detail to preserve transcript context.
 function readStringArray(value: unknown): string[] | undefined {
   return normalizeOptionalTrimmedStringList(value);
 }
@@ -117,6 +120,7 @@ function isCurrentSourceConversation(
   );
 }
 
+/** Mirrors successful outbound source replies into the owning session transcript. */
 export async function mirrorDeliveredSourceReplyToTranscript(
   params: SourceReplyTranscriptMirrorParams,
 ): Promise<boolean> {

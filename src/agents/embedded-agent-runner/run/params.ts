@@ -1,3 +1,6 @@
+/**
+ * Shared parameter types for embedded-agent run orchestration.
+ */
 import type {
   PartialReplyPayload,
   SourceReplyDeliveryMode,
@@ -33,6 +36,7 @@ export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "o
 
 export type CurrentInboundPromptContext = {
   text: string;
+  resumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
 };
 
@@ -81,6 +85,8 @@ export type RunEmbeddedAgentParams = {
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
+  /** True when the current inbound turn carried audio media. */
+  currentInboundAudio?: boolean;
   /** Reply-to mode for Slack auto-threading. */
   replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent (for "first" mode). */

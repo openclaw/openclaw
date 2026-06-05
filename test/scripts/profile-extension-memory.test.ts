@@ -1,10 +1,11 @@
+// Profile Extension Memory tests cover profile extension memory script behavior.
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { runCase } from "../../scripts/profile-extension-memory.mjs";
+import { parseArgs, runCase } from "../../scripts/profile-extension-memory.mjs";
 
 const SCRIPT_PATH = path.resolve("scripts/profile-extension-memory.mjs");
 
@@ -22,6 +23,19 @@ describe("scripts/profile-extension-memory", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: node scripts/profile-extension-memory.mjs");
+  });
+
+  it("stops parsing options after the argument terminator", () => {
+    expect(parseArgs(["--extension", "discord", "--", "--extension", "telegram"])).toMatchObject({
+      extensions: ["discord"],
+    });
+  });
+
+  it("accepts package-manager argument separators before script options", () => {
+    expect(parseArgs(["--", "--extension", "discord", "--skip-combined"])).toMatchObject({
+      extensions: ["discord"],
+      skipCombined: true,
+    });
   });
 
   it("rejects loose numeric flags before scanning built plugin artifacts", () => {

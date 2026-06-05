@@ -1,3 +1,4 @@
+// Codex tests cover outcome fallback runtime contract plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -179,7 +180,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
         text: `Codex reasoning:\n${OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText}`,
       },
     ]);
-    expect(reasoningMessage.api).toBe("openai-codex-responses");
+    expect(reasoningMessage.api).toBe("openai-chatgpt-responses");
     expect(reasoningMessage.provider).toBe("codex");
     expect(reasoningMessage.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel);
     expect(reasoningMessage.usage).toStrictEqual({
@@ -245,7 +246,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
         text: `Codex plan:\n${OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText}`,
       },
     ]);
-    expect(planMessage.api).toBe("openai-codex-responses");
+    expect(planMessage.api).toBe("openai-chatgpt-responses");
     expect(planMessage.provider).toBe("codex");
     expect(planMessage.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel);
     expect(planMessage.usage).toStrictEqual({

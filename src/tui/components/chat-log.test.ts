@@ -1,3 +1,4 @@
+// Chat log tests cover message rendering order and layout behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { ChatLog } from "./chat-log.js";
@@ -95,6 +96,22 @@ describe("ChatLog", () => {
     chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "done" }] });
 
     expect(chatLog.children.length).toBe(20);
+  });
+
+  it("clears visible tool entries and stale tool references", () => {
+    const chatLog = new ChatLog(20);
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "done" }] });
+
+    let rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("Read File");
+
+    chatLog.clearTools();
+    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "stale" }] });
+
+    rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).not.toContain("Read File");
+    expect(rendered).not.toContain("stale");
   });
 
   it("prunes system messages atomically when a non-system entry overflows the log", () => {

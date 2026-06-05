@@ -1,3 +1,4 @@
+// Imessage plugin module implements actions behavior.
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   createActionGate,
@@ -24,7 +25,7 @@ import {
   rememberIMessageReplyCache,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
-import { getCachedIMessagePrivateApiStatus } from "./probe.js";
+import { getCachedIMessagePrivateApiStatus, probeIMessagePrivateApi } from "./probe.js";
 import { parseIMessageTarget, type IMessageTarget } from "./targets.js";
 
 const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
@@ -417,7 +418,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         // status adapter, which doesn't fire eagerly on first dispatch. Run
         // an inline probe so the first react/send-rich attempt after `imsg
         // launch` succeeds without requiring a manual `channels status`.
-        const { probeIMessagePrivateApi } = await import("./probe.js");
         privateApiStatus = await probeIMessagePrivateApi(
           cliPathForProbe,
           account.config.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS,

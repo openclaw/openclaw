@@ -1,3 +1,4 @@
+// Memory Core plugin module implements search manager behavior.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -224,7 +225,6 @@ export async function getMemorySearchManager(params: {
       if (!primary) {
         return { entry: null, failureReason };
       }
-      let cacheEntry!: CachedQmdManagerEntry;
       const wrapper = new FallbackMemoryManager(
         {
           primary,
@@ -240,7 +240,7 @@ export async function getMemorySearchManager(params: {
           }
         },
       );
-      cacheEntry = {
+      const cacheEntry: CachedQmdManagerEntry = {
         identityKey: expectedIdentityKey,
         manager: wrapper,
       };
@@ -294,7 +294,7 @@ export async function getMemorySearchManager(params: {
         }
         QMD_MANAGER_CACHE.set(scopeKey, created.entry);
         if (cached) {
-          await closeQmdManagerForReplacement(cached.manager).catch((err) => {
+          await closeQmdManagerForReplacement(cached.manager).catch((err: unknown) => {
             log.warn(`failed to retire replaced qmd memory manager: ${formatErrorMessage(err)}`);
           });
         }

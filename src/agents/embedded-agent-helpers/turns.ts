@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+/**
+ * Normalizes embedded-agent conversation turn ordering for provider contracts.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../runtime/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 
@@ -349,6 +352,7 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
   });
 }
 
+/** Merge adjacent user turns into a single provider-compatible user message. */
 export function mergeConsecutiveUserTurns(
   previous: Extract<AgentMessage, { role: "user" }>,
   current: Extract<AgentMessage, { role: "user" }>,

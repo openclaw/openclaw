@@ -1,3 +1,4 @@
+// Tests SSH config parsing and spawned command options.
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -18,7 +19,7 @@ function createMockSpawnChild() {
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
-  const spawn = vi.fn(() => {
+  const spawnLocal = vi.fn(() => {
     const { child, stdout } = createMockSpawnChild();
     process.nextTick(() => {
       stdout?.emit(
@@ -39,7 +40,7 @@ vi.mock("node:child_process", async () => {
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
-      spawn: spawn as unknown as typeof import("node:child_process").spawn,
+      spawn: spawnLocal as unknown as typeof import("node:child_process").spawn,
     },
   );
 });

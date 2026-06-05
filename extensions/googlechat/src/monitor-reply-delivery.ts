@@ -1,3 +1,4 @@
+// Googlechat plugin module implements monitor reply delivery behavior.
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,

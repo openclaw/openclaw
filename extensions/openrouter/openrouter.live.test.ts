@@ -1,3 +1,4 @@
+// Openrouter tests cover openrouter plugin behavior.
 import OpenAI from "openai";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -148,7 +149,9 @@ describeCacheLive("openrouter plugin live cache", () => {
     ];
 
     await completeOpenRouterChat({ client, model: resolved.id, messages });
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 2_000);
+    });
     const cached = await completeOpenRouterChat({ client, model: resolved.id, messages });
 
     const cachedTokens = cached.usage?.prompt_tokens_details?.cached_tokens ?? 0;

@@ -1,5 +1,6 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeUniqueTrimmedStringList } from "../shared/string-normalization.js";
+/** Validates and normalizes provider plugin definitions before registry registration. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
@@ -309,6 +310,8 @@ function normalizeProviderWizard(params: {
   };
 }
 
+/** Normalizes provider plugin metadata and emits diagnostics for invalid public fields. */
+/** Returns a normalized provider plugin plus validation diagnostics for registry insertion. */
 export function normalizeRegisteredProvider(params: {
   pluginId: string;
   source: string;

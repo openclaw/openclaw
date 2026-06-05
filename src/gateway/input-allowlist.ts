@@ -1,4 +1,6 @@
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+// Gateway input allowlist helpers normalize optional hostname allowlists while
+// keeping "unset" distinct from "deny all".
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 /**
  * Normalize optional gateway URL-input hostname allowlists.

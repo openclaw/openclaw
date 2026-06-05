@@ -1,7 +1,8 @@
+// Implements docs link/search output for `openclaw docs`.
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { isRich, theme } from "../terminal/theme.js";
 
 const SEARCH_API = "https://docs.openclaw.ai/api/search";
 const SEARCH_TIMEOUT_MS = 30_000;
@@ -104,6 +105,7 @@ function parseDocsSearchResults(raw: unknown): DocResult[] {
   return results;
 }
 
+/** Search hosted docs, or print the docs homepage when no query is provided. */
 export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEnv) {
   const query = queryParts.join(" ").trim();
   if (!query) {

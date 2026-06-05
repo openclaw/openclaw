@@ -1,3 +1,4 @@
+// Release Beta Verifier script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -224,7 +225,9 @@ async function fetchWithRetry(
       lastError = error;
     }
     if (attempt < attempts) {
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, attempt * 1000));
+      await new Promise((resolveDelay) => {
+        setTimeout(resolveDelay, attempt * 1000);
+      });
     }
   }
   const message = lastError instanceof Error ? lastError.message : String(lastError);

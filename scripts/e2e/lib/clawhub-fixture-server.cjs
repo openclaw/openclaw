@@ -1,3 +1,4 @@
+// CommonJS fixture server for ClawHub package/install E2E scenarios.
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -467,7 +468,9 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+main().catch(
+  /** @param {unknown} error */ (error) => {
+    console.error(error);
+    process.exit(1);
+  },
+);

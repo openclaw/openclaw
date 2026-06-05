@@ -1,3 +1,4 @@
+// Install download tests cover downloading skill archives before extraction.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -39,7 +40,7 @@ function buildEntry(name: string): SkillEntry {
   const skillDir = path.join(workspaceDir, "skills", name);
   const filePath = path.join(skillDir, "SKILL.md");
   return {
-    skill: createFixtureSkill({
+    skill: createCanonicalFixtureSkill({
       name,
       description: `${name} test skill`,
       filePath,
@@ -48,16 +49,6 @@ function buildEntry(name: string): SkillEntry {
     }),
     frontmatter: {},
   };
-}
-
-function createFixtureSkill(params: {
-  name: string;
-  description: string;
-  filePath: string;
-  baseDir: string;
-  source: string;
-}): SkillEntry["skill"] {
-  return createCanonicalFixtureSkill(params);
 }
 
 function buildDownloadSpec(params: {
@@ -153,18 +144,15 @@ function mockTarExtractionFlow(params: {
 }
 
 let workspaceDir = "";
-let stateDir = "";
-
 beforeAll(async () => {
   workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
-  stateDir = setTempStateDir(workspaceDir);
+  setTempStateDir(workspaceDir);
 });
 
 afterAll(async () => {
   if (workspaceDir) {
     await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
     workspaceDir = "";
-    stateDir = "";
   }
 });
 

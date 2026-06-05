@@ -1,4 +1,5 @@
-import { type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+// File Transfer plugin module implements dir list tool behavior.
+import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { readClampedInt } from "../shared/params.js";
 import {

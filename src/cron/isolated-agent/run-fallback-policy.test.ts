@@ -1,3 +1,4 @@
+// Run fallback policy tests cover isolated agent fallback behavior after run failures.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -88,7 +89,7 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.2", "zai/glm-5"],
+                  fallbacks: ["openai/gpt-5.2", "zai/glm-5"],
                 },
               },
             },
@@ -101,7 +102,7 @@ describe("resolveCronFallbacksOverride", () => {
           message: "summarize",
         }),
       }),
-    ).toEqual(["openai-codex/gpt-5.2", "zai/glm-5"]);
+    ).toEqual(["openai/gpt-5.2", "zai/glm-5"]);
   });
 
   it("keeps a selected agent primary model strict ahead of default subagent fallbacks", () => {
@@ -113,7 +114,7 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.2"],
+                  fallbacks: ["openai/gpt-5.2"],
                 },
               },
             },
@@ -178,7 +179,7 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.2"],
+                  fallbacks: ["openai/gpt-5.2"],
                 },
               },
             },
@@ -233,7 +234,7 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+                  fallbacks: ["openai/gpt-5.4", "zai/glm-5"],
                 },
               },
             },

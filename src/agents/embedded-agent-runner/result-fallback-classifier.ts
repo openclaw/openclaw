@@ -1,9 +1,20 @@
+/**
+ * Classifies embedded-agent run results for model fallback decisions.
+ */
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
+import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
 import type { ModelFallbackResultClassification } from "../model-fallback.js";
 import { hasOutboundDeliveryEvidence, hasVisibleAgentPayload } from "./delivery-evidence.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
+/**
+ * Classifies embedded-agent terminal results for model fallback decisions.
+ *
+ * The classifier only flags failed invisible outcomes; delivered messages, deliberate silent
+ * replies, hook blocks, and aborts must not trigger another model attempt.
+ */
 const EMPTY_TERMINAL_REPLY_RE = /Agent couldn't generate a response/i;
 const PLAN_ONLY_TERMINAL_REPLY_RE = /Agent stopped after repeated plan-only turns/i;
 
@@ -55,6 +66,26 @@ function classifyHarnessResult(params: {
   }
 }
 
+/** Maps provider error payloads to fallback-safe business reasons. */
+function classifyBusinessDenialErrorPayloadReason(
+  errorText: string,
+  provider: string,
+): Extract<FailoverReason, "auth" | "auth_permanent" | "billing"> | null {
+  if (!errorText.trim()) {
+    return null;
+  }
+  const failoverReason = classifyFailoverReason(errorText, { provider });
+  switch (failoverReason) {
+    case "auth":
+    case "auth_permanent":
+    case "billing":
+      return failoverReason;
+    default:
+      return null;
+  }
+}
+
+/** Returns a fallback classification when an embedded run failed without user-visible output. */
 export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   provider: string;
   model: string;
@@ -79,6 +110,11 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (hasOutboundDeliveryEvidence(params.result)) {
     return null;
   }
+  if (params.result.meta.error?.kind === "hook_block") {
+    // Hook blocks intentionally suppress normal agent output. Retrying on another model would
+    // bypass a policy decision rather than recover a malformed model result.
+    return null;
+  }
 
   const harnessClassification = classifyHarnessResult({
     provider: params.provider,
@@ -99,6 +135,15 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
       message: `${params.provider}/${params.model} ended with an incomplete terminal response`,
       reason: "format",
       code: "incomplete_result",
+    };
+  }
+  const failoverReason = classifyBusinessDenialErrorPayloadReason(errorText, params.provider);
+  if (failoverReason) {
+    return {
+      message: `${params.provider}/${params.model} ended with a provider error: ${errorText}`,
+      reason: failoverReason,
+      code: "embedded_error_payload",
+      rawError: errorText,
     };
   }
 

@@ -1,3 +1,4 @@
+// Msteams plugin module implements feedback invoke behavior.
 import path from "node:path";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
@@ -191,7 +192,7 @@ export async function runMSTeamsFeedbackInvokeHandler(
       feedbackMessageId: messageId,
       userComment,
       log: deps.log,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       deps.log.error("feedback reflection failed", { error: formatUnknownError(err) });
     });
   }

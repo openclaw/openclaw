@@ -1,5 +1,7 @@
+// Voice Call tests cover media stream plugin behavior.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
@@ -354,8 +356,8 @@ describe("MediaStreamHandler security hardening", () => {
     const result = handler.sendAudio("MZ-backpressure", Buffer.alloc(160, 0xff));
 
     expect(result.sent).toBe(false);
-    expect(ws.send).not.toHaveBeenCalled();
-    expect(ws.close).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
+    expect(ws["send"]).not.toHaveBeenCalled();
+    expect(ws["close"]).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
   });
 
   it("fails sends when buffered bytes exceed cap after enqueueing a frame", () => {
@@ -396,9 +398,9 @@ describe("MediaStreamHandler security hardening", () => {
 
     const result = handler.sendMark("MZ-overflow", "mark-1");
 
-    expect(ws.send).toHaveBeenCalledTimes(1);
+    expect(ws["send"]).toHaveBeenCalledTimes(1);
     expect(result.sent).toBe(false);
-    expect(ws.close).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
+    expect(ws["close"]).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
   });
 
   it("sanitizes websocket close reason before logging", () => {
@@ -432,6 +434,30 @@ describe("MediaStreamHandler security hardening", () => {
       expect(shouldAcceptStreamCalls).toStrictEqual([]);
     } finally {
       await server.close();
+    }
+  });
+
+  it("clamps oversized pre-start connection timeouts", () => {
+    vi.useFakeTimers();
+    try {
+      const handler = new MediaStreamHandler({
+        transcriptionProvider: createStubSttProvider(),
+        providerConfig: {},
+        preStartTimeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const ws = { close: vi.fn() } as unknown as WebSocket;
+
+      const registered = (
+        handler as unknown as {
+          registerPendingConnection(ws: WebSocket, ip: string): boolean;
+        }
+      ).registerPendingConnection(ws, "203.0.113.10");
+
+      expect(registered).toBe(true);
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -476,12 +502,20 @@ describe("MediaStreamHandler security hardening", () => {
       const first = new WebSocket(server.url, {
         headers: { "x-forwarded-for": "198.51.100.10" },
       });
-      await withTimeout(new Promise((resolve) => first.once("open", resolve)));
+      await withTimeout(
+        new Promise((resolve) => {
+          first.once("open", resolve);
+        }),
+      );
 
       const second = new WebSocket(server.url, {
         headers: { "x-forwarded-for": "203.0.113.20" },
       });
-      await withTimeout(new Promise((resolve) => second.once("open", resolve)));
+      await withTimeout(
+        new Promise((resolve) => {
+          second.once("open", resolve);
+        }),
+      );
 
       expect(first.readyState).toBe(WebSocket.OPEN);
       expect(second.readyState).toBe(WebSocket.OPEN);
@@ -909,7 +943,7 @@ describe("MediaStreamHandler security hardening", () => {
       expect(onTranscriptionReady).not.toHaveBeenCalled();
       expect(onDisconnect).toHaveBeenCalledTimes(1);
       expect(onDisconnect).toHaveBeenCalledWith("CA-stt-fail", "MZ-stt-fail");
-      expect(session.close).toHaveBeenCalledTimes(1);
+      expect(session["close"]).toHaveBeenCalledTimes(1);
     } finally {
       await server.close();
     }

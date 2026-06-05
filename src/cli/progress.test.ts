@@ -1,5 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+// Progress tests cover CLI progress rendering and lifecycle cleanup.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createCliProgress, shouldUseInteractiveProgressSpinner } from "./progress.js";
+
+const clackMocks = vi.hoisted(() => {
+  const spinnerInstance = {
+    start: vi.fn(),
+    message: vi.fn(),
+    stop: vi.fn(),
+  };
+  return {
+    spinner: vi.fn(() => spinnerInstance),
+    spinnerInstance,
+  };
+});
+
+vi.mock("@clack/prompts", () => ({
+  spinner: clackMocks.spinner,
+}));
 
 function withStdinIsRaw<T>(isRaw: boolean, run: () => T): T {
   const original = Object.getOwnPropertyDescriptor(process.stdin, "isRaw");
@@ -19,6 +37,13 @@ function withStdinIsRaw<T>(isRaw: boolean, run: () => T): T {
 }
 
 describe("cli progress", () => {
+  beforeEach(() => {
+    clackMocks.spinner.mockClear();
+    clackMocks.spinnerInstance.start.mockClear();
+    clackMocks.spinnerInstance.message.mockClear();
+    clackMocks.spinnerInstance.stop.mockClear();
+  });
+
   it("logs progress when non-tty and fallback=log", () => {
     const writes: string[] = [];
     const stream = {
@@ -68,6 +93,15 @@ describe("cli progress", () => {
     ).toBe(false);
   });
 
+  it("uses the progress stream instead of stdout to decide spinner interactivity", () => {
+    expect(
+      shouldUseInteractiveProgressSpinner({
+        streamIsTty: true,
+        stdinIsRaw: false,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps the normal interactive spinner for regular tty commands", () => {
     expect(
       shouldUseInteractiveProgressSpinner({
@@ -75,6 +109,25 @@ describe("cli progress", () => {
         stdinIsRaw: false,
       }),
     ).toBe(true);
+  });
+
+  it("routes clack spinner output through the progress stream", () => {
+    const stream = {
+      isTTY: true,
+      write: vi.fn(),
+    } as unknown as NodeJS.WriteStream;
+
+    const progress = createCliProgress({
+      label: "Loading",
+      stream,
+    });
+    progress.done();
+
+    expect(clackMocks.spinner).toHaveBeenCalledWith({ output: stream });
+    expect(clackMocks.spinnerInstance.start).toHaveBeenCalledWith(
+      expect.stringContaining("Loading"),
+    );
+    expect(clackMocks.spinnerInstance.stop).toHaveBeenCalledTimes(1);
   });
 
   it("does not write terminal controls when raw TUI input suppresses the default spinner", () => {
@@ -129,5 +182,26 @@ describe("cli progress", () => {
     next.done();
 
     expect(firstWrites).toStrictEqual([]);
+  });
+
+  it("clamps oversized delayed progress timers", () => {
+    const stream = {
+      isTTY: true,
+      write: vi.fn(),
+    } as unknown as NodeJS.WriteStream;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const progress = createCliProgress({
+        label: "Delayed",
+        stream,
+        fallback: "line",
+        delayMs: Number.MAX_SAFE_INTEGER,
+      });
+      progress.done();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 });

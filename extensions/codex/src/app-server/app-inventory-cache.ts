@@ -1,15 +1,27 @@
+/**
+ * Process-local cache for Codex app-server app inventories, keyed by runtime
+ * identity and safe to refresh in the background.
+ */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonValue, v2 } from "./protocol.js";
 
+/** Default app inventory cache freshness window. */
 export const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
 const MAX_SERIALIZED_ERROR_MESSAGE_LENGTH = 500;
 
+/** App-server request function used to list installed/available apps. */
 export type CodexAppInventoryRequest = (
   method: "app/list",
   params: v2.AppsListParams,
 ) => Promise<v2.AppsListResponse>;
 
+/** Runtime identity fields that affect visible Codex app inventory. */
 export type CodexAppInventoryCacheKeyInput = {
   codexHome?: string;
   endpoint?: string;
@@ -19,11 +31,13 @@ export type CodexAppInventoryCacheKeyInput = {
   appServerVersion?: string;
 };
 
+/** Last refresh diagnostic stored with a cache key or snapshot. */
 export type CodexAppInventoryCacheDiagnostic = {
   message: string;
   atMs: number;
 };
 
+/** Immutable app inventory snapshot returned from cache reads and refreshes. */
 export type CodexAppInventorySnapshot = {
   key: string;
   apps: v2.AppInfo[];
@@ -33,8 +47,10 @@ export type CodexAppInventorySnapshot = {
   lastError?: CodexAppInventoryCacheDiagnostic;
 };
 
+/** Freshness state for a cache read. */
 export type CodexAppInventoryReadState = "fresh" | "stale" | "missing";
 
+/** Cache read result plus refresh scheduling state. */
 export type CodexAppInventoryCacheRead = {
   state: CodexAppInventoryReadState;
   key: string;
@@ -56,6 +72,7 @@ type RefreshParams = {
   suppressRefresh?: boolean;
 };
 
+/** In-memory app inventory cache with coalesced refreshes per key. */
 export class CodexAppInventoryCache {
   private readonly ttlMs: number;
   private readonly entries = new Map<string, CacheEntry>();
@@ -70,8 +87,9 @@ export class CodexAppInventoryCache {
     this.ttlMs = options.ttlMs ?? CODEX_APP_INVENTORY_CACHE_TTL_MS;
   }
 
+  /** Reads a snapshot and schedules refresh when missing, stale, or forced. */
   read(params: RefreshParams): CodexAppInventoryCacheRead {
-    const nowMs = params.nowMs ?? Date.now();
+    const nowMs = resolveDateTimestampMs(params.nowMs);
     const entry = this.entries.get(params.key);
     if (!entry) {
       const refreshScheduled = params.suppressRefresh ? false : this.scheduleRefresh(params);
@@ -87,7 +105,9 @@ export class CodexAppInventoryCache {
     }
 
     const state: CodexAppInventoryReadState =
-      entry.invalidated || entry.expiresAtMs <= nowMs ? "stale" : "fresh";
+      entry.invalidated || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })
+        ? "stale"
+        : "fresh";
     const refreshScheduled =
       state === "fresh" && !params.forceRefetch ? false : this.scheduleRefresh(params);
     return {
@@ -100,10 +120,12 @@ export class CodexAppInventoryCache {
     };
   }
 
+  /** Forces or joins an immediate refresh for a cache key. */
   refreshNow(params: RefreshParams): Promise<CodexAppInventorySnapshot> {
     return this.refresh(params);
   }
 
+  /** Marks a key stale and records the reason as a diagnostic. */
   invalidate(key: string, reason: string, nowMs = Date.now()): number {
     this.revision += 1;
     const diagnostic = { message: reason, atMs: nowMs };
@@ -118,6 +140,7 @@ export class CodexAppInventoryCache {
     return this.revision;
   }
 
+  /** Clears all cached snapshots, diagnostics, in-flight requests, and revision state. */
   clear(): void {
     this.entries.clear();
     this.inFlight.clear();
@@ -126,6 +149,7 @@ export class CodexAppInventoryCache {
     this.revision = 0;
   }
 
+  /** Returns the monotonically increasing cache revision. */
   getRevision(): number {
     return this.revision;
   }
@@ -163,15 +187,16 @@ export class CodexAppInventoryCache {
     params: RefreshParams,
     refreshToken: number,
   ): Promise<CodexAppInventorySnapshot> {
-    const nowMs = params.nowMs ?? Date.now();
+    const nowMs = resolveDateTimestampMs(params.nowMs);
     try {
       const apps = await listAllApps(params.request, params.forceRefetch ?? false);
       this.revision += 1;
+      const expiresAtMs = resolveExpiresAtMsFromDurationMs(this.ttlMs, { nowMs }) ?? 0;
       const snapshot: CodexAppInventorySnapshot = {
         key: params.key,
         apps,
         fetchedAtMs: nowMs,
-        expiresAtMs: nowMs + this.ttlMs,
+        expiresAtMs,
         revision: this.revision,
       };
       // Only publish this snapshot if no newer refresh started for the same key
@@ -201,6 +226,7 @@ export class CodexAppInventoryCache {
   }
 }
 
+/** Serializes a refresh failure without leaking large or sensitive error data. */
 export function serializeCodexAppInventoryError(error: unknown): Record<string, unknown> {
   const record = isRecord(error) ? error : undefined;
   const data = record && "data" in record ? redactErrorData(record.data) : undefined;
@@ -217,8 +243,10 @@ export function serializeCodexAppInventoryError(error: unknown): Record<string, 
   };
 }
 
+/** Shared app inventory cache used by Codex app-server runtime paths. */
 export const defaultCodexAppInventoryCache = new CodexAppInventoryCache();
 
+/** Builds a stable cache key from runtime identity fields. */
 export function buildCodexAppInventoryCacheKey(input: CodexAppInventoryCacheKeyInput): string {
   return JSON.stringify({
     codexHome: input.codexHome ?? null,

@@ -1,3 +1,4 @@
+// Vitest unit config tests validate unit test project configuration.
 import { afterEach, describe, expect, it } from "vitest";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
@@ -175,7 +176,7 @@ describe("unit vitest config", () => {
     expect(coverageInclude).toContain("src/commitments/runtime.ts");
     expect(coverageInclude).toContain("src/media-generation/runtime-shared.ts");
     expect(coverageInclude).toContain("src/web-search/runtime.ts");
-    expect(coverageInclude).not.toContain("src/markdown/render.ts");
+    expect(coverageInclude).not.toContain("packages/markdown-core/src/render.ts");
     expect(coverageInclude).not.toContain("src/security/audit-workspace-skills.ts");
   });
 

@@ -1,3 +1,8 @@
+/**
+ * Exec runtime tests.
+ * Covers target resolution, cursor mode tracking, exit outcome classification,
+ * system events, and process lifecycle behavior.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 
@@ -396,7 +401,9 @@ describe("exec notifyOnExit suppression", () => {
           startedAtMs: Date.now(),
           pid: 123,
           wait: async () => {
-            await new Promise((resolve) => setImmediate(resolve));
+            await new Promise((resolve) => {
+              setImmediate(resolve);
+            });
             return {
               reason: params.reason,
               exitCode: null,
@@ -784,7 +791,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       cancel: vi.fn(),
     });
 
-    const run = await runExecProcess({
+    const ignoredRun = await runExecProcess({
       command: "echo test",
       workdir: "/tmp",
       env: { PATH: "/usr/bin" },
@@ -796,6 +803,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       notifyOnExit: false,
       timeoutSec: null,
     });
+    void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];
@@ -827,7 +835,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       cancel: vi.fn(),
     });
 
-    const run = await runExecProcess({
+    const ignoredRun = await runExecProcess({
       command: "echo test",
       workdir: "C:\\tmp",
       env: { Path: "C:\\Windows\\System32" },
@@ -839,6 +847,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       notifyOnExit: false,
       timeoutSec: null,
     });
+    void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];

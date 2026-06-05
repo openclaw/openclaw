@@ -1,4 +1,8 @@
-import { parseFiniteNumber } from "../shared/number-coercion.js";
+// Typing indicator lifecycle controller for reply dispatchers.
+import {
+  parseFiniteNumber,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
 import { createTypingStartGuard } from "./typing-start-guard.js";
 
@@ -27,20 +31,18 @@ function resolvePositiveIntegerOption(value: number | undefined, fallback: numbe
 }
 
 function resolveKeepaliveIntervalMs(value: number | undefined): number {
-  const parsed = parseFiniteNumber(value);
-  return parsed === undefined ? 3_000 : Math.floor(parsed);
+  return resolveTimerTimeoutMs(value, 3_000, 0);
 }
 
 function resolveDurationMsOption(value: number | undefined, fallback: number): number {
-  const parsed = parseFiniteNumber(value);
-  return parsed === undefined ? fallback : Math.floor(parsed);
+  return resolveTimerTimeoutMs(value, fallback, 0);
 }
 
 export function createTypingCallbacks(params: CreateTypingCallbacksParams): TypingCallbacks {
   const stop = params.stop;
   const keepaliveIntervalMs = resolveKeepaliveIntervalMs(params.keepaliveIntervalMs);
   const maxConsecutiveFailures = resolvePositiveIntegerOption(params.maxConsecutiveFailures, 2);
-  const maxDurationMs = resolveDurationMsOption(params.maxDurationMs, 60_000); // Default 60s TTL
+  const maxDurationMs = resolveDurationMsOption(params.maxDurationMs, 60_000);
   let stopSent = false;
   let closed = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
@@ -63,7 +65,6 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     onTick: fireStart,
   });
 
-  // TTL safety: auto-stop typing after maxDurationMs
   const startTtlTimer = () => {
     if (maxDurationMs <= 0) {
       return;
@@ -75,6 +76,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
         fireStop();
       }
     }, maxDurationMs);
+    ttlTimer.unref?.();
   };
 
   const clearTtlTimer = () => {
@@ -106,12 +108,12 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   const fireStop = () => {
     closed = true;
     keepaliveLoop.stop();
-    clearTtlTimer(); // Clear TTL timer on normal stop
+    clearTtlTimer();
     if (!stop || stopSent) {
       return;
     }
     stopSent = true;
-    void stop().catch((err) => (params.onStopError ?? params.onStartError)(err));
+    void stop().catch((err: unknown) => (params.onStopError ?? params.onStartError)(err));
   };
 
   return { onReplyStart, onIdle: fireStop, onCleanup: fireStop };

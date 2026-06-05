@@ -1,3 +1,4 @@
+// Plugin sandbox sync tests cover syncing plugin-provided skills into sandbox state.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
@@ -66,7 +67,7 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
     await syncSkillsToWorkspace({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
-      pluginSkillsDir: pluginSkillsDir,
+      pluginSkillsDir,
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
       managedSkillsDir: path.join(sourceWorkspace, ".managed"),
     });
@@ -127,7 +128,7 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
     await syncSkillsToWorkspace({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
-      pluginSkillsDir: pluginSkillsDir,
+      pluginSkillsDir,
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
       managedSkillsDir: path.join(sourceWorkspace, ".managed"),
     });
@@ -170,7 +171,7 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
     await syncSkillsToWorkspace({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
-      pluginSkillsDir: pluginSkillsDir,
+      pluginSkillsDir,
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
       managedSkillsDir: path.join(sourceWorkspace, ".managed"),
     });

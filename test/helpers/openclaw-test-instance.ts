@@ -1,3 +1,4 @@
+// OpenClaw test instance helper spawns isolated OpenClaw processes.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -191,13 +192,17 @@ async function resolveGatewayEntrypoint(cwd: string): Promise<string[]> {
 
 const getFreePort = async () => {
   const srv = net.createServer();
-  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    srv.listen(0, "127.0.0.1", resolve);
+  });
   const addr = srv.address();
   if (!addr || typeof addr === "string") {
     srv.close();
     throw new Error("failed to bind ephemeral port");
   }
-  await new Promise<void>((resolve) => srv.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    srv.close(() => resolve());
+  });
   return addr.port;
 };
 
@@ -249,7 +254,8 @@ async function waitForGatewayExit(
   return await Promise.race([
     new Promise<boolean>((resolve) => {
       if (child.exitCode !== null || child.signalCode !== null) {
-        return resolve(true);
+        resolve(true);
+        return;
       }
       child.once("exit", () => resolve(true));
     }),

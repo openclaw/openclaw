@@ -6,13 +6,36 @@
  * globals, fully supporting multi-account concurrent operation.
  */
 
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  asDateTimestampMs,
+  parseStrictPositiveInteger,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveTimestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 const DEFAULT_TOKEN_EXPIRES_IN_SECONDS = 7200;
+
+/**
+ * Host-scoped SSRF policy for the QQ Bot token endpoint.
+ *
+ * `TOKEN_URL` is a hard-coded `https://bots.qq.com/...` constant, so this
+ * relaxation only ever applies to that single host. Fake-IP proxy stacks
+ * (sing-box, Clash, Surge, WSL2 DNS, etc.) routinely map `bots.qq.com` into
+ * the RFC 2544 benchmark range `198.18.0.0/15`, which the default SSRF
+ * guard blocks. We mirror the existing media-path pattern
+ * (`QQBOT_MEDIA_SSRF_POLICY` in `../utils/file-utils.ts`) so the relaxation
+ * stays narrowly host-scoped instead of weakening the global default.
+ *
+ * See https://github.com/openclaw/openclaw/issues/88984.
+ */
+const QQBOT_TOKEN_SSRF_POLICY: SsrFPolicy = {
+  hostnameAllowlist: ["bots.qq.com"],
+  allowRfc2544BenchmarkRange: true,
+};
 
 interface CachedToken {
   token: string;
@@ -185,9 +208,11 @@ export class TokenManager {
       this.logger?.info?.(`[qqbot:token:${appId}] Background refresh stopped`);
     };
 
-    loop().catch((err) => {
+    loop().catch((err: unknown) => {
       this.refreshControllers.delete(appId);
-      this.logger?.error?.(`[qqbot:token:${appId}] Background refresh crashed: ${err}`);
+      this.logger?.error?.(
+        `[qqbot:token:${appId}] Background refresh crashed: ${formatErrorMessage(err)}`,
+      );
     });
   }
 
@@ -227,6 +252,7 @@ export class TokenManager {
         url: TOKEN_URL,
         auditContext: "qqbot-token",
         capture: false,
+        policy: QQBOT_TOKEN_SSRF_POLICY,
         init: {
           method: "POST",
           headers: {
@@ -273,10 +299,18 @@ export class TokenManager {
         throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
       }
 
-      const expiresAt = Date.now() + resolveTokenExpiresInSeconds(data.expires_in) * 1000;
+      const nowMs = asDateTimestampMs(Date.now());
+      if (nowMs === undefined) {
+        this.logger?.debug?.(`[qqbot:token:${appId}] Not cached: invalid process clock`);
+        return data.access_token;
+      }
+      const expiresAt =
+        resolveExpiresAtMsFromDurationSeconds(resolveTokenExpiresInSeconds(data.expires_in), {
+          nowMs,
+        }) ?? nowMs;
       this.cache.set(appId, { token: data.access_token, expiresAt, appId });
       this.logger?.debug?.(
-        `[qqbot:token:${appId}] Cached, expires at: ${new Date(expiresAt).toISOString()}`,
+        `[qqbot:token:${appId}] Cached, expires at: ${resolveTimestampMsToIsoString(expiresAt)}`,
       );
 
       return data.access_token;

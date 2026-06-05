@@ -1,3 +1,4 @@
+// Msteams tests cover reply dispatcher plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
@@ -108,7 +109,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   let lastStreamMock: StreamMock | undefined;
 
   function createDispatcher(
-    conversationType: string = "personal",
+    conversationType = "personal",
     msteamsConfig: Record<string, unknown> = {},
     extraParams: { onSentMessageIds?: (ids: string[]) => void } = {},
   ) {

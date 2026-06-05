@@ -1,3 +1,4 @@
+// Agent Core module implements skills behavior.
 import ignore from "ignore";
 import {
   basenameEnvPath,
@@ -7,7 +8,7 @@ import {
   relativeEnvPath,
   resolveFileInfoKind as resolveKind,
 } from "./file-loader-utils.js";
-import { type ExecutionEnv, type Result, type Skill } from "./types.js";
+import type { ExecutionEnv, Result, Skill } from "./types.js";
 
 const MAX_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;

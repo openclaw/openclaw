@@ -1,10 +1,11 @@
+// Implements steer commands that persist per-session agent guidance.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {

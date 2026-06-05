@@ -1,3 +1,4 @@
+// Googlechat plugin module implements gateway behavior.
 import {
   createAccountStatusSink,
   runPassiveAccountLifecycle,

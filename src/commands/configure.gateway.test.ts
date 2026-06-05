@@ -1,3 +1,4 @@
+// Configure gateway tests cover interactive gateway auth, port, bind, and remote settings.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -27,7 +28,7 @@ vi.mock("./configure.shared.js", () => ({
   confirm: mocks.confirm,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 

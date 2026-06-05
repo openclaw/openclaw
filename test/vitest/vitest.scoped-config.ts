@@ -1,3 +1,4 @@
+// Vitest scoped config helper builds test configs for scoped file patterns.
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
@@ -77,13 +78,10 @@ export function shouldPassWithNoTestsForCliIncludes(
   if (cliIncludePatterns === null) {
     return false;
   }
-  return (
-    cliIncludePatterns.length === 0 ||
-    cliIncludePatterns.every((includePattern) =>
-      excludePatterns.some((excludePattern) =>
-        includePatternIsFullyExcluded(includePattern, excludePattern),
-      ),
-    )
+  return cliIncludePatterns.every((includePattern) =>
+    excludePatterns.some((excludePattern) =>
+      includePatternIsFullyExcluded(includePattern, excludePattern),
+    ),
   );
 }
 

@@ -1,3 +1,4 @@
+// Amazon Bedrock tests cover discovery plugin behavior.
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -254,6 +255,28 @@ describe("bedrock discovery", () => {
     await discoverBedrockModels({ region: "us-east-1", clientFactory });
     // 2 calls on first discovery (ListFoundationModels + ListInferenceProfiles), 0 on cached second.
     expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips cache when refreshInterval expiry overflows", async () => {
+    sendMock
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+      .mockResolvedValueOnce({ inferenceProfileSummaries: [] })
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+      .mockResolvedValueOnce({ inferenceProfileSummaries: [] });
+
+    await discoverBedrockModels({
+      region: "us-east-1",
+      config: { refreshInterval: 1 },
+      now: () => 8_640_000_000_000_000,
+      clientFactory,
+    });
+    await discoverBedrockModels({
+      region: "us-east-1",
+      config: { refreshInterval: 1 },
+      now: () => 8_640_000_000_000_000,
+      clientFactory,
+    });
+    expect(sendMock).toHaveBeenCalledTimes(4);
   });
 
   it("skips cache when refreshInterval is 0", async () => {

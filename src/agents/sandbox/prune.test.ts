@@ -1,3 +1,5 @@
+// Sandbox prune tests cover runtime removal ordering and registry cleanup
+// behavior for stale sandbox entries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxConfig } from "./types.js";
 
@@ -137,6 +139,8 @@ describe("maybePruneSandboxes", () => {
   });
 
   it("keeps the registry entry when runtime removal fails", async () => {
+    // The registry is the retry source; keep it until the backend confirms the
+    // runtime was removed.
     backendMocks.removeRuntime.mockRejectedValueOnce(new Error("docker rm failed"));
 
     await maybePruneSandboxes(buildPruneConfig());
@@ -145,5 +149,24 @@ describe("maybePruneSandboxes", () => {
     expect(runtimeMocks.error).toHaveBeenCalledWith(
       "Sandbox prune failed to remove sandbox-1: docker rm failed",
     );
+  });
+
+  it("prunes entries with out-of-range registry timestamps", async () => {
+    registryMocks.readRegistry.mockResolvedValueOnce({
+      entries: [
+        {
+          containerName: "sandbox-out-of-range",
+          backendId: "docker",
+          createdAtMs: Date.now(),
+          lastUsedAtMs: Number.MAX_SAFE_INTEGER,
+          image: "openclaw-sandbox:bookworm-slim",
+        },
+      ],
+    });
+
+    await maybePruneSandboxes(buildPruneConfig());
+
+    expect(backendMocks.removeRuntime).toHaveBeenCalledTimes(1);
+    expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("sandbox-out-of-range");
   });
 });

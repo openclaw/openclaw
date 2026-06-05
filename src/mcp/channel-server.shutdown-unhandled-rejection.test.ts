@@ -1,3 +1,4 @@
+// Channel MCP shutdown tests cover unhandled rejection behavior during shutdown.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const transportState = vi.hoisted(() => ({
@@ -46,7 +47,8 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async () => ({
+  ...(await vi.importActual<typeof import("../version.js")>("../version.js")),
   VERSION: "test",
 }));
 
@@ -118,7 +120,9 @@ describe("serveOpenClawChannelMcp shutdown", () => {
 
     transport.onclose?.();
     await servePromise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(unhandledRejections).toStrictEqual([]);
     expect(bridgeState.close).toHaveBeenCalledTimes(1);

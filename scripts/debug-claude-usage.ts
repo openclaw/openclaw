@@ -1,10 +1,12 @@
+// Debug Claude Usage script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { normalizeOptionalString } from "../src/shared/string-coerce.ts";
+import { normalizeOptionalString } from "../packages/normalization-core/src/string-coerce.js";
+import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response.ts";
 import {
   maskIdentifier,
   parseStrictIntegerOption,
@@ -125,92 +127,16 @@ const withFetchTimeout = async <T>(
   }
 };
 
-const responseBodyTooLargeError = (label: string, maxBytes: number): Error =>
-  new Error(`${label} response body exceeded ${maxBytes} bytes`);
-
-const readResponseChunk = async (
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  label: string,
-  signal: AbortSignal,
-  markCanceled: () => void,
-): Promise<ReadableStreamReadResult<Uint8Array>> => {
-  if (signal.aborted) {
-    markCanceled();
-    await reader.cancel().catch(() => undefined);
-    throw signal.reason instanceof Error ? signal.reason : new Error(`${label} request aborted`);
-  }
-
-  let removeAbortListener: (() => void) | undefined;
-  const abortPromise = new Promise<ReadableStreamReadResult<Uint8Array>>((_resolve, reject) => {
-    const onAbort = () => {
-      markCanceled();
-      void reader.cancel().catch(() => undefined);
-      reject(
-        signal.reason instanceof Error ? signal.reason : new Error(`${label} request aborted`),
-      );
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
-  });
-
-  try {
-    return await Promise.race([reader.read(), abortPromise]);
-  } finally {
-    removeAbortListener?.();
-  }
-};
-
-const readBoundedResponseText = async (
+const readBoundedResponseText = (
   response: Response,
   label: string,
   signal: AbortSignal,
   maxBytes = FETCH_RESPONSE_MAX_BYTES,
-): Promise<string> => {
-  const contentLength = Number(response.headers.get("content-length") ?? "");
-  if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
-    await response.body?.cancel().catch(() => undefined);
-    throw responseBodyTooLargeError(label, maxBytes);
-  }
-
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  let totalBytes = 0;
-  let canceled = false;
-
-  try {
-    for (;;) {
-      const { done, value } = await readResponseChunk(reader, label, signal, () => {
-        canceled = true;
-      });
-      if (done) {
-        const tail = decoder.decode();
-        if (tail) {
-          chunks.push(tail);
-        }
-        break;
-      }
-
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        canceled = true;
-        await reader.cancel().catch(() => undefined);
-        throw responseBodyTooLargeError(label, maxBytes);
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-  } finally {
-    if (!canceled) {
-      reader.releaseLock();
-    }
-  }
-
-  return chunks.join("");
-};
+): Promise<string> =>
+  readBoundedResponseTextWithLimit(response, label, maxBytes, {
+    createTooLargeError: (message) => new Error(message),
+    signal,
+  });
 
 const fetchText = async (
   label: string,
@@ -564,7 +490,7 @@ export const testing = {
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await main().catch((error) => {
+  await main().catch((error: unknown) => {
     console.error(
       previewForDevToolLog(error instanceof Error ? error.message : String(error), 800),
     );

@@ -1,8 +1,9 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+// Exposes reply directive aliases for parsing and command help.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 
 export function reserveSkillCommandNames(params: {

@@ -1,3 +1,4 @@
+/** Context-pruning planner that trims old assistant/tool content under token pressure. */
 import type { ImageContent, TextContent, ToolResultMessage } from "../../../llm/types.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../utils/cjk-chars.js";
 import { dropThinkingBlocks } from "../../embedded-agent-runner/thinking.js";
@@ -34,7 +35,9 @@ function coerceTextBlock(block: unknown): string | null {
 }
 
 function isImageBlock(block: unknown): boolean {
-  return !!block && typeof block === "object" && (block as { type?: unknown }).type === "image";
+  return (
+    Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image"
+  );
 }
 
 function collectTextSegments(content: ReadonlyArray<TextContent | ImageContent>): string[] {
@@ -117,7 +120,6 @@ function takeTailFromJoinedText(parts: string[], maxChars: number): string {
       remaining -= p.length;
     } else {
       out.push(p.slice(p.length - remaining));
-      remaining = 0;
       break;
     }
     if (remaining > 0 && i > 0) {
@@ -284,6 +286,7 @@ ${tail}`;
   return { ...msg, content: [asText(trimmed + note)] };
 }
 
+/** Returns a pruned message array when configured thresholds are exceeded, otherwise original. */
 export function pruneContextMessages(params: {
   messages: AgentMessage[];
   settings: EffectiveContextPruningSettings;

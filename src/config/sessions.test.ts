@@ -1,3 +1,4 @@
+// Covers session config persistence and compatibility behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -688,7 +689,7 @@ describe("sessions", () => {
     expect(store[sessionKey]?.modelProvider).toBeUndefined();
   });
 
-  it("upsertSessionEntry preserves existing ACP metadata by default", async () => {
+  it("upsertSessionEntry drops legacy embedded ACP metadata", async () => {
     const sessionKey = "agent:main:main";
     const acp = {
       backend: "codex",
@@ -720,7 +721,7 @@ describe("sessions", () => {
 
     const store = loadSessionStore(storePath);
     expect(store[sessionKey]?.sessionId).toBe("sess-2");
-    expect(store[sessionKey]?.acp).toStrictEqual(acp);
+    expect(store[sessionKey]?.acp).toBeUndefined();
   });
 
   it("updateSessionStore preserves concurrent additions", async () => {

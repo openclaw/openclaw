@@ -1,4 +1,6 @@
+/** Policy and execution pipeline for approved node-host system.run requests. */
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
@@ -42,7 +44,6 @@ import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-bin
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
   applyOutputTruncation,
@@ -219,6 +220,7 @@ function resolveAgentExecConfig(
   return entry?.tools?.exec;
 }
 
+/** Resolves the effective exec security/ask policy for one system.run request. */
 export function resolveEffectiveSystemRunExecPolicy(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;
@@ -506,14 +508,7 @@ async function evaluateSystemRunPolicyPhase(
     onWarning: warnWritableTrustedDirOnce,
   });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];
-  let {
-    analysisOk,
-    allowlistMatches,
-    allowlistSatisfied,
-    segments,
-    segmentAllowlistEntries,
-    segmentSatisfiedBy,
-  } = evaluateSystemRunAllowlist({
+  const allowlistEvaluation = evaluateSystemRunAllowlist({
     shellCommand: parsed.shellPayload,
     argv: parsed.argv,
     approvals,
@@ -526,6 +521,9 @@ async function evaluateSystemRunPolicyPhase(
     skillBins: bins,
     autoAllowSkills,
   });
+  const { allowlistMatches, segments, segmentAllowlistEntries, segmentSatisfiedBy } =
+    allowlistEvaluation;
+  let { analysisOk, allowlistSatisfied } = allowlistEvaluation;
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
   const inlineEvalHit = strictInlineEval ? detectPolicyInlineEval(segments) : null;
@@ -874,6 +872,7 @@ async function executeSystemRunPhase(
           cwd: phase.cwd,
           env: phase.env,
           platform: process.platform,
+          commandText: phase.commandText,
           strictInlineEval: phase.strictInlineEval,
         })
       : [];
@@ -915,6 +914,7 @@ async function executeSystemRunPhase(
   );
 }
 
+/** Executes a validated system.run request, emitting lifecycle events and approvals. */
 export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions): Promise<void> {
   const parsed = await parseSystemRunPhase(opts);
   if (!parsed) {

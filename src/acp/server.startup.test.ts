@@ -1,3 +1,4 @@
+/** Tests ACP server startup readiness, Gateway bootstrap, and shutdown wiring. */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type GatewayClientCallbacks = {
@@ -28,7 +29,7 @@ const mockState = vi.hoisted(() => ({
   agentSideConnectionCtor: vi.fn(),
   agentStart: vi.fn(),
   routeLogsToStderr: vi.fn(),
-  startProxy: vi.fn(async (configForTest: unknown) => null as unknown),
+  startProxy: vi.fn(async (_configForTest: unknown) => null as unknown),
   stopProxy: vi.fn(async (_handle: unknown) => {}),
   resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
     url: "ws://127.0.0.1:18789",

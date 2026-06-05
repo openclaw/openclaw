@@ -1,3 +1,4 @@
+// Write Plugin Sdk Entry Dts script supports OpenClaw repository automation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -44,6 +45,16 @@ const RUNTIME_SHIMS: Partial<Record<string, string>> = {
 };
 
 function isBareImportSpecifier(id: string): boolean {
+  if (
+    id === "@openclaw/llm-core" ||
+    id.startsWith("@openclaw/llm-core/") ||
+    id === "@openclaw/model-catalog-core/model-catalog-types" ||
+    id.startsWith("@openclaw/normalization-core/") ||
+    id.startsWith("@openclaw/media-core/") ||
+    id.startsWith("@openclaw/acp-core/")
+  ) {
+    return false;
+  }
   return !id.startsWith(".") && !id.startsWith("/") && !/^[A-Za-z]:[\\/]/u.test(id);
 }
 

@@ -1,10 +1,16 @@
+// Gateway logs CLI with RPC tailing, local file fallback, and systemd journal fallback.
 import { setTimeout as delay } from "node:timers/promises";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { readConnectPairingRequiredMessage } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
+import { createSafeStreamWriter } from "../../packages/terminal-core/src/stream-writer.js";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import {
   buildGatewayConnectionDetails,
   isGatewayTransportError,
@@ -18,11 +24,6 @@ import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
 import { formatTimestamp } from "../logging/timestamps.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { clearActiveProgressLine } from "../terminal/progress-line.js";
-import { createSafeStreamWriter } from "../terminal/stream-writer.js";
-import { colorize, isRich, theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -159,6 +160,7 @@ function normalizeErrorMessage(error: unknown): string {
 }
 
 function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
+  // Fallback reads local files only for implicit loopback Gateway RPC failures.
   if (!isLocalGatewayRpcUnavailableError(error)) {
     return false;
   }
@@ -589,10 +591,8 @@ export function registerLogsCli(program: Command) {
             if (!emitJsonLine({ type: "log", ...parsed })) {
               return;
             }
-          } else {
-            if (!emitJsonLine({ type: "raw", raw: line })) {
-              return;
-            }
+          } else if (!emitJsonLine({ type: "raw", raw: line })) {
+            return;
           }
         }
         if (payload.truncated) {

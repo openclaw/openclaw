@@ -1,3 +1,4 @@
+// Ensure Extension Memory Build tests cover ensure extension memory build script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -144,27 +145,21 @@ describe("ensure-extension-memory-build", () => {
 });
 
 describe("resolveExtensionMemoryBuildTimeoutMs", () => {
-  it("uses a positive environment timeout", () => {
+  it("parses only positive integer environment timeouts", () => {
+    expect(resolveExtensionMemoryBuildTimeoutMs({})).toBe(10 * 60 * 1000);
     expect(
-      resolveExtensionMemoryBuildTimeoutMs({
-        OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: "4321",
-      }),
+      resolveExtensionMemoryBuildTimeoutMs({ OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: "" }),
+    ).toBe(10 * 60 * 1000);
+    expect(
+      resolveExtensionMemoryBuildTimeoutMs({ OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: "4321" }),
     ).toBe(4321);
-  });
 
-  it("falls back when the environment timeout is invalid", () => {
-    expect(
-      resolveExtensionMemoryBuildTimeoutMs({
-        OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: "nope",
-      }),
-    ).toBe(10 * 60 * 1000);
-  });
-
-  it("falls back when the environment timeout has a numeric prefix", () => {
-    expect(
-      resolveExtensionMemoryBuildTimeoutMs({
-        OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: "10m",
-      }),
-    ).toBe(10 * 60 * 1000);
+    for (const raw of ["nope", "10m", "1e3", "0", "-1", "9007199254740992"]) {
+      expect(() =>
+        resolveExtensionMemoryBuildTimeoutMs({
+          OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: raw,
+        }),
+      ).toThrow(`invalid OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: ${raw}`);
+    }
   });
 });

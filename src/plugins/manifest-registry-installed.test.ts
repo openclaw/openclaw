@@ -1,3 +1,4 @@
+// Covers installed plugin manifest registry behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -300,7 +301,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       includeDisabled: true,
     });
     const realpathSpy = vi.spyOn(fs, "realpathSync");
-    let packagePathCalls: unknown[][] = [];
+    let packagePathCalls: unknown[][];
     try {
       loadPluginManifestRegistryForInstalledIndex({
         index,

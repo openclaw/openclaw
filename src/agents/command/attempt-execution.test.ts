@@ -1,3 +1,5 @@
+// Covers attempt-execution helper behavior around retries, Claude CLI
+// transcripts, and ACP visible text accumulation.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +9,7 @@ import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptPath,
+  claudeCliSessionTranscriptHasOrphanedToolUse,
   createAcpVisibleTextAccumulator,
   formatClaudeCliFallbackPrelude,
   resolveFallbackRetryPrompt,
@@ -85,6 +88,8 @@ describe("resolveFallbackRetryPrompt", () => {
 
   it("prepends priorContextPrelude before the retry marker on fallback retry", () => {
     const prelude = "## Prior session context (from claude-cli)\nuser: prior question";
+    // Claude fallback prelude must come before the retry marker so the model
+    // receives prior CLI context before the instruction about failure recovery.
     const result = resolveFallbackRetryPrompt({
       body: originalBody,
       isFallbackRetry: true,
@@ -149,6 +154,8 @@ describe("formatClaudeCliFallbackPrelude", () => {
   });
 
   it("formats user/assistant turns and tags tool blocks with compact hints", () => {
+    // Tool-use blocks are represented as compact hints because fallback prompts
+    // should preserve intent without replaying full tool schemas or outputs.
     const out = formatClaudeCliFallbackPrelude({
       recentTurns: [
         {
@@ -199,7 +206,7 @@ describe("formatClaudeCliFallbackPrelude", () => {
       content: `turn ${i + 1} ${"x".repeat(80)}`,
     }));
     const out = formatClaudeCliFallbackPrelude({ recentTurns: turns }, { charBudget: 350 });
-    // Newest turn (turn 10) must be present; oldest (turn 1) must not be.
+    // Newest turn must be present; oldest turns are the first budget casualty.
     expect(out).toContain("turn 10");
     expect(out).not.toContain("turn 1 ");
   });
@@ -247,6 +254,8 @@ describe("buildClaudeCliFallbackContextPrelude", () => {
     const sessionId = "e2e-session";
     const projectsDir = path.join(tmpHome, ".claude", "projects", "demo");
     try {
+      // Use Claude's JSONL shape directly so parser and formatter behavior stay
+      // aligned with real CLI transcripts rather than synthetic message arrays.
       await fs.mkdir(projectsDir, { recursive: true });
       const lines = [
         {
@@ -703,6 +712,396 @@ describe("claudeCliSessionTranscriptHasContent", () => {
       setTimeoutSpy.mockRestore();
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
+  let tmpDir: string;
+  let workspaceDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-claude-orphan-test-"));
+    workspaceDir = await fs.mkdtemp(path.join(tmpDir, "ws-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function writeJsonlSession(sessionId: string, lines: object[]) {
+    const projectDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir,
+      homeDir: tmpDir,
+    });
+    await fs.mkdir(projectDir, { recursive: true });
+    const file = path.join(projectDir, `${sessionId}.jsonl`);
+    await fs.writeFile(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf-8");
+    return file;
+  }
+
+  it("returns false when the transcript is missing", async () => {
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "no-such-session",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when the last assistant message has no tool_use", async () => {
+    await writeJsonlSession("text-only", [
+      {
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "all done" }] },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "text-only",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when every tool_use in the last assistant message has a matching tool_result", async () => {
+    await writeJsonlSession("answered", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: {} }],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "ok" }],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "answered",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when the last assistant message has a trailing tool_use without tool_result", async () => {
+    await writeJsonlSession("orphan", [
+      {
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "let me run that" }] },
+      },
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_unanswered", name: "Bash", input: {} }],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "orphan",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true when a Claude server tool use is unanswered", async () => {
+    await writeJsonlSession("server-tool-orphan", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "server_tool_use", id: "srvtoolu_unanswered", name: "web_search", input: {} },
+          ],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "server-tool-orphan",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when Claude-specific tool uses have matching tool results", async () => {
+    await writeJsonlSession("claude-specific-answered", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: {} },
+            { type: "mcp_tool_use", id: "mcptoolu_1", name: "mcp__demo", input: {} },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            { type: "web_search_tool_result", tool_use_id: "srvtoolu_1", content: [] },
+            { type: "mcp_tool_result", tool_use_id: "mcptoolu_1", content: "ok" },
+          ],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "claude-specific-answered",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when Claude hosted tool results are in the assistant message", async () => {
+    await writeJsonlSession("assistant-hosted-tool-result", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "server_tool_use", id: "srvtoolu_inline", name: "web_search", input: {} },
+            { type: "web_search_tool_result", tool_use_id: "srvtoolu_inline", content: [] },
+            { type: "text", text: "found it" },
+          ],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "assistant-hosted-tool-result",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when the last assistant has multiple tool_use and at least one is orphaned", async () => {
+    await writeJsonlSession("partial", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "toolu_a", name: "Bash", input: {} },
+            { type: "tool_use", id: "toolu_b", name: "Read", input: {} },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_a", content: "ok" }],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "partial",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when an earlier assistant tool_use is unanswered but the last assistant message resolved cleanly", async () => {
+    await writeJsonlSession("buried", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_old", name: "Bash", input: {} }],
+        },
+      },
+      {
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "moving on" }] },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "buried",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when a later string assistant message supersedes an old orphan", async () => {
+    await writeJsonlSession("buried-string", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_old_string", name: "Bash", input: {} }],
+        },
+      },
+      {
+        type: "assistant",
+        message: { role: "assistant", content: "moving on" },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "buried-string",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects path-like session ids instead of escaping the Claude projects tree", async () => {
+    await writeJsonlSession("safe", []);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "../safe",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores sidechain entries when deciding orphans (matches main-history importer's skip rule)", async () => {
+    await writeJsonlSession("sidechain-trailing", [
+      {
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      },
+      {
+        isSidechain: true,
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_subagent", name: "Bash", input: {} }],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "sidechain-trailing",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("still flags a main-conversation orphan even when sidechain entries exist alongside", async () => {
+    await writeJsonlSession("main-orphan-with-sidechain", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_main_orphan", name: "Bash", input: {} }],
+        },
+      },
+      {
+        isSidechain: true,
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_main_orphan", content: "ignored sidechain" },
+          ],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "main-orphan-with-sidechain",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(true);
+  });
+
+  it("inspects the transcript tail past 500 records (does not inherit the content-probe cap)", async () => {
+    const lines: object[] = [];
+    for (let i = 0; i < 600; i++) {
+      lines.push({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: `ping ${i}` }] },
+      });
+    }
+    lines.push({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_resolved_late", name: "Bash", input: {} }],
+      },
+    });
+    lines.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "toolu_resolved_late", content: "ok" }],
+      },
+    });
+    lines.push({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_trailing_orphan", name: "Bash", input: {} }],
+      },
+    });
+    await writeJsonlSession("long-with-trailing-orphan", lines);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "long-with-trailing-orphan",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not falsely flag a long transcript whose orphan was resolved past record 500", async () => {
+    const lines: object[] = [];
+    lines.push({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_resolved_far_later", name: "Bash", input: {} }],
+      },
+    });
+    for (let i = 0; i < 600; i++) {
+      lines.push({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: `ping ${i}` }] },
+      });
+    }
+    lines.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "toolu_resolved_far_later", content: "ok" }],
+      },
+    });
+    lines.push({
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "text", text: "moving on" }] },
+    });
+    await writeJsonlSession("long-with-resolved-far-later", lines);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "long-with-resolved-far-later",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
   });
 });
 

@@ -1,3 +1,4 @@
+// Implements trajectory export command packaging for the active session agent.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
@@ -24,6 +25,7 @@ import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -53,7 +55,7 @@ type ExportTrajectoryCommandDeps = {
 const defaultExportTrajectoryCommandDeps: ExportTrajectoryCommandDeps = {
   createExecTool,
   resolvePrivateTrajectoryTargets: resolvePrivateTrajectoryTargetsForCommand,
-  deliverPrivateTrajectoryReply: deliverPrivateTrajectoryReply,
+  deliverPrivateTrajectoryReply,
 };
 
 export async function buildExportTrajectoryCommandReply(
@@ -216,7 +218,7 @@ function buildTrajectoryExportApprovalRequest(
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
     createdAtMs: now,
-    expiresAtMs: now + 5 * 60_000,
+    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
   };
 }
 

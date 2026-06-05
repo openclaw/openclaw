@@ -1,3 +1,4 @@
+// Preview warning tests cover doctor warnings for preview or experimental config state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -388,17 +389,17 @@ describe("doctor preview warnings", () => {
 
   it("includes active tool schema projection warnings", async () => {
     activeToolSchemaState.warnings = [
-      '- agents.main: active tool "dofbot_move_angles" from plugin "dofbot" has unsupported runtime input schema.',
+      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
     ];
 
     const warnings = await collectDoctorPreviewWarnings({
-      cfg: { tools: { allow: ["dofbot_move_angles"] } },
+      cfg: { tools: { allow: ["fuzzplugin_move_angles"] } },
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(warnings.some((warning) => warning.includes('active tool "dofbot_move_angles"'))).toBe(
-      true,
-    );
+    expect(
+      warnings.some((warning) => warning.includes('active tool "fuzzplugin_move_angles"')),
+    ).toBe(true);
   });
 
   it("warns but skips auto-removal when plugin discovery has errors", async () => {

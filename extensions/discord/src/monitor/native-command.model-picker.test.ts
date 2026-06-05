@@ -1,3 +1,4 @@
+// Discord tests cover native command.model picker plugin behavior.
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -933,7 +934,7 @@ describe("Discord model picker interactions", () => {
   it("opens the first visible provider when the current model provider is filtered out", async () => {
     const context = createModelPickerContext();
     const pickerData = createModelsProviderData({
-      "openai-codex": ["gpt-5.5-codex"],
+      openai: ["gpt-5.5-codex"],
       vllm: ["qwen3-local"],
     });
     pickerData.resolvedDefault = {
@@ -950,7 +951,7 @@ describe("Discord model picker interactions", () => {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-5" },
           models: {
-            "openai-codex/*": {},
+            "openai/*": {},
             "vllm/*": {},
           },
         },
@@ -970,7 +971,7 @@ describe("Discord model picker interactions", () => {
 
     expect(loadSpy).toHaveBeenCalledWith(cfg, "main");
     const payload = JSON.stringify(firstMockArg(interaction.reply, "interaction.reply"));
-    expect(payload).toContain("openai-codex");
+    expect(payload).toContain("openai");
     expect(payload).toContain("gpt-5.5-codex");
     expect(payload).not.toContain("Provider not found");
   });

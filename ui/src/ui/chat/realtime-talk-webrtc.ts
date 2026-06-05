@@ -1,3 +1,4 @@
+// Control UI chat module implements realtime talk webrtc behavior.
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -228,9 +229,8 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
           final: true,
           payload: { message: this.extractErrorDetail(event.error) },
         });
-        return;
+
       default:
-        return;
     }
   }
 

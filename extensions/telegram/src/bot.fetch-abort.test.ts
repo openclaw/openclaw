@@ -1,3 +1,4 @@
+// Telegram tests cover bot.fetch abort plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { getTelegramNetworkErrorOrigin } from "./network-errors.js";
 
@@ -171,7 +172,11 @@ describe("createTelegramBot fetch abort", () => {
         (_input: RequestInfo | URL, init?: RequestInit) =>
           new Promise((_resolve, reject) => {
             const signal = init?.signal as AbortSignal;
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            signal.addEventListener(
+              "abort",
+              () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+              { once: true },
+            );
           }),
       )
       .mockResolvedValueOnce({ ok: true } as Response);
@@ -200,7 +205,11 @@ describe("createTelegramBot fetch abort", () => {
           (_input: RequestInfo | URL, init?: RequestInit) =>
             new Promise((_resolve, reject) => {
               const signal = init?.signal as AbortSignal;
-              signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+              signal.addEventListener(
+                "abort",
+                () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+                { once: true },
+              );
             }),
         )
         .mockResolvedValueOnce({ ok: true } as Response);
@@ -228,7 +237,11 @@ describe("createTelegramBot fetch abort", () => {
         (_input: RequestInfo | URL, init?: RequestInit) =>
           new Promise((_resolve, reject) => {
             const signal = init?.signal as AbortSignal;
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            signal.addEventListener(
+              "abort",
+              () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+              { once: true },
+            );
           }),
       )
       .mockResolvedValueOnce({ ok: true } as Response);
@@ -293,7 +306,7 @@ describe("createTelegramBot fetch abort", () => {
       }),
     );
     const fetchSpy = vi.fn(async () => {
-      throw frozenError;
+      throw toLintErrorObject(frozenError, "Non-Error thrown");
     });
     const { clientFetch } = createWrappedTelegramClientFetch(fetchSpy as unknown as typeof fetch);
 
@@ -303,3 +316,17 @@ describe("createTelegramBot fetch abort", () => {
     expect(getTelegramNetworkErrorOrigin(frozenError)).toBeNull();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

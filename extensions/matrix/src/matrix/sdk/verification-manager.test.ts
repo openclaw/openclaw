@@ -1,3 +1,4 @@
+// Matrix tests cover verification manager plugin behavior.
 import { EventEmitter } from "node:events";
 import {
   VerificationPhase,
@@ -164,6 +165,26 @@ describe("MatrixVerificationManager", () => {
     expect(summary.id).toMatch(/^verification-\d+$/u);
     expect(summary.methods).toStrictEqual([]);
     expect(summary.phaseName).toBe("requested");
+  });
+
+  it("tracks verification requests when the process clock is outside the Date range", () => {
+    const manager = new MatrixVerificationManager();
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+    try {
+      const summary = manager.trackVerificationRequest(
+        new MockVerificationRequest({
+          transactionId: "txn-invalid-clock",
+          phase: VerificationPhase.Requested,
+        }),
+      );
+
+      expect(summary.createdAt).toBe("1970-01-01T00:00:00.000Z");
+      expect(summary.updatedAt).toBe("1970-01-01T00:00:00.000Z");
+      expect(manager.listVerifications()).toHaveLength(1);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("reuses the same tracked id for repeated transaction IDs", () => {

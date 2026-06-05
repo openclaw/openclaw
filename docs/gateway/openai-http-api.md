@@ -212,7 +212,7 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 ### Supported request fields
 
 - `tools`: array of `{ "type": "function", "function": { ... } }`
-- `tool_choice`: `"auto"`, `"none"`
+- `tool_choice`: `"auto"`, `"none"`, `"required"`, or `{ "type": "function", "function": { "name": "..." } }`
 - `messages[*].role: "tool"` follow-up turns
 - `messages[*].tool_call_id` for binding tool results back to a prior tool call
 - `max_completion_tokens`: number; per-call cap for total completion tokens (reasoning tokens included). Current OpenAI Chat Completions field name; preferred when both `max_completion_tokens` and `max_tokens` are sent.
@@ -222,8 +222,9 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 - `frequency_penalty`: number; best-effort frequency penalty forwarded to the upstream provider via the agent stream-param channel. Validated range: -2.0 to 2.0. Returns `400 invalid_request_error` for out-of-range values.
 - `presence_penalty`: number; best-effort presence penalty forwarded to the upstream provider via the agent stream-param channel. Validated range: -2.0 to 2.0. Returns `400 invalid_request_error` for out-of-range values.
 - `seed`: number (integer); best-effort seed forwarded to the upstream provider via the agent stream-param channel. Returns `400 invalid_request_error` for non-integer values.
+- `stop`: string or array of up to 4 strings; best-effort stop sequences forwarded to the upstream provider via the agent stream-param channel. Returns `400 invalid_request_error` for more than 4 sequences or non-string/empty entries.
 
-When either token-cap field is set, the value is forwarded to the upstream provider via the agent stream-param channel. The actual wire field name sent to the upstream provider is chosen by the provider transport: `max_completion_tokens` for OpenAI-family endpoints, and `max_tokens` for providers that only accept the legacy name (such as Mistral and Chutes). Sampling fields (`temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `seed`) follow the same stream-param channel; the ChatGPT-based Codex Responses backend strips them server-side since it uses fixed sampling.
+When either token-cap field is set, the value is forwarded to the upstream provider via the agent stream-param channel. The actual wire field name sent to the upstream provider is chosen by the provider transport: `max_completion_tokens` for OpenAI-family endpoints, and `max_tokens` for providers that only accept the legacy name (such as Mistral and Chutes). Sampling fields (`temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `seed`) follow the same stream-param channel; the ChatGPT-based Codex Responses backend strips them server-side since it uses fixed sampling. `stop` also rides the stream-param channel and maps to the transport's stop field (`stop` for Chat Completions backends, `stop_sequences` for Anthropic); the OpenAI Responses API has no stop parameter, so `stop` is not applied on Responses-backed models.
 
 ### Unsupported variants
 
@@ -233,9 +234,9 @@ The endpoint returns `400 invalid_request_error` for unsupported tool variants, 
 - non-function tool entries
 - missing `tool.function.name`
 - `tool_choice` variants such as `allowed_tools` and `custom`
-- `tool_choice: "required"` (not yet enforced at runtime; will be supported once hard enforcement is implemented)
-- `tool_choice: { "type": "function", "function": { "name": "..." } }` (same rationale as `required`)
 - `tool_choice.function.name` values that do not match provided `tools`
+
+For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client function-tool set, instructs the runtime to call a client tool before responding, and returns an error if the agent response does not include a matching structured client-tool call. This contract applies to the caller-supplied HTTP `tools` list, not every internal OpenClaw agent tool.
 
 ### Non-streaming tool response shape
 

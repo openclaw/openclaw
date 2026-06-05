@@ -1,3 +1,4 @@
+// Lmstudio plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
@@ -217,7 +218,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
                 () => {
                   recordPreloadSuccess(preloadKey);
                 },
-                (error) => {
+                (error: unknown) => {
                   const entry = recordPreloadFailure(preloadKey, Date.now());
                   throw Object.assign(new Error("preload-failed"), {
                     cause: error,

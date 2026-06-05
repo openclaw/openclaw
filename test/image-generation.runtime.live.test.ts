@@ -1,3 +1,4 @@
+// Live image generation runtime tests cover image provider runtime behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -225,7 +226,7 @@ describeLive("image generation live (provider sweep)", () => {
           requireProfileKeys: REQUIRE_PROFILE_KEYS,
           hasLiveKeys,
         });
-        let authLabel = "unresolved";
+        let authLabel;
         try {
           const auth = await resolveApiKeyForProvider({
             provider: providerCase.providerId,

@@ -1,3 +1,8 @@
+// OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
+import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
@@ -22,10 +27,6 @@ import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import {
-  normalizeOptionalLowercaseString,
-  readStringValue,
-} from "../../../shared/string-coerce.js";
 import { streamSimple } from "../../stream.js";
 import type { SimpleStreamOptions } from "../../types.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
@@ -36,6 +37,9 @@ const log = createSubsystemLogger("llm/providers/stream-wrappers");
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
   openclawCodeModeToolSurface?: boolean;
+};
+type OpenAIResponsesReplayOptions = Parameters<StreamFn>[2] & {
+  replayResponsesItemIds?: boolean;
 };
 export { resolveOpenAITextVerbosity };
 
@@ -76,11 +80,22 @@ function shouldApplyOpenAIAttributionHeaders(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
-}): "openai" | "openai-codex" | undefined {
+}): "openai" | undefined {
   const attributionProvider = resolveOpenAIRequestCapabilities(model).attributionProvider;
-  return attributionProvider === "openai" || attributionProvider === "openai-codex"
-    ? attributionProvider
-    : undefined;
+  return attributionProvider === "openai" ? attributionProvider : undefined;
+}
+
+function shouldUseCodexNativeTransport(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+  compat?: unknown;
+}): boolean {
+  const api = readStringValue(model.api);
+  if (api !== "openai-chatgpt-responses") {
+    return false;
+  }
+  return resolveOpenAIRequestCapabilities(model).endpointClass === "openai";
 }
 
 function shouldApplyOpenAIServiceTier(model: {
@@ -382,15 +397,21 @@ export function createOpenAIResponsesContextManagementWrapper(
     }
 
     const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
+    const replayResponsesItemIds =
+      policy.explicitStore === undefined
+        ? (options as OpenAIResponsesReplayOptions | undefined)?.replayResponsesItemIds
+        : policy.explicitStore;
+    const nextOptions: OpenAIResponsesReplayOptions = {
       ...options,
+      ...(replayResponsesItemIds === undefined ? {} : { replayResponsesItemIds }),
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
           applyOpenAIResponsesPayloadPolicy(payload as Record<string, unknown>, policy);
         }
         return originalOnPayload?.(payload, model);
       },
-    });
+    };
+    return underlying(model, context, nextOptions);
   };
 }
 
@@ -517,9 +538,9 @@ export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined):
   return (model, context, options) => {
     if (
       (model.api !== "openai-responses" &&
-        model.api !== "openai-codex-responses" &&
+        model.api !== "openai-chatgpt-responses" &&
         model.api !== "azure-openai-responses") ||
-      (model.provider !== "openai" && model.provider !== "openai-codex")
+      model.provider !== "openai"
     ) {
       return underlying(model, context, options);
     }
@@ -564,12 +585,12 @@ export function createOpenAITextVerbosityWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (model.api !== "openai-responses" && model.api !== "openai-codex-responses") {
+    if (model.api !== "openai-responses" && model.api !== "openai-chatgpt-responses") {
       return underlying(model, context, options);
     }
     const resolvedVerbosity = resolveOpenAITextVerbosityForModel(model, verbosity);
     const shouldOverrideExistingVerbosity =
-      model.api === "openai-codex-responses" || resolvedVerbosity !== verbosity;
+      model.api === "openai-chatgpt-responses" || resolvedVerbosity !== verbosity;
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
@@ -694,7 +715,7 @@ export function createOpenAIAttributionHeadersWrapper(
       return underlying(model, context, options);
     }
     const shouldCreateCodexTransport =
-      attributionProvider === "openai-codex" &&
+      shouldUseCodexNativeTransport(model) &&
       (baseStreamFn === undefined || baseStreamFn === streamSimple);
     const streamFn = shouldCreateCodexTransport
       ? (opts?.codexNativeTransportStreamFn ?? createOpenAIResponsesTransportStreamFn())

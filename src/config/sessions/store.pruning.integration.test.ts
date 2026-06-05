@@ -1,3 +1,4 @@
+// Session store pruning integration tests cover filesystem-backed pruning.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -38,6 +39,11 @@ const ENFORCED_MAINTENANCE_OVERRIDE = {
   highWaterBytes: null,
 };
 
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
+
 const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll(":", "-");
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-pruning-integ-" });
@@ -46,8 +52,8 @@ function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
 }
 
-function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
-  mockLoadConfig.mockReturnValue({
+function applyEnforcedMaintenanceConfig(mockLoadConfigValue: ReturnType<typeof vi.fn>) {
+  mockLoadConfigValue.mockReturnValue({
     session: {
       maintenance: {
         mode: "enforce",
@@ -58,8 +64,8 @@ function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>
   });
 }
 
-function applyCappedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
-  mockLoadConfig.mockReturnValue({
+function applyCappedMaintenanceConfig(mockLoadConfigLocal: ReturnType<typeof vi.fn>) {
+  mockLoadConfigLocal.mockReturnValue({
     session: {
       maintenance: {
         mode: "enforce",
@@ -678,7 +684,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     );
     const freshReset = path.join(
       testDir,
-      `fresh-reset.jsonl.reset.${archiveTimestamp(now - 1 * DAY_MS)}`,
+      `fresh-reset.jsonl.reset.${archiveTimestamp(now - DAY_MS)}`,
     );
     await fs.writeFile(oldReset, "old", "utf-8");
     await fs.writeFile(freshReset, "fresh", "utf-8");
@@ -1193,10 +1199,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     };
     await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
 
-    await saveSessionStore(
-      storePath,
-      JSON.parse(JSON.stringify(store)) as Record<string, SessionEntry>,
-    );
+    await saveSessionStore(storePath, jsonRoundTrip(store));
 
     const files = await fs.readdir(testDir);
     const backups = files.filter((file) => file.startsWith("sessions.json.bak."));

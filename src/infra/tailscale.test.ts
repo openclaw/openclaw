@@ -1,3 +1,4 @@
+// Covers Tailscale install, whois, Serve, and Funnel helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import * as tailscale from "./tailscale.js";
@@ -7,6 +8,7 @@ const {
   ensureTailscaledInstalled,
   getTailnetHostname,
   getTestTailscaleBinaryOverride,
+  readTailscaleWhoisIdentity,
   enableTailscaleServe,
   disableTailscaleServe,
   ensureFunnel,
@@ -55,6 +57,7 @@ describe("tailscale helpers", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     envSnapshot.restore();
     vi.restoreAllMocks();
   });
@@ -84,6 +87,28 @@ describe("tailscale helpers", () => {
     });
     const host = await getTailnetHostname(exec);
     expect(host).toBe("noisy.tailnet.ts.net");
+  });
+
+  it("does not cache whois results when the cache expiry would exceed Date range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ UserProfile: { LoginName: "first@example.com" } }),
+      })
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ UserProfile: { LoginName: "second@example.com" } }),
+      });
+
+    await expect(readTailscaleWhoisIdentity("100.64.0.10", exec)).resolves.toEqual({
+      login: "first@example.com",
+    });
+    await expect(readTailscaleWhoisIdentity("100.64.0.10", exec)).resolves.toEqual({
+      login: "second@example.com",
+    });
+
+    expect(exec).toHaveBeenCalledTimes(2);
   });
 
   it("allows the test binary override in explicit test environments", () => {
@@ -179,6 +204,24 @@ describe("tailscale helpers", () => {
     });
   });
 
+  it("enableTailscaleServe passes a configured service name", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "" });
+
+    await enableTailscaleServe(3000, exec as never, "svc:openclaw");
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expectExecCall(
+      exec,
+      1,
+      tailscaleBin,
+      ["serve", "--service=svc:openclaw", "--bg", "--yes", "3000"],
+      {
+        maxBuffer: 200_000,
+        timeoutMs: 15_000,
+      },
+    );
+  });
+
   it("disableTailscaleServe uses fallback", async () => {
     const exec = vi
       .fn()
@@ -189,6 +232,18 @@ describe("tailscale helpers", () => {
 
     expect(exec).toHaveBeenCalledTimes(2);
     expectExecCall(exec, 2, "sudo", ["-n", tailscaleBin, "serve", "reset"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+  });
+
+  it("disableTailscaleServe disables only the configured service name", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "" });
+
+    await disableTailscaleServe(exec as never, "svc:openclaw");
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expectExecCall(exec, 1, tailscaleBin, ["serve", "clear", "svc:openclaw"], {
       maxBuffer: 200_000,
       timeoutMs: 15_000,
     });

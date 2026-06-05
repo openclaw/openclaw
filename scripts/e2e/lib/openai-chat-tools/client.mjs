@@ -1,3 +1,4 @@
+// Gateway client for OpenAI chat tools E2E scenarios.
 const port = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;
 const backendModel = process.env.MODEL_REF || "openai/gpt-5.4-mini";
@@ -123,7 +124,7 @@ if (toolCall?.type !== "function" || toolCall?.function?.name !== "get_weather")
   throw new Error(`unexpected tool call: ${JSON.stringify(toolCall)}`);
 }
 
-let args = {};
+let args;
 try {
   args = JSON.parse(toolCall.function.arguments || "{}");
 } catch {

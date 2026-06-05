@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor behavior.
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
@@ -10,7 +11,11 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
-import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asDateTimestampMs,
+  parseStrictFiniteNumber,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -80,6 +85,13 @@ type LocalGroupMetadataCacheEntry = WhatsAppGroupMetadataCacheEntry & {
   mentionParticipants?: WhatsAppOutboundMentionParticipant[];
 };
 
+function resolveGroupMetadataExpiresAt(nowRaw = Date.now()): number | undefined {
+  const now = asDateTimestampMs(nowRaw);
+  return now === undefined
+    ? undefined
+    : resolveExpiresAtMsFromDurationMs(GROUP_META_TTL_MS, { nowMs: now });
+}
+
 function parseWhatsAppTimestampSeconds(value: unknown): number | undefined {
   if (value == null) {
     return undefined;
@@ -96,6 +108,10 @@ function rememberGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEnt
   jid: string,
   entry: T,
 ): void {
+  if (asDateTimestampMs(entry.expires) === undefined) {
+    cache.delete(jid);
+    return;
+  }
   if (cache.has(jid)) {
     cache.delete(jid);
   }
@@ -118,7 +134,9 @@ function readGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
   if (!entry) {
     return null;
   }
-  if (entry.expires <= Date.now()) {
+  const now = asDateTimestampMs(Date.now());
+  const expires = asDateTimestampMs(entry.expires);
+  if (now === undefined || expires === undefined || expires <= now) {
     cache.delete(jid);
     return null;
   }
@@ -472,7 +490,7 @@ export async function attachWebInboxToSocket(
       subject: meta.subject,
       participants,
       mentionParticipants,
-      expires: Date.now() + GROUP_META_TTL_MS,
+      expires: resolveGroupMetadataExpiresAt() ?? 0,
     };
   };
 
@@ -480,7 +498,7 @@ export async function attachWebInboxToSocket(
     meta: GroupMetadata,
   ): WhatsAppGroupMetadataCacheEntry => ({
     subject: meta.subject,
-    expires: Date.now() + GROUP_META_TTL_MS,
+    expires: resolveGroupMetadataExpiresAt() ?? Number.NaN,
   });
 
   const getGroupMeta = async (jid: string) => {
@@ -511,7 +529,7 @@ export async function attachWebInboxToSocket(
         options.verbose,
         `Failed to fetch group metadata for ${jid}: ${String(err)}`,
       );
-      return { expires: Date.now() + GROUP_META_TTL_MS };
+      return { expires: resolveGroupMetadataExpiresAt() ?? 0 };
     }
   };
 
@@ -956,24 +974,24 @@ export async function attachWebInboxToSocket(
         logWhatsAppVerbose(options.verbose, `Presence update failed: ${String(err)}`);
       }
     };
-    const reply = async (text: string, options?: MiscMessageGenerationOptions) => {
+    const reply = async (text: string, optionsResult?: MiscMessageGenerationOptions) => {
       const resolved = await resolveOutboundMentionsForGroup(chatJid, text);
       const result = await sendTrackedMessage(
         chatJid,
         addWhatsAppOutboundMentionsToContent({ text: resolved.text }, resolved.mentionedJids),
-        options,
+        optionsResult,
       );
       return normalizeWhatsAppSendResult(result, "text");
     };
     const sendMedia = async (
       payload: AnyMessageContent,
-      options?: MiscMessageGenerationOptions,
+      optionsValue?: MiscMessageGenerationOptions,
     ) => {
       const previewPayload = await addWhatsAppImagePreviewFields(payload);
       const result = await sendTrackedMessage(
         chatJid,
         await applyOutboundMentionsToContent(chatJid, previewPayload),
-        options,
+        optionsValue,
       );
       return normalizeWhatsAppSendResult(result, "media");
     };
@@ -1068,7 +1086,7 @@ export async function attachWebInboxToSocket(
     }
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
-      void task.catch((err) => {
+      void task.catch((err: unknown) => {
         inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
         inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
       });
@@ -1104,7 +1122,7 @@ export async function attachWebInboxToSocket(
     }
   };
   const handleMessagesUpsertEvent = (upsert: { type?: string; messages?: Array<WAMessage> }) => {
-    const task = handleMessagesUpsert(upsert).catch((err) => {
+    const task = handleMessagesUpsert(upsert).catch((err: unknown) => {
       inboundLogger.error({ error: String(err) }, "messages.upsert handler error");
       inboundConsoleLog.error(`Messages upsert handler error: ${String(err)}`);
     });
@@ -1196,7 +1214,7 @@ export async function attachWebInboxToSocket(
     handleConnectionUpdate as unknown as (...args: unknown[]) => void,
   );
 
-  const replayTask = replayPendingDurableInboundMessages().catch((err) => {
+  const replayTask = replayPendingDurableInboundMessages().catch((err: unknown) => {
     inboundLogger.error({ error: String(err) }, "failed replaying durable WhatsApp inbound");
     inboundConsoleLog.error(`Failed replaying durable WhatsApp inbound: ${String(err)}`);
   });
@@ -1237,14 +1255,14 @@ export async function attachWebInboxToSocket(
       sendMessage: (
         jid: string,
         content: AnyMessageContent,
-        options?: MiscMessageGenerationOptions,
-      ) => sendTrackedMessage(jid, content, options),
-      sendPresenceUpdate: async (presence, jid?: string) => {
+        optionsLocal?: MiscMessageGenerationOptions,
+      ) => sendTrackedMessage(jid, content, optionsLocal),
+      sendPresenceUpdate: async (presenceLocal, jid?: string) => {
         const currentSock = getCurrentSock();
         if (!currentSock) {
           throw new Error(RECONNECT_IN_PROGRESS_ERROR);
         }
-        return currentSock.sendPresenceUpdate(presence, jid);
+        return currentSock.sendPresenceUpdate(presenceLocal, jid);
       },
     },
     defaultAccountId: options.accountId,
@@ -1277,11 +1295,17 @@ export async function attachWebInboxToSocket(
 }
 
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
+  const socketTiming = resolveWhatsAppSocketTiming(options.cfg);
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
-    ...resolveWhatsAppSocketTiming(options.cfg),
+    ...socketTiming,
   });
-  await waitForWaConnection(sock);
+  try {
+    await waitForWaConnection(sock, { timeoutMs: socketTiming.connectTimeoutMs });
+  } catch (err) {
+    closeInboundMonitorSocket(sock);
+    throw err;
+  }
   return attachWebInboxToSocket({
     ...options,
     sock,

@@ -1,3 +1,4 @@
+// Fal provider module implements model/runtime integration.
 import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
@@ -512,8 +513,8 @@ async function fetchImageBuffer(
     const mimeType = response.headers.get("content-type")?.trim() || "image/png";
     return {
       buffer: await readResponseWithLimit(response, maxBytes, {
-        onOverflow: ({ maxBytes }) =>
-          new Error(`fal generated image download exceeds ${maxBytes} bytes`),
+        onOverflow: ({ maxBytes: maxBytesLocal }) =>
+          new Error(`fal generated image download exceeds ${maxBytesLocal} bytes`),
       }),
       mimeType,
     };

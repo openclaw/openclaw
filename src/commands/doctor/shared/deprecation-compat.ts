@@ -1,3 +1,4 @@
+// Inventory of doctor compatibility migrations that outlive deprecated runtime/config paths.
 export type DoctorDeprecationCompatStatus = "active" | "deprecated" | "removal-pending" | "removed";
 
 export type DoctorDeprecationCompatOwner =
@@ -13,9 +14,13 @@ export type DoctorDeprecationCompatOwner =
   | "tts";
 
 export type DoctorDeprecationCompatRecord<Code extends string = string> = {
+  /** Stable inventory code for a doctor compatibility surface. */
   code: Code;
+  /** Current lifecycle state for the compatibility surface. */
   status: DoctorDeprecationCompatStatus;
+  /** Area that owns the deprecated input or migration. */
   owner: DoctorDeprecationCompatOwner;
+  /** Date or release window when the compatibility surface first shipped. */
   introduced: string;
   deprecated?: string;
   warningStarts?: string;
@@ -196,6 +201,22 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/channel-legacy-config-migrate.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-webchat-channel-config",
+    status: "removed",
+    owner: "channel",
+    introduced: "2026-05-18",
+    deprecated: "2026-05-31",
+    warningStarts: "2026-05-31",
+    removeAfter: "2026-08-31",
+    source: "channels.webchat",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.channels.ts",
+    replacement: "chat.history maxChars per-request override when a custom client needs it",
+    docsPath: "/web/webchat",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "WebChat is an internal control surface, not a configurable outbound channel. Runtime ignores the retired channel key; doctor removes stale config.",
+  }),
+  deprecatedCompatRecord({
     code: "doctor-tts-provider-aliases",
     owner: "tts",
     introduced: "2026-04-26",
@@ -233,7 +254,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-04-25",
     source: "plugins.installs in authored config",
     migration: "src/config/plugin-install-config-migration.ts",
-    replacement: "state-managed plugins/installs.json install ledger",
+    replacement: "shared SQLite installed_plugin_index install ledger",
     docsPath: "/cli/plugins#registry",
     tests: [
       "src/config/io.write-config.test.ts",
@@ -328,20 +349,24 @@ const doctorDeprecationCompatRecordByCode = new Map<
   KnownDoctorDeprecationCompatRecord
 >(DOCTOR_DEPRECATION_COMPAT_RECORDS.map((record) => [record.code, record]));
 
+/** List every doctor compatibility record, including removed or still-active entries. */
 export function listDoctorDeprecationCompatRecords(): readonly KnownDoctorDeprecationCompatRecord[] {
   return DOCTOR_DEPRECATION_COMPAT_RECORDS;
 }
 
+/** List compatibility records currently in a deprecated/removal-pending lifecycle. */
 export function listDeprecatedDoctorDeprecationCompatRecords(): readonly KnownDoctorDeprecationCompatRecord[] {
   return DOCTOR_DEPRECATION_COMPAT_RECORDS.filter((record) =>
     (["deprecated", "removal-pending"] as readonly string[]).includes(record.status),
   );
 }
 
+/** Return true when a string is a known doctor compatibility inventory code. */
 export function isDoctorDeprecationCompatCode(code: string): code is DoctorDeprecationCompatCode {
   return doctorDeprecationCompatRecordByCode.has(code);
 }
 
+/** Return a doctor compatibility record by code, throwing for impossible stale callers. */
 export function getDoctorDeprecationCompatRecord(
   code: DoctorDeprecationCompatCode,
 ): KnownDoctorDeprecationCompatRecord {

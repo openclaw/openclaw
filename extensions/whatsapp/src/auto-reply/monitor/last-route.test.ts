@@ -1,9 +1,12 @@
+// Whatsapp tests cover last route plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { trackBackgroundTask } from "./last-route.js";
 
 const waitForTaskCleanup = async (task: Promise<unknown>) => {
   await Promise.allSettled([task]);
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 };
 
 describe("trackBackgroundTask", () => {

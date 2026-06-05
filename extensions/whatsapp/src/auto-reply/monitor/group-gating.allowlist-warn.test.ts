@@ -1,3 +1,4 @@
+// Whatsapp tests cover group gating.allowlist warn plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./group-activation.js", () => ({
@@ -12,10 +13,7 @@ import {
   type GroupHistoryEntry,
 } from "./group-gating.js";
 
-function makeUnregisteredGroupMsg(
-  conversationId: string,
-  accountId: string = "default",
-): WebInboundMsg {
+function makeUnregisteredGroupMsg(conversationId: string, accountId = "default"): WebInboundMsg {
   return {
     id: `msg-${conversationId}`,
     from: conversationId,

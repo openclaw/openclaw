@@ -45,6 +45,7 @@ struct SettingsProTab: View {
     @State var gatewayPassword = ""
     @State var manualGatewayPortText = ""
     @State var setupStatusText: String?
+    @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var defaultShareInstruction = ""
     @State var showGatewayProblemDetails = false
@@ -58,6 +59,11 @@ struct SettingsProTab: View {
     @State var notificationActionText = "Request Access"
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
+    @State var bottomOverlayInset: CGFloat = 0
+
+    var bottomScrollMargin: CGFloat {
+        max(0, self.bottomOverlayInset - SettingsLayout.rowHeight - SettingsLayout.bottomContentPadding)
+    }
 
     var body: some View {
         NavigationStack {
@@ -70,9 +76,13 @@ struct SettingsProTab: View {
                         self.gatewaySection
                         self.settingsListSection
                     }
-                    .padding(.vertical, 18)
+                    .padding(.top, 18)
+                    .padding(.bottom, SettingsLayout.bottomContentPadding)
                 }
-                .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
+                .contentMargins(.bottom, self.bottomScrollMargin, for: .scrollContent)
+                SettingsBottomOverlayInsetReader(inset: self.$bottomOverlayInset)
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
             }
             .navigationBarHidden(true)
             .navigationDestination(for: SettingsRoute.self) { route in
@@ -82,6 +92,7 @@ struct SettingsProTab: View {
                 self.previousLocationModeRaw = self.locationModeRaw
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
+                self.applyPendingGatewaySetupLinkIfNeeded()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
@@ -107,8 +118,16 @@ struct SettingsProTab: View {
             .onChange(of: self.gatewayPassword) { _, newValue in
                 self.persistGatewayPassword(newValue)
             }
+            .onChange(of: self.setupCode) { _, newValue in
+                if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.stagedGatewaySetupLink = nil
+                }
+            }
             .onChange(of: self.defaultShareInstruction) { _, newValue in
                 ShareToAgentSettings.saveDefaultInstruction(newValue)
+            }
+            .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
+                self.applyPendingGatewaySetupLinkIfNeeded()
             }
         }
         .sheet(isPresented: self.$showGatewayProblemDetails) {

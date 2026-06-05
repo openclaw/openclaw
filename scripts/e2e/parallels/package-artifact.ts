@@ -1,3 +1,4 @@
+// Package Artifact script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -198,7 +199,8 @@ async function acquirePackageLock(lockDir: string, ownerToken: string): Promise<
   const timeoutMs = readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_TIMEOUT_MS", 30 * 60_000);
   const staleMs = readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_STALE_MS", 2 * 60 * 60_000);
   const startedAt = Date.now();
-  let announcedWait = false;
+  let waitAnnouncementBudget = 1;
+  const consumeWaitAnnouncement = () => waitAnnouncementBudget-- > 0;
   while (Date.now() - startedAt < timeoutMs) {
     try {
       await mkdir(lockDir);
@@ -210,9 +212,8 @@ async function acquirePackageLock(lockDir: string, ownerToken: string): Promise<
       }
     }
     await removeStalePackageLock(lockDir, staleMs);
-    if (!announcedWait) {
+    if (consumeWaitAnnouncement()) {
       say(`Wait for Parallels package lock: ${lockDir}`);
-      announcedWait = true;
     }
     await delay(1_000);
   }
@@ -283,5 +284,7 @@ function isErrorCode(error: unknown, code: string): boolean {
 }
 
 async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

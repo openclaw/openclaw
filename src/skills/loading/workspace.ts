@@ -1,20 +1,25 @@
+// Workspace skill loading helpers discover and load skills from workspace directories.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { normalizeTrimmedStringList, uniqueStrings } from "../../shared/string-normalization.js";
 import { CONFIG_DIR, resolveHomeDir, resolveUserPath } from "../../utils.js";
 import {
   resolveEffectiveAgentSkillFilter,
   resolveEffectiveAgentSkillsLimits,
 } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
+import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
@@ -23,7 +28,7 @@ import type {
   SkillSnapshot,
 } from "../types.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { shouldIncludeSkill } from "./config.js";
+import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
@@ -59,12 +64,12 @@ function resolveNativeUserHomeDir(): string | undefined {
 
 function resolveCompactHomePrefixes(): string[] {
   const homes = [resolveHomeDir(), resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
-    (home): home is string => !!home,
+    (home): home is string => Boolean(home),
   );
   const resolvedHomes = homes.map((home) => path.resolve(home));
   const realHomes = resolvedHomes
     .map((home) => tryRealpath(home))
-    .filter((home): home is string => !!home);
+    .filter((home): home is string => Boolean(home));
   return uniqueStrings([...resolvedHomes, ...realHomes]).toSorted((a, b) => b.length - a.length);
 }
 
@@ -106,32 +111,27 @@ function compactPathForConsoleMessage(filePath: string): string {
   return compactHomePath(filePath, resolveCompactHomePrefixes());
 }
 
-function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
-  if (entry.exposure) {
-    return entry.exposure.includeInAvailableSkillsPrompt ?? true;
-  }
-  if (entry.invocation) {
-    return !entry.invocation.disableModelInvocation;
-  }
-  return !entry.skill.disableModelInvocation;
-}
-
 function filterSkillEntries(
   entries: SkillEntry[],
   config?: OpenClawConfig,
   skillFilter?: string[],
   eligibility?: SkillEligibilityContext,
 ): SkillEntry[] {
-  let filtered = entries.filter((entry) => shouldIncludeSkill({ entry, config, eligibility }));
+  const bundledAllowlist = resolveBundledAllowlist(config);
+  let filtered = entries.filter((entry) =>
+    shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility }),
+  );
   // If skillFilter is provided, only include skills in the filter list.
   if (skillFilter !== undefined) {
     const normalized = normalizeSkillFilter(skillFilter) ?? [];
     const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
     skillsLogger.debug(`Applying skill filter: ${label}`);
-    filtered =
-      normalized.length > 0
-        ? filtered.filter((entry) => normalized.includes(entry.skill.name))
-        : [];
+    if (normalized.length > 0) {
+      const allowed = new Set(normalized);
+      filtered = filtered.filter((entry) => allowed.has(entry.skill.name));
+    } else {
+      filtered = [];
+    }
     skillsLogger.debug(
       `After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`,
     );
@@ -292,8 +292,7 @@ function containsDiscoverableSkill(
 ): boolean {
   const discoveryBudget = createSkillDiscoveryBudget(opts.maxCandidateDirs);
   const queue: Array<{ dir: string; depth: number }> = [{ dir, depth: 0 }];
-  for (let index = 0; index < queue.length; index += 1) {
-    const candidate = queue[index];
+  for (const candidate of queue) {
     if (!candidate) {
       continue;
     }
@@ -373,7 +372,7 @@ function hasLoadableSkillFrontmatter(
   });
   const fallbackName = path.basename(skillDir).trim();
   const name = frontmatter?.name?.trim() || fallbackName;
-  return !!name && !!frontmatter?.description?.trim();
+  return Boolean(name) && Boolean(frontmatter?.description?.trim());
 }
 
 function tryRealpath(filePath: string): string | null {
@@ -521,8 +520,7 @@ export function resolveNestedSkillsRoot(
   // child-directory filter as discovery so ignored folders cannot re-root.
   const discoveryBudget = createSkillDiscoveryBudget(scanLimit);
   const queue: Array<{ dir: string; depth: number }> = [{ dir: nested, depth: 0 }];
-  for (let index = 0; index < queue.length; index += 1) {
-    const candidate = queue[index];
+  for (const candidate of queue) {
     if (!candidate) {
       continue;
     }
@@ -1000,8 +998,7 @@ function loadSkillEntries(
       }),
     );
 
-    for (let queueIndex = 0; queueIndex < scanQueue.length; queueIndex += 1) {
-      const candidate = scanQueue[queueIndex];
+    for (const candidate of scanQueue) {
       if (!candidate) {
         continue;
       }
@@ -1213,8 +1210,8 @@ function loadSkillEntries(
         exposure: {
           includeInRuntimeRegistry: true,
           // Freshly loaded entries preserve the documented disable-model-invocation
-          // contract, while legacy entries without exposure metadata still use the
-          // fallback in isSkillVisibleInAvailableSkillsPrompt().
+          // contract, while legacy entries without exposure metadata still use
+          // the centralized prompt visibility fallback.
           includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
           userInvocable: invocation.userInvocable ?? true,
         },
@@ -1392,7 +1389,7 @@ function resolveWorkspaceSkillPromptState(
     effectiveSkillFilter,
     opts?.eligibility,
   );
-  const promptEntries = eligible.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
+  const promptEntries = filterPromptVisibleSkillEntries(eligible);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.
@@ -1556,7 +1553,7 @@ export async function syncSkillsToWorkspace(params: {
 
     const usedDirNames = new Set<string>();
     for (const entry of entries) {
-      let dest: string | null = null;
+      let dest: string | null;
       try {
         dest = resolveSyncedSkillDestinationPath({
           targetSkillsDir,

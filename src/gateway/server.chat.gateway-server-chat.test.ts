@@ -1,3 +1,5 @@
+// Gateway server chat tests cover WebSocket chat flow, history construction,
+// NO_REPLY handling, agent events, and connected control-UI delivery.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +8,6 @@ import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { testing as agentJobTesting } from "./server-methods/agent-job.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
@@ -182,11 +183,6 @@ describe("gateway server chat", () => {
     expect(res.payload?.status).toBe("ok");
     return res;
   };
-
-  const waitForLifecycleWaiter = async (runId: string) => {
-    await vi.waitFor(() => expect(agentJobTesting.getWaiterCount(runId)).toBeGreaterThan(0));
-  };
-
   const abortChatRun = async (runId: string) => {
     const res = await rpcReq(ws, "chat.abort", {
       sessionKey: "main",
@@ -448,7 +444,9 @@ describe("gateway server chat", () => {
         headers: { origin: `http://127.0.0.1:${port}` },
       });
       trackConnectChallengeNonce(webchatWs);
-      await new Promise<void>((resolve) => webchatWs?.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        webchatWs?.once("open", resolve);
+      });
       await connectOk(webchatWs, {
         client: {
           id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -1334,12 +1332,14 @@ describe("gateway server chat", () => {
         },
       });
 
-      const historyRes = await rpcReq<{ thinkingLevel?: string }>(ws, "chat.history", {
-        sessionKey: "agent:alpha:main",
-      });
+      const historyRes = await rpcReq<{
+        thinkingLevel?: string;
+        sessionInfo?: { thinkingLevel?: string };
+      }>(ws, "chat.history", { sessionKey: "agent:alpha:main" });
 
       expect(historyRes.ok).toBe(true);
       expect(historyRes.payload?.thinkingLevel).toBe("minimal");
+      expect(historyRes.payload?.sessionInfo?.thinkingLevel).toBeUndefined();
     } finally {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
@@ -1349,14 +1349,16 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send does not persist verboseLevel for operator.write callers", async () => {
-    await withGatewayServer(async ({ port }) => {
+    await withGatewayServer(async ({ port: portValue }) => {
       await withMainSessionStore(async () => {
         let scopedWs: WebSocket | undefined;
 
         try {
-          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          scopedWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
           trackConnectChallengeNonce(scopedWs);
-          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await new Promise<void>((resolve) => {
+            scopedWs?.once("open", resolve);
+          });
           await connectOk(scopedWs, {
             scopes: ["operator.write"],
           });
@@ -1375,7 +1377,11 @@ describe("gateway server chat", () => {
           expect(waitRes.ok).toBe(true);
           expect(waitRes.payload?.status).toBe("ok");
 
-          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const sessionStorePath = testState.sessionStorePath;
+          if (!sessionStorePath) {
+            throw new Error("session store path was not initialized");
+          }
+          const raw = await fs.readFile(sessionStorePath, "utf-8");
           const stored = JSON.parse(raw) as {
             "agent:main:main"?: {
               verboseLevel?: string;
@@ -1390,14 +1396,16 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send does not rotate sessions for operator.write reset triggers", async () => {
-    await withGatewayServer(async ({ port }) => {
+    await withGatewayServer(async ({ port: portLocal }) => {
       await withMainSessionStore(async () => {
         let scopedWs: WebSocket | undefined;
 
         try {
-          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          scopedWs = new WebSocket(`ws://127.0.0.1:${portLocal}`);
           trackConnectChallengeNonce(scopedWs);
-          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await new Promise<void>((resolve) => {
+            scopedWs?.once("open", resolve);
+          });
           await connectOk(scopedWs, {
             scopes: ["operator.write"],
           });
@@ -1416,7 +1424,11 @@ describe("gateway server chat", () => {
           expect(waitRes.ok).toBe(true);
           expect(waitRes.payload?.status).toBe("ok");
 
-          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const sessionStorePath = testState.sessionStorePath;
+          if (!sessionStorePath) {
+            throw new Error("session store path was not initialized");
+          }
+          const raw = await fs.readFile(sessionStorePath, "utf-8");
           const stored = JSON.parse(raw) as {
             "agent:main:main"?: {
               sessionId?: string;
@@ -1524,7 +1536,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("agent.wait keeps lifecycle wait active while same-runId chat.send is active", async () => {
+  test("agent.wait ignores lifecycle completion while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-with-agent-lifecycle";
       const releaseBlockedReply = mockBlockedChatReply();
@@ -1532,12 +1544,6 @@ describe("gateway server chat", () => {
       try {
         await sendChatAndExpectStarted(runId, "hold chat run open");
 
-        const waitP = rpcReq(ws, "agent.wait", {
-          runId,
-          timeoutMs: 1_000,
-        });
-
-        await waitForLifecycleWaiter(runId);
         emitAgentEvent({
           runId,
           stream: "lifecycle",
@@ -1549,11 +1555,14 @@ describe("gateway server chat", () => {
           data: { phase: "end", startedAt: 1, endedAt: 2 },
         });
 
-        const waitRes = await waitP;
-        expect(waitRes.ok).toBe(true);
-        expect(waitRes.payload?.status).toBe("ok");
+        const waitWhileChatActive = await rpcReq(ws, "agent.wait", {
+          runId,
+          timeoutMs: 40,
+        });
+        expectAgentWaitTimeout(waitWhileChatActive);
 
-        await abortChatRun(runId);
+        releaseBlockedReply();
+        await waitForAgentRunOk(runId);
       } finally {
         releaseBlockedReply();
       }
@@ -1577,7 +1586,9 @@ describe("gateway server chat", () => {
       headers: { origin: `http://127.0.0.1:${port}` },
     });
     trackConnectChallengeNonce(webchatWs);
-    await new Promise<void>((resolve) => webchatWs.once("open", resolve));
+    await new Promise<void>((resolve) => {
+      webchatWs.once("open", resolve);
+    });
     await connectOk(webchatWs, {
       client: {
         id: GATEWAY_CLIENT_NAMES.WEBCHAT,

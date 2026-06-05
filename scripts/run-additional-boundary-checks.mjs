@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Runs additional architecture and boundary checks with sharding, concurrency,
+// timeout handling, and grouped CI output.
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 
@@ -6,6 +8,7 @@ const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
 const TIMEOUT_KILL_GRACE_MS = 5_000;
 
+/** Ordered list of supplemental boundary checks used by CI sharding. */
 export const BOUNDARY_CHECKS = [
   ["prompt:snapshots:check", "pnpm", ["prompt:snapshots:check"]],
   ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
@@ -66,22 +69,34 @@ export const BOUNDARY_CHECKS = [
   ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
 ].map(([label, command, args]) => ({ label, command, args }));
 
-export function resolveConcurrency(value, fallback = 4) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (!Number.isFinite(parsed) || parsed < 1) {
+/**
+ * Resolves the configured boundary-check concurrency.
+ */
+export function resolveConcurrency(value, fallback = 4, label = "concurrency") {
+  return resolvePositiveInteger(value, fallback, label);
+}
+
+/**
+ * Parses positive integer CLI/env options with a fallback.
+ */
+export function resolvePositiveInteger(value, fallback, label = "value") {
+  if (value === undefined || value === null || value === "") {
     return fallback;
+  }
+  const text = String(value).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer; got: ${value}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${label} must be a positive integer; got: ${value}`);
   }
   return parsed;
 }
 
-export function resolvePositiveInteger(value, fallback) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return fallback;
-  }
-  return parsed;
-}
-
+/**
+ * Parses one N/TOTAL shard selector into zero-based index form.
+ */
 export function parseShardSpec(value) {
   if (!value) {
     return null;
@@ -104,6 +119,9 @@ export function parseShardSpec(value) {
   return { count, index: index - 1, label: `${index}/${count}` };
 }
 
+/**
+ * Parses a comma-separated list of N/TOTAL shard selectors.
+ */
 export function parseShardSelection(value) {
   if (!value) {
     return null;
@@ -121,6 +139,9 @@ export function parseShardSelection(value) {
     });
 }
 
+/**
+ * Selects checks whose ordinal belongs to the requested shard set.
+ */
 export function selectChecksForShard(checks, shardSpec) {
   const shards =
     typeof shardSpec === "string"
@@ -138,10 +159,16 @@ export function selectChecksForShard(checks, shardSpec) {
   );
 }
 
+/**
+ * Formats a check command for CI group output.
+ */
 export function formatCommand({ command, args }) {
   return [command, ...args].join(" ");
 }
 
+/**
+ * Keeps only the tail of noisy check output so failure logs stay bounded.
+ */
 export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
   const limit = Math.max(1, maxBytes);
   const chunks = [];
@@ -150,7 +177,7 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
 
   const append = (value) => {
     const text = String(value);
-    let textBytes = Buffer.byteLength(text);
+    const textBytes = Buffer.byteLength(text);
     if (textBytes >= limit) {
       const buffer = Buffer.from(text);
       const tail = buffer.subarray(buffer.length - limit).toString("utf8");
@@ -185,9 +212,7 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
     append,
     read() {
       const output = chunks.join("");
-      return truncated
-        ? `[output truncated to last ${limit} bytes]\n${output}`
-        : output;
+      return truncated ? `[output truncated to last ${limit} bytes]\n${output}` : output;
     },
   };
 }
@@ -246,6 +271,9 @@ function installActiveChildCleanup(activeChildren) {
   };
 }
 
+/**
+ * Runs one boundary check with timeout and process-group termination.
+ */
 export function runSingleCheck(
   check,
   {
@@ -358,6 +386,9 @@ function writeTimingSummary(results, output) {
   }
 }
 
+/**
+ * Runs boundary checks with bounded concurrency and returns the failure count.
+ */
 export async function runChecks(
   checks = BOUNDARY_CHECKS,
   {
@@ -434,17 +465,23 @@ function resolveCliShardSpec(args, env) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const concurrency = resolveConcurrency(
+  const concurrencyRaw =
     process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY ??
-      process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY,
-  );
+    process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY;
+  const concurrencyLabel =
+    process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY === undefined
+      ? "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY"
+      : "OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY";
+  const concurrency = resolveConcurrency(concurrencyRaw, 4, concurrencyLabel);
   const checkTimeoutMs = resolvePositiveInteger(
     process.env.OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS,
     DEFAULT_CHECK_TIMEOUT_MS,
+    "OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS",
   );
   const outputMaxBytes = resolvePositiveInteger(
     process.env.OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES,
     DEFAULT_OUTPUT_MAX_BYTES,
+    "OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES",
   );
   const shards = parseShardSelection(resolveCliShardSpec(process.argv.slice(2), process.env));
   const checks = selectChecksForShard(BOUNDARY_CHECKS, shards);

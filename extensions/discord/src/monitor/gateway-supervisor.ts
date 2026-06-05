@@ -1,3 +1,4 @@
+// Discord plugin module implements gateway supervisor behavior.
 import type { EventEmitter } from "node:events";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -166,7 +167,6 @@ export function createDiscordGatewaySupervisor(params: {
         return;
       case "buffering":
         pending.push(event);
-        return;
     }
   };
   emitter.on("error", onGatewayError);

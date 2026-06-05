@@ -1,3 +1,4 @@
+// Covers provider auth choice selection for plugin-owned providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -8,6 +9,11 @@ const ensureCodexRuntimePluginForModelSelection = vi.hoisted(() => vi.fn());
 vi.mock("../commands/codex-runtime-plugin-install.js", () => ({
   CODEX_RUNTIME_PLUGIN_ID: "codex",
   ensureCodexRuntimePluginForModelSelection,
+}));
+
+const ensureCopilotRuntimePluginForModelSelection = vi.hoisted(() => vi.fn());
+vi.mock("../commands/copilot-runtime-plugin-install.js", () => ({
+  ensureCopilotRuntimePluginForModelSelection,
 }));
 
 const offerPostInstallMigrations = vi.hoisted(() => vi.fn());
@@ -40,6 +46,14 @@ describe("applyAuthChoicePluginProvider", () => {
   beforeEach(() => {
     testing.resetDepsForTest();
     ensureCodexRuntimePluginForModelSelection.mockReset();
+    ensureCopilotRuntimePluginForModelSelection.mockReset();
+    ensureCopilotRuntimePluginForModelSelection.mockImplementation(
+      async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg,
+        required: false,
+        installed: false,
+      }),
+    );
     offerPostInstallMigrations.mockReset();
   });
 

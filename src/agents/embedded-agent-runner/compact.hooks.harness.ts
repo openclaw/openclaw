@@ -1,3 +1,6 @@
+/**
+ * Test harness mocks for embedded-agent compaction hook coverage.
+ */
 import { vi, type Mock } from "vitest";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { clearAgentHarnesses } from "../harness/registry.js";
@@ -458,8 +461,11 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("../harness/selection.js", () => ({
+  vi.doMock("../harness/compaction.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
+  }));
+
+  vi.doMock("../harness/policy.js", () => ({
     resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,
   }));
 

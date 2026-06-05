@@ -1,3 +1,4 @@
+// Openrouter plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
   type ProviderReplayPolicy,
@@ -172,11 +173,11 @@ export default definePluginEntry({
           : undefined;
       },
       normalizeResolvedModel: ({ model }) => normalizeOpenRouterResolvedModel(model),
-      normalizeTransport: ({ api, baseUrl }) => {
+      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
         const normalizedBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
         return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
           ? {
-              api,
+              api: apiLocal,
               baseUrl: normalizedBaseUrl,
             }
           : undefined;

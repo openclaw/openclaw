@@ -1,3 +1,4 @@
+// Matrix helper module supports config schema behavior.
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
 import {
   AllowFromListSchema,
@@ -5,6 +6,7 @@ import {
   ContextVisibilityModeSchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
   ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
@@ -121,6 +123,7 @@ export const MatrixConfigSchema = z.object({
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   botLoopProtection: botLoopProtectionSchema,
   groupPolicy: GroupPolicySchema.optional(),
+  mentionPatterns: MentionPatternsPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
   blockStreaming: z.boolean().optional(),
   streaming: z

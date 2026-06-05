@@ -1,3 +1,4 @@
+// Qa Lab helper module supports qa gateway config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -74,7 +75,7 @@ export function buildQaGatewayConfig(params: {
   );
   const modelProviderIds = [primaryModel, alternateModel]
     .map((ref) => splitQaModelRef(ref)?.provider)
-    .filter((provider): provider is string => Boolean(provider));
+    .filter((providerValue): providerValue is string => Boolean(providerValue));
   const imageGenerationModelRef =
     params.imageGenerationModel !== undefined
       ? params.imageGenerationModel
@@ -86,7 +87,7 @@ export function buildQaGatewayConfig(params: {
             .map((value) =>
               typeof value === "string" ? (splitQaModelRef(value)?.provider ?? value) : null,
             )
-            .filter((provider): provider is string => Boolean(provider)),
+            .filter((providerLocal): providerLocal is string => Boolean(providerLocal)),
         ),
       ]
     : [];

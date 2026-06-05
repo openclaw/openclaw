@@ -1,3 +1,5 @@
+// Session filesystem utility tests cover transcript reading, usage extraction,
+// preview rows, message counts, title fields, and archive candidate resolution.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -2104,6 +2106,29 @@ describe("oversized transcript line guards", () => {
 
     // The oversized content must NOT appear in the output.
     const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain(oversizedContent);
+  });
+
+  test("readSessionMessagesAsync keeps id-less oversized message placeholders", async () => {
+    const sessionId = "test-oversized-idless-async";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const oversizedContent = "w".repeat(300 * 1024);
+    fs.writeFileSync(
+      transcriptPath,
+      `${JSON.stringify({
+        message: { role: "assistant", content: oversizedContent },
+      })}\n`,
+      "utf-8",
+    );
+
+    const out = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test",
+    });
+
+    expect(out).toHaveLength(1);
+    const serialized = JSON.stringify(out);
+    expect(serialized).toContain("[chat.history omitted: message too large]");
     expect(serialized).not.toContain(oversizedContent);
   });
 

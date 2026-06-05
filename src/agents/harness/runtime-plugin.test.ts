@@ -1,3 +1,4 @@
+// Verifies plugin loading needed before agent harness selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -28,8 +29,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     mocks.resolveBundledProviderCompatPluginIds.mockReset();
     mocks.resolveOwningPluginIdsForProvider.mockReset();
     mocks.resolveOwningPluginIdsForProvider.mockImplementation(
-      ({ provider }: { provider: string }) =>
-        provider === "openai" || provider === "openai-codex" ? ["openai"] : undefined,
+      ({ provider }: { provider: string }) => (provider === "openai" ? ["openai"] : undefined),
     );
     mocks.resolveBundledProviderCompatPluginIds.mockImplementation(
       ({ onlyPluginIds }: { onlyPluginIds?: readonly string[] }) =>
@@ -130,6 +130,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
   });
 
   it("does not bypass a restrictive allowlist that omits a configured Copilot harness", async () => {
+    // A configured harness can request loading, but explicit plugin allowlists
+    // remain the operator's boundary and are not widened implicitly.
     await ensureSelectedAgentHarnessPlugin({
       provider: "github-copilot",
       modelId: "gpt-4o",
@@ -170,9 +172,9 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
-  it("widens a scoped harness allowlist with the provider owner for openai-codex models", async () => {
+  it("widens a scoped harness allowlist with the provider owner for openai models", async () => {
     await ensureSelectedAgentHarnessPlugin({
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.5-pro",
       config: {
         plugins: {
@@ -204,12 +206,14 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
   });
 
   it("does not auto-activate untrusted provider owners for Codex harness loads", async () => {
+    // Provider owner activation is limited to bundled-compatible/activatable
+    // owners so workspace plugins are not enabled just because Codex was chosen.
     mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(["openai", "workspace-openai"]);
     mocks.resolveBundledProviderCompatPluginIds.mockReturnValueOnce(["openai"]);
     mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce([]);
 
     await ensureSelectedAgentHarnessPlugin({
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.5-pro",
       config: {
         plugins: {
@@ -243,7 +247,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
 
   it("does not bypass a restrictive allowlist that omits the Codex harness", async () => {
     await ensureSelectedAgentHarnessPlugin({
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.5-pro",
       config: {
         plugins: {

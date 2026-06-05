@@ -1,5 +1,7 @@
+/** Session update helpers for skill snapshots, compaction, and lifecycle hooks. */
 import crypto from "node:crypto";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import {
@@ -19,7 +21,6 @@ import { resolveStableSessionEndTranscript } from "../../gateway/session-transcr
 import { logVerbose } from "../../globals.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
@@ -42,9 +43,18 @@ async function persistSessionEntryUpdate(params: {
   if (!params.storePath) {
     return;
   }
-  await updateSessionStore(params.storePath, (store) => {
-    store[params.sessionKey!] = { ...store[params.sessionKey!], ...params.nextEntry };
-  });
+  await updateSessionStore(
+    params.storePath,
+    (store) => {
+      const next = { ...store[params.sessionKey!], ...params.nextEntry };
+      store[params.sessionKey!] = next;
+      return next;
+    },
+    {
+      resolveSingleEntryPersistence: (entry) =>
+        entry && params.sessionKey ? { sessionKey: params.sessionKey, entry } : null,
+    },
+  );
 }
 
 function emitCompactionSessionLifecycleHooks(params: {
@@ -88,7 +98,7 @@ function emitCompactionSessionLifecycleHooks(params: {
       transcriptArchived: transcript.transcriptArchived,
       nextSessionId: params.nextEntry.sessionId,
     });
-    void hookRunner.runSessionEnd(payload.event, payload.context).catch((err) => {
+    void hookRunner.runSessionEnd(payload.event, payload.context).catch((err: unknown) => {
       logVerbose(`session_end hook failed: ${String(err)}`);
     });
   }
@@ -100,7 +110,7 @@ function emitCompactionSessionLifecycleHooks(params: {
       cfg: params.cfg,
       resumedFrom: params.previousEntry.sessionId,
     });
-    void hookRunner.runSessionStart(payload.event, payload.context).catch((err) => {
+    void hookRunner.runSessionStart(payload.event, payload.context).catch((err: unknown) => {
       logVerbose(`session_start hook failed: ${String(err)}`);
     });
   }
@@ -112,6 +122,7 @@ function resolveNonNegativeTokenCount(value: number | undefined): number | undef
     : undefined;
 }
 
+/** Ensures a session entry has the reusable skill snapshot needed for reply runs. */
 export async function ensureSkillSnapshot(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -227,6 +238,7 @@ export async function ensureSkillSnapshot(params: {
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
 }
 
+/** Increments compaction count and persists the updated session entry. */
 export async function incrementCompactionCount(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;

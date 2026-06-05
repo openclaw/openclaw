@@ -1,3 +1,4 @@
+// Deepinfra provider module implements model/runtime integration.
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/provider-http";
@@ -293,13 +294,13 @@ const STATIC_NON_CHAT_FALLBACK: DeepInfraSurfaceModel[] = [
     id: "ResembleAI/chatterbox-turbo",
     name: "ResembleAI/chatterbox-turbo",
     tags: ["tts"],
-    pricing: { input_characters: 1.0 },
+    pricing: { input_characters: 1 },
   },
   {
     id: "sesame/csm-1b",
     name: "sesame/csm-1b",
     tags: ["tts"],
-    pricing: { input_characters: 7.0 },
+    pricing: { input_characters: 7 },
   },
   // stt
   {

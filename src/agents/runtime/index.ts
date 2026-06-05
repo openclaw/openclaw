@@ -1,9 +1,14 @@
+/**
+ * OpenClaw-owned agent runtime facade.
+ *
+ * Wires agent-core to the plugin SDK LLM runtime and re-exports reusable runtime helpers.
+ */
 import {
   Agent as CoreAgent,
   type AgentOptions as CoreAgentOptions,
 } from "../../../packages/agent-core/src/agent.js";
-import type { CompleteSimpleFn, StreamFn } from "../../../packages/agent-core/src/llm.js";
 import type { AgentCoreRuntimeDeps } from "../../../packages/agent-core/src/runtime-deps.js";
+import type { CompleteSimpleFn, StreamFn } from "../../../packages/llm-core/src/index.js";
 import { completeSimple, streamSimple } from "../../plugin-sdk/llm.js";
 
 export const openClawAgentCoreRuntime = {

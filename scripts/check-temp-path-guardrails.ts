@@ -1,3 +1,4 @@
+// Check Temp Path Guardrails script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -101,8 +102,7 @@ function splitTopLevelArguments(source: string): string[] {
   let bracketDepth = 0;
   let braceDepth = 0;
   const quoteState: QuoteScanState = { quote: null, escaped: false };
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i];
+  for (const ch of source) {
     if (quoteState.quote) {
       current += ch;
       consumeQuotedChar(quoteState, ch);

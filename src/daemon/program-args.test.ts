@@ -1,3 +1,4 @@
+// Daemon program argument tests cover CLI argument construction for services.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -73,7 +74,6 @@ describe("resolveGatewayProgramArguments", () => {
       if (target === indexPath || target === indexMjsPath) {
         throw new Error("missing");
       }
-      return;
     });
 
     const result = await resolveGatewayProgramArguments({ port: 18789 });

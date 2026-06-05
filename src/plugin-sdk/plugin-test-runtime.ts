@@ -14,6 +14,9 @@ export {
   resolveWebSearchProviderContractEntriesForPluginId,
 } from "../plugins/contracts/registry.js";
 export { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+export { emitInternalDiagnosticEvent as emitInternalDiagnosticEventForTest } from "../infra/diagnostic-events.js";
+export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
 export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {
   initializeGlobalHookRunner,
@@ -65,6 +68,7 @@ export type { PluginHookRegistration } from "../plugins/hook-types.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { MockFn } from "../test-utils/vitest-mock-fn.js";
 export { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+export { readQueuedEntries as readQueuedDeliveryEntriesForTest } from "../infra/outbound/delivery-queue.test-helpers.js";
 export {
   registerProviderPlugin,
   registerProviderPlugins,

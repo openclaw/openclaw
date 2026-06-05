@@ -1,3 +1,4 @@
+// Cron service state tests cover in-memory scheduler state transitions.
 import { describe, expect, it, vi } from "vitest";
 import { createCronServiceState } from "./state.js";
 
@@ -33,7 +34,6 @@ describe("cron service state seam coverage", () => {
     expect(state.running).toBe(false);
     expect(state.warnedDisabled).toBe(false);
     expect(state.storeLoadedAtMs).toBeNull();
-    expect(state.storeFileMtimeMs).toBeNull();
 
     expect(state.deps.storePath).toBe("/tmp/cron/jobs.json");
     expect(state.deps.cronEnabled).toBe(true);

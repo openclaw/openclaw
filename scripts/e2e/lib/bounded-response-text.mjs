@@ -1,3 +1,4 @@
+// Bounded response body reader used by E2E HTTP fixture clients.
 function bodyTooLargeError(label, byteLimit) {
   return Object.assign(new Error(`${label} response body exceeded ${byteLimit} bytes`), {
     code: "ETOOBIG",
@@ -23,7 +24,9 @@ export async function readBoundedResponseText(response, label, byteLimit, timeou
   let text = "";
   try {
     while (true) {
-      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
+      const { done, value } = await (timeoutPromise
+        ? Promise.race([reader.read(), timeoutPromise])
+        : reader.read());
       if (done) {
         return text + decoder.decode();
       }

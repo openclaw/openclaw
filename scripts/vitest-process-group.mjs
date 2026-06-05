@@ -1,7 +1,11 @@
+// Shared Vitest child process-group signal forwarding helpers.
 export function shouldUseDetachedVitestProcessGroup(platform = process.platform) {
   return platform !== "win32";
 }
 
+/**
+ * Resolves the PID or process-group target for Vitest signal forwarding.
+ */
 export function resolveVitestProcessGroupSignalTarget(params) {
   const pid = params.childPid;
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
@@ -10,6 +14,9 @@ export function resolveVitestProcessGroupSignalTarget(params) {
   return shouldUseDetachedVitestProcessGroup(params.platform) ? -pid : pid;
 }
 
+/**
+ * Forwards a signal to the Vitest child or process group.
+ */
 export function forwardSignalToVitestProcessGroup(params) {
   const target = resolveVitestProcessGroupSignalTarget({
     childPid: params.child.pid,
@@ -54,6 +61,9 @@ function ensureProcessListenerCapacity(processObject, eventName, additionalListe
   }
 }
 
+/**
+ * Installs signal/exit cleanup handlers for a Vitest child process group.
+ */
 export function installVitestProcessGroupCleanup(params) {
   const processObject = params.processObject ?? process;
   const platform = params.platform ?? process.platform;
@@ -61,6 +71,7 @@ export function installVitestProcessGroupCleanup(params) {
   const cleanupSignal = params.cleanupSignal ?? "SIGTERM";
   const forwardedSignals = params.forwardedSignals ?? ["SIGINT", "SIGTERM"];
   const child = params.child;
+  const onSignal = params.onSignal;
 
   let active = true;
 
@@ -79,6 +90,7 @@ export function installVitestProcessGroupCleanup(params) {
   const signalHandlers = new Map();
   for (const signal of forwardedSignals) {
     const handler = () => {
+      onSignal?.(signal);
       forward(signal);
     };
     signalHandlers.set(signal, handler);

@@ -1,3 +1,5 @@
+// Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
+// request-scope injection, diagnostics, and handler dispatch integration.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -120,7 +122,6 @@ function createLookUpTableForTest(params: {
   pluginIds?: readonly string[];
 }): PluginLookUpTable {
   return {
-    key: "test",
     policyHash: "test",
     index: {
       version: 1,

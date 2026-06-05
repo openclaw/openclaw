@@ -1,3 +1,4 @@
+// Mistral provider adapts Mistral streams and tool calls to the runtime.
 import { Mistral } from "@mistralai/mistralai";
 import type {
   ChatCompletionStreamRequest,
@@ -283,6 +284,9 @@ function buildChatPayload(
   }
   if (options?.maxTokens !== undefined) {
     payload.maxTokens = options.maxTokens;
+  }
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    payload.stop = options.stop;
   }
   if (options?.toolChoice) {
     payload.toolChoice = mapToolChoice(options.toolChoice);
