@@ -404,6 +404,17 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
+  it("hot-reloads diagnostics memory pressure threshold edits", () => {
+    const plan = buildGatewayReloadPlan([
+      "diagnostics.memoryPressureThresholds.rssCriticalBytes",
+      "diagnostics.memoryPressureThresholds.pressureRepeatMs",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toContain("diagnostics.memoryPressureThresholds.rssCriticalBytes");
+    expect(plan.hotReasons).toContain("diagnostics.memoryPressureThresholds.pressureRepeatMs");
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
   it("restarts for gateway.auth.token changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.auth.token"]);
     expect(plan.restartGateway).toBe(true);

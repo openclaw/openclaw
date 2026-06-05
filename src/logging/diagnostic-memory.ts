@@ -146,6 +146,24 @@ function pickGrowthPressure(params: {
   return null;
 }
 
+type PressureCandidate = Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">;
+
+// critical outranks warning; ties keep the absolute-threshold pressure (passed
+// as `a`) to preserve prior reason selection when both signals are equal.
+function pickMoreSeverePressure(
+  a: PressureCandidate | null,
+  b: PressureCandidate | null,
+): PressureCandidate | null {
+  if (!a) {
+    return b;
+  }
+  if (!b) {
+    return a;
+  }
+  const rank = (level: PressureCandidate["level"]): number => (level === "critical" ? 2 : 1);
+  return rank(b.level) > rank(a.level) ? b : a;
+}
+
 function shouldEmitPressure(
   pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">,
   now: number,
@@ -211,9 +229,14 @@ export function emitDiagnosticMemorySample(options?: {
     });
   }
 
-  const pressure =
-    pickThresholdPressure({ memory, thresholds }) ??
-    pickGrowthPressure({ previous: state.lastSample, current, thresholds });
+  // Pick the highest-severity pressure across absolute and growth signals.
+  // A short-circuit `threshold ?? growth` would let a low absolute warning
+  // (e.g. rssWarning still at its default while only rssCritical is raised)
+  // mask a critical:rss_growth runaway, since threshold is evaluated first.
+  const pressure = pickMoreSeverePressure(
+    pickThresholdPressure({ memory, thresholds }),
+    pickGrowthPressure({ previous: state.lastSample, current, thresholds }),
+  );
   state.lastSample = current;
   if (pressure && shouldEmitPressure(pressure, now, thresholds.pressureRepeatMs)) {
     emitDiagnosticEvent({

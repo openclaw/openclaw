@@ -201,6 +201,25 @@ describe("diagnostic memory", () => {
     });
   });
 
+  it("does not let a threshold warning mask a critical RSS-growth runaway", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+
+    // rss=2000 trips warning:rss_threshold (>= rssWarningBytes), but the
+    // 1000-byte jump is a critical:rss_growth — the more severe must win.
+    const thresholds = {
+      rssWarningBytes: 1500,
+      rssGrowthCriticalBytes: 500,
+      growthWindowMs: 10_000,
+    };
+    emitDiagnosticMemorySample({ now: 1000, memoryUsage: memoryUsage({ rss: 1000 }), thresholds });
+    emitDiagnosticMemorySample({ now: 2000, memoryUsage: memoryUsage({ rss: 2000 }), thresholds });
+    stop();
+
+    const pressure = events.filter((event) => event.type === "diagnostic.memory.pressure").at(-1);
+    expect(pressure).toMatchObject({ level: "critical", reason: "rss_growth" });
+  });
+
   it("throttles repeated pressure events by reason and level", () => {
     const events: DiagnosticEventPayload[] = [];
     const stop = onDiagnosticEvent((event) => events.push(event));

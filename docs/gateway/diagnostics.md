@@ -214,15 +214,20 @@ steady-state usage. Raise them (and stretch the repeat interval) per host:
   diagnostics: {
     memoryPressureThresholds: {
       rssCriticalBytes: 6442450944, // ~6 GiB — only signal genuine pre-OOM pressure
+      heapUsedCriticalBytes: 5368709120, // ~5 GiB — raise with RSS, else 2 GiB heap default fires
       pressureRepeatMs: 3600000, // re-emit hourly instead of every 5 min
     },
   },
 }
 ```
 
-Any unset field keeps its built-in default. Growth detection
-(`rssGrowthCriticalBytes` over `growthWindowMs`) still fires on fast runaway
-regardless of the absolute RSS/heap thresholds. See the field reference in
+Raise the critical bytes for **both** RSS and heap together: the monitor signals
+`critical` when _either_ crosses its threshold, so leaving `heapUsedCriticalBytes`
+at its 2 GiB default keeps paging a host whose heap legitimately sits higher. Any
+unset field keeps its built-in default. The sampler always reports the
+highest-severity signal, so a fast `rss_growth` runaway (`rssGrowthCriticalBytes`
+over `growthWindowMs`) still surfaces as `critical` even when the absolute
+RSS/heap thresholds are raised. See the field reference in
 [Configuration reference](/gateway/configuration-reference#diagnostics).
 
 ## Related

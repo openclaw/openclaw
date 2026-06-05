@@ -1029,7 +1029,8 @@ Notes:
     stuckSessionAbortMs: 300000,
     memoryPressureSnapshot: false,
     memoryPressureThresholds: {
-      rssCriticalBytes: 6442450944, // only signal critical above ~6 GiB RSS on hot hosts
+      rssCriticalBytes: 6442450944, // ~6 GiB — raise both RSS and heap criticals together
+      heapUsedCriticalBytes: 5368709120, // ~5 GiB — else the 2 GiB heap default still fires
       pressureRepeatMs: 3600000, // re-emit sustained pressure hourly instead of every 5 min
     },
 
