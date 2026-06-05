@@ -773,6 +773,37 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
+  test("times out while waiting for the first in-process gateway response", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("initial-response-timeout"));
+    handleGatewayRequest.mockImplementationOnce(async () => {
+      await new Promise(() => {});
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "sessions.delete",
+        { key: "stuck-session" },
+        { timeoutMs: 5 },
+      ),
+    ).rejects.toThrow("gateway request timeout for sessions.delete");
+  });
+
+  test("returns an accepted in-process response without waiting for handler completion", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("accepted-before-complete"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(true, { status: "accepted", runId: "run-accepted" });
+      await new Promise(() => {});
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "s-accepted" },
+        { timeoutMs: 5 },
+      ),
+    ).resolves.toEqual({ status: "accepted", runId: "run-accepted" });
+  });
+
   test("filters connected plugin nodes locally without sending unsupported node.list params", async () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayStartupPluginsForTest();
@@ -1388,11 +1419,14 @@ describe("loadGatewayPlugins", () => {
     const runtime = await createSubagentRuntime(serverPlugins);
     let currentContext = createTestContext("before-resolver-update");
 
+    expect(serverPlugins.hasInProcessGatewayContext()).toBe(false);
     serverPlugins.setFallbackGatewayContextResolver(() => currentContext);
+    expect(serverPlugins.hasInProcessGatewayContext()).toBe(true);
     await runtime.run({ sessionKey: "s-4", message: "before resolver update" });
     expect(getLastDispatchedContext()).toBe(currentContext);
 
     currentContext = createTestContext("after-resolver-update");
+    expect(serverPlugins.hasInProcessGatewayContext()).toBe(true);
     await runtime.run({ sessionKey: "s-4", message: "after resolver update" });
     expect(getLastDispatchedContext()).toBe(currentContext);
   });
@@ -1434,6 +1468,7 @@ describe("loadGatewayPlugins", () => {
 
     serverPlugins.clearFallbackGatewayContext();
 
+    expect(serverPlugins.hasInProcessGatewayContext()).toBe(false);
     await expect(runtime.run({ sessionKey: "s-7", message: "after clear" })).rejects.toThrow(
       "No scope set and no fallback context available",
     );
