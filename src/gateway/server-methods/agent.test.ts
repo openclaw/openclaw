@@ -1823,6 +1823,7 @@ describe("gateway agent handler", () => {
   });
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
+    const updatedAt = Date.now() - 1_000;
     const completedRun = {
       runId: "run-old",
       childSessionKey,
@@ -1843,7 +1844,7 @@ describe("gateway agent handler", () => {
       storePath: "/tmp/sessions.json",
       entry: {
         sessionId: "sess-followup",
-        updatedAt: Date.now(),
+        updatedAt,
       },
       canonicalKey: childSessionKey,
     });
@@ -1851,7 +1852,7 @@ describe("gateway agent handler", () => {
       const store: Record<string, unknown> = {
         [childSessionKey]: {
           sessionId: "sess-followup",
-          updatedAt: Date.now(),
+          updatedAt,
         },
       };
       return await updater(store);
