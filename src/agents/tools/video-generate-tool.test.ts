@@ -360,6 +360,17 @@ describe("createVideoGenerateTool", () => {
     );
   });
 
+  it("skips registration availability checks when the caller already resolved them", () => {
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
+
+    expect(
+      createVideoGenerateTool({
+        config: asConfig({}),
+        availabilityResolved: true,
+      })?.name,
+    ).toBe("video_generate");
+  });
+
   it("registers when video-generation config is present", () => {
     expectVideoGenerateTool(
       createVideoGenerateTool({
