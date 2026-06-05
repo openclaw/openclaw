@@ -2008,7 +2008,11 @@ export async function dispatchReplyFromConfig(
     const sendFinalPayload = async (
       payload: ReplyPayload,
       options: { abortSignal?: AbortSignal } = {},
-    ): Promise<{ queuedFinal: boolean; deliveredFinal: boolean; routedFinalCount: number }> => {
+    ): Promise<{
+      queuedFinal: boolean;
+      completedFinalDeliveryAttempt: boolean;
+      routedFinalCount: number;
+    }> => {
       const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
       const throwIfFinalDeliveryAborted = () => {
         if (abortSignal?.aborted) {
@@ -2054,7 +2058,7 @@ export async function dispatchReplyFromConfig(
         }
         return {
           queuedFinal: result.ok,
-          deliveredFinal: isRoutedReplyDelivered(result),
+          completedFinalDeliveryAttempt: result.ok,
           routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
         };
       }
@@ -2068,7 +2072,7 @@ export async function dispatchReplyFromConfig(
         metadata: sourceReplyTranscriptMirror,
       });
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
-      let deliveredFinal = queuedFinal;
+      let completedFinalDeliveryAttempt = queuedFinal;
       if (queuedFinal) {
         await mirrorInternalSourceReplyAfterDispatcherDelivery({
           dispatcher,
@@ -2077,13 +2081,11 @@ export async function dispatchReplyFromConfig(
           cfg,
         });
         const finalOutcomeAfter = getDispatcherFinalOutcomeCounts(dispatcher);
-        deliveredFinal =
-          finalOutcomeAfter.cancelled <= finalOutcomeBefore.cancelled &&
-          finalOutcomeAfter.failed <= finalOutcomeBefore.failed;
+        completedFinalDeliveryAttempt = finalOutcomeAfter.failed <= finalOutcomeBefore.failed;
       }
       return {
         queuedFinal,
-        deliveredFinal,
+        completedFinalDeliveryAttempt,
         routedFinalCount: 0,
       };
     };
@@ -2872,7 +2874,7 @@ export async function dispatchReplyFromConfig(
       const finalReply = await sendFinalPayload(reply);
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
-      if (!finalReply.deliveredFinal) {
+      if (!finalReply.completedFinalDeliveryAttempt) {
         finalDeliveryFailed = true;
       }
     }
