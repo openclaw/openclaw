@@ -21,7 +21,6 @@ export function resolveNodeIdentityId(
   // Keep every node-facing gateway path on the same identity contract:
   // signed CLI --node-id arrives as client.instanceId and wins before device/client fallbacks.
   // v4 signed instanceId is only used when trustInstanceId (set for role="node" device-auth v4).
-  // This is the security boundary change reviewed in ClawSweeper (P2 risk before merge).
   if (options?.trustInstanceId !== false) {
     const instanceId = normalizeTrimmedString(connect?.client?.instanceId);
     if (instanceId) {

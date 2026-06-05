@@ -47,14 +47,12 @@ function normalizeNodeIdSource(
   if (config?.nodeIdSource === "generated" || config?.nodeIdSource === "user") {
     return config.nodeIdSource;
   }
-  // Legacy compatibility (addresses "Risk before merge" P1 in ClawSweeper review for #88374):
-  // Unmarked legacy node.json entries whose nodeId looks like a UUID (isUuidLike)
+  // Legacy compatibility: unmarked legacy node.json entries whose nodeId looks like a UUID (isUuidLike)
   // are treated as "generated" (unsigned path, signInstanceId=false in runner).
   // This preserves exact pre-PR behavior for existing installs that never used --node-id.
   // Users who want a signed custom node id must pass --node-id again post-upgrade.
   // The compatibility tradeoff (legacy UUID-like ids stay unsigned) is intentionally accepted
   // rather than forcing a broader migration that would also affect generated-id behavior.
-  // See also: gateway/security owner review of v4 signed instanceId + owner-checked adoption.
   return isUuidLike(nodeId) ? "generated" : "user";
 }
 
