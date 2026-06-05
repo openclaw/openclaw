@@ -37,17 +37,22 @@ function toRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
+function readContextToolName(tool: unknown): string | undefined {
+  const record = toRecord(tool);
+  try {
+    const name = record?.name;
+    return typeof name === "string" && name.trim() ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> {
   const tools = (context as { tools?: unknown }).tools;
   if (!Array.isArray(tools)) {
     return new Set();
   }
-  const names = tools
-    .map((tool) => {
-      const record = toRecord(tool);
-      return typeof record?.name === "string" && record.name.trim() ? record.name : undefined;
-    })
-    .filter((name): name is string => Boolean(name));
+  const names = tools.map(readContextToolName).filter((name): name is string => Boolean(name));
   return new Set(names);
 }
 

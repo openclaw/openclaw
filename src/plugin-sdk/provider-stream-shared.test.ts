@@ -241,6 +241,51 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     ]);
   });
 
+  it("skips unreadable context tool names while promoting healthy text tool calls", async () => {
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: '[tool:read] {"path":"/tmp/file.txt"}',
+          },
+        },
+      ]);
+    const unreadableTool = Object.defineProperty({}, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("plain text tool name getter exploded");
+      },
+    });
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [unreadableTool, { name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.at(-1) as { message?: { content?: unknown; stopReason?: unknown } };
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "/tmp/file.txt" },
+      }),
+    ]);
+  });
+
   it("promotes complete under-cap text tool calls for non-stop terminal reasons", async () => {
     const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
     const baseStreamFn: StreamFn = () =>
