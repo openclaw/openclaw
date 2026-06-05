@@ -999,6 +999,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             cfg: deps.cfg,
             baseUrl: deps.baseUrl,
             account: deps.account,
+            configPath: deps.configPath,
             maxBytes: deps.mediaMaxBytes,
             accountId: deps.accountId,
           });

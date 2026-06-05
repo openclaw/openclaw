@@ -101,6 +101,7 @@ export type SignalEventHandlerDeps = {
   baseUrl: string;
   account?: string;
   accountUuid?: string;
+  configPath?: string;
   ingressMode?: "standard" | "note-to-self";
   accountId: string;
   blockStreaming?: boolean;
@@ -132,6 +133,7 @@ export type SignalEventHandlerDeps = {
     baseUrl: string;
     account?: string;
     accountUuid?: string | null;
+    configPath?: string;
     accountId?: string;
     runtime: RuntimeEnv;
     maxBytes: number;

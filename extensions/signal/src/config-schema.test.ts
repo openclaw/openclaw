@@ -100,6 +100,44 @@ describe("signal groups schema", () => {
     expectValidSignalConfig(updated?.channels?.signal);
   });
 
+  it("materializes inherited note-to-self transport fields for explicit named accounts", () => {
+    const updated = signalConfigAdapter.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            configPath: "/tmp/signal-cli",
+            httpUrl: "http://signal.test",
+            ingressMode: "note-to-self",
+            accounts: {
+              work: {
+                account: "+15555550123",
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(updated?.channels?.signal).toMatchObject({
+      ingressMode: "note-to-self",
+      accounts: {
+        work: {
+          account: "+15555550123",
+          accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+          configPath: "/tmp/signal-cli",
+          httpUrl: "http://signal.test",
+          ingressMode: "note-to-self",
+        },
+      },
+    });
+    expect(updated?.channels?.signal?.account).toBeUndefined();
+    expect(updated?.channels?.signal?.configPath).toBeUndefined();
+    expectValidSignalConfig(updated?.channels?.signal);
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const issues = expectInvalidSignalConfig({
       dmPolicy: "open",

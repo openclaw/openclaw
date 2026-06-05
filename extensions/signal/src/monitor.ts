@@ -370,6 +370,7 @@ async function deliverReplies(params: {
   baseUrl: string;
   account?: string;
   accountUuid?: string | null;
+  configPath?: string;
   accountId?: string;
   runtime: RuntimeEnv;
   maxBytes: number;
@@ -382,6 +383,7 @@ async function deliverReplies(params: {
     baseUrl,
     account,
     accountUuid,
+    configPath,
     accountId,
     runtime,
     maxBytes,
@@ -400,6 +402,7 @@ async function deliverReplies(params: {
           baseUrl,
           account,
           accountUuid,
+          configPath,
           maxBytes,
           accountId,
         });
@@ -410,6 +413,7 @@ async function deliverReplies(params: {
           baseUrl,
           account,
           accountUuid,
+          configPath,
           mediaUrl,
           maxBytes,
           accountId,
@@ -553,6 +557,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
             baseUrl,
             account,
             accountUuid,
+            configPath: signalConfigPath,
           }
         : null,
       abortSignal: opts.abortSignal,
@@ -564,6 +569,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       baseUrl,
       account,
       accountUuid,
+      configPath: signalConfigPath,
       ingressMode: accountInfo.config.ingressMode,
       accountId: accountInfo.accountId,
       blockStreaming: accountInfo.config.blockStreaming,

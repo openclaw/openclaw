@@ -36,6 +36,7 @@ export type SignalSendOpts = {
   baseUrl?: string;
   account?: string;
   accountUuid?: string | null;
+  configPath?: string;
   accountId?: string;
   mediaUrl?: string;
   mediaAccess?: {
@@ -227,7 +228,7 @@ export async function sendMessageSignal(
   const discoverAccountUuid = async () => {
     accountUuid ??= await discoverSignalAccountUuid({
       account,
-      configPath: accountInfo.config.configPath,
+      configPath: opts.configPath ?? accountInfo.config.configPath,
     });
     return accountUuid;
   };

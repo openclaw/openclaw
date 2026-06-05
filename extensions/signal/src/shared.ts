@@ -85,9 +85,11 @@ function materializeInheritedNoteToSelfAccounts(params: {
       const entry = account ?? {};
       const inheritedNoteToSelf =
         (entry.ingressMode ?? originalSignal?.ingressMode) === "note-to-self";
-      if (!entry.account && inheritedNoteToSelf) {
-        changed = true;
-        const materialized: Record<string, unknown> = { ...entry, account: rootAccount };
+      if (inheritedNoteToSelf) {
+        const materialized: Record<string, unknown> = { ...entry };
+        if (!materialized.account) {
+          materialized.account = rootAccount;
+        }
         for (const field of INHERITED_NOTE_TO_SELF_FIELDS) {
           if (field in materialized) {
             continue;
@@ -97,7 +99,11 @@ function materializeInheritedNoteToSelfAccounts(params: {
             materialized[field] = value;
           }
         }
-        return [accountId, materialized];
+        const hasChanged = INHERITED_NOTE_TO_SELF_FIELDS.some(
+          (field) => materialized[field] !== entry[field],
+        );
+        changed ||= hasChanged;
+        return [accountId, hasChanged ? materialized : entry];
       }
       return [accountId, entry];
     }),

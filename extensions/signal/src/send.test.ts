@@ -705,4 +705,36 @@ describe("sendMessageSignal receipts", () => {
       }),
     );
   });
+
+  it("uses the runtime configPath override when discovering the account UUID", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567801 });
+    discoverSignalAccountUuidMock.mockResolvedValueOnce("999e4567-e89b-12d3-a456-426614174999");
+
+    await sendMessageSignal("+15550002222", "/approve exec-1 allow-once deny", {
+      cfg: {
+        channels: {
+          signal: {
+            accounts: {
+              default: {
+                httpUrl: "http://signal.test",
+                account: "+15550001111",
+                configPath: "/tmp/configured-signal-cli",
+              },
+            },
+          },
+        },
+      },
+      configPath: "/tmp/runtime-signal-cli",
+    });
+
+    expect(discoverSignalAccountUuidMock).toHaveBeenCalledWith({
+      account: "+15550001111",
+      configPath: "/tmp/runtime-signal-cli",
+    });
+    expect(appendSignalApprovalReactionHintMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetAuthorUuid: "999e4567-e89b-12d3-a456-426614174999",
+      }),
+    );
+  });
 });
