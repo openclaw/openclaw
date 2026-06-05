@@ -26,6 +26,7 @@ class ShellScreenLogicTest {
         channelsSummary = emptyChannels(),
         nodesDevicesSummary = emptyNodesDevices(),
         readyProviderCount = 0,
+        modelsCount = 0,
       )
 
     assertEquals(listOf("Gateway"), rows.map { it.title })
@@ -73,6 +74,7 @@ class ShellScreenLogicTest {
             pairedDevices = emptyList(),
           ),
         readyProviderCount = 0,
+        modelsCount = 0,
       )
 
     assertEquals(listOf("Approvals", "Channels", "Nodes & Devices", "Providers"), rows.map { it.title })
@@ -87,6 +89,7 @@ class ShellScreenLogicTest {
         channelsSummary = emptyChannels(),
         nodesDevicesSummary = emptyNodesDevices(),
         readyProviderCount = 1,
+        modelsCount = 1,
       )
 
     assertEquals(emptyList<String>(), rows.map { it.title })
@@ -101,6 +104,7 @@ class ShellScreenLogicTest {
         channelsSummary = emptyChannels(),
         nodesDevicesSummary = emptyNodesDevices(),
         readyProviderCount = 0,
+        modelsCount = 0,
         expiringProviderCount = 1,
       )
 
