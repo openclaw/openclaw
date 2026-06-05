@@ -12,6 +12,7 @@ import {
 } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { resolveFeishuDmIngressAccess } from "./policy.js";
+import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu } from "./send.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
@@ -120,26 +121,6 @@ function parseInviteTimestamp(value: string | undefined): number {
   return parsed < 10_000_000_000 ? parsed * 1000 : parsed;
 }
 
-function createNoopReplyDispatcher(): {
-  sendToolResult: () => false;
-  sendBlockReply: () => false;
-  sendFinalReply: () => false;
-  waitForIdle: () => Promise<void>;
-  getQueuedCounts: () => { tool: 0; block: 0; final: 0 };
-  getFailedCounts: () => { tool: 0; block: 0; final: 0 };
-  markComplete: () => void;
-} {
-  return {
-    sendToolResult: () => false,
-    sendBlockReply: () => false,
-    sendFinalReply: () => false,
-    waitForIdle: async () => {},
-    getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-    getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-    markComplete: () => {},
-  };
-}
-
 async function sendVcInviteAcceptedReply(params: {
   cfg: ClawdbotConfig;
   accountId: string;
@@ -176,6 +157,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
   >;
   const log = params.runtime?.log ?? console.log;
   const error = params.runtime?.error ?? console.error;
+  const runtime = (params.runtime ?? { log, error, exit: process.exit }) as RuntimeEnv;
   const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const pairing = createChannelPairingController({
@@ -306,7 +288,15 @@ async function dispatchVcMeetingInvitedTurn(params: {
   const storePath = core.channel.session.resolveStorePath(effectiveCfg.session?.store, {
     agentId: route.agentId,
   });
-  const noopDispatcher = createNoopReplyDispatcher();
+  const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
+    cfg: effectiveCfg,
+    agentId: route.agentId,
+    runtime,
+    chatId: replyTarget,
+    accountId: route.accountId,
+    messageCreateTimeMs: timestamp,
+    sessionKey: route.sessionKey,
+  });
 
   log(
     `feishu[${account.accountId}]: vc meeting invited, dispatching synthetic inbound sender=${params.turn.inviter.senderId} meeting_no=${params.turn.meetingNo}`,
@@ -340,12 +330,14 @@ async function dispatchVcMeetingInvitedTurn(params: {
         },
         runDispatch: () =>
           core.channel.reply.withReplyDispatcher({
-            dispatcher: noopDispatcher,
+            dispatcher,
+            onSettled: () => markDispatchIdle(),
             run: () =>
               core.channel.reply.dispatchReplyFromConfig({
                 ctx: ctxPayload,
                 cfg: effectiveCfg,
-                dispatcher: noopDispatcher,
+                dispatcher,
+                replyOptions,
               }),
           }),
       }),

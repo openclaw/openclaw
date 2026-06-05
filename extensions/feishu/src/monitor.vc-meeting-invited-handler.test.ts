@@ -15,6 +15,27 @@ const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 const maybeCreateDynamicAgentMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+const replyDispatcherMocks = vi.hoisted(() => {
+  const markDispatchIdle = vi.fn();
+  const dispatcher = {
+    sendToolResult: vi.fn(() => true),
+    sendBlockReply: vi.fn(() => true),
+    sendFinalReply: vi.fn(() => true),
+    waitForIdle: vi.fn(async () => {}),
+    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 1 })),
+    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    markComplete: vi.fn(),
+  };
+  return {
+    dispatcher,
+    markDispatchIdle,
+    createFeishuReplyDispatcher: vi.fn(() => ({
+      dispatcher,
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
+      markDispatchIdle,
+    })),
+  };
+});
 const dedupMocks = vi.hoisted(() => ({
   claimUnprocessedFeishuMessage: vi.fn(async () => "claimed" as const),
   forgetProcessedFeishuMessage: vi.fn(async () => true),
@@ -47,6 +68,10 @@ vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
 }));
 
+vi.mock("./reply-dispatcher.js", () => ({
+  createFeishuReplyDispatcher: replyDispatcherMocks.createFeishuReplyDispatcher,
+}));
+
 vi.mock("./dedup.js", () => ({
   claimUnprocessedFeishuMessage: dedupMocks.claimUnprocessedFeishuMessage,
   forgetProcessedFeishuMessage: dedupMocks.forgetProcessedFeishuMessage,
@@ -62,6 +87,7 @@ afterAll(() => {
   vi.doUnmock("./thread-bindings.js");
   vi.doUnmock("./dynamic-agent.js");
   vi.doUnmock("./send.js");
+  vi.doUnmock("./reply-dispatcher.js");
   vi.resetModules();
 });
 
@@ -130,13 +156,17 @@ function createTestRuntime(overrides?: {
   const withReplyDispatcher = vi.fn(
     async ({
       dispatcher,
+      onSettled,
       run,
     }: {
       dispatcher: { sendFinalReply?: (payload: unknown) => boolean };
+      onSettled?: () => void;
       run: () => Promise<unknown>;
     }) => {
-      expect(dispatcher.sendFinalReply?.({ text: "visible reply" })).toBe(false);
-      return await run();
+      expect(dispatcher).toBe(replyDispatcherMocks.dispatcher);
+      const result = await run();
+      onSettled?.();
+      return result;
     },
   );
   const recordInboundSession = vi.fn(async () => {});
@@ -269,6 +299,20 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     dedupMocks.recordProcessedFeishuMessage.mockResolvedValue(true);
     dedupMocks.warmupDedupFromPluginState.mockResolvedValue(0);
     dedupMocks.hasProcessedFeishuMessage.mockResolvedValue(false);
+    replyDispatcherMocks.dispatcher.sendToolResult.mockClear();
+    replyDispatcherMocks.dispatcher.sendBlockReply.mockClear();
+    replyDispatcherMocks.dispatcher.sendFinalReply.mockClear();
+    replyDispatcherMocks.dispatcher.waitForIdle.mockClear();
+    replyDispatcherMocks.dispatcher.getQueuedCounts.mockClear();
+    replyDispatcherMocks.dispatcher.getFailedCounts.mockClear();
+    replyDispatcherMocks.dispatcher.markComplete.mockClear();
+    replyDispatcherMocks.markDispatchIdle.mockClear();
+    replyDispatcherMocks.createFeishuReplyDispatcher.mockClear();
+    replyDispatcherMocks.createFeishuReplyDispatcher.mockReturnValue({
+      dispatcher: replyDispatcherMocks.dispatcher,
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
+      markDispatchIdle: replyDispatcherMocks.markDispatchIdle,
+    });
     maybeCreateDynamicAgentMock.mockResolvedValue({ created: false });
     sendMessageFeishuMock.mockResolvedValue({ messageId: "om_pair", chatId: "oc_dm" });
   });
@@ -341,7 +385,22 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
       }),
     );
     expect(withReplyDispatcher).toHaveBeenCalledTimes(1);
+    expect(replyDispatcherMocks.createFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        accountId: "default",
+        chatId: "user:ou_inviter_1",
+        messageCreateTimeMs: 1712345678000,
+        sessionKey: "agent:main:feishu:direct:ou_inviter_1",
+      }),
+    );
+    expect(replyDispatcherMocks.markDispatchIdle).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const dispatchArgs = mockCallArg(dispatchReplyFromConfig, "dispatchReplyFromConfig") as
+      | { dispatcher?: unknown; replyOptions?: unknown }
+      | undefined;
+    expect(dispatchArgs?.dispatcher).toBe(replyDispatcherMocks.dispatcher);
+    expect(dispatchArgs?.replyOptions).toEqual({ sourceReplyDeliveryMode: "automatic" });
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     expect(mockCallArg(sendMessageFeishuMock, "sendMessageFeishu")).toMatchObject({
       to: "user:ou_inviter_1",
