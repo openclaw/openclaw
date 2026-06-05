@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
 import "../components/file-preview-modal.ts";
+import { toLocaleDateString } from "../timezone.ts";
 
 export type SkillWorkshopProposalStatus =
   | "pending"
@@ -957,8 +958,8 @@ function truncateAtWord(value: string, maxChars: number): string {
 
 function formatTodayDate(ms: number): string {
   const d = new Date(ms);
-  const day = d.toLocaleDateString(undefined, { weekday: "long" });
-  const month = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const day = toLocaleDateString(d, undefined, { weekday: "long" });
+  const month = toLocaleDateString(d, undefined, { month: "short", day: "numeric" });
   return `${day} · ${month}`;
 }
 

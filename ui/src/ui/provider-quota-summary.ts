@@ -1,5 +1,6 @@
 // Control UI module implements provider quota summary behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { toLocaleDateString } from "./timezone.ts";
 import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "./types.ts";
 
 export type QuotaWindowSummary = {
@@ -32,7 +33,7 @@ export function formatQuotaReset(resetAt?: number): string | null {
     const remainingHours = hours % 24;
     return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
   }
-  return new Date(timestampMs).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return toLocaleDateString(new Date(timestampMs), undefined, { month: "short", day: "numeric" });
 }
 
 export function collectQuotaWindows(

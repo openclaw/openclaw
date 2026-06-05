@@ -13,6 +13,7 @@ import {
   type QuotaWindowSummary,
 } from "../provider-quota-summary.ts";
 import { resolveSessionDisplayName } from "../session-display.ts";
+import { toLocaleDateString, toLocaleTimeString } from "../timezone.ts";
 import type {
   SessionsUsageResult,
   SessionsListResult,
@@ -233,8 +234,8 @@ export function renderOverviewCards(props: OverviewCardsProps) {
       const d = new Date(timestampMs);
       const withinADay = timestampMs - Date.now() < 24 * 60 * 60 * 1000;
       return withinADay
-        ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-        : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        ? toLocaleTimeString(d, undefined, { hour: "numeric", minute: "2-digit" })
+        : toLocaleDateString(d, undefined, { month: "short", day: "numeric" });
     };
 
     const hintParts = monitoredProviders
