@@ -90,6 +90,7 @@ async function resolveCronAnnounceDelivery(params: {
 async function deliverCronAnnouncePayload(params: {
   deps: CliDeps;
   cfg: OpenClawConfig;
+  jobId: string;
   delivery: {
     resolvedTarget: SuccessfulDeliveryTarget;
     session: ReturnType<typeof buildOutboundSessionContext>;
@@ -106,7 +107,15 @@ async function deliverCronAnnouncePayload(params: {
     to: params.delivery.resolvedTarget.to,
     accountId: params.delivery.resolvedTarget.accountId,
     threadId: params.delivery.resolvedTarget.threadId,
-    payloads: [{ text: params.message }],
+    payloads: [
+      {
+        text: params.message,
+        // Tag the payload so channel outbound adapters and message_sending
+        // plugin hooks can tell scheduler-driven sends apart from regular
+        // assistant replies. See ReplyPayload.origin docstring.
+        origin: { kind: "cron", jobId: params.jobId },
+      },
+    ],
     session: params.delivery.session,
     identity: params.delivery.identity,
     bestEffort: false,
@@ -135,6 +144,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   await deliverCronAnnouncePayload({
     deps: params.deps,
     cfg: params.cfg,
+    jobId: params.jobId,
     delivery,
     message: params.message,
     abortSignal: params.abortSignal,
@@ -172,6 +182,7 @@ export async function sendFailureNotificationAnnounce(
     await deliverCronAnnouncePayload({
       deps,
       cfg,
+      jobId,
       delivery,
       message,
       abortSignal: abortController.signal,

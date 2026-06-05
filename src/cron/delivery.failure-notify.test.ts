@@ -112,7 +112,9 @@ describe("sendFailureNotificationAnnounce", () => {
     expect(deliveryRequest.to).toBe("123");
     expect(deliveryRequest.accountId).toBe("bot-a");
     expect(deliveryRequest.threadId).toBe(42);
-    expect(deliveryRequest.payloads).toEqual([{ text: "Cron failed" }]);
+    expect(deliveryRequest.payloads).toEqual([
+      { text: "Cron failed", origin: { kind: "cron", jobId: "job-1" } },
+    ]);
     expect(deliveryRequest.session).toEqual({ kind: "session" });
     expect(deliveryRequest.identity).toEqual({ kind: "identity" });
     expect(deliveryRequest.bestEffort).toBe(false);

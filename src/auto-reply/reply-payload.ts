@@ -59,7 +59,22 @@ export type ReplyPayload = {
   isStatusNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
+  /**
+   * Identifies the runtime that produced this payload, so channel adapters and
+   * `message_sending` plugin hooks can distinguish scheduler-driven sends from
+   * normal assistant replies. Optional and additive — older callers never set
+   * it; consumers should treat absence as "unknown / regular reply".
+   */
+  origin?: ReplyPayloadOrigin;
 };
+
+/**
+ * Discriminated union describing what triggered an outbound payload. Currently
+ * only cron is named, but the shape is intentionally open so heartbeat,
+ * follow-up, and other scheduler-style runtimes can extend it without breaking
+ * existing consumers.
+ */
+export type ReplyPayloadOrigin = { kind: "cron"; jobId: string };
 
 /** Metadata for audio-only media that supplements already-visible assistant text. */
 export type ReplyPayloadTtsSupplement = {
