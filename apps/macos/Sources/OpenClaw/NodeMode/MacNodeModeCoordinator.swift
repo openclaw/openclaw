@@ -3,28 +3,31 @@ import OpenClawKit
 import OSLog
 
 struct MacNodeGatewayTLSSessionCache {
-    private typealias Key = (
-        url: URL,
-        required: Bool,
-        expectedFingerprint: String?,
-        allowTOFU: Bool,
-        storeKey: String?)
+    private struct Key: Equatable {
+        let url: URL
+        let required: Bool
+        let expectedFingerprint: String?
+        let allowTOFU: Bool
+        let storeKey: String?
+
+        init(url: URL, params: GatewayTLSParams) {
+            self.url = url
+            self.required = params.required
+            self.expectedFingerprint = params.expectedFingerprint
+            self.allowTOFU = params.allowTOFU
+            self.storeKey = params.storeKey
+        }
+    }
 
     private var cachedKey: Key?
     private var cachedBox: WebSocketSessionBox?
 
-    // GatewayNodeSession treats session identity changes as reconnect input.
     mutating func sessionBox(url: URL, params: GatewayTLSParams?) -> WebSocketSessionBox? {
         guard let params else {
             self.invalidate()
             return nil
         }
-        let key = (
-            url: url,
-            required: params.required,
-            expectedFingerprint: params.expectedFingerprint,
-            allowTOFU: params.allowTOFU,
-            storeKey: params.storeKey)
+        let key = Key(url: url, params: params)
         if let cachedKey = self.cachedKey, cachedKey == key, let cachedBox = self.cachedBox {
             return cachedBox
         }
