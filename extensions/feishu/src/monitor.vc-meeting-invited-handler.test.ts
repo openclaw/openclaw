@@ -253,7 +253,7 @@ describe("resolveVcMeetingInvitedTurn", () => {
         name: "Alice",
       },
       prompt:
-        'Use the available tool to join the meeting with meeting number 123456789 immediately. Do not ask for confirmation. When invoking the join tool, pass call_id="call_vc_123" so the server can correlate invite and join telemetry.',
+        "Use the available tool to join the meeting with meeting number 123456789 immediately. Do not ask for confirmation.",
     });
   });
 
@@ -334,7 +334,8 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     expect(finalizedContext?.BodyForAgent).toContain(
       "Use the available tool to join the meeting with meeting number 123456789 immediately.",
     );
-    expect(finalizedContext?.BodyForAgent).toContain('pass call_id="call_vc_123"');
+    expect(finalizedContext?.BodyForAgent).not.toContain("call_vc_123");
+    expect(finalizedContext?.BodyForAgent).not.toContain("call_id");
     const sessionRecord = mockCallArg(recordInboundSession, "recordInboundSession") as
       | { updateLastRoute?: unknown }
       | undefined;

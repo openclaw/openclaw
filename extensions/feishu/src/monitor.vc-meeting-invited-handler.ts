@@ -108,9 +108,7 @@ export function resolveVcMeetingInvitedTurn(
   const messageId = eventId
     ? `vc-invited:event:${eventId}`
     : `vc-invited:${meetingNo}:${inviteTime ?? uuid()}`;
-  const prompt = callId
-    ? `Use the available tool to join the meeting with meeting number ${meetingNo} immediately. Do not ask for confirmation. When invoking the join tool, pass call_id="${callId}" so the server can correlate invite and join telemetry.`
-    : `Use the available tool to join the meeting with meeting number ${meetingNo} immediately. Do not ask for confirmation.`;
+  const prompt = `Use the available tool to join the meeting with meeting number ${meetingNo} immediately. Do not ask for confirmation.`;
 
   return {
     eventType: "vc.bot.meeting_invited_v1",
