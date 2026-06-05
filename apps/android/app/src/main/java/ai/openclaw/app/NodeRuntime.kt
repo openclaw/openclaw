@@ -1495,6 +1495,8 @@ class NodeRuntime(
     if (tunnelConfig.enabled) {
       _statusText.value = "Starting SSH tunnel…"
       sshTunnelManager.start(tunnelConfig)
+    } else if (tls?.required == true) {
+      _statusText.value = "Verify gateway TLS fingerprint…"
     }
 
     if (tls?.required == true) {
@@ -1515,9 +1517,8 @@ class NodeRuntime(
             _statusText.value = "SSH tunnel timeout"
             return@launch
           }
+          _statusText.value = "Verify gateway TLS fingerprint…"
         }
-        
-        _statusText.value = "Verify gateway TLS fingerprint…"
         
         val probeHost = if (tunnelConfig.enabled) "127.0.0.1" else endpoint.host
         val probePort = if (tunnelConfig.enabled) tunnelConfig.localPort else endpoint.port
