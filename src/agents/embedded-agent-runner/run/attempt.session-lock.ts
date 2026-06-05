@@ -2,7 +2,7 @@
  * Coordinates embedded-attempt session ownership, takeover, and prompt locks.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { statSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -39,7 +39,7 @@ type PromptReleaseStreamFn = ((...args: unknown[]) => unknown) & {
   __openclawSessionLockPromptReleaseInstalled?: boolean;
 };
 
-type SessionFileFingerprint =
+export type SessionFileFingerprint =
   | { exists: false }
   | {
       exists: true;
@@ -212,6 +212,35 @@ async function readAppendedSessionFileText(params: {
   return buffer.toString("utf8");
 }
 
+function readAppendedSessionFileTextSync(params: {
+  sessionFile: string;
+  previous: Extract<SessionFileFingerprint, { exists: true }>;
+  current: Extract<SessionFileFingerprint, { exists: true }>;
+}): string | undefined {
+  if (params.current.size <= params.previous.size || params.previous.size > MAX_SAFE_FILE_OFFSET) {
+    return undefined;
+  }
+  const appendedBytes = params.current.size - params.previous.size;
+  if (
+    appendedBytes > BigInt(MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES) ||
+    appendedBytes > MAX_SAFE_FILE_OFFSET
+  ) {
+    return undefined;
+  }
+  const length = Number(appendedBytes);
+  const buffer = Buffer.alloc(length);
+  const file = openSync(params.sessionFile, "r");
+  try {
+    const bytesRead = readSync(file, buffer, 0, length, Number(params.previous.size));
+    if (bytesRead !== length) {
+      return undefined;
+    }
+  } finally {
+    closeSync(file);
+  }
+  return buffer.toString("utf8");
+}
+
 async function readSessionFileFenceSnapshot(
   sessionFile: string,
 ): Promise<SessionFileFenceSnapshot> {
@@ -246,6 +275,30 @@ async function sessionFenceAdvanceIsBenign(params: {
     return false;
   }
   const text = await readAppendedSessionFileText({
+    sessionFile: params.sessionFile,
+    previous: params.previous.fingerprint,
+    current: params.current,
+  });
+  if (!text?.endsWith("\n")) {
+    return false;
+  }
+  const lines = normalizeStringEntries(text.split("\n"));
+  return lines.length > 0 && lines.every(isTranscriptOnlyOpenClawAssistantLine);
+}
+
+function sessionFenceAdvanceIsBenignSync(params: {
+  sessionFile: string;
+  previous: SessionFileFenceSnapshot | undefined;
+  current: SessionFileFingerprint;
+}): boolean {
+  if (
+    !params.previous?.fingerprint.exists ||
+    !params.current.exists ||
+    !sameSessionFileIdentity(params.previous.fingerprint, params.current)
+  ) {
+    return false;
+  }
+  const text = readAppendedSessionFileTextSync({
     sessionFile: params.sessionFile,
     previous: params.previous.fingerprint,
     current: params.current,
@@ -543,7 +596,7 @@ async function readSessionFileFingerprint(sessionFile: string): Promise<SessionF
   }
 }
 
-function readSessionFileFingerprintSync(sessionFile: string): SessionFileFingerprint {
+export function readSessionFileFingerprintSync(sessionFile: string): SessionFileFingerprint {
   try {
     const stat = statSync(sessionFile, { bigint: true });
     return {
@@ -574,7 +627,7 @@ export class EmbeddedAttemptSessionTakeoverError extends Error {
 export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
   releaseHeldLockForAbort(): Promise<void>;
-  refreshAfterOwnedSessionWrite(): void;
+  publishOwnedPostMessageWrite(beforeWrite: SessionFileFingerprint | undefined): void;
   reacquireAfterPrompt(): Promise<void>;
   waitForSessionEvents(session: unknown): Promise<void>;
   withSessionWriteLock<T>(
@@ -907,10 +960,55 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     async releaseHeldLockForAbort(): Promise<void> {
       await releaseHeldLockWithFence();
     },
-    refreshAfterOwnedSessionWrite(): void {
-      if (fenceActive && !takeoverDetected) {
-        fenceFingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
-        fenceSnapshot = { fingerprint: fenceFingerprint };
+    publishOwnedPostMessageWrite(beforeWrite: SessionFileFingerprint | undefined): void {
+      // Called synchronously after pi's `sessionManager.appendMessage` →
+      // `_persist` → `appendFileSync` from the `onMessagePersisted` callback.
+      // `beforeWrite` is the file fingerprint captured immediately BEFORE the
+      // session-manager append (passed through `beforeMessagePersist` in
+      // `installSessionPersistenceGuard`). Records the post-write fingerprint
+      // as an OWNED write in `ownedSessionFileWrites` so subsequent
+      // `assertSessionFileFence` calls inside `withSessionWriteLock` accept
+      // the lane's own writes via the owned-write match path.
+      //
+      // Fail-closed gate: the trust check runs on `beforeWrite`, not on the
+      // current fence fingerprint. If an external mutation lands between
+      // `releaseForPrompt` (which marks F0 trusted) and pi's append, then
+      // `beforeWrite` = F1 ≠ F0 and `isTrustedSessionFileState` returns
+      // false — publish is skipped and the external + pi combined state
+      // (F2) is NOT recorded as owned. The subsequent hook-lock
+      // `assertSessionFileFence` still sees current = F2 ≠ fence = F0 and
+      // trips the takeover correctly.
+      if (takeoverDetected) {
+        return;
+      }
+      if (!beforeWrite) {
+        return;
+      }
+      const beforeWriteMatchesActiveFence =
+        fenceActive && sameSessionFileFingerprint(fenceFingerprint, beforeWrite);
+      const beforeWriteIsBenignAdvance =
+        fenceActive &&
+        sessionFenceAdvanceIsBenignSync({
+          sessionFile: params.lockOptions.sessionFile,
+          previous: fenceSnapshot,
+          current: beforeWrite,
+        });
+      if (
+        !beforeWriteMatchesActiveFence &&
+        !beforeWriteIsBenignAdvance &&
+        !isTrustedSessionFileState(sessionFileFenceKey, beforeWrite)
+      ) {
+        return;
+      }
+      const current = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+      if (sameSessionFileFingerprint(beforeWrite, current)) {
+        return;
+      }
+      const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, current);
+      if (fenceActive) {
+        fenceFingerprint = current;
+        fenceSnapshot = { fingerprint: current };
+        fenceGeneration = generation;
       }
     },
     async reacquireAfterPrompt(): Promise<void> {

@@ -567,7 +567,15 @@ export function installSessionToolResultGuard(
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
-    onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+    onMessagePersisted?: (
+      message: AgentMessage,
+      context: { beforeWriteSnapshot?: unknown },
+    ) => void | Promise<void>;
+    // Captured immediately before the session-manager append. Callers can use
+    // the returned snapshot to detect external writes that landed between
+    // earlier lifecycle checkpoints and the current append (see #86572 for
+    // the session-takeover fence trust gate that consumes it).
+    beforeMessagePersist?: () => unknown;
     onAssistantErrorMessagePersisted?: (
       message: Extract<AgentMessage, { role: "assistant" }>,
     ) => void | Promise<void>;
@@ -608,8 +616,9 @@ export function installSessionToolResultGuard(
     message: AgentMessage,
   ): { entryId: string; messageSeq?: number; sessionFile?: string | null } => {
     const parentEntryId = sessionManager.getLeafId();
+    const beforeWriteSnapshot = opts?.beforeMessagePersist?.();
     const entryId = originalAppend(message as never);
-    void opts?.onMessagePersisted?.(message);
+    void opts?.onMessagePersisted?.(message, { beforeWriteSnapshot });
     const sessionFile = getSessionFile();
     if (!sessionFile) {
       return { entryId, sessionFile };
