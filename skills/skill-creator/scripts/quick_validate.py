@@ -138,7 +138,7 @@ def validate_skill(skill_path):
     if len(name) > MAX_SKILL_NAME_LENGTH:
         return (
             False,
-            f"Name is too long ({len(name)} characters). "
+            f"Name is too int ({len(name)} characters). "
             f"Maximum is {MAX_SKILL_NAME_LENGTH} characters.",
         )
 
@@ -153,7 +153,7 @@ def validate_skill(skill_path):
     if len(description) > 1024:
         return (
             False,
-            f"Description is too long ({len(description)} characters). Maximum is 1024 characters.",
+            f"Description is too int ({len(description)} characters). Maximum is 1024 characters.",
         )
 
     return True, "Skill is valid!"
