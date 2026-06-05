@@ -20,7 +20,10 @@ import {
   loadModelCatalogForBrowse,
   type ModelCatalogBrowseView,
 } from "../../agents/model-catalog-browse.js";
-import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
+import {
+  isCodexRoutableOpenAIPlatformCatalogEntry,
+  resolveVisibleModelCatalog,
+} from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -37,16 +40,7 @@ type ModelsListProviderAuthChecker = (
 
 let loggedSlowModelsListCatalog = false;
 const OAUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
-const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
-const OPENAI_CODEX_ROUTABLE_MODEL_IDS = new Set([
-  "gpt-5.5",
-  "gpt-5.5-pro",
-  "gpt-5.4",
-  "gpt-5.4-codex",
-  "gpt-5.4-pro",
-  "gpt-5.4-mini",
-]);
 
 // Unknown views are rejected by protocol validation first; this helper keeps the
 // handler default explicit for older clients that omit the field.
@@ -208,15 +202,6 @@ function createModelsListProviderAuthChecker(params: {
         cfg: params.cfg,
         store,
       }),
-  );
-}
-
-function isCodexRoutableOpenAIPlatformCatalogEntry(entry: ModelCatalogEntry): boolean {
-  return (
-    normalizeProviderId(entry.provider) === OPENAI_PROVIDER_ID &&
-    entry.api !== undefined &&
-    entry.api !== OPENAI_CODEX_RESPONSES_API &&
-    OPENAI_CODEX_ROUTABLE_MODEL_IDS.has(entry.id.trim().toLowerCase())
   );
 }
 
