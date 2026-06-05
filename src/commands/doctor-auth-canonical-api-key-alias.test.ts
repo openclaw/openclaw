@@ -1,3 +1,4 @@
+// Doctor auth alias tests cover canonical API-key profile repair and auth-profile store migration.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -42,6 +43,16 @@ async function makeTestState(): Promise<OpenClawTestState> {
   return state;
 }
 
+async function writeLegacyAuthProfilesJson(
+  state: OpenClawTestState,
+  value: unknown,
+): Promise<string> {
+  return await state.writeText(
+    "agents/main/agent/auth-profiles.json",
+    `${JSON.stringify(value, null, 2)}\n`,
+  );
+}
+
 afterEach(async () => {
   clearRuntimeAuthProfileStoreSnapshots();
   for (const state of states.splice(0)) {
@@ -65,7 +76,7 @@ describe("maybeRepairCanonicalApiKeyFieldAlias", () => {
         "my-provider": ["my-key"],
       },
     };
-    const authPath = await state.writeAuthProfiles(canonical);
+    const authPath = await writeLegacyAuthProfilesJson(state, canonical);
 
     const result = await maybeRepairCanonicalApiKeyFieldAlias({
       cfg: {},
@@ -110,7 +121,7 @@ describe("maybeRepairCanonicalApiKeyFieldAlias", () => {
         },
       },
     };
-    const authPath = await state.writeAuthProfiles(canonical);
+    const authPath = await writeLegacyAuthProfilesJson(state, canonical);
 
     const result = await maybeRepairCanonicalApiKeyFieldAlias({
       cfg: {},
@@ -230,7 +241,7 @@ describe("maybeRepairCanonicalApiKeyFieldAlias", () => {
         },
       },
     };
-    const authPath = await state.writeAuthProfiles(canonical);
+    const authPath = await writeLegacyAuthProfilesJson(state, canonical);
 
     const result = await maybeRepairCanonicalApiKeyFieldAlias({
       cfg: {},
@@ -257,7 +268,7 @@ describe("maybeRepairCanonicalApiKeyFieldAlias", () => {
         },
       },
     };
-    const authPath = await state.writeAuthProfiles(canonical);
+    const authPath = await writeLegacyAuthProfilesJson(state, canonical);
 
     const result = await maybeRepairCanonicalApiKeyFieldAlias({
       cfg: {},
@@ -284,7 +295,7 @@ describe("maybeRepairCanonicalApiKeyFieldAlias", () => {
         },
       },
     };
-    const authPath = await state.writeAuthProfiles(canonical);
+    const authPath = await writeLegacyAuthProfilesJson(state, canonical);
 
     const result = await maybeRepairCanonicalApiKeyFieldAlias({
       cfg: {},
@@ -310,7 +321,7 @@ describe("maybeRepairCanonicalApiKeyFieldAlias", () => {
         },
       },
     };
-    const authPath = await state.writeAuthProfiles(canonical);
+    const authPath = await writeLegacyAuthProfilesJson(state, canonical);
 
     const result = await maybeRepairCanonicalApiKeyFieldAlias({
       cfg: {},

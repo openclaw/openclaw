@@ -1,3 +1,4 @@
+// Vitest scoped config tests validate scoped project config generation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -118,6 +119,14 @@ function expectThreadedNonIsolatedRunner(config: {
   expect(testConfig.pool).toBe("threads");
   expect(testConfig.isolate).toBe(false);
   expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
+}
+function expectThreadedIsolatedRunner(config: {
+  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
+}) {
+  const testConfig = requireTestConfig(config);
+  expect(testConfig.pool).toBe("threads");
+  expect(testConfig.isolate).toBe(true);
+  expect(testConfig.runner).toBeUndefined();
 }
 function expectForkedNonIsolatedRunner(config: {
   test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
@@ -388,7 +397,6 @@ describe("scoped vitest configs", () => {
       defaultExtensionImessageConfig,
       defaultExtensionLineConfig,
       defaultExtensionProviderOpenAiConfig,
-      defaultExtensionProvidersConfig,
       defaultExtensionSignalConfig,
       defaultExtensionSlackConfig,
       defaultAutoReplyConfig,
@@ -407,6 +415,8 @@ describe("scoped vitest configs", () => {
     expectForkedNonIsolatedRunner(defaultCommandsConfig);
 
     expectThreadedNonIsolatedRunner(defaultUiConfig);
+    expectThreadedIsolatedRunner(defaultExtensionMemoryConfig);
+    expectThreadedIsolatedRunner(defaultExtensionProvidersConfig);
     expectForkedIsolatedRunner(defaultInfraConfig);
   });
 
@@ -495,12 +505,9 @@ describe("scoped vitest configs", () => {
     expectThreadedNonIsolatedRunner(defaultExtensionsConfig);
   });
 
-  it("isolates the Telegram extension lane so release shards do not accumulate suite state", () => {
-    const testConfig = requireTestConfig(defaultExtensionTelegramConfig);
-    expect(testConfig.pool).toBe("threads");
-    expect(testConfig.isolate).toBe(true);
-    expect(testConfig.runner).toBeUndefined();
-    expect(testConfig.fileParallelism).toBe(false);
+  it("serializes Telegram extension files that share process globals", () => {
+    expectThreadedNonIsolatedRunner(defaultExtensionTelegramConfig);
+    expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(false);
   });
 
   it("serializes Slack extension files that share process globals", () => {

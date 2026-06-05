@@ -1,3 +1,4 @@
+// Verifies sessions_spawn lifecycle hooks, cleanup, and completion announcements.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -52,6 +53,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
 }
 
 function expectAcceptedRunDetails(details: unknown): string {
+  // Accepted details must include the run id used by later lifecycle events.
   const rec = details as { status?: string; runId?: unknown } | undefined;
   const runId = rec?.runId;
   expect(rec?.status).toBe("accepted");
@@ -92,7 +94,6 @@ async function executeSpawnAndExpectAccepted(params: {
 }) {
   const result = await params.tool.execute(params.callId, {
     task: "do thing",
-    runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
     ...(params.label ? { label: params.label } : {}),
     ...(params.expectsCompletionMessage === false ? { expectsCompletionMessage: false } : {}),
@@ -139,6 +140,7 @@ async function emitLifecycleEndAndFlush(params: {
   startedAt: number;
   endedAt: number;
 }) {
+  // Lifecycle handlers use timers for cleanup/announce work; fake timers flush them deterministically.
   vi.useFakeTimers();
   try {
     emitAgentEvent({
@@ -178,6 +180,13 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       messages: {
         queue: {
           debounceMs: 0,
+        },
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+          },
         },
       },
     });
@@ -288,10 +297,20 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       agentSessionKey: "main",
       agentChannel: "whatsapp",
     });
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: { debounceMs: 0 } },
+      agents: {
+        defaults: {
+          subagents: {
+            runTimeoutSeconds: 120,
+          },
+        },
+      },
+    });
 
     const result = await tool.execute("call-start-timeout", {
       task: "do thing",
-      runTimeoutSeconds: 120,
     });
 
     expectAcceptedRunDetails(result.details);

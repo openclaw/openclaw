@@ -1,3 +1,4 @@
+// Memory Core plugin module implements memory tool manager mock behavior.
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
 
@@ -86,6 +87,10 @@ export function setMemoryWorkspaceDir(next: string): void {
   workspaceDir = next;
 }
 
+export function setMemoryCustomStatus(next: Record<string, unknown> | undefined): void {
+  customStatus = next;
+}
+
 export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }
@@ -128,6 +133,10 @@ export function resetMemoryToolMockState(overrides?: {
 
 export function getMemorySearchManagerMockCalls(): number {
   return getMemorySearchManagerMock.mock.calls.length;
+}
+
+export function getMemorySyncMockCalls(): number {
+  return stubManager.sync.mock.calls.length;
 }
 
 export function getMemorySearchManagerMockConfigs(): unknown[] {

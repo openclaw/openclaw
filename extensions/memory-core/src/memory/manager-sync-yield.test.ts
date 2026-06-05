@@ -1,3 +1,4 @@
+// Memory Core tests cover manager sync yield plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -38,6 +39,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
 });
 
 vi.mock("./embeddings.js", () => ({
+  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   createEmbeddingProvider: vi.fn(),
 }));
 

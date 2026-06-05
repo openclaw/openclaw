@@ -1,3 +1,4 @@
+// Non-interactive auth-choice tests cover built-in, custom, deprecated, and plugin provider dispatch.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
@@ -140,6 +141,26 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(apiKeyParams?.envVar).toBe("CUSTOM_API_KEY");
     expect(apiKeyParams?.envVarName).toBe("CUSTOM_API_KEY");
     expect(apiKeyParams?.secretInputMode).toBe("ref");
+  });
+
+  it("stores custom provider OpenAI Responses compatibility", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "gpt-5.4",
+        customCompatibility: "openai-responses",
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result?.models?.providers?.["custom-models-custom-local"]?.api).toBe("openai-responses");
   });
 
   it("marks non-interactive custom provider models as image-capable when requested", async () => {

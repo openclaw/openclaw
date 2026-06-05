@@ -1,3 +1,5 @@
+// Gateway tool invocation engine.
+// Shared implementation behind HTTP and RPC tool invocation adapters.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -18,6 +20,7 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
+/** Protocol input shape accepted by gateway tool invocation surfaces. */
 export type ToolsInvokeInput = {
   tool?: unknown;
   name?: unknown;
@@ -143,6 +146,7 @@ function resolveToolSource(tool: AnyAgentTool): "core" | "plugin" | "channel" {
   return "core";
 }
 
+/** Resolves, authorizes, and invokes one gateway-visible core/plugin/channel tool. */
 export async function invokeGatewayTool(params: {
   cfg: OpenClawConfig;
   input: ToolsInvokeInput;

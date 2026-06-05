@@ -1,3 +1,4 @@
+// Full-suite Vitest shard definitions used by test-projects and CI planning.
 export const autoReplyCoreTestInclude = ["src/auto-reply/*.test.ts"];
 
 export const autoReplyCoreTestExclude = ["src/auto-reply/reply*.test.ts"];
@@ -120,7 +121,14 @@ export const fullSuiteVitestShards = [
     projects: [
       "test/vitest/vitest.extension-active-memory.config.ts",
       "test/vitest/vitest.extension-acpx.config.ts",
-      "test/vitest/vitest.extension-codex.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-attempt.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-attempt-extra.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-attempt-support.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-runtime.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-support.config.ts",
+      "test/vitest/vitest.extension-codex-app-server-tools.config.ts",
+      "test/vitest/vitest.extension-codex-surface.config.ts",
       "test/vitest/vitest.extension-diffs.config.ts",
       "test/vitest/vitest.extension-discord.config.ts",
       "test/vitest/vitest.extension-feishu.config.ts",
