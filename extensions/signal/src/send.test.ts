@@ -328,6 +328,39 @@ describe("sendMessageSignal receipts", () => {
     });
   });
 
+  it("keeps memory-only pre-send self-echo markers when Signal REST send returns an invalid timestamp", async () => {
+    signalRpcRequestMock.mockRejectedValueOnce(
+      new Error("Signal REST send returned invalid timestamp"),
+    );
+
+    await expect(
+      sendMessageSignal("+15550001111", "hello invalid timestamp", {
+        cfg: {
+          channels: {
+            signal: {
+              accounts: {
+                default: {
+                  httpUrl: "http://signal.test",
+                  account: "+15550001111",
+                  ingressMode: "note-to-self",
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("Signal REST send returned invalid timestamp");
+
+    expect(forgetSignalSelfReplyEchoMock).not.toHaveBeenCalled();
+    expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith({
+      accountId: "default",
+      accountIdentity: "+15550001111",
+      messageId: "unknown",
+      text: "hello invalid timestamp",
+      persist: false,
+    });
+  });
+
   it("keeps memory-only pre-send self-echo markers when response loss is ambiguous", async () => {
     signalRpcRequestMock.mockRejectedValueOnce(new Error("socket hang up"));
 
