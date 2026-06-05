@@ -176,6 +176,12 @@ describe("sendReactionSignal", () => {
         text: "<reaction:add:456:👍:+15550001111:>",
       }),
     );
+    expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountIdentity: "+15550001111",
+        text: "<reaction:add:456:👍:+15550001111:>",
+      }),
+    );
   });
 
   it("keeps provisional note-to-self reaction echoes when response loss is ambiguous", async () => {

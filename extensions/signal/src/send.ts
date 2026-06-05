@@ -431,11 +431,13 @@ export async function sendMessageSignal(
         text: fallbackEchoText,
       });
     }
-    await rememberSelfEcho({
-      messageId,
-      timestamp,
-      text: fallbackEchoTexts[0] ?? message,
-    });
+    for (const fallbackEchoText of fallbackEchoTexts.length ? fallbackEchoTexts : [message]) {
+      await rememberSelfEcho({
+        messageId,
+        timestamp,
+        text: fallbackEchoText,
+      });
+    }
   } else if (shouldRememberSelfEcho) {
     for (const fallbackEchoText of fallbackEchoTexts) {
       await rememberSelfEcho({

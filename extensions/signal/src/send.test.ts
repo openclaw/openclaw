@@ -457,6 +457,43 @@ describe("sendMessageSignal receipts", () => {
     });
   });
 
+  it("keeps exact and generic media echoes for timestamped self sends", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1700000000100 });
+
+    await sendMessageSignal("+15550001111", "", {
+      cfg: {
+        channels: {
+          signal: {
+            accounts: {
+              default: {
+                httpUrl: "http://signal.test",
+                account: "+15550001111",
+                ingressMode: "note-to-self",
+              },
+            },
+          },
+        },
+      },
+      mediaUrl: "/tmp/image.png",
+      mediaLocalRoots: ["/tmp"],
+    });
+
+    expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith({
+      accountId: "default",
+      accountIdentity: "+15550001111",
+      messageId: "1700000000100",
+      timestamp: 1700000000100,
+      text: "<media:image:image/png:4321>",
+    });
+    expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith({
+      accountId: "default",
+      accountIdentity: "+15550001111",
+      messageId: "1700000000100",
+      timestamp: 1700000000100,
+      text: "<media:image>",
+    });
+  });
+
   it("records generic attachment echoes for timestamp-less media-only self sends without detected MIME", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({});
     resolveOutboundAttachmentFromUrlMock.mockResolvedValueOnce({ path: "/tmp/upload.bin" });

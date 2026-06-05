@@ -193,11 +193,36 @@ async function sendReactionSignalCore(params: {
           targetAuthorUuid: params.opts.targetAuthorUuid,
         })
       : undefined;
-  const echoIdentity = accountUuid ?? account;
+  const echoIdentities = [
+    ...new Set(
+      [accountUuid ?? undefined, account].filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  const rememberSelfReactionEcho = async (echo: {
+    messageId?: string;
+    timestamp?: number;
+    text?: string;
+    includeTextWithPrimary?: boolean;
+  }) => {
+    for (const accountIdentity of echoIdentities) {
+      await rememberSignalSelfReplyEcho({
+        accountId: accountInfo.accountId,
+        accountIdentity,
+        ...echo,
+      });
+    }
+  };
+  const forgetSelfReactionEcho = (echo: { messageId?: string; text?: string }) => {
+    for (const accountIdentity of echoIdentities) {
+      forgetSignalSelfReplyEcho({
+        accountId: accountInfo.accountId,
+        accountIdentity,
+        ...echo,
+      });
+    }
+  };
   if (selfReactionEchoText) {
-    await rememberSignalSelfReplyEcho({
-      accountId: accountInfo.accountId,
-      accountIdentity: echoIdentity,
+    await rememberSelfReactionEcho({
       messageId: "unknown",
       text: selfReactionEchoText,
       includeTextWithPrimary: true,
@@ -213,9 +238,7 @@ async function sendReactionSignalCore(params: {
     });
   } catch (err) {
     if (selfReactionEchoText && isDefiniteSignalReactionFailure(err)) {
-      forgetSignalSelfReplyEcho({
-        accountId: accountInfo.accountId,
-        accountIdentity: echoIdentity,
+      forgetSelfReactionEcho({
         messageId: "unknown",
         text: selfReactionEchoText,
       });
@@ -224,16 +247,12 @@ async function sendReactionSignalCore(params: {
   }
   if (selfReactionEchoText) {
     if (result?.timestamp != null) {
-      forgetSignalSelfReplyEcho({
-        accountId: accountInfo.accountId,
-        accountIdentity: echoIdentity,
+      forgetSelfReactionEcho({
         messageId: "unknown",
         text: selfReactionEchoText,
       });
     }
-    await rememberSignalSelfReplyEcho({
-      accountId: accountInfo.accountId,
-      accountIdentity: echoIdentity,
+    await rememberSelfReactionEcho({
       messageId: result?.timestamp != null ? String(result.timestamp) : undefined,
       timestamp: result?.timestamp,
       text: selfReactionEchoText,
