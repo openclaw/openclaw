@@ -3992,6 +3992,8 @@ export async function runEmbeddedAttempt(
               reacquireAfterPrompt: () => sessionLockController.reacquireAfterPrompt(),
               sessionKey: params.sessionKey,
               sessionFile: params.sessionFile,
+              refreshAfterOwnedSessionWrite: () =>
+                sessionLockController.refreshAfterOwnedSessionWrite(),
               withSessionWriteLock: (run, options) =>
                 sessionLockController.withSessionWriteLock(run, options),
             });

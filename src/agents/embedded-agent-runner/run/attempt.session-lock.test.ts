@@ -17,6 +17,7 @@ import {
   acquireSessionWriteLock,
   resetSessionWriteLockStateForTest,
 } from "../../session-write-lock.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import {
   acquireEmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
@@ -899,6 +900,43 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.releaseForPrompt();
     await fs.appendFile(sessionFile, '{"type":"message","id":"owned-session-manager"}\n', "utf8");
     controller.refreshAfterOwnedSessionWrite();
+
+    await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
+  it("keeps threshold compaction appends owned while the prompt lock is released", async () => {
+    const sessionFile = await createTempSessionFile();
+    const sessionManager = SessionManager.open(sessionFile);
+    const userId = sessionManager.appendMessage({ role: "user", content: "hello" });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "long enough to compact" }],
+      provider: "openclaw",
+      model: "test",
+      timestamp: Date.now(),
+    });
+
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal3 = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal3,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        sessionKey: "agent:main:whatsapp:direct:peer",
+        refreshAfterOwnedSessionWrite: () => controller.refreshAfterOwnedSessionWrite(),
+        withSessionWriteLock: (operation, options) =>
+          controller.withSessionWriteLock(operation, options),
+      },
+      async () => {
+        sessionManager.appendCompaction("summary", userId, 120_000);
+      },
+    );
 
     await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
     expect(controller.hasSessionTakeover()).toBe(false);

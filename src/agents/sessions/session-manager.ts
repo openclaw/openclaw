@@ -22,6 +22,7 @@ import {
   appendJsonlEntrySync,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
+import { publishOwnedSessionTranscriptWrite } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
@@ -920,6 +921,7 @@ export class SessionManager {
     this.byId.set(entry.id, entry);
     this.leafId = entry.id;
     this.persist(entry);
+    publishOwnedSessionTranscriptWrite({ sessionFile: this.sessionFile });
   }
 
   /** Append a message as child of current leaf, then advance leaf. Returns entry id.

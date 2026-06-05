@@ -1018,6 +1018,7 @@ export function installPromptSubmissionLockRelease(params: {
   reacquireAfterPrompt: () => Promise<void>;
   sessionFile?: string;
   sessionKey?: string;
+  refreshAfterOwnedSessionWrite?: () => void;
   withSessionWriteLock?: <T>(
     run: () => Promise<T> | T,
     options?: SessionWriteLockRunOptions,
@@ -1041,6 +1042,7 @@ export function installPromptSubmissionLockRelease(params: {
           {
             sessionFile: params.sessionFile,
             sessionKey: params.sessionKey,
+            refreshAfterOwnedSessionWrite: params.refreshAfterOwnedSessionWrite,
             withSessionWriteLock: params.withSessionWriteLock,
           },
           async () => await originalStreamFn(...args),
