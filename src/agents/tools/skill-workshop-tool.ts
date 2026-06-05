@@ -5,6 +5,11 @@
  */
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeSkillIndexName } from "../../skills/discovery/skill-index.js";
+import {
+  buildWorkspaceSkillStatus,
+  resolveSkillStatusEntry,
+} from "../../skills/discovery/status.js";
 import {
   applySkillProposal,
   inspectSkillProposal,
@@ -50,6 +55,7 @@ const SKILL_PROPOSAL_STATUSES = [
   "quarantined",
   "stale",
 ] as const satisfies readonly SkillProposalStatus[];
+const WORKSHOP_WRITABLE_SKILL_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
 
 const SkillWorkshopToolSchema = Type.Object(
   {
@@ -99,19 +105,24 @@ const SkillWorkshopToolSchema = Type.Object(
       }),
     ),
     support_files: Type.Optional(
-      Type.Array(
-        Type.Object(
-          {
-            path: Type.String({
-              description:
-                "Relative support file path under assets/, examples/, references/, scripts/, or templates/.",
-            }),
-            content: Type.String({ description: "Support file text content." }),
-          },
-          { additionalProperties: false },
+      Type.Union([
+        Type.String({
+          description: "Optional JSON-array string of support files with path and content fields.",
+        }),
+        Type.Array(
+          Type.Object(
+            {
+              path: Type.String({
+                description:
+                  "Relative support file path under assets/, examples/, references/, scripts/, or templates/.",
+              }),
+              content: Type.String({ description: "Support file text content." }),
+            },
+            { additionalProperties: false },
+          ),
+          { description: "Optional support files to store with the proposal." },
         ),
-        { description: "Optional support files to store with the proposal." },
-      ),
+      ]),
     ),
     goal: Type.Optional(Type.String({ description: "Proposal or improvement goal." })),
     evidence: Type.Optional(Type.String({ description: "Short evidence or notes." })),
@@ -212,19 +223,51 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       let proposal: SkillProposalReadResult;
       let contentText: string;
       if (action === "create") {
-        proposal = await proposeCreateSkill({
-          workspaceDir: options.workspaceDir,
-          config: options.config,
-          name: readStringParam(params, "name", { required: true }),
-          description: readStringParam(params, "description", { required: true }),
-          content: proposalContent,
-          supportFiles,
-          createdBy: "skill-workshop",
-          ...(options.origin ? { origin: options.origin } : {}),
-          goal,
-          evidence,
-        });
-        contentText = proposalMutationText("Created skill proposal", proposal.record);
+        const name = readStringParam(params, "name", { required: true });
+        const description = readStringParam(params, "description", { required: true });
+        const pendingProposal = await findPendingCreateProposal(options.workspaceDir, name);
+        if (pendingProposal) {
+          proposal = await reviseSkillProposal({
+            workspaceDir: options.workspaceDir,
+            config: options.config,
+            proposalId: pendingProposal.record.id,
+            description,
+            content: proposalContent,
+            supportFiles,
+            goal,
+            evidence,
+          });
+          contentText = proposalMutationText("Revised skill proposal", proposal.record);
+        } else if (hasWritableLiveSkill(options, name)) {
+          proposal = await proposeUpdateSkill({
+            workspaceDir: options.workspaceDir,
+            config: options.config,
+            agentId: options.agentId,
+            skillName: name,
+            description,
+            content: proposalContent,
+            supportFiles,
+            createdBy: "skill-workshop",
+            ...(options.origin ? { origin: options.origin } : {}),
+            goal,
+            evidence,
+          });
+          contentText = proposalMutationText("Created skill update proposal", proposal.record);
+        } else {
+          proposal = await proposeCreateSkill({
+            workspaceDir: options.workspaceDir,
+            config: options.config,
+            name,
+            description,
+            content: proposalContent,
+            supportFiles,
+            createdBy: "skill-workshop",
+            ...(options.origin ? { origin: options.origin } : {}),
+            goal,
+            evidence,
+          });
+          contentText = proposalMutationText("Created skill proposal", proposal.record);
+        }
       } else if (action === "update") {
         proposal = await proposeUpdateSkill({
           workspaceDir: options.workspaceDir,
@@ -269,6 +312,42 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       return proposalResult(proposal, { contentText });
     },
   };
+}
+
+async function findPendingCreateProposal(
+  workspaceDir: string,
+  name: string,
+): Promise<SkillProposalReadResult | undefined> {
+  const skillKey = normalizeSkillIndexName(name);
+  const matches = (await listSkillProposals({ workspaceDir })).proposals.filter(
+    (proposal) =>
+      proposal.status === "pending" && proposal.kind === "create" && proposal.skillKey === skillKey,
+  );
+  if (matches.length === 0) {
+    return undefined;
+  }
+  if (matches.length > 1) {
+    throw new ToolInputError(
+      `Multiple pending create proposals matched ${skillKey}: ${matches
+        .slice(0, 8)
+        .map((proposal) => proposal.id)
+        .join(", ")}`,
+    );
+  }
+  const proposal = await inspectSkillProposal(matches[0].id, { workspaceDir });
+  if (!proposal || proposal.record.status !== "pending" || proposal.record.kind !== "create") {
+    return undefined;
+  }
+  return proposal;
+}
+
+function hasWritableLiveSkill(options: SkillWorkshopToolOptions, name: string): boolean {
+  const status = buildWorkspaceSkillStatus(options.workspaceDir, {
+    config: options.config,
+    agentId: options.agentId,
+  });
+  const skill = resolveSkillStatusEntry(status.skills, name);
+  return Boolean(skill && WORKSHOP_WRITABLE_SKILL_SOURCES.has(skill.source));
 }
 
 function proposalMutationText(action: string, record: SkillProposalRecord): string {
@@ -463,10 +542,8 @@ function readSupportFilesParam(
   if (raw === undefined) {
     return undefined;
   }
-  if (!Array.isArray(raw)) {
-    throw new ToolInputError("support_files must be an array");
-  }
-  return raw.map((item, index) => {
+  const parsed = parseSupportFilesArray(raw, "support_files");
+  return parsed.map((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new ToolInputError(`support_files[${index}] must be an object`);
     }
@@ -482,4 +559,26 @@ function readSupportFilesParam(
       content: file.content,
     };
   });
+}
+
+function parseSupportFilesArray(raw: unknown, label: string): unknown[] {
+  if (Array.isArray(raw)) {
+    return raw;
+  }
+  if (typeof raw !== "string") {
+    throw new ToolInputError(`${label} must be an array`);
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch {
+    // Fall through to the user-facing validation error below.
+  }
+  throw new ToolInputError(`${label} must be an array`);
 }

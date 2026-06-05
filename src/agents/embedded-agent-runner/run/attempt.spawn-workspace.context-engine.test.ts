@@ -11,6 +11,7 @@ import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
 } from "../../../plugins/memory-state.js";
+import type { MetaSkillCatalog } from "../../../skills/meta/catalog.js";
 import {
   type AttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -1268,6 +1269,81 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(promptSubmitted?.data?.prompt).toBe(seenPrompt);
     expect(promptSubmitted?.data?.prompt).toContain("WT daily plan - Sat May 2");
     expect(promptSubmitted?.data?.prompt).not.toContain("secret runtime context");
+  });
+
+  it("adds soft meta trigger hints as hidden runtime context without invoking meta_invoke", async () => {
+    const executeMetaInvoke = vi.fn(async () => ({
+      content: [{ type: "text", text: "should not run" }],
+      details: {},
+    }));
+    hoisted.createOpenClawCodingToolsMock.mockReturnValueOnce([
+      {
+        name: "meta_invoke",
+        label: "Meta Invoke",
+        description: "Run a registered meta skill.",
+        parameters: { type: "object", properties: {}, additionalProperties: true },
+        execute: executeMetaInvoke,
+      },
+    ]);
+    const seen: { prompt?: string; messages?: unknown[] } = {};
+    const metaSkillCatalog = {
+      plans: [
+        {
+          name: "meta-skill-creator",
+          description: "Create governed Skill Workshop proposals.",
+          triggers: [{ pattern: "create a skill" }],
+          steps: [
+            {
+              id: "collect",
+              kind: "user_input",
+              dependsOn: [],
+              onFailure: { kind: "fail" },
+            },
+          ],
+          finalTextMode: { kind: "auto" },
+        },
+      ],
+      diagnostics: [],
+    } satisfies MetaSkillCatalog;
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        prompt: "please create a skill from this workflow",
+        transcriptPrompt: "please create a skill from this workflow",
+        skillsSnapshot: {
+          prompt: "",
+          skills: [],
+          resolvedSkills: [],
+          metaSkillCatalog,
+        },
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(result.finalPromptText).toBe("please create a skill from this workflow");
+    expect(seen.prompt).toBe("please create a skill from this workflow");
+    expect(executeMetaInvoke).not.toHaveBeenCalled();
+    const runtimeContext = findRecord(
+      requireRecords(seen.messages, "seen messages"),
+      (message) => message.customType === "openclaw.runtime-context",
+      "runtime context message",
+    );
+    expect(runtimeContext.content).toContain("Meta skill trigger hint:");
+    expect(runtimeContext.content).toContain("meta-skill-creator");
+    expect(runtimeContext.content).toContain("match=soft");
+    expect(runtimeContext.content).toContain("call `meta_invoke`");
+    expect(seen.prompt).not.toContain("Meta skill trigger hint:");
   });
 
   it("keeps hook prompt context visible while hiding inter-session provenance", async () => {

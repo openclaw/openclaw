@@ -245,6 +245,140 @@ When the user asks to generate an image, use the `image_generate` tool...
   folder path.
 </Note>
 
+## Meta skills
+
+Meta skills are structured workflow skills declared with `kind: meta`. They use
+a `composition` DAG to describe model, tool, skill, agent, and clarification
+steps. OpenClaw exposes cataloged meta skills through `meta_invoke`; a step runs
+only when the runtime has a supported executor, and unsupported step kinds fail
+the meta run instead of silently succeeding.
+
+Generated skill output from meta workflows still goes through
+[Skill Workshop](/tools/skill-workshop). Meta skills do not write active
+`SKILL.md` files directly.
+
+Bundled meta skills currently include:
+
+| Skill                      | Trigger examples                 | What it does                                                             |
+| -------------------------- | -------------------------------- | ------------------------------------------------------------------------ |
+| `meta-skill-creator`       | `create a skill`, `make a skill` | Creates governed Skill Workshop proposals for reusable workflows.        |
+| `meta-kid-project-planner` | `school project`, `我要做火山`   | Ports OpenSquilla's kid project planner for safe, age-appropriate plans. |
+
+Meta skill runtime state is stored in OpenClaw SQLite tables for runs, step
+outputs, pauses, and gate evidence. Meta skills do not create JSON, JSONL, TXT,
+or sidecar files for runtime state.
+
+### Meta frontmatter
+
+Use `kind: meta` with a structured `composition.steps` list. Each step needs an
+`id` and `kind`; `depends_on` declares DAG edges. OpenClaw validates duplicate
+step ids, missing dependencies, dependency cycles, route targets, `when`
+expressions, `on_failure`, and `final_text_mode` before cataloging a meta skill.
+
+```markdown
+---
+name: clarify-and-draft
+description: Ask for missing context, then draft a response.
+kind: meta
+triggers: ["draft reply"]
+risk_metadata: { "level": "low", "notes": ["clarification only"] }
+composition:
+  {
+    "steps":
+      [
+        { "id": "ask", "kind": "user_input", "schema": { "required": ["topic"] } },
+        {
+          "id": "draft",
+          "kind": "llm_chat",
+          "depends_on": ["ask"],
+          "prompt": "Draft a reply about {{ask.topic}}.",
+        },
+      ],
+  }
+final_text_mode: step:draft
+---
+```
+
+Use `risk_metadata` or `risk` for JSON-compatible plan-level risk metadata. The
+runtime preserves this metadata in the meta catalog so tools and operator
+surfaces can inspect it before invocation.
+
+`triggers` may activate a meta skill before the ordinary agent loop. An exact
+natural-language trigger or slash-prefix match can run deterministically; a
+contained or ambiguous match is added as a soft hint so the model can decide
+whether to call `meta_invoke`.
+
+### Step kinds
+
+| Kind           | Required fields                                    | Behavior                                                                                                                                                                               |
+| -------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `llm_chat`     | `prompt` or `args`                                 | Runs a model-backed text step through the agent model runtime.                                                                                                                         |
+| `llm_classify` | `choices`                                          | Runs a model-backed classifier and returns the selected choice.                                                                                                                        |
+| `agent`        | `args.sessionKey`, plus `prompt` or `args.message` | Delegates work to an agent session through the existing agent step surface.                                                                                                            |
+| `tool_call`    | `tool`                                             | Calls an available agent tool through the normal tool lifecycle. Wrapper tools such as `meta_invoke`, `tool_call`, `tool_search`, `tool_search_code`, and `tool_describe` are blocked. |
+| `skill_exec`   | `skill`                                            | Executes an ordinary loaded skill through model invocation. Meta skills and skills that disable model invocation are rejected.                                                         |
+| `user_input`   | `schema`                                           | Pauses the run until the same session supplies the requested fields.                                                                                                                   |
+
+`user_input` pauses are resumable. When the same session replies, OpenClaw checks
+the pending pause first and resumes that run before evaluating new meta triggers.
+If a required field is still missing, the run remains paused instead of falling
+back to an ordinary chat retry.
+
+### Failure policy
+
+Each step defaults to `on_failure: fail`. Steps can also declare `skip`,
+`substitute`, or bounded `failover` policies. A failover policy retries the same
+step kind with explicitly declared fallback prompts, args, tools, skills,
+choices, or schemas, capped by `max_attempts`.
+
+```json
+{
+  "id": "publish",
+  "kind": "tool_call",
+  "tool": "primary_publish",
+  "on_failure": {
+    "kind": "failover",
+    "max_attempts": 1,
+    "attempts": [{ "tool": "backup_publish", "args": { "mode": "backup" } }]
+  }
+}
+```
+
+### Output and gates
+
+`final_text_mode` can be `auto`, `raw`, or `step:<id>`. `auto` returns the last
+step `text` when available; `raw` returns the aggregate outputs and step states;
+`step:<id>` returns that step's `text` or a JSON fallback.
+
+Creator-style meta skills should use internal gate tools and then call
+`skill_workshop` only after gates pass. Skill Workshop remains the boundary for
+creating or updating skills: proposals are scanned, reviewed, and applied by
+the existing Workshop policy. `meta-skill-creator` can include harvested
+`prior_context` and optional `support_files` in the pending proposal when those
+inputs are available. When a meta invocation is bound to a session,
+`meta-skill-creator` first attempts to harvest sanitized recent session history
+through `sessions_history`; callers can still provide explicit `prior_context`
+to add notes that are not present in session history.
+
+Auto-propose can consume durable gate evidence recorded by meta runs. Evidence
+rows with `gate_name` set to `auto_propose_signal` are grouped by workflow key
+and can become candidates when the repeated signal count, risk, proposal, and
+trigger-collision filters pass. The evidence JSON should include:
+
+```json
+{
+  "key": "weekly-brief",
+  "name": "Weekly Brief",
+  "description": "Summarize weekly project updates",
+  "content": "# Weekly Brief\n\nSummarize updates, blockers, owners, and next actions.\n",
+  "trigger": "weekly brief",
+  "risk": "low"
+}
+```
+
+Auto-propose still creates pending Skill Workshop proposals only. It does not
+write active skills, apply proposals, or enable generated behavior directly.
+
 ### Optional frontmatter keys
 
 <ParamField path="homepage" type="string">

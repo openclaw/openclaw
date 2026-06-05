@@ -12,12 +12,14 @@ const runtimeMocks = vi.hoisted(() => ({
     accountId: "acct-1",
     threadId: "thread-2",
   })),
+  canExecRequestNode: vi.fn(() => true),
   applyFinalEffectiveToolPolicy: vi.fn(
     (params: { bundledTools: unknown[] }) => params.bundledTools,
   ),
   buildBundleMcpToolsFromCatalog: vi.fn(() => [] as unknown[]),
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
   getActivePluginRegistryVersion: vi.fn(() => 1),
+  getRemoteSkillEligibility: vi.fn((params: unknown) => ({ params })),
   resolveRuntimeConfigCacheKey: vi.fn(() => "runtime:1:test"),
   resolveAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
   listAgentIds: vi.fn(() => ["main"]),
@@ -50,10 +52,20 @@ const runtimeMocks = vi.hoisted(() => ({
     serverNames: [] as string[],
   })),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace-main"),
+  resolveEffectiveAgentSkillFilter: vi.fn(() => undefined),
   resolveEffectiveToolInventory: vi.fn(),
   resolveReplyToMode: vi.fn(() => "first"),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-4.1" })),
+  resolveReusableWorkspaceSkillSnapshot: vi.fn(() => ({
+    snapshot: {
+      prompt: "",
+      skills: [{ name: "meta-skill-creator" }],
+      version: 3,
+    },
+    shouldRefresh: false,
+    snapshotVersion: 3,
+  })),
   resolveEffectiveToolInventoryRuntimeModelContext: vi.fn(() => ({
     modelApi: "openai-responses",
     runtimeModel: {
@@ -229,6 +241,18 @@ describe("tools.effective handler", () => {
     runtimeMocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
     runtimeMocks.getActivePluginRegistryVersion.mockReturnValue(1);
     runtimeMocks.resolveRuntimeConfigCacheKey.mockReturnValue("runtime:1:test");
+    runtimeMocks.resolveEffectiveAgentSkillFilter.mockReturnValue(undefined);
+    runtimeMocks.canExecRequestNode.mockReturnValue(true);
+    runtimeMocks.getRemoteSkillEligibility.mockImplementation((params: unknown) => ({ params }));
+    runtimeMocks.resolveReusableWorkspaceSkillSnapshot.mockReturnValue({
+      snapshot: {
+        prompt: "",
+        skills: [{ name: "meta-skill-creator" }],
+        version: 3,
+      },
+      shouldRefresh: false,
+      snapshotVersion: 3,
+    });
     runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext.mockReturnValue({
       modelApi: "openai-responses",
       runtimeModel: {
@@ -316,6 +340,19 @@ describe("tools.effective handler", () => {
       api: "openai-responses",
       provider: "openai",
     });
+    expect(inventoryParams?.skillsSnapshot).toEqual({
+      prompt: "",
+      skills: [{ name: "meta-skill-creator" }],
+      version: 3,
+    });
+    expect(runtimeMocks.resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace-main",
+        agentId: "main",
+        skillFilter: undefined,
+        watch: false,
+      }),
+    );
     expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(1);
     expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -326,6 +363,37 @@ describe("tools.effective handler", () => {
         modelId: "gpt-4.1",
       }),
     );
+  });
+
+  it("invalidates the fresh base inventory cache when the skill snapshot version changes", async () => {
+    runtimeMocks.resolveReusableWorkspaceSkillSnapshot
+      .mockReturnValueOnce({
+        snapshot: { prompt: "", skills: [], version: 3 },
+        shouldRefresh: false,
+        snapshotVersion: 3,
+      })
+      .mockReturnValueOnce({
+        snapshot: { prompt: "", skills: [{ name: "meta-skill-creator" }], version: 4 },
+        shouldRefresh: true,
+        snapshotVersion: 4,
+      });
+
+    const first = createInvokeParams({ sessionKey: "main:abc" });
+    await first.invoke();
+    const second = createInvokeParams({ sessionKey: "main:abc" });
+    await second.invoke();
+
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
+    expect(resolveEffectiveToolInventoryArg(0)?.skillsSnapshot).toEqual({
+      prompt: "",
+      skills: [],
+      version: 3,
+    });
+    expect(resolveEffectiveToolInventoryArg(1)?.skillsSnapshot).toEqual({
+      prompt: "",
+      skills: [{ name: "meta-skill-creator" }],
+      version: 4,
+    });
   });
 
   it("serves repeated requests from the fresh base inventory cache while still peeking MCP state", async () => {

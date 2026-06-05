@@ -347,6 +347,12 @@ export function resolveEffectiveToolInventory(
     modelHasVision: params.modelHasVision,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     disableMessageTool: params.disableMessageTool,
+    ...(params.skillsSnapshot
+      ? {
+          skillsSnapshot: params.skillsSnapshot,
+          metaInvokeToolExecutorRef: {},
+        }
+      : {}),
   });
   const projectedInventory = buildRuntimeCompatibleToolInventory({
     tools: effectiveTools,

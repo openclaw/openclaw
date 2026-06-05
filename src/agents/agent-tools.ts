@@ -26,6 +26,11 @@ import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runt
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import {
+  resolveMetaInvokeRuntime,
+  type RuntimeMetaInvokePlanRunner,
+} from "../skills/meta/runtime.js";
+import { createMetaRunStore, type JsonRecord, type MetaRunStore } from "../skills/meta/store.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -72,6 +77,12 @@ import {
   filterLocalModelLeanTools,
   resolveLocalModelLeanPreserveToolNames,
 } from "./local-model-lean.js";
+import {
+  createAgentMetaInvokePlanRunner,
+  filterMetaInvokeTargetTools,
+  type MetaInvokeToolExecutorRef,
+  type MetaInvokeToolRef,
+} from "./meta-invoke-runtime.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -309,6 +320,112 @@ function isApplyPatchAllowedForModel(params: {
   });
 }
 
+function resolveMetaInvokeModelRef(params: {
+  modelProvider?: string;
+  modelId?: string;
+}): string | undefined {
+  const modelId = params.modelId?.trim();
+  if (!modelId) {
+    return undefined;
+  }
+  const provider = params.modelProvider?.trim();
+  if (!provider || modelId.includes("/")) {
+    return modelId;
+  }
+  return `${provider}/${modelId}`;
+}
+
+function addJsonStringField(
+  record: JsonRecord,
+  key: string,
+  value: string | null | undefined,
+): void {
+  const normalized = value?.trim();
+  if (normalized) {
+    record[key] = normalized;
+  }
+}
+
+function addJsonNumberOrStringField(
+  record: JsonRecord,
+  key: string,
+  value: string | number | null | undefined,
+): void {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    record[key] = value;
+    return;
+  }
+  if (typeof value === "string") {
+    addJsonStringField(record, key, value);
+  }
+}
+
+function optionalJsonRecord(record: JsonRecord): JsonRecord | undefined {
+  return Object.keys(record).length > 0 ? record : undefined;
+}
+
+function buildMetaInvokeChannelTargetJson(params: {
+  messageProvider?: string;
+  agentAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
+  currentChannelId?: string;
+  hookChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+}): JsonRecord | undefined {
+  const target: JsonRecord = {};
+  addJsonStringField(target, "provider", params.messageProvider);
+  addJsonStringField(
+    target,
+    "gatewayChannel",
+    resolveGatewayMessageChannel(params.messageProvider),
+  );
+  addJsonStringField(target, "accountId", params.agentAccountId);
+  addJsonStringField(target, "to", params.messageTo);
+  addJsonNumberOrStringField(target, "threadId", params.messageThreadId);
+  addJsonStringField(target, "currentChannelId", params.currentChannelId);
+  addJsonStringField(target, "hookChannelId", params.hookChannelId);
+  addJsonStringField(target, "currentThreadTs", params.currentThreadTs);
+  addJsonNumberOrStringField(target, "currentMessageId", params.currentMessageId);
+  addJsonStringField(target, "groupId", params.groupId);
+  addJsonStringField(target, "groupChannel", params.groupChannel);
+  addJsonStringField(target, "groupSpace", params.groupSpace);
+  return optionalJsonRecord(target);
+}
+
+function buildMetaInvokeWorkspaceContextJson(params: {
+  workspaceDir?: string;
+  cwd?: string;
+  spawnWorkspaceDir?: string;
+  agentDir?: string;
+  sandbox?: SandboxContext;
+}): JsonRecord | undefined {
+  const context: JsonRecord = {};
+  addJsonStringField(context, "workspaceDir", params.workspaceDir);
+  addJsonStringField(context, "cwd", params.cwd);
+  addJsonStringField(context, "spawnWorkspaceDir", params.spawnWorkspaceDir);
+  addJsonStringField(context, "agentDir", params.agentDir);
+  if (params.sandbox) {
+    context.sandbox = {
+      enabled: params.sandbox.enabled,
+      backendId: params.sandbox.backendId,
+      sessionKey: params.sandbox.sessionKey,
+      workspaceDir: params.sandbox.workspaceDir,
+      agentWorkspaceDir: params.sandbox.agentWorkspaceDir,
+      workspaceAccess: params.sandbox.workspaceAccess,
+      runtimeId: params.sandbox.runtimeId,
+      runtimeLabel: params.sandbox.runtimeLabel,
+      containerName: params.sandbox.containerName,
+      containerWorkdir: params.sandbox.containerWorkdir,
+    };
+  }
+  return optionalJsonRecord(context);
+}
+
 type ExecPolicyLayer = {
   mode?: ExecMode;
   security?: ExecSecurity;
@@ -512,6 +629,10 @@ export function createOpenClawCodingTools(options?: {
   toolSearchCatalogExecutor?: ToolSearchCatalogToolExecutor;
   /** Runtime-local Tool Search catalog ref shared with attempt compaction. */
   toolSearchCatalogRef?: ToolSearchCatalogRef;
+  /** Runtime-local target tools that default meta tool_call steps may invoke. */
+  metaInvokeToolsRef?: MetaInvokeToolRef;
+  /** Executes default meta tool_call steps through the active agent run lifecycle. */
+  metaInvokeToolExecutorRef?: MetaInvokeToolExecutorRef;
   /** Limits which tool families are materialized before the shared policy pipeline runs. */
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
   /** Trusted sender identity bit for command/channel-action auth; does not filter model tools. */
@@ -528,6 +649,10 @@ export function createOpenClawCodingTools(options?: {
   onToolOutcome?: ToolOutcomeObserver;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
   skillsSnapshot?: SkillSnapshot;
+  /** Meta plan runner supplied by runtimes that can execute cataloged meta steps. */
+  runMetaPlan?: RuntimeMetaInvokePlanRunner;
+  /** Shared persistence store for default meta plan runs and pending-pause dispatch. */
+  metaRunStore?: MetaRunStore;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -953,6 +1078,81 @@ export function createOpenClawCodingTools(options?: {
         executeTool: options?.toolSearchCatalogExecutor,
       })
     : [];
+  const metaInvokeToolsRef: MetaInvokeToolRef = options?.metaInvokeToolsRef ?? { current: [] };
+  const metaInvokeModelRef = resolveMetaInvokeModelRef({
+    modelProvider: options?.modelProvider,
+    modelId: options?.modelId,
+  });
+  const metaInvokeLlmCompletion = options?.config
+    ? {
+        config: options.config,
+        agentId: agentId ?? options?.agentId ?? "main",
+        ...(metaInvokeModelRef ? { modelRef: metaInvokeModelRef } : {}),
+        ...(options?.abortSignal ? { signal: options.abortSignal } : {}),
+      }
+    : undefined;
+  const metaInvokeSessionKey = options?.runSessionKey ?? options?.sessionKey;
+  const metaRunStore = options?.metaRunStore ?? createMetaRunStore();
+  const metaInvokeChannelTargetJson = buildMetaInvokeChannelTargetJson({
+    messageProvider: options?.messageProvider,
+    agentAccountId: options?.agentAccountId,
+    messageTo: options?.messageTo,
+    messageThreadId: options?.messageThreadId,
+    currentChannelId: options?.currentChannelId,
+    hookChannelId: options?.hookChannelId,
+    currentThreadTs: options?.currentThreadTs,
+    currentMessageId: options?.currentMessageId,
+    groupId: options?.groupId,
+    groupChannel: options?.groupChannel,
+    groupSpace: options?.groupSpace,
+  });
+  const metaInvokeWorkspaceContextJson = buildMetaInvokeWorkspaceContextJson({
+    workspaceDir: options?.workspaceDir,
+    cwd: options?.cwd,
+    spawnWorkspaceDir: options?.spawnWorkspaceDir,
+    agentDir: options?.agentDir,
+    ...(sandbox ? { sandbox } : {}),
+  });
+  const defaultRunMetaPlan = createAgentMetaInvokePlanRunner({
+    toolsRef: metaInvokeToolsRef,
+    toolExecutorRef: options?.metaInvokeToolExecutorRef,
+    llmCompletion: metaInvokeLlmCompletion,
+    skillsSnapshot: options?.skillsSnapshot,
+    agentStep: {
+      ...(metaInvokeSessionKey ? { sourceSessionKey: metaInvokeSessionKey } : {}),
+      sourceChannel: resolveGatewayMessageChannel(options?.messageProvider),
+    },
+    persistence: {
+      store: metaRunStore,
+      agentId: agentId ?? options?.agentId ?? "main",
+      ...(metaInvokeSessionKey ? { sessionKey: metaInvokeSessionKey } : {}),
+      ...(options?.runId ? { agentRunId: options.runId } : {}),
+      ...(metaInvokeChannelTargetJson ? { channelTargetJson: metaInvokeChannelTargetJson } : {}),
+      ...(metaInvokeWorkspaceContextJson
+        ? { workspaceContextJson: metaInvokeWorkspaceContextJson }
+        : {}),
+      ...(options?.trigger ? { triggerJson: { trigger: options.trigger } } : {}),
+      ...(metaInvokeChannelTargetJson ? { channelBindingJson: metaInvokeChannelTargetJson } : {}),
+    },
+    signal: options?.abortSignal,
+  });
+  const defaultMetaStepKinds = [
+    "user_input",
+    ...(options?.config ? (["llm_chat", "llm_classify"] as const) : []),
+    ...(options?.config && options?.skillsSnapshot?.resolvedSkills?.length
+      ? (["skill_exec"] as const)
+      : []),
+    ...(options?.metaInvokeToolExecutorRef ? (["tool_call"] as const) : []),
+    "agent",
+  ] as const;
+  const metaInvokeRuntime = resolveMetaInvokeRuntime(
+    options?.skillsSnapshot,
+    options?.runMetaPlan,
+    {
+      runMetaPlan: defaultRunMetaPlan,
+      stepKinds: defaultMetaStepKinds,
+    },
+  );
   const tools: AnyAgentTool[] = [
     ...base,
     ...(includeBaseCodingTools && sandboxRoot
@@ -1039,6 +1239,7 @@ export function createOpenClawCodingTools(options?: {
           onYield: options?.onYield,
           allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
           recordToolPrepStage: options?.recordToolPrepStage,
+          ...metaInvokeRuntime,
         })
       : pluginToolsOnly),
     ...toolSearchTools,
@@ -1174,6 +1375,7 @@ export function createOpenClawCodingTools(options?: {
     agentId,
   });
   options?.recordToolPrepStage?.("deferred-followup-descriptions");
+  metaInvokeToolsRef.current = filterMetaInvokeTargetTools(withDeferredFollowupDescriptions);
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // shared model runtime's Anthropic OAuth transport remaps tool names to Claude Code-style names

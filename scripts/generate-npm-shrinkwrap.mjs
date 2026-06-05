@@ -945,6 +945,16 @@ function versionSatisfiesSimpleSpec(version, spec) {
   if (normalized === "" || normalized === "*") {
     return true;
   }
+  const boundedRangeMatch = normalized.match(
+    /^>=(?<minimum>\d+\.\d+\.\d+) <(?<maximum>\d+\.\d+\.\d+)$/u,
+  );
+  if (boundedRangeMatch?.groups) {
+    const minimumComparison = compareStableVersions(version, boundedRangeMatch.groups.minimum);
+    const maximumComparison = compareStableVersions(version, boundedRangeMatch.groups.maximum);
+    return minimumComparison !== null && maximumComparison !== null
+      ? minimumComparison >= 0 && maximumComparison < 0
+      : false;
+  }
   const match = normalized.match(/^(?<operator>\^|~|>=)?(?<version>\d+\.\d+\.\d+)$/u);
   if (!match?.groups) {
     return normalized === version;
@@ -980,11 +990,65 @@ function dependencySpecForLockPath(packages, lockPath, dependencyName) {
   const parentPath = packagePath.at(-2)?.path ?? "";
   const parent = packages[parentPath];
   return (
-    parent?.dependencies?.[dependencyName] ??
-    parent?.optionalDependencies?.[dependencyName] ??
-    parent?.peerDependencies?.[dependencyName] ??
-    null
+    parent?.dependencies?.[dependencyName] ?? parent?.optionalDependencies?.[dependencyName] ?? null
   );
+}
+
+function collectShrinkwrapDependencySpecViolations(packages) {
+  const violations = [];
+  if (!packages || typeof packages !== "object") {
+    return violations;
+  }
+  for (const [parentPath, metadata] of Object.entries(packages)) {
+    if (parentPath === "" || !metadata || typeof metadata !== "object") {
+      continue;
+    }
+    for (const dependencyField of ["dependencies", "optionalDependencies"]) {
+      const dependencies = metadata[dependencyField];
+      if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+        continue;
+      }
+      for (const [dependencyName, dependencySpec] of Object.entries(dependencies)) {
+        const resolved = resolveShrinkwrapDependency(packages, parentPath, dependencyName);
+        if (resolved && versionSatisfiesSimpleSpec(resolved.version, String(dependencySpec))) {
+          continue;
+        }
+        violations.push({
+          parentPath,
+          dependencyName,
+          dependencySpec: String(dependencySpec),
+          resolved,
+        });
+      }
+    }
+  }
+  return violations;
+}
+
+function isPackageSubtreeDependencyPath(parentPath, dependencyPath) {
+  return Boolean(parentPath) && dependencyPath.startsWith(`${parentPath}/node_modules/`);
+}
+
+function findCurrentSatisfyingDependency({
+  currentPackages,
+  dependencyName,
+  dependencySpec,
+  parentPath,
+  pnpmLockPackages,
+}) {
+  for (const candidatePath of dependencyCandidatePaths(parentPath, dependencyName)) {
+    const metadata = currentPackages[candidatePath];
+    const packageName = metadata?.name ?? packageNameForLockPath(candidatePath);
+    if (
+      packageName === dependencyName &&
+      metadata?.version &&
+      versionSatisfiesSimpleSpec(metadata.version, dependencySpec) &&
+      pnpmLockPackages.has(`${dependencyName}@${metadata.version}`)
+    ) {
+      return { path: candidatePath, metadata };
+    }
+  }
+  return null;
 }
 
 function restoreCurrentPnpmLockedPackages(
@@ -1036,6 +1100,35 @@ function restoreCurrentPnpmLockedPackages(
     // name has multiple locked major lines. Keep the existing shrinkwrap entry
     // when it still matches the canonical pnpm lock.
     generatedPackages[lockPath] = currentMetadata;
+  }
+
+  for (let index = 0; index < Object.keys(generatedPackages).length; index += 1) {
+    const violations = collectShrinkwrapDependencySpecViolations(generatedPackages);
+    let restored = false;
+    for (const violation of violations) {
+      const replacement = findCurrentSatisfyingDependency({
+        currentPackages,
+        dependencyName: violation.dependencyName,
+        dependencySpec: violation.dependencySpec,
+        parentPath: violation.parentPath,
+        pnpmLockPackages,
+      });
+      if (!replacement) {
+        continue;
+      }
+      generatedPackages[replacement.path] = replacement.metadata;
+      if (
+        violation.resolved &&
+        violation.resolved.path !== replacement.path &&
+        isPackageSubtreeDependencyPath(violation.parentPath, violation.resolved.path)
+      ) {
+        delete generatedPackages[violation.resolved.path];
+      }
+      restored = true;
+    }
+    if (!restored) {
+      break;
+    }
   }
 
   return generated;

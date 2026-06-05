@@ -331,18 +331,18 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   };
 }
 
-// resolvedSkills carries the full parsed Skill[] (including each SKILL.md body)
-// and is only used as an in-turn cache by the runtime — see
-// src/skills/runtime/embedded-run-entries.ts. Persisting it bloats
-// sessions.json by orders of magnitude when many sessions are active. Strip
-// it from every entry that flows through normalize, so neither the in-memory
-// store reloaded from disk nor the JSON serialized back to disk carries it.
+// resolvedSkills and metaSkillCatalog are in-turn runtime caches. Persisting
+// them leaks full SKILL.md bodies, derived prompts, and source paths while also
+// bloating sessions.json. Strip both from every normalized store entry.
 function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
   const snapshot = entry.skillsSnapshot;
-  if (!snapshot || snapshot.resolvedSkills === undefined) {
+  if (
+    !snapshot ||
+    (snapshot.resolvedSkills === undefined && snapshot.metaSkillCatalog === undefined)
+  ) {
     return entry;
   }
-  const { resolvedSkills: _drop, ...rest } = snapshot;
+  const { metaSkillCatalog: _dropMeta, resolvedSkills: _dropSkills, ...rest } = snapshot;
   return { ...entry, skillsSnapshot: rest };
 }
 

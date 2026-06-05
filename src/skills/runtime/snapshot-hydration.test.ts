@@ -15,11 +15,33 @@ function makeFixtureSkill(name: string, bodySize = 3000) {
   });
 }
 
+const metaSkillCatalog: SessionSkillSnapshot["metaSkillCatalog"] = {
+  plans: [
+    {
+      name: "meta-x",
+      description: "Meta X",
+      triggers: [],
+      steps: [
+        {
+          id: "draft",
+          kind: "llm_chat",
+          dependsOn: [],
+          prompt: "Draft",
+          onFailure: { kind: "fail" },
+        },
+      ],
+      finalTextMode: { kind: "auto" },
+    },
+  ],
+  diagnostics: [],
+};
+
 describe("hydrateResolvedSkills", () => {
-  it("returns the same snapshot when resolvedSkills is already populated", () => {
+  it("returns the same snapshot when runtime skill fields are already populated", () => {
     const snapshot: SessionSkillSnapshot = {
       prompt: "p",
       skills: [{ name: "x" }],
+      metaSkillCatalog,
       resolvedSkills: [makeFixtureSkill("x", 100)],
       version: 1,
     };
@@ -32,7 +54,7 @@ describe("hydrateResolvedSkills", () => {
     expect(buildCalls).toBe(0);
   });
 
-  it("rebuilds resolvedSkills only when missing and preserves persisted fields", () => {
+  it("rebuilds runtime skill fields only when missing and preserves persisted fields", () => {
     const stripped: SessionSkillSnapshot = {
       prompt: "original-prompt",
       skills: [{ name: "x" }],
@@ -46,6 +68,7 @@ describe("hydrateResolvedSkills", () => {
       return {
         prompt: "DIFFERENT-PROMPT",
         skills: [{ name: "y" }],
+        metaSkillCatalog,
         resolvedSkills: rebuiltSkills,
         version: 99,
       };
@@ -55,20 +78,28 @@ describe("hydrateResolvedSkills", () => {
     expect(result.skills).toEqual([{ name: "x" }]);
     expect(result.skillFilter).toEqual(["x"]);
     expect(result.version).toBe(7);
+    expect(result.metaSkillCatalog).toBe(metaSkillCatalog);
     expect(result.resolvedSkills).toBe(rebuiltSkills);
   });
 
-  it("treats an empty resolvedSkills array as populated", () => {
+  it("treats empty runtime skill fields as populated", () => {
     const snapshot: SessionSkillSnapshot = {
       prompt: "",
       skills: [],
+      metaSkillCatalog: { plans: [], diagnostics: [] },
       resolvedSkills: [],
       version: 1,
     };
     let buildCalls = 0;
     const result = hydrateResolvedSkills(snapshot, () => {
       buildCalls += 1;
-      return { prompt: "", skills: [], resolvedSkills: [makeFixtureSkill("x")], version: 1 };
+      return {
+        prompt: "",
+        skills: [],
+        metaSkillCatalog,
+        resolvedSkills: [makeFixtureSkill("x")],
+        version: 1,
+      };
     });
     expect(result).toBe(snapshot);
     expect(buildCalls).toBe(0);
@@ -84,12 +115,14 @@ describe("hydrateResolvedSkills", () => {
     const result = await hydrateResolvedSkillsAsync(stripped, async () => ({
       prompt: "fresh-prompt",
       skills: [{ name: "y" }],
+      metaSkillCatalog,
       resolvedSkills: rebuiltSkills,
       version: 3,
     }));
     expect(result.prompt).toBe("cached-prompt");
     expect(result.skills).toEqual([{ name: "x" }]);
     expect(result.version).toBe(2);
+    expect(result.metaSkillCatalog).toBe(metaSkillCatalog);
     expect(result.resolvedSkills).toBe(rebuiltSkills);
   });
 });

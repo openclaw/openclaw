@@ -323,6 +323,21 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         },
       },
     );
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["meta_invoke"] }),
+      {
+        constructTools: true,
+        includeCoreTools: true,
+        runtimeToolAllowlist: ["meta_invoke"],
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      },
+    );
   });
 
   it("keeps plugin-owned catalog tools on the plugin construction path", () => {

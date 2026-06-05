@@ -12,6 +12,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
+import type { MetaSkillCatalog } from "../../skills/meta/catalog.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
@@ -651,6 +652,13 @@ export type SessionSkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /**
+   * Runtime-only, never persisted. Carries derived meta plans, including
+   * prompt templates and source paths, so meta_invoke can run without another
+   * skill scan during the same turn. Stripped from sessions.json with
+   * resolvedSkills and rebuilt by snapshot hydration on cold resume.
+   */
+  metaSkillCatalog?: MetaSkillCatalog;
   /**
    * Runtime-only, never persisted. Carries the full parsed Skill[] (including
    * each SKILL.md body) so the embedded runner can skip a workspace skill

@@ -282,6 +282,174 @@ describe("generate-npm-shrinkwrap", () => {
     ).toEqual(generated);
   });
 
+  it("restores current hoisted dependencies when generated versions violate a parent spec", () => {
+    const generated = {
+      packages: {
+        "": {},
+        "node_modules/yargs": {
+          version: "17.7.2",
+          dependencies: {
+            cliui: "^8.0.1",
+            y18n: "^5.0.5",
+            "yargs-parser": "^21.1.1",
+          },
+        },
+        "node_modules/cliui": {
+          version: "6.0.0",
+        },
+        "node_modules/y18n": {
+          version: "4.0.3",
+        },
+        "node_modules/yargs-parser": {
+          version: "18.1.3",
+        },
+      },
+    };
+    const current = {
+      packages: {
+        "": {},
+        "node_modules/cliui": {
+          version: "8.0.1",
+        },
+        "node_modules/y18n": {
+          version: "5.0.8",
+        },
+        "node_modules/yargs-parser": {
+          version: "21.1.1",
+        },
+      },
+    };
+    const pnpmPackages = new Set([
+      "cliui@6.0.0",
+      "cliui@8.0.1",
+      "y18n@4.0.3",
+      "y18n@5.0.8",
+      "yargs@17.7.2",
+      "yargs-parser@18.1.3",
+      "yargs-parser@21.1.1",
+    ]);
+
+    expect(restoreCurrentPnpmLockedPackages(generated, current, pnpmPackages)).toEqual({
+      packages: {
+        "": {},
+        "node_modules/yargs": generated.packages["node_modules/yargs"],
+        "node_modules/cliui": current.packages["node_modules/cliui"],
+        "node_modules/y18n": current.packages["node_modules/y18n"],
+        "node_modules/yargs-parser": current.packages["node_modules/yargs-parser"],
+      },
+    });
+  });
+
+  it("does not restore hoisted dependencies to satisfy peer dependency ranges", () => {
+    const generated = {
+      packages: {
+        "": {},
+        "node_modules/react": {
+          version: "19.0.0",
+        },
+        "node_modules/widget": {
+          version: "1.0.0",
+          peerDependencies: {
+            react: "^18.0.0",
+          },
+        },
+      },
+    };
+    const current = {
+      packages: {
+        "": {},
+        "node_modules/react": {
+          version: "18.2.0",
+        },
+      },
+    };
+    const pnpmPackages = new Set(["react@18.2.0", "react@19.0.0", "widget@1.0.0"]);
+
+    expect(restoreCurrentPnpmLockedPackages(generated, current, pnpmPackages)).toEqual(generated);
+  });
+
+  it("removes generated nested dependencies that shadow an incompatible parent spec", () => {
+    const generated = {
+      packages: {
+        "": {},
+        "node_modules/@azure/msal-common": {
+          version: "16.6.2",
+        },
+        "node_modules/@azure/msal-node": {
+          version: "5.2.2",
+          dependencies: {
+            "@azure/msal-common": "16.6.2",
+          },
+        },
+        "node_modules/@azure/msal-node/node_modules/@azure/msal-common": {
+          version: "15.17.0",
+        },
+      },
+    };
+    const current = {
+      packages: {
+        "": {},
+        "node_modules/@azure/msal-common": {
+          version: "16.6.2",
+        },
+      },
+    };
+    const pnpmPackages = new Set([
+      "@azure/msal-common@15.17.0",
+      "@azure/msal-common@16.6.2",
+      "@azure/msal-node@5.2.2",
+    ]);
+
+    expect(restoreCurrentPnpmLockedPackages(generated, current, pnpmPackages)).toEqual({
+      packages: {
+        "": {},
+        "node_modules/@azure/msal-common": current.packages["node_modules/@azure/msal-common"],
+        "node_modules/@azure/msal-node": generated.packages["node_modules/@azure/msal-node"],
+      },
+    });
+  });
+
+  it("restores nested dependencies for bounded range specs", () => {
+    const generated = {
+      packages: {
+        "": {},
+        "node_modules/@types/ws/node_modules/@types/node": {
+          version: "25.9.1",
+          dependencies: {
+            "undici-types": ">=7.24.0 <7.24.7",
+          },
+        },
+        "node_modules/undici-types": {
+          version: "6.21.0",
+        },
+      },
+    };
+    const current = {
+      packages: {
+        "": {},
+        "node_modules/@types/ws/node_modules/undici-types": {
+          version: "7.24.6",
+        },
+      },
+    };
+    const pnpmPackages = new Set([
+      "@types/node@25.9.1",
+      "undici-types@6.21.0",
+      "undici-types@7.24.6",
+    ]);
+
+    expect(restoreCurrentPnpmLockedPackages(generated, current, pnpmPackages)).toEqual({
+      packages: {
+        "": {},
+        "node_modules/@types/ws/node_modules/@types/node":
+          generated.packages["node_modules/@types/ws/node_modules/@types/node"],
+        "node_modules/@types/ws/node_modules/undici-types":
+          current.packages["node_modules/@types/ws/node_modules/undici-types"],
+        "node_modules/undici-types": generated.packages["node_modules/undici-types"],
+      },
+    });
+  });
+
   it("pins current shrinkwrap versions that are still in the pnpm lock", () => {
     const lockfile = {
       packages: {

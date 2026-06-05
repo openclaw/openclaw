@@ -131,6 +131,40 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.skills.map((skill) => skill.name)).toContain("visible-skill");
   });
 
+  it("projects meta skills into the runtime meta catalog", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "meta-draft"),
+      name: "meta-draft",
+      description: "Draft through meta",
+      frontmatterExtra: [
+        "kind: meta",
+        'triggers: ["draft"]',
+        'composition: {"steps":[{"id":"draft","kind":"llm_chat","prompt":"Draft"}]}',
+      ].join("\n"),
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "hidden-meta"),
+      name: "hidden-meta",
+      description: "Hidden meta",
+      frontmatterExtra: [
+        "disable-model-invocation: true",
+        "kind: meta",
+        'triggers: ["hidden"]',
+        'composition: {"steps":[{"id":"draft","kind":"llm_chat","prompt":"Hidden"}]}',
+      ].join("\n"),
+    });
+
+    const snapshot = buildSnapshot(workspaceDir);
+
+    expect(snapshot.metaSkillCatalog?.diagnostics).toEqual([]);
+    expect(snapshot.metaSkillCatalog?.plans.map((plan) => plan.name)).toEqual(["meta-draft"]);
+    expect(snapshot.metaSkillCatalog?.plans[0]).toMatchObject({
+      description: "Draft through meta",
+      finalTextMode: { kind: "auto" },
+    });
+  });
+
   it("keeps prompt output aligned with buildWorkspaceSkillsPrompt", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     await writeSkill({

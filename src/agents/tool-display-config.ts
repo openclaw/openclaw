@@ -281,6 +281,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Skill Workshop",
       detailKeys: ["action", "name", "proposal_id"],
     },
+    meta_invoke: {
+      emoji: "🧰",
+      title: "Meta Invoke",
+      detailKeys: ["skill", "input.name", "input.query", "input.path"],
+    },
     gateway: {
       emoji: "🔌",
       title: "Gateway",

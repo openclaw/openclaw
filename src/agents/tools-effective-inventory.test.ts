@@ -5,6 +5,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import type { createOpenClawCodingTools } from "./agent-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -996,5 +997,48 @@ describe("resolveEffectiveToolInventory", () => {
       nativeWebSearchTool: true,
     });
     expect(createToolsOptions?.modelApi).toBe("openai-completions");
+  });
+
+  it("passes the resolved skill snapshot and meta executor capability into effective tool creation", async () => {
+    const createToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => [
+      mockTool({
+        name: "meta_invoke",
+        label: "Meta Invoke",
+        description: "Run meta skills",
+      }),
+    ]);
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal } = await loadHarness(
+      {
+        createToolsMock,
+      },
+    );
+    const skillsSnapshot: SkillSnapshot = {
+      prompt: "",
+      skills: [{ name: "meta-skill-creator" }],
+      metaSkillCatalog: {
+        plans: [
+          {
+            name: "meta-skill-creator",
+            description: "Create skills",
+            triggers: [],
+            steps: [],
+            finalTextMode: { kind: "auto" },
+          },
+        ],
+        diagnostics: [],
+      },
+      version: 7,
+    };
+
+    const result = resolveEffectiveToolInventoryLocal({
+      cfg: {},
+      skillsSnapshot,
+    });
+
+    expect(result.groups[0]?.tools[0]?.id).toBe("meta_invoke");
+    expect(createToolsMock).toHaveBeenCalledTimes(1);
+    const createToolsOptions = createToolsMock.mock.calls.at(0)?.[0];
+    expect(createToolsOptions?.skillsSnapshot).toBe(skillsSnapshot);
+    expect(createToolsOptions?.metaInvokeToolExecutorRef).toEqual({});
   });
 });

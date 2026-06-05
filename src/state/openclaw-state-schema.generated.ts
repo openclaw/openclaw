@@ -1026,6 +1026,84 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);
 
+CREATE TABLE IF NOT EXISTS meta_skill_runs (
+  run_id TEXT NOT NULL PRIMARY KEY,
+  skill_name TEXT NOT NULL,
+  skill_key TEXT,
+  agent_id TEXT,
+  session_key TEXT,
+  agent_run_id TEXT,
+  channel_target_json TEXT,
+  workspace_context_json TEXT,
+  status TEXT NOT NULL,
+  trigger_json TEXT,
+  input_json TEXT NOT NULL,
+  original_input_summary TEXT,
+  final_mode TEXT,
+  final_text TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  completed_at_ms INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_meta_skill_runs_session_updated
+  ON meta_skill_runs(session_key, updated_at_ms DESC, run_id)
+  WHERE session_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS meta_skill_steps (
+  run_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  dependency_state_json TEXT,
+  status TEXT NOT NULL,
+  input_json TEXT,
+  output_json TEXT,
+  error_json TEXT,
+  started_at_ms INTEGER,
+  updated_at_ms INTEGER NOT NULL,
+  completed_at_ms INTEGER,
+  PRIMARY KEY (run_id, step_id),
+  FOREIGN KEY (run_id) REFERENCES meta_skill_runs(run_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS meta_skill_pauses (
+  pause_id TEXT NOT NULL PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  schema_json TEXT NOT NULL,
+  prefill_json TEXT,
+  confirmed_fields_json TEXT,
+  channel_binding_json TEXT,
+  session_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'resumed', 'expired', 'cancelled')),
+  expires_at_ms INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  resumed_at_ms INTEGER,
+  FOREIGN KEY (run_id) REFERENCES meta_skill_runs(run_id) ON DELETE CASCADE,
+  FOREIGN KEY (run_id, step_id) REFERENCES meta_skill_steps(run_id, step_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_meta_skill_pauses_session_status_expires
+  ON meta_skill_pauses(session_key, status, expires_at_ms);
+
+CREATE TABLE IF NOT EXISTS meta_skill_evidence (
+  evidence_id TEXT NOT NULL PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  step_id TEXT,
+  proposal_id TEXT,
+  gate_name TEXT NOT NULL,
+  result TEXT NOT NULL,
+  risk_level TEXT,
+  evidence_json TEXT NOT NULL,
+  artifact_refs_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES meta_skill_runs(run_id) ON DELETE CASCADE,
+  FOREIGN KEY (run_id, step_id) REFERENCES meta_skill_steps(run_id, step_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_meta_skill_evidence_run_created
+  ON meta_skill_evidence(run_id, created_at_ms, evidence_id);
+
 CREATE TABLE IF NOT EXISTS subagent_runs (
   run_id TEXT NOT NULL PRIMARY KEY,
   child_session_key TEXT NOT NULL,

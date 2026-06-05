@@ -10,7 +10,9 @@ import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./ref
 import { ensureSkillsWatcher } from "./refresh.js";
 import { hydrateResolvedSkills } from "./snapshot-hydration.js";
 
-const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
+type RuntimeSkillSnapshotCacheEntry = Pick<SkillSnapshot, "metaSkillCatalog" | "resolvedSkills">;
+
+const resolvedSkillsCache = new Map<string, RuntimeSkillSnapshotCacheEntry>();
 const RESOLVED_SKILLS_CACHE_MAX = 10;
 
 /** Inputs that make a resolved skill snapshot reusable within a process. */
@@ -44,7 +46,10 @@ function fingerprintSkillSnapshotConfig(config: OpenClawConfig): string {
 }
 
 function cacheResolvedSkills(cacheKey: string, snapshot: SkillSnapshot): SkillSnapshot {
-  resolvedSkillsCache.set(cacheKey, snapshot.resolvedSkills);
+  resolvedSkillsCache.set(cacheKey, {
+    metaSkillCatalog: snapshot.metaSkillCatalog,
+    resolvedSkills: snapshot.resolvedSkills,
+  });
   if (resolvedSkillsCache.size > RESOLVED_SKILLS_CACHE_MAX) {
     const oldest = resolvedSkillsCache.keys().next().value;
     if (oldest !== undefined) {
@@ -85,8 +90,9 @@ export function resolveReusableWorkspaceSkillSnapshot(
   ]);
 
   const cachedRebuild = (): SkillSnapshot => {
-    if (resolvedSkillsCache.has(snapshotCacheKey)) {
-      return { resolvedSkills: resolvedSkillsCache.get(snapshotCacheKey) } as SkillSnapshot;
+    const cachedRuntimeFields = resolvedSkillsCache.get(snapshotCacheKey);
+    if (cachedRuntimeFields) {
+      return cachedRuntimeFields as SkillSnapshot;
     }
     return cacheResolvedSkills(snapshotCacheKey, buildSnapshot());
   };

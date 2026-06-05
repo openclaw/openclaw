@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
@@ -254,6 +255,46 @@ describe("skill_workshop tool", () => {
     );
   });
 
+  it("accepts support files from JSON-array strings", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+
+    const result = await tool.execute("call-1", {
+      action: "create",
+      name: "Release Captain",
+      description: "Coordinate release readiness",
+      proposal_content: "# Release Captain\n\nCollect release risks.\n",
+      support_files: JSON.stringify([
+        {
+          path: "examples/release.md",
+          content: "Example release checklist.\n",
+        },
+      ]),
+      goal: "Reuse release planning steps",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "pending",
+      kind: "create",
+      skillKey: "release-captain",
+      scanState: "clean",
+      supportFileCount: 1,
+    });
+    await expect(
+      fs.readFile(
+        path.join(
+          stateDir,
+          "skill-workshop",
+          "proposals",
+          (result.details as { id: string }).id,
+          "examples",
+          "release.md",
+        ),
+        "utf8",
+      ),
+    ).resolves.toContain("Example release checklist.");
+  });
+
   it("applies, rejects, and quarantines proposals through the workshop service", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
@@ -369,6 +410,101 @@ describe("skill_workshop tool", () => {
     await expect(
       fs.access(path.join(workspaceDir, "skills", "quarantined-skill", "SKILL.md")),
     ).rejects.toThrow();
+  });
+
+  it("revises a same-name pending proposal through action=create", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+    });
+
+    const created = await tool.execute("call-1", {
+      action: "create",
+      name: "Weekly Brief",
+      description: "Draft a weekly operations brief",
+      proposal_content: "# Weekly Brief\n\nSummarize updates.\n",
+      evidence: "initial draft",
+    });
+    const revised = await tool.execute("call-2", {
+      action: "create",
+      name: "Weekly Brief",
+      description: "Draft a sharper weekly operations brief",
+      proposal_content: "# Weekly Brief\n\nSummarize updates and blockers.\n",
+      evidence: "gate_summary: passed",
+    });
+
+    expect(revised.details).toMatchObject({
+      id: (created.details as { id: string }).id,
+      status: "pending",
+      kind: "create",
+      skillKey: "weekly-brief",
+      proposedVersion: "v2",
+    });
+    expect((revised.content[0] as { text: string }).text).toBe(
+      `Revised skill proposal ${(created.details as { id: string }).id} (pending) for weekly-brief.`,
+    );
+  });
+
+  it("does not use fuzzy proposal matches when action=create auto-revises", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+
+    const planner = await tool.execute("call-1", {
+      action: "create",
+      name: "Weather Planner",
+      description: "Plan around current weather",
+      proposal_content: "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
+    });
+
+    const weather = await tool.execute("call-2", {
+      action: "create",
+      name: "Weather",
+      description: "Check current weather",
+      proposal_content: "# Weather\n\nFetch weather before answering.\n",
+    });
+
+    expect(weather.details).toMatchObject({
+      status: "pending",
+      kind: "create",
+      skillKey: "weather",
+      proposedVersion: "v1",
+    });
+    expect((weather.details as { id: string }).id).not.toBe((planner.details as { id: string }).id);
+    expect((weather.content[0] as { text: string }).text).toBe(
+      `Created skill proposal ${(weather.details as { id: string }).id} (pending) for weather.`,
+    );
+  });
+
+  it("creates update proposals for existing writable skills through action=create", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const skillFile = path.join(workspaceDir, "skills", "weekly-brief", "SKILL.md");
+    await writeSkill({
+      dir: path.dirname(skillFile),
+      name: "weekly-brief",
+      description: "Old weekly brief workflow",
+      body: "# Weekly Brief\n\nOld instructions.\n",
+    });
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+
+    const result = await tool.execute("call-1", {
+      action: "create",
+      name: "weekly-brief",
+      description: "Draft a sharper weekly operations brief",
+      proposal_content: "# Weekly Brief\n\nGather updates and summarize blockers.\n",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "pending",
+      kind: "update",
+      skillKey: "weekly-brief",
+      targetSkillFile: skillFile,
+    });
+    expect((result.content[0] as { text: string }).text).toBe(
+      `Created skill update proposal ${(result.details as { id: string }).id} (pending) for weekly-brief.`,
+    );
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Old instructions.");
   });
 
   it("scopes proposal discovery to the tool workspace", async () => {

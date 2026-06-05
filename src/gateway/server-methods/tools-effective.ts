@@ -17,20 +17,25 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import {
   applyFinalEffectiveToolPolicy,
   buildBundleMcpToolsFromCatalog,
+  canExecRequestNode,
   deliveryContextFromSession,
   getActivePluginChannelRegistryVersion,
   getActivePluginRegistryVersion,
+  getRemoteSkillEligibility,
   listAgentIds,
   loadSessionEntry,
   peekSessionMcpRuntime,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveEffectiveAgentSkillFilter,
   resolveEffectiveToolInventory,
   resolveEffectiveToolInventoryRuntimeModelContext,
   resolveReplyToMode,
+  resolveReusableWorkspaceSkillSnapshot,
   resolveRuntimeConfigCacheKey,
   resolveSessionAgentId,
   resolveSessionMcpConfigSummary,
@@ -66,6 +71,8 @@ type TrustedToolsEffectiveContext = {
   groupSpace?: string | null;
   replyToMode?: "off" | "first" | "all" | "batched";
   spawnedBy?: string | null;
+  skillsSnapshot: SkillSnapshot;
+  skillsSnapshotVersion: number;
 };
 
 type ToolsEffectiveCacheEntry = {
@@ -109,6 +116,7 @@ function buildToolsEffectiveCacheKey(params: {
     groupChannel: optionalCacheString(context.groupChannel),
     groupSpace: optionalCacheString(context.groupSpace),
     replyToMode: optionalCacheString(context.replyToMode),
+    skillsSnapshotVersion: context.skillsSnapshotVersion,
   });
 }
 
@@ -367,6 +375,7 @@ function resolveBaseToolsEffectiveInventory(
     groupChannel: context.groupChannel,
     groupSpace: context.groupSpace,
     replyToMode: context.replyToMode,
+    skillsSnapshot: context.skillsSnapshot,
   });
 }
 
@@ -493,6 +502,25 @@ function resolveTrustedToolsEffectiveContext(params: {
   const runtimeConfigCacheKey = resolveRuntimeConfigCacheKey(loaded.cfg);
   const pluginRegistryVersion = getActivePluginRegistryVersion();
   const channelRegistryVersion = getActivePluginChannelRegistryVersion();
+  const skillFilter = resolveEffectiveAgentSkillFilter(loaded.cfg, sessionAgentId);
+  const skillSnapshotState = resolveReusableWorkspaceSkillSnapshot({
+    workspaceDir,
+    config: loaded.cfg,
+    agentId: sessionAgentId,
+    existingSnapshot: loaded.entry.skillsSnapshot,
+    skillFilter,
+    eligibility: {
+      remote: getRemoteSkillEligibility({
+        advertiseExecNode: canExecRequestNode({
+          cfg: loaded.cfg,
+          sessionEntry: loaded.entry,
+          sessionKey: loaded.canonicalKey ?? params.sessionKey,
+          agentId: sessionAgentId,
+        }),
+      }),
+    },
+    watch: false,
+  });
   return {
     cfg: loaded.cfg,
     agentId: sessionAgentId,
@@ -502,6 +530,8 @@ function resolveTrustedToolsEffectiveContext(params: {
     runtimeConfigCacheKey,
     pluginRegistryVersion,
     channelRegistryVersion,
+    skillsSnapshot: skillSnapshotState.snapshot,
+    skillsSnapshotVersion: skillSnapshotState.snapshotVersion,
     modelProvider: resolvedModel.provider,
     modelId: resolvedModel.model,
     messageProvider:

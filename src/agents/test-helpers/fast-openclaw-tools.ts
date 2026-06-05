@@ -54,9 +54,18 @@ const coreTools = [
 ];
 
 const createOpenClawToolsMock = vi.fn(
-  (options?: { enableHeartbeatTool?: boolean; recordToolPrepStage?: (name: string) => void }) => {
+  (options?: {
+    enableHeartbeatTool?: boolean;
+    metaSkillCatalog?: unknown;
+    runMetaPlan?: unknown;
+    recordToolPrepStage?: (name: string) => void;
+  }) => {
     options?.recordToolPrepStage?.("openclaw-tools:test-helper");
-    return coreTools
+    const tools =
+      options?.metaSkillCatalog && options.runMetaPlan
+        ? [...coreTools, stubTool("meta_invoke")]
+        : coreTools;
+    return tools
       .filter((tool) => tool.name !== "heartbeat_respond" || options?.enableHeartbeatTool === true)
       .map((tool) => Object.assign({}, tool));
   },

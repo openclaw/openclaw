@@ -45,6 +45,27 @@ function makeSnapshot(skillCount: number): SessionSkillSnapshot {
     prompt: "<available_skills>...</available_skills>",
     skills: resolved.map((s) => ({ name: s.name })),
     skillFilter: undefined,
+    metaSkillCatalog: {
+      plans: [
+        {
+          name: "meta-secret",
+          description: "Meta secret skill",
+          triggers: [],
+          steps: [
+            {
+              id: "draft",
+              kind: "llm_chat",
+              dependsOn: [],
+              prompt: "meta secret prompt",
+              onFailure: { kind: "fail" },
+            },
+          ],
+          finalTextMode: { kind: "auto" },
+          sourceFilePath: "/private/skills/meta-secret/SKILL.md",
+        },
+      ],
+      diagnostics: [],
+    },
     resolvedSkills: resolved,
     version: 1,
   };
@@ -104,9 +125,13 @@ describe("session store strips resolvedSkills from persistence", () => {
 
     const raw = await fs.readFile(storePath, "utf-8");
     expect(raw).not.toContain("resolvedSkills");
+    expect(raw).not.toContain("metaSkillCatalog");
+    expect(raw).not.toContain("meta secret prompt");
+    expect(raw).not.toContain("/private/skills");
     expect(raw).not.toContain("xxxxx"); // none of the skill source bodies leaked
     const parsed = JSON.parse(raw) as Record<string, SessionEntry>;
     expect(parsed["agent:main:test:1"]?.skillsSnapshot?.resolvedSkills).toBeUndefined();
+    expect(parsed["agent:main:test:1"]?.skillsSnapshot?.metaSkillCatalog).toBeUndefined();
   });
 
   it("preserves prompt, skills, skillFilter, and version on roundtrip", async () => {
@@ -125,9 +150,10 @@ describe("session store strips resolvedSkills from persistence", () => {
     expect(persistedSnapshot?.skillFilter).toEqual(["skill-0"]);
     expect(persistedSnapshot?.version).toBe(1);
     expect(persistedSnapshot?.resolvedSkills).toBeUndefined();
+    expect(persistedSnapshot?.metaSkillCatalog).toBeUndefined();
   });
 
-  it("strips resolvedSkills from a legacy sessions.json on load", async () => {
+  it("strips runtime skill caches from a legacy sessions.json on load", async () => {
     // Hand-craft a pre-fix file with embedded resolvedSkills.
     const legacy = {
       "agent:main:test:1": makeEntry("session-1", makeSnapshot(4)),
@@ -147,6 +173,7 @@ describe("session store strips resolvedSkills from persistence", () => {
     await saveSessionStore(storePath, loaded, { skipMaintenance: true });
     const rawAfter = await fs.readFile(storePath, "utf-8");
     expect(rawAfter).not.toContain("resolvedSkills");
+    expect(rawAfter).not.toContain("metaSkillCatalog");
   });
 
   it("strips resolvedSkills written via updateSessionStore mutator", async () => {
@@ -162,8 +189,10 @@ describe("session store strips resolvedSkills from persistence", () => {
 
     const raw = await fs.readFile(storePath, "utf-8");
     expect(raw).not.toContain("resolvedSkills");
+    expect(raw).not.toContain("metaSkillCatalog");
     const reloaded = loadSessionStore(storePath, { skipCache: true });
     expect(reloaded["agent:main:test:1"]?.skillsSnapshot?.resolvedSkills).toBeUndefined();
+    expect(reloaded["agent:main:test:1"]?.skillsSnapshot?.metaSkillCatalog).toBeUndefined();
     expect(reloaded["agent:main:test:1"]?.skillsSnapshot?.skills).toHaveLength(6);
   });
 

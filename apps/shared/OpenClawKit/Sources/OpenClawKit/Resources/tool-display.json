@@ -398,6 +398,16 @@
         "proposal_id"
       ]
     },
+    "meta_invoke": {
+      "emoji": "🧰",
+      "title": "Meta Invoke",
+      "detailKeys": [
+        "skill",
+        "input.name",
+        "input.query",
+        "input.path"
+      ]
+    },
     "gateway": {
       "emoji": "🔌",
       "title": "Gateway",

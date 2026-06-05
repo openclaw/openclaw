@@ -633,6 +633,15 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "commitments", "dismissed_at_ms INTEGER");
   ensureColumn(db, "commitments", "snoozed_until_ms INTEGER");
   ensureColumn(db, "commitments", "expired_at_ms INTEGER");
+  ensureColumn(db, "meta_skill_runs", "skill_key TEXT");
+  ensureColumn(db, "meta_skill_runs", "agent_run_id TEXT");
+  ensureColumn(db, "meta_skill_runs", "channel_target_json TEXT");
+  ensureColumn(db, "meta_skill_runs", "workspace_context_json TEXT");
+  ensureColumn(db, "meta_skill_runs", "original_input_summary TEXT");
+  ensureColumn(db, "meta_skill_runs", "final_mode TEXT");
+  ensureColumn(db, "meta_skill_steps", "dependency_state_json TEXT");
+  ensureColumn(db, "meta_skill_pauses", "channel_binding_json TEXT");
+  ensureColumn(db, "meta_skill_evidence", "artifact_refs_json TEXT");
   ensureColumn(db, "current_conversation_bindings", "target_agent_id TEXT NOT NULL DEFAULT 'main'");
   ensureColumn(db, "current_conversation_bindings", "target_session_id TEXT");
   ensureColumn(

@@ -17,6 +17,8 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import type { MetaSkillCatalog } from "../skills/meta/catalog.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -130,6 +132,175 @@ function requireToolExecute(tool: OpenClawCodingTool): NonNullable<OpenClawCodin
   }
   return tool.execute;
 }
+
+const metaSkillCatalog = {
+  plans: [
+    {
+      name: "draft_reply",
+      description: "Draft a concise reply",
+      triggers: [],
+      steps: [
+        {
+          id: "draft",
+          kind: "llm_chat",
+          dependsOn: [],
+          prompt: "Write the reply.",
+          onFailure: { kind: "fail" },
+        },
+      ],
+      finalTextMode: { kind: "auto" },
+    },
+  ],
+  diagnostics: [],
+} satisfies MetaSkillCatalog;
+
+const skillsSnapshotWithMetaCatalog = {
+  prompt: "",
+  skills: [],
+  metaSkillCatalog,
+  resolvedSkills: [],
+} satisfies SkillSnapshot;
+
+const defaultRunnableMetaSkillCatalog = {
+  plans: [
+    {
+      name: "clarify_reply",
+      description: "Ask for missing reply details",
+      triggers: [],
+      steps: [
+        {
+          id: "clarify",
+          kind: "user_input",
+          dependsOn: [],
+          schema: {
+            type: "object",
+            required: ["topic"],
+            properties: {
+              topic: { type: "string" },
+            },
+          },
+          onFailure: { kind: "fail" },
+        },
+      ],
+      finalTextMode: { kind: "step", stepId: "clarify" },
+    },
+  ],
+  diagnostics: [],
+} satisfies MetaSkillCatalog;
+
+const skillsSnapshotWithDefaultRunnableMetaCatalog = {
+  prompt: "",
+  skills: [],
+  metaSkillCatalog: defaultRunnableMetaSkillCatalog,
+  resolvedSkills: [],
+} satisfies SkillSnapshot;
+
+const defaultToolCallMetaSkillCatalog = {
+  plans: [
+    {
+      name: "read_note",
+      description: "Read a note through a cataloged tool call",
+      triggers: [],
+      steps: [
+        {
+          id: "read",
+          kind: "tool_call",
+          dependsOn: [],
+          toolName: "read",
+          args: {
+            path: "{{input.path}}",
+          },
+          onFailure: { kind: "fail" },
+        },
+      ],
+      finalTextMode: { kind: "step", stepId: "read" },
+    },
+  ],
+  diagnostics: [],
+} satisfies MetaSkillCatalog;
+
+const skillsSnapshotWithDefaultToolCallMetaCatalog = {
+  prompt: "",
+  skills: [],
+  metaSkillCatalog: defaultToolCallMetaSkillCatalog,
+  resolvedSkills: [],
+} satisfies SkillSnapshot;
+
+const defaultAgentMetaSkillCatalog = {
+  plans: [
+    {
+      name: "ask_reviewer",
+      description: "Ask a reviewer agent for a summary",
+      triggers: [],
+      steps: [
+        {
+          id: "ask",
+          kind: "agent",
+          dependsOn: [],
+          prompt: "Review {{input.topic}}",
+          args: {
+            sessionKey: "agent:reviewer:main",
+          },
+          onFailure: { kind: "fail" },
+        },
+      ],
+      finalTextMode: { kind: "step", stepId: "ask" },
+    },
+  ],
+  diagnostics: [],
+} satisfies MetaSkillCatalog;
+
+const skillsSnapshotWithDefaultAgentMetaCatalog = {
+  prompt: "",
+  skills: [],
+  metaSkillCatalog: defaultAgentMetaSkillCatalog,
+  resolvedSkills: [],
+} satisfies SkillSnapshot;
+
+const defaultSkillExecMetaSkillCatalog = {
+  plans: [
+    {
+      name: "review_with_skill",
+      description: "Review through an ordinary skill",
+      triggers: [],
+      steps: [
+        {
+          id: "review",
+          kind: "skill_exec",
+          dependsOn: [],
+          skillName: "review-helper",
+          prompt: "Review {{input.file}}",
+          onFailure: { kind: "fail" },
+        },
+      ],
+      finalTextMode: { kind: "step", stepId: "review" },
+    },
+  ],
+  diagnostics: [],
+} satisfies MetaSkillCatalog;
+
+const skillsSnapshotWithDefaultSkillExecMetaCatalog = {
+  prompt: "",
+  skills: [{ name: "review-helper" }],
+  metaSkillCatalog: defaultSkillExecMetaSkillCatalog,
+  resolvedSkills: [
+    {
+      name: "review-helper",
+      description: "Review code changes",
+      filePath: "/workspace/skills/review-helper/SKILL.md",
+      baseDir: "/workspace/skills/review-helper",
+      sourceInfo: {
+        path: "/workspace/skills/review-helper/SKILL.md",
+        source: "workspace",
+        scope: "project",
+        origin: "top-level",
+        baseDir: "/workspace/skills/review-helper",
+      },
+      disableModelInvocation: false,
+      source: "# Review Helper\n\nCheck changed behavior and tests.",
+    },
+  ],
+} satisfies SkillSnapshot;
 
 function latestCreateOpenClawToolsOptions(): OpenClawToolsOptions {
   const calls = vi.mocked(createOpenClawTools).mock.calls;
@@ -344,6 +515,227 @@ describe("createOpenClawCodingTools", () => {
         toolsEnabled: true,
       }),
     ).toBeNull();
+  });
+
+  it("materializes meta_invoke from a runtime meta skill snapshot and allowlist", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const runMetaPlan = vi.fn().mockResolvedValue({
+      status: "succeeded",
+      finalText: "ok",
+      outputs: {},
+      steps: {},
+    });
+
+    const tools = createOpenClawCodingTools({
+      skillsSnapshot: skillsSnapshotWithMetaCatalog,
+      runMetaPlan,
+      runtimeToolAllowlist: ["meta_invoke"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("meta_invoke");
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      metaSkillCatalog,
+      runMetaPlan,
+    });
+  });
+
+  it("materializes meta_invoke from a runtime meta skill snapshot with the default runner", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    const tools = createOpenClawCodingTools({
+      skillsSnapshot: skillsSnapshotWithDefaultRunnableMetaCatalog,
+      runtimeToolAllowlist: ["meta_invoke"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("meta_invoke");
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      metaSkillCatalog: defaultRunnableMetaSkillCatalog,
+    });
+    expect(latestCreateOpenClawToolsOptions().runMetaPlan).toEqual(expect.any(Function));
+  });
+
+  it("materializes default llm meta plans when model config is available", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+          },
+        },
+      },
+      skillsSnapshot: skillsSnapshotWithMetaCatalog,
+      runtimeToolAllowlist: ["meta_invoke"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("meta_invoke");
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      metaSkillCatalog,
+    });
+    expect(latestCreateOpenClawToolsOptions().runMetaPlan).toEqual(expect.any(Function));
+  });
+
+  it("materializes default skill_exec meta plans when model config and loaded skills are available", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+          },
+        },
+      },
+      skillsSnapshot: skillsSnapshotWithDefaultSkillExecMetaCatalog,
+      runtimeToolAllowlist: ["meta_invoke"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("meta_invoke");
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      metaSkillCatalog: defaultSkillExecMetaSkillCatalog,
+    });
+    expect(latestCreateOpenClawToolsOptions().runMetaPlan).toEqual(expect.any(Function));
+  });
+
+  it("does not materialize default skill_exec meta plans without model config", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    const tools = createOpenClawCodingTools({
+      skillsSnapshot: skillsSnapshotWithDefaultSkillExecMetaCatalog,
+      runtimeToolAllowlist: ["meta_invoke"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).not.toContain("meta_invoke");
+  });
+
+  it("does not materialize meta_invoke from default tool_call meta plans without a lifecycle executor", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    const tools = createOpenClawCodingTools({
+      skillsSnapshot: skillsSnapshotWithDefaultToolCallMetaCatalog,
+      runtimeToolAllowlist: ["meta_invoke"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: true,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).not.toContain("meta_invoke");
+  });
+
+  it("materializes meta_invoke from default tool_call meta plans", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    const tools = createOpenClawCodingTools({
+      skillsSnapshot: skillsSnapshotWithDefaultToolCallMetaCatalog,
+      runtimeToolAllowlist: ["meta_invoke"],
+      metaInvokeToolExecutorRef: { current: vi.fn() },
+      toolConstructionPlan: {
+        includeBaseCodingTools: true,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("meta_invoke");
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      metaSkillCatalog: defaultToolCallMetaSkillCatalog,
+    });
+    expect(latestCreateOpenClawToolsOptions().runMetaPlan).toEqual(expect.any(Function));
+  });
+
+  it("materializes meta_invoke from default agent meta plans", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    const tools = createOpenClawCodingTools({
+      sessionKey: "agent:main:main",
+      messageProvider: "telegram",
+      skillsSnapshot: skillsSnapshotWithDefaultAgentMetaCatalog,
+      runtimeToolAllowlist: ["meta_invoke"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("meta_invoke");
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      metaSkillCatalog: defaultAgentMetaSkillCatalog,
+    });
+    expect(latestCreateOpenClawToolsOptions().runMetaPlan).toEqual(expect.any(Function));
+  });
+
+  it("does not materialize meta_invoke from unsupported default meta plans", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    const tools = createOpenClawCodingTools({
+      skillsSnapshot: skillsSnapshotWithMetaCatalog,
+      runtimeToolAllowlist: ["meta_invoke"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).not.toContain("meta_invoke");
+    expect(latestCreateOpenClawToolsOptions()).not.toHaveProperty("metaSkillCatalog");
+    expect(latestCreateOpenClawToolsOptions()).not.toHaveProperty("runMetaPlan");
   });
 
   it("uses runtime toolsAllow when materializing plugin tools", () => {
