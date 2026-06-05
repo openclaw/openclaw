@@ -54,6 +54,26 @@ describe("native command auth in groups", () => {
     expect(notAuthCalls).toHaveLength(0);
   });
 
+  it("authorizes native commands in open groups without a sender allowlist", async () => {
+    const { handlers, sendMessage } = setup({
+      cfg: {
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+          },
+        },
+      } as OpenClawConfig,
+      useAccessGroups: true,
+    });
+
+    const ctx = createTelegramGroupCommandContext();
+
+    await handlers.status?.(ctx);
+
+    const notAuthCalls = findNotAuthorizedCalls(sendMessage);
+    expect(notAuthCalls).toHaveLength(0);
+  });
+
   it("does not authorize group native commands from the DM allowlist store", async () => {
     const { handlers, sendMessage } = setup({
       storeAllowFrom: ["12345"],
