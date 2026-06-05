@@ -8,12 +8,12 @@ import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 
 type DiscordMentionAliasesConfig = Record<string, string>;
 
-const MARKDOWN_CODE_SEGMENT_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
 const MENTION_CANDIDATE_PATTERN = /(^|[\s([{"'.,;:!?])@([a-z0-9_.-]{2,32}(?:#[0-9]{4})?)/gi;
 const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
 const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
 const DISCORD_TARGETED_MENTION_PATTERN = /<@!?\d+>|<@&\d+>/;
 const DISCORD_BROADCAST_MENTION_PATTERN = /@(everyone|here)\b/;
+type MarkdownCodeSegment = { start: number; end: number };
 
 function normalizeSnowflake(value: string | number | bigint): string | null {
   const text = normalizeOptionalStringifiedId(value) ?? "";
@@ -126,6 +126,145 @@ function rewritePlainTextMentions(
   });
 }
 
+function countRun(text: string, index: number, char: "`" | "~"): number {
+  let end = index;
+  while (end < text.length && text[end] === char) {
+    end += 1;
+  }
+  return end - index;
+}
+
+function findLineEnd(text: string, index: number): number {
+  const lineEnd = text.indexOf("\n", index);
+  return lineEnd === -1 ? text.length : lineEnd;
+}
+
+function isFenceLine(params: {
+  text: string;
+  lineStart: number;
+  fenceChar?: "`" | "~";
+  minLength: number;
+  requireClosingLine: boolean;
+}): { fenceChar: "`" | "~"; fenceLength: number; fenceStart: number; fenceEnd: number } | null {
+  const { text, lineStart, fenceChar, minLength, requireClosingLine } = params;
+  const lineEnd = findLineEnd(text, lineStart);
+  let index = lineStart;
+  let indent = 0;
+  while (index < lineEnd && text[index] === " " && indent < 4) {
+    index += 1;
+    indent += 1;
+  }
+  if (indent > 3 || index >= lineEnd) {
+    return null;
+  }
+  const currentFenceChar = text[index];
+  if (currentFenceChar !== "`" && currentFenceChar !== "~") {
+    return null;
+  }
+  if (fenceChar != null && currentFenceChar !== fenceChar) {
+    return null;
+  }
+  const fenceLength = countRun(text, index, currentFenceChar);
+  if (fenceLength < minLength) {
+    return null;
+  }
+  if (requireClosingLine && text.slice(index + fenceLength, lineEnd).trim() !== "") {
+    return null;
+  }
+  return {
+    fenceChar: currentFenceChar,
+    fenceLength,
+    fenceStart: index,
+    fenceEnd: index + fenceLength,
+  };
+}
+
+function findFencedCodeSegment(text: string, index: number): MarkdownCodeSegment | null {
+  const fenceChar = text[index];
+  if (fenceChar !== "`" && fenceChar !== "~") {
+    return null;
+  }
+  const fenceLength = countRun(text, index, fenceChar);
+  if (fenceLength < 3) {
+    return null;
+  }
+  const lineStart = text.lastIndexOf("\n", index - 1) + 1;
+  const openerIsIndentedLine =
+    index - lineStart <= 3 && text.slice(lineStart, index).trim() === "";
+  let nextLineStart = findLineEnd(text, index);
+  if (nextLineStart < text.length) {
+    nextLineStart += 1;
+  }
+  while (nextLineStart < text.length) {
+    const closer = isFenceLine({
+      text,
+      lineStart: nextLineStart,
+      fenceChar,
+      minLength: fenceLength,
+      requireClosingLine: false,
+    });
+    const lineEnd = findLineEnd(text, nextLineStart);
+    if (closer) {
+      return {
+        start: openerIsIndentedLine ? lineStart : index,
+        end: closer.fenceEnd,
+      };
+    }
+    nextLineStart = lineEnd < text.length ? lineEnd + 1 : text.length;
+  }
+  if (!openerIsIndentedLine) {
+    return null;
+  }
+  return {
+    start: lineStart,
+    end: text.length,
+  };
+}
+
+function findInlineCodeSegment(text: string, index: number): MarkdownCodeSegment | null {
+  if (text[index] !== "`") {
+    return null;
+  }
+  const fenceLength = countRun(text, index, "`");
+  let cursor = index + fenceLength;
+  while (cursor < text.length && text[cursor] !== "\n") {
+    if (text[cursor] !== "`") {
+      cursor += 1;
+      continue;
+    }
+    const closingLength = countRun(text, cursor, "`");
+    if (closingLength === fenceLength) {
+      return {
+        start: index,
+        end: cursor + closingLength,
+      };
+    }
+    cursor += closingLength;
+  }
+  return null;
+}
+
+function collectMarkdownCodeSegments(text: string): MarkdownCodeSegment[] {
+  const segments: MarkdownCodeSegment[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const fenced = findFencedCodeSegment(text, index);
+    if (fenced) {
+      segments.push(fenced);
+      index = fenced.end;
+      continue;
+    }
+    const inline = findInlineCodeSegment(text, index);
+    if (inline) {
+      segments.push(inline);
+      index = inline.end;
+      continue;
+    }
+    index += 1;
+  }
+  return segments;
+}
+
 export function rewriteDiscordKnownMentions(
   text: string,
   params: {
@@ -138,12 +277,10 @@ export function rewriteDiscordKnownMentions(
   }
   let rewritten = "";
   let offset = 0;
-  MARKDOWN_CODE_SEGMENT_PATTERN.lastIndex = 0;
-  for (const match of text.matchAll(MARKDOWN_CODE_SEGMENT_PATTERN)) {
-    const matchIndex = match.index ?? 0;
-    rewritten += rewritePlainTextMentions(text.slice(offset, matchIndex), params);
-    rewritten += match[0];
-    offset = matchIndex + match[0].length;
+  for (const segment of collectMarkdownCodeSegments(text)) {
+    rewritten += rewritePlainTextMentions(text.slice(offset, segment.start), params);
+    rewritten += text.slice(segment.start, segment.end);
+    offset = segment.end;
   }
   rewritten += rewritePlainTextMentions(text.slice(offset), params);
   return rewritten;

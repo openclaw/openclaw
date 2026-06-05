@@ -103,6 +103,42 @@ describe("rewriteDiscordKnownMentions", () => {
     expect(rewritten).toBe("inline `@alice` fence ```\n@alice\n``` text <@123456789>");
   });
 
+  it("does not rewrite mentions after triple-backtick literals inside fenced code", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice"],
+    });
+    const text = '```js\nconst fence = "```";\n// do not ping @alice\n```\noutside @alice';
+    const rewritten = rewriteDiscordKnownMentions(text, { accountId: "default" });
+    expect(rewritten).toBe(
+      '```js\nconst fence = "```";\n// do not ping @alice\n```\noutside <@123456789>',
+    );
+  });
+
+  it("keeps shorter backtick fence lines inside longer fenced code blocks", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice"],
+    });
+    const text = "````md\n```\n@alice\n```\n````\noutside @alice";
+    const rewritten = rewriteDiscordKnownMentions(text, { accountId: "default" });
+    expect(rewritten).toBe("````md\n```\n@alice\n```\n````\noutside <@123456789>");
+  });
+
+  it("does not rewrite mentions inside multi-backtick inline code spans", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice"],
+    });
+    const rewritten = rewriteDiscordKnownMentions("inline ``do not ` ping @alice`` outside @alice", {
+      accountId: "default",
+    });
+    expect(rewritten).toBe("inline ``do not ` ping @alice`` outside <@123456789>");
+  });
+
   it("is account-scoped", () => {
     rememberDiscordDirectoryUser({
       accountId: "ops",
