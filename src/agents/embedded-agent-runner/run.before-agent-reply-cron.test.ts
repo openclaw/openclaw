@@ -26,9 +26,17 @@ function firstAttemptParams(): {
   modelRun?: boolean;
   promptMode?: string;
   promptCacheKey?: string;
+  suppressLiveStreamOutput?: boolean;
 } {
   const call = mockedRunEmbeddedAttempt.mock.calls[0] as
-    | [{ modelRun?: boolean; promptMode?: string; promptCacheKey?: string }]
+    | [
+        {
+          modelRun?: boolean;
+          promptMode?: string;
+          promptCacheKey?: string;
+          suppressLiveStreamOutput?: boolean;
+        },
+      ]
     | undefined;
   if (!call) {
     throw new Error("expected embedded attempt call");
@@ -164,5 +172,16 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     });
 
     expect(firstAttemptParams().promptCacheKey).toBe("cron-cache-key");
+  });
+
+  it("forwards suppressed live stream output into the embedded attempt", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      suppressLiveStreamOutput: true,
+    });
+
+    expect(firstAttemptParams().suppressLiveStreamOutput).toBe(true);
   });
 });
