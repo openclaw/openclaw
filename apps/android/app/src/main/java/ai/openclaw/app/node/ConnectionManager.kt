@@ -131,11 +131,7 @@ class ConnectionManager(
    */
   fun resolvedVersionName(): String {
     val versionName = BuildConfig.VERSION_NAME.trim().ifEmpty { "dev" }
-    return if (BuildConfig.DEBUG && !versionName.contains("dev", ignoreCase = true)) {
-      "$versionName-dev"
-    } else {
-      versionName
-    }
+    return versionName
   }
 
   /** Human-readable Android device model used in gateway client metadata. */
