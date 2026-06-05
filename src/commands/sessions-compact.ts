@@ -14,6 +14,8 @@ export type SessionsCompactOptions = {
   agent?: string;
   maxLines?: number;
   json?: boolean;
+  /** Gateway call timeout in milliseconds. */
+  timeoutMs?: number;
 };
 
 export type SessionsCompactResult = {
@@ -53,6 +55,7 @@ async function runSessionsCompact(
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       requiredMethods: ["sessions.compact"],
+      timeoutMs: opts.timeoutMs,
     });
 
     if (opts.json) {

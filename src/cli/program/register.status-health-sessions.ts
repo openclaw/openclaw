@@ -326,7 +326,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .description("Compact a session transcript to reduce context size")
     .argument("<session-key>", "Session key to compact")
     .option("--agent <id>", "Agent id (default: resolved from session key)")
-    .option("--store <path>", "Path to session store (default: resolved from config)")
     .option("--max-lines <n>", "Compact session down to N output lines")
     .option("--timeout <ms>", "Gateway call timeout in milliseconds", "180000")
     .option("--json", "Output JSON", false)
@@ -348,7 +347,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .action(async (sessionKey, opts, command) => {
       const parentOpts = command.parent?.opts() as
         | {
-            store?: string;
             agent?: string;
             json?: boolean;
           }
@@ -363,6 +361,9 @@ export function registerStatusHealthSessionsCommands(program: Command) {
               ? (parsePositiveIntOrUndefined(opts.maxLines) ?? undefined)
               : undefined,
             json: Boolean(opts.json || parentOpts?.json),
+            timeoutMs: opts.timeout
+              ? (parsePositiveIntOrUndefined(opts.timeout) ?? undefined)
+              : undefined,
           },
           defaultRuntime,
         );

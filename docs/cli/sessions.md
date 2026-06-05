@@ -172,6 +172,51 @@ Related:
 
 - Session config: [Configuration reference](/gateway/config-agents#session)
 
+## Manual compaction
+
+`openclaw sessions compact <session-key>` triggers manual compaction for a stored
+session transcript. It delegates to the live gateway's `sessions.compact` RPC.
+
+```bash
+openclaw sessions compact <session-key>
+```
+
+Options:
+
+| Option            | Description                                            |
+| ----------------- | ------------------------------------------------------ |
+| `--agent <id>`    | Agent id (default: resolved from session key)          |
+| `--max-lines <n>` | Compact session down to N output lines                 |
+| `--timeout <ms>`  | Gateway call timeout in milliseconds (default: 180000) |
+| `--json`          | Output result as JSON                                  |
+
+Examples:
+
+```bash
+openclaw sessions compact agent:main:slack:direct:U0123
+openclaw sessions compact agent:main:slack:direct:U0123 --max-lines 200
+openclaw sessions compact my-session --json
+```
+
+JSON output:
+
+```json
+{
+  "ok": true,
+  "key": "agent:main:slack:direct:U0123",
+  "compacted": true,
+  "result": {
+    "tokensBefore": 157661,
+    "tokensAfter": 34941
+  }
+}
+```
+
+Related:
+
+- Underlying RPC: `sessions.compact` (Gateway method)
+- Compaction mode: [Configuration reference](/gateway/config-agents#session)
+
 ## Related
 
 - [CLI reference](/cli)
