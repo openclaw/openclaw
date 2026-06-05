@@ -1,3 +1,4 @@
+// Plugins CLI update tests cover plugin update command behavior and output.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -67,7 +68,7 @@ describe("plugins cli update", () => {
     }
   });
 
-  it("shows the dangerous unsafe install override in update help", () => {
+  it("shows the deprecated unsafe install flag in update help", () => {
     const program = new Command();
     registerPluginsCli(program);
 
@@ -76,8 +77,9 @@ describe("plugins cli update", () => {
     const helpText = updateCommand?.helpInformation() ?? "";
 
     expect(helpText).toContain("--dangerously-force-unsafe-install");
-    expect(helpText).toContain("Bypass built-in dangerous-code update");
-    expect(helpText).toContain("blocking for plugins");
+    expect(helpText).toContain("Deprecated no-op");
+    expect(helpText).toContain("install policy and");
+    expect(helpText).toContain("plugin hooks may still block");
   });
 
   it("refuses plugin updates in Nix mode before package-manager work", async () => {
@@ -208,6 +210,34 @@ describe("plugins cli update", () => {
     expect(updateParams.config).toEqual(config);
     expect(updateParams.pluginIds).toEqual(["openclaw-codex-app-server"]);
     expect(updateParams.dangerouslyForceUnsafeInstall).toBe(true);
+    expect(
+      runtimeLogs.some((message) =>
+        message.includes(
+          "--dangerously-force-unsafe-install is deprecated and no longer affects plugin updates",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not sync official catalog specs for manual plugin updates", async () => {
+    const config = createTrackedPluginConfig({
+      pluginId: "codex",
+      spec: "@openclaw/codex@2026.5.28",
+      resolvedName: "@openclaw/codex",
+    });
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [],
+    });
+
+    await runPluginsCommand(["plugins", "update", "codex"]);
+
+    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(updateParams.pluginIds).toEqual(["codex"]);
+    expect(updateParams.syncOfficialPluginInstalls).toBeUndefined();
   });
 
   it("writes updated config when updater reports changes", async () => {

@@ -1,3 +1,4 @@
+// E2E Shell Tempfiles tests cover e2e shell tempfiles script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

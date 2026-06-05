@@ -1,3 +1,6 @@
+/**
+ * Early gateway startup helper tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 

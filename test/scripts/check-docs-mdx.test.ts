@@ -1,3 +1,4 @@
+// Check Docs Mdx tests cover check docs mdx script behavior.
 import { describe, expect, it } from "vitest";
 import { parseArgs } from "../../scripts/check-docs-mdx.mjs";
 

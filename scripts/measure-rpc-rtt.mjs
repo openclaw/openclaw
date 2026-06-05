@@ -1,5 +1,8 @@
+// Measures gateway RPC round-trip time by launching an isolated local gateway
+// and writing qa-lab-compatible summary artifacts.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import net from "node:net";
@@ -9,7 +12,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_METHODS = ["health", "config.get"];
 const DEFAULT_ITERATIONS = 10;
+/** Maximum time to wait for a spawned gateway to become reachable. */
 export const READY_TIMEOUT_MS = 120_000;
+/** Per-probe timeout used while polling gateway readiness endpoints. */
 export const READY_PROBE_TIMEOUT_MS = 1_000;
 const PARENT_TERMINATION_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 const IS_DIRECT_RUN =
@@ -99,6 +104,9 @@ function formatErrorMessage(error) {
   return String(error);
 }
 
+/**
+ * Polls readiness endpoints while also failing fast if the child exits.
+ */
 export async function waitForGatewayReady({
   child,
   fetchImpl = fetch,
@@ -156,6 +164,17 @@ async function defaultOpen(filePath, flags) {
   return await fs.open(filePath, flags);
 }
 
+function resolveOpenClawLaunchArgs(repoRoot, sourceEntryExists = existsSync) {
+  const sourceEntry = path.join(repoRoot, "src", "entry.ts");
+  if (sourceEntryExists(sourceEntry)) {
+    return ["--import", "tsx", sourceEntry];
+  }
+  return [path.join(repoRoot, "openclaw.mjs")];
+}
+
+/**
+ * Signals the gateway process group on POSIX so spawned children are cleaned up.
+ */
 export function signalGatewayProcess(child, signal, killProcess = defaultKillProcess) {
   if (process.platform !== "win32" && typeof child.pid === "number") {
     try {
@@ -178,6 +197,9 @@ export function signalGatewayProcess(child, signal, killProcess = defaultKillPro
   }
 }
 
+/**
+ * Checks process-group liveness without treating an already-exited child as an error.
+ */
 export function isGatewayProcessAlive(child, killProcess = defaultKillProcess) {
   if (process.platform !== "win32" && typeof child.pid === "number") {
     try {
@@ -201,6 +223,9 @@ function signalGatewayProcessForParentExit(child, signal, killProcess) {
   }
 }
 
+/**
+ * Installs parent-process cleanup handlers for a spawned gateway.
+ */
 export function installGatewayParentCleanup(
   child,
   { killProcess = defaultKillProcess, processLike = process } = {},
@@ -246,6 +271,9 @@ async function waitForGatewayExit(child, timeoutMs, killProcess = defaultKillPro
   return !isGatewayProcessAlive(child, killProcess);
 }
 
+/**
+ * Stops the gateway with SIGTERM first and SIGKILL after the grace window.
+ */
 export async function stopGateway(child, options = {}) {
   if (!isGatewayProcessAlive(child, options.killProcess)) {
     return;
@@ -266,12 +294,16 @@ async function closeFileHandles(handles) {
   }
 }
 
+/**
+ * Starts an isolated loopback gateway with temp HOME/state directories.
+ */
 export async function startGateway({
   configPath,
   env = process.env,
   openImpl = defaultOpen,
   port,
   repoRoot,
+  sourceEntryExists = existsSync,
   spawnImpl = spawn,
   stderrPath,
   stdoutPath,
@@ -290,11 +322,12 @@ export async function startGateway({
   }
 
   let child;
+  const launcherArgs = resolveOpenClawLaunchArgs(repoRoot, sourceEntryExists);
   try {
     child = spawnImpl(
-      "pnpm",
+      process.execPath,
       [
-        "openclaw",
+        ...launcherArgs,
         "gateway",
         "run",
         "--port",
@@ -343,6 +376,9 @@ export async function startGateway({
   return child;
 }
 
+/**
+ * Removes the temporary root used by the RPC RTT probe.
+ */
 export async function cleanupTempRoot(tempRoot, { rmImpl = fs.rm } = {}) {
   try {
     await rmImpl(tempRoot, { force: true, recursive: true });
@@ -351,6 +387,25 @@ export async function cleanupTempRoot(tempRoot, { rmImpl = fs.rm } = {}) {
       cause: error,
     });
   }
+}
+
+async function copyLogIfPresent(source, target) {
+  try {
+    await fs.copyFile(source, target);
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function copyGatewayLogs({ outputDir, stderrPath, stdoutPath }) {
+  await fs.mkdir(outputDir, { recursive: true });
+  await Promise.all([
+    copyLogIfPresent(stdoutPath, path.join(outputDir, "gateway.stdout.log")),
+    copyLogIfPresent(stderrPath, path.join(outputDir, "gateway.stderr.log")),
+  ]);
 }
 
 function quantile(sorted, q) {
@@ -641,6 +696,14 @@ async function main() {
       }
     } finally {
       removeGatewayParentCleanup();
+    }
+    try {
+      await copyGatewayLogs({ outputDir, stderrPath, stdoutPath });
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      details = details
+        ? `${details}\nwarning: failed to copy gateway logs: ${message}`
+        : `warning: failed to copy gateway logs: ${message}`;
     }
     try {
       await cleanupTempRoot(tempRoot);

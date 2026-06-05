@@ -1,3 +1,8 @@
+/**
+ * Exec tool factory and request pipeline.
+ * Resolves host/sandbox/node target, policy, approval, env, script preflight,
+ * process launch, foreground result, and background session handoff.
+ */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -1312,6 +1317,7 @@ function resolveExecReviewerDefaults(params: { defaults?: ExecToolDefaults; agen
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
 }
 
+/** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
@@ -1411,7 +1417,10 @@ export function createExecTool(
       return markResolveExecEnvPrepared(params);
     }
     const hookRunner = getGlobalHookRunner();
-    if (!hookRunner?.hasHooks("resolve_exec_env")) {
+    if (
+      !hookRunner?.hasHooks("resolve_exec_env") ||
+      typeof hookRunner.runResolveExecEnv !== "function"
+    ) {
       return markResolveExecEnvPrepared(params);
     }
     let host: ExecHost;
@@ -1971,8 +1980,10 @@ export function createExecTool(
   };
 }
 
+/** Default exec tool instance used by agent tool registries. */
 export const execTool = createExecTool();
 
+/** Test-only seams for parser/preflight helpers. */
 export const testing = {
   parseOpenClawChannelsLoginShellCommand,
   validateScriptFileForShellBleed,

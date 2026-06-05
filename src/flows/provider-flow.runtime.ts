@@ -1,3 +1,4 @@
+// Provider flow runtime helpers load provider setup behavior behind runtime imports.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as providerWizard from "../plugins/provider-wizard.js";
@@ -7,6 +8,7 @@ import type { ProviderPlugin } from "../plugins/types.js";
 import type { FlowContribution } from "./types.js";
 import { sortFlowContributionsByLabel } from "./types.js";
 
+// Runtime-backed provider entries for model-picker setup flows.
 type ProviderModelPickerFlowEntry = ProviderModelPickerEntry;
 
 type ProviderModelPickerFlowContribution = FlowContribution & {
@@ -37,6 +39,7 @@ function resolveProviderDocsById(params?: {
   );
 }
 
+/** Resolves provider model-picker options without exposing contribution metadata. */
 export function resolveProviderModelPickerFlowEntries(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -47,6 +50,7 @@ export function resolveProviderModelPickerFlowEntries(params?: {
   );
 }
 
+/** Resolves provider model-picker contributions with docs metadata for setup UIs. */
 export function resolveProviderModelPickerFlowContributions(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -58,6 +62,7 @@ export function resolveProviderModelPickerFlowContributions(params?: {
       const providerId = entry.value.startsWith("provider-plugin:")
         ? entry.value.slice("provider-plugin:".length).split(":")[0]
         : entry.value;
+      // Provider-plugin values encode plugin/provider in the option value; docs attach by provider id.
       return {
         id: `provider:model-picker:${entry.value}`,
         kind: "provider" as const,

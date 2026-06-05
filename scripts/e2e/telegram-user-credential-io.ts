@@ -1,3 +1,4 @@
+// Telegram User Credential Io script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { readBoundedResponseText } from "../lib/bounded-response.ts";
 

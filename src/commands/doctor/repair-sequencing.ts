@@ -1,7 +1,9 @@
+// Doctor repair sequence coordinator for config, auth, plugin, and warning repairs.
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
+  maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig,
   maybeRepairOpenAICodexAuthProfileStores,
 } from "../doctor-auth-flat-profiles.js";
@@ -36,6 +38,7 @@ import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 import { maybeRepairStaleSubagentAllowlists } from "./shared/stale-subagent-allowlist.js";
 import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
 
+/** Run doctor auto-repairs in dependency order and collect sanitized user notes. */
 export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
@@ -189,10 +192,32 @@ export async function runDoctorRepairSequence(params: {
   if (staleOAuthShadowRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(staleOAuthShadowRepair.warnings));
   }
+  const authProfileSqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg: state.candidate,
+    prompter: { confirmAutoFix: async () => true },
+    env,
+  });
+  if (authProfileSqliteMigration.configChanged) {
+    state = applyDoctorConfigMutation({
+      state,
+      mutation: {
+        config: state.candidate,
+        changes: ["Auth profile SQLite migration updated auth.profiles."],
+      },
+      shouldRepair: true,
+    });
+  }
+  if (authProfileSqliteMigration.changes.length > 0) {
+    changeNotes.push(sanitizeLines(authProfileSqliteMigration.changes));
+  }
+  if (authProfileSqliteMigration.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(authProfileSqliteMigration.warnings));
+  }
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
     openAIAuthProviderRepair.changes.length > 0 ||
-    staleOAuthShadowRepair.changes.length > 0;
+    staleOAuthShadowRepair.changes.length > 0 ||
+    authProfileSqliteMigration.changes.length > 0;
 
   const activeToolSchemaWarnings = collectActiveToolSchemaProjectionWarnings({
     cfg: state.candidate,
