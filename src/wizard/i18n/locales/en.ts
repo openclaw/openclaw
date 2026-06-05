@@ -18,6 +18,112 @@ export const en = {
     skipForNow: "Skip for now",
     tokenRecommended: "Token (recommended)",
   },
+  runtime: {
+    channel: {
+      aiServiceOverloaded:
+        "The AI service is temporarily overloaded. Please try again in a moment.",
+      aiServiceRateLimited:
+        "The AI service is temporarily rate-limited. Please try again in a moment.",
+      agentFailedBeforeReply:
+        "⚠️ Agent failed before reply: {detail}{suffix} Please try again, or use /new to start a fresh session.",
+      agentFailedBeforeReplyWithLogs:
+        "⚠️ Agent failed before reply: {detail}.\nLogs: openclaw logs --follow",
+      agentCouldntGenerateResponse: "⚠️ Agent couldn't generate a response. Please try again.",
+      agentCouldntGenerateResponseWithSideEffects:
+        "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+      apiBillingError:
+        "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.",
+      apiBillingErrorForProvider:
+        "⚠️ {providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your {providerName} billing dashboard and top up or switch to a different API key.",
+      apiRateLimitReached: "⚠️ API rate limit reached. Please try again later.",
+      autoCompactionComplete: "🧹 Auto-compaction complete{suffix}.",
+      cliBackendTimeout:
+        "⚠️ CLI subprocess{routingSuffix}: timed out after {seconds}s ({modeLabel}). The gateway may still be healthy. Try `/new`, a lighter model, or raise `agents.defaults.timeoutSeconds` and the watchdog `noOutputTimeoutMs` entries under `cliBackends.<your-runtime>`.",
+      codexAppServerConnectionClosed:
+        "⚠️ Codex app-server connection closed before this turn finished. OpenClaw retried once when the stdio turn was still replay-safe; please try again if this keeps happening.",
+      codexAppServerStopped:
+        "⚠️ Codex app-server stopped before confirming turn completion. OpenClaw did not replay the turn automatically because it may still be active; try again, or use /new if the session stays stuck.",
+      compactionComplete: "🧹 Compaction complete",
+      compactionIncomplete: "🧹 Compaction incomplete",
+      compactingContext: "🧹 Compacting context...",
+      contextAutoCompactionCouldNotRecover:
+        "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session.",
+      contextLimitExceededDuringCompaction:
+        "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.",
+      contextLimitExceededReset:
+        "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.",
+      contextOverflowConversationTooLarge:
+        "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
+      contextOverflowPromptTooLarge:
+        "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.",
+      fallbackBackendNoVisibleReply:
+        "⚠️ I couldn't reach the configured model backend {selectedModelRef}. Fallback used {activeModelRef}, but it produced no visible reply.",
+      gatewayRestarting: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+      genericExternalRunFailure:
+        "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
+      heartbeatExternalRunFailure:
+        "⚠️ Heartbeat check failed before it could produce an update. The main chat session remains available.",
+      llmConnectionFailed:
+        "⚠️ LLM connection failed. This could be due to server issues, network problems, or context length exceeded (e.g., with local LLMs like LM Studio). Original error:",
+      mediaFailed: "⚠️ Media failed.",
+      memoryFlushExhausted:
+        "⚠️ Memory flush failed after {attempts} attempts; skipping for this cycle. It will retry after the next compaction.",
+      missingApiKeyOpenAi:
+        '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.',
+      missingApiKeyOpenAiOAuth:
+        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
+      missingApiKeyProvider:
+        '⚠️ Missing API key for provider "{provider}". Configure the gateway auth for that provider, then try again.',
+      missingApiKeySelectedProvider:
+        "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.",
+      modelAtCapacity:
+        "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
+      modelLoginExpired:
+        "⚠️ Model login expired on the gateway{providerSuffix}. Re-auth with `{loginCommand}`, then try again.",
+      modelLoginFailed:
+        "⚠️ Model login failed on the gateway{providerSuffix}. Please try again. If this keeps happening, re-auth with `{loginCommand}`.",
+      modelLoginProviderSuffix: " for {provider}",
+      modelSwitchCouldNotComplete:
+        "⚠️ Model switch could not be completed. The requested model may be temporarily unavailable. Please try again shortly.",
+      modelSwitchFailedBeforeReply:
+        "⚠️ Agent failed before reply: model switch could not be completed. The requested model may be temporarily unavailable. Please try again shortly.",
+      modelSwitchFailedBeforeReplyWithLogs:
+        "⚠️ Agent failed before reply: model switch could not be completed. The requested model may be temporarily unavailable.\nLogs: openclaw logs --follow",
+      newSession: "🧭 New session: {sessionId}",
+      preflightCompactionFailure:
+        "⚠️ Context is too large and auto-compaction could not recover this turn.{reasonSuffix} Try again, use /compact, or use /new to start a fresh session.",
+      preflightCompactionReason: " Reason: {reason}.",
+      previousRunStillShuttingDown:
+        "⚠️ Previous run is still shutting down. Please try again in a moment.",
+      providerConversationStateError:
+        "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.",
+      sessionReset: "✅ Session reset.",
+      sessionResetAcpFailed: "⚠️ ACP session reset failed. Check /acp status and try again.",
+      sessionResetAcpInPlace: "✅ ACP session reset in place.",
+      sessionStarted: "✅ New session started.",
+      toolFailed: "⚠️ {toolSummary} failed{errorSuffix}",
+      unknownError: "Unknown error",
+      warningMessage: "⚠️ {message}",
+      rateLimitAllModels:
+        "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.",
+      rateLimitReadyMinutes: "⚠️ Rate-limited — ready in ~{minutes} min. Please try again shortly.",
+      rateLimitReadySeconds: "⚠️ Rate-limited — ready in ~{seconds}s. Please wait a moment.",
+    },
+    gateway: {
+      attachmentUnavailable: "Attachment unavailable",
+      blockedLocalFile: "Blocked local file",
+      fileNotFound: "File not found",
+      invalidFile: "Invalid file",
+      mediaReplyCouldNotBeDisplayed: "Media reply could not be displayed.",
+      notAFile: "Not a file",
+      outsideAllowedFolders: "Outside allowed folders",
+      sessionStillActive: "Session {sessionKey} is still active; try again in a moment.",
+      tooManyFailedAuthAttempts: "Too many failed authentication attempts. Please try again later.",
+    },
+    tui: {
+      thinking: "thinking",
+    },
+  },
   wizard: {
     customProvider: {
       apiBaseUrl: "API Base URL",

@@ -4,6 +4,7 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { t as runtimeT } from "../../../wizard/i18n/index.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
   formatAssistantErrorText,
@@ -138,17 +139,14 @@ export async function handleAssistantFailover(params: {
         return {
           action: "throw",
           overloadProfileRotations,
-          error: new FailoverError(
-            "The AI service is temporarily overloaded. Please try again in a moment.",
-            {
-              reason: "overloaded",
-              provider: params.activeErrorContext.provider,
-              model: params.activeErrorContext.model,
-              profileId: params.lastProfileId,
-              status,
-              rawError: params.lastAssistant?.errorMessage?.trim(),
-            },
-          ),
+          error: new FailoverError(runtimeT("runtime.channel.aiServiceOverloaded"), {
+            reason: "overloaded",
+            provider: params.activeErrorContext.provider,
+            model: params.activeErrorContext.model,
+            profileId: params.lastProfileId,
+            status,
+            rawError: params.lastAssistant?.errorMessage?.trim(),
+          }),
         };
       }
     }

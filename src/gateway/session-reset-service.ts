@@ -53,6 +53,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { t as runtimeT } from "../wizard/i18n/index.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -422,7 +423,7 @@ async function ensureSessionRuntimeCleanup(params: {
   }
   return errorShape(
     ErrorCodes.UNAVAILABLE,
-    `Session ${params.key} is still active; try again in a moment.`,
+    runtimeT("runtime.gateway.sessionStillActive", { sessionKey: params.key }),
   );
 }
 
@@ -483,7 +484,7 @@ async function closeAcpRuntimeForSession(params: {
   if (cancelOutcome.status === "timeout") {
     return errorShape(
       ErrorCodes.UNAVAILABLE,
-      `Session ${params.sessionKey} is still active; try again in a moment.`,
+      runtimeT("runtime.gateway.sessionStillActive", { sessionKey: params.sessionKey }),
     );
   }
   if (cancelOutcome.status === "error") {
@@ -507,7 +508,7 @@ async function closeAcpRuntimeForSession(params: {
   if (closeOutcome.status === "timeout") {
     return errorShape(
       ErrorCodes.UNAVAILABLE,
-      `Session ${params.sessionKey} is still active; try again in a moment.`,
+      runtimeT("runtime.gateway.sessionStillActive", { sessionKey: params.sessionKey }),
     );
   }
   if (closeOutcome.status === "error") {

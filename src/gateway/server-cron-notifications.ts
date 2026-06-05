@@ -20,6 +20,7 @@ import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { t as runtimeT } from "../wizard/i18n/index.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
@@ -358,7 +359,7 @@ function dispatchCronFailureDestinationNotifications(params: {
           accountId: failureDest.accountId,
           sessionKey: deliverySessionKey,
         },
-        `⚠️ ${failureMessage}`,
+        runtimeT("runtime.channel.warningMessage", { message: failureMessage }),
       );
     }
     return;
@@ -381,6 +382,6 @@ function dispatchCronFailureDestinationNotifications(params: {
       accountId: primaryPlan.accountId,
       sessionKey: deliverySessionKey,
     },
-    `⚠️ ${failureMessage}`,
+    runtimeT("runtime.channel.warningMessage", { message: failureMessage }),
   );
 }

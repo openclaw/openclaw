@@ -52,6 +52,7 @@ import {
   formatTokenCount,
   resolveModelCostConfig,
 } from "../../utils/usage-format.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import {
   buildFallbackClearedNotice,
   buildFallbackNotice,
@@ -145,9 +146,10 @@ function buildSilentFallbackFailurePayload(params: {
     return undefined;
   }
   return markReplyPayloadForSourceSuppressionDelivery({
-    text:
-      `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
-      `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
+    text: runtimeT("runtime.channel.fallbackBackendNoVisibleReply", {
+      selectedModelRef: params.fallbackTransition.selectedModelRef,
+      activeModelRef: params.fallbackTransition.activeModelRef,
+    }),
     isError: true,
   });
 }
@@ -2100,7 +2102,9 @@ export async function runReplyAgent(params: {
     const prefixNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {
-      prefixNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
+      prefixNotices.push({
+        text: runtimeT("runtime.channel.newSession", { sessionId: followupRun.run.sessionId }),
+      });
     }
 
     if (autoCompactionCount > 0) {
@@ -2148,7 +2152,9 @@ export async function runReplyAgent(params: {
 
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
-        prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
+        prefixNotices.push({
+          text: runtimeT("runtime.channel.autoCompactionComplete", { suffix }),
+        });
       }
     }
     const prefixPayloads = [...prefixNotices];
@@ -2388,7 +2394,7 @@ export async function runReplyAgent(params: {
     ) {
       return returnWithQueuedFollowupDrain(
         markReplyPayloadForSourceSuppressionDelivery({
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          text: runtimeT("runtime.channel.gatewayRestarting"),
         }),
       );
     }
@@ -2399,7 +2405,7 @@ export async function runReplyAgent(params: {
       replyOperation.fail("gateway_draining", error);
       return returnWithQueuedFollowupDrain(
         markReplyPayloadForSourceSuppressionDelivery({
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          text: runtimeT("runtime.channel.gatewayRestarting"),
         }),
       );
     }
@@ -2407,7 +2413,7 @@ export async function runReplyAgent(params: {
       replyOperation.fail("command_lane_cleared", error);
       return returnWithQueuedFollowupDrain(
         markReplyPayloadForSourceSuppressionDelivery({
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          text: runtimeT("runtime.channel.gatewayRestarting"),
         }),
       );
     }

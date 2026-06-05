@@ -5,6 +5,7 @@ import type { SessionGoal } from "../config/sessions/types.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { formatTokenCount } from "../utils/usage-format.js";
+import { t as runtimeT } from "../wizard/i18n/index.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
 const MAX_TOKEN_CHARS = 32;
@@ -242,7 +243,7 @@ export function composeThinkingAndContent(params: {
   const parts: string[] = [];
 
   if (params.showThinking && thinkingText) {
-    parts.push(`[thinking]\n${thinkingText}`);
+    parts.push(`[${runtimeT("runtime.tui.thinking")}]\n${thinkingText}`);
   }
   if (contentText) {
     parts.push(contentText);

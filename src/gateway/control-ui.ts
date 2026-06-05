@@ -27,6 +27,7 @@ import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { t as runtimeT } from "../wizard/i18n/index.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
@@ -474,18 +475,30 @@ function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
   if (err instanceof FsSafeError) {
     switch (err.code) {
       case "not-found":
-        return { available: false, code: "file-not-found", reason: "File not found" };
+        return {
+          available: false,
+          code: "file-not-found",
+          reason: runtimeT("runtime.gateway.fileNotFound"),
+        };
       case "not-file":
-        return { available: false, code: "not-a-file", reason: "Not a file" };
+        return {
+          available: false,
+          code: "not-a-file",
+          reason: runtimeT("runtime.gateway.notAFile"),
+        };
       case "invalid-path":
       case "path-mismatch":
       case "symlink":
-        return { available: false, code: "invalid-file", reason: "Invalid file" };
+        return {
+          available: false,
+          code: "invalid-file",
+          reason: runtimeT("runtime.gateway.invalidFile"),
+        };
       default:
         return {
           available: false,
           code: "attachment-unavailable",
-          reason: "Attachment unavailable",
+          reason: runtimeT("runtime.gateway.attachmentUnavailable"),
         };
     }
   }
@@ -496,23 +509,39 @@ function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
         return {
           available: false,
           code: "outside-allowed-folders",
-          reason: "Outside allowed folders",
+          reason: runtimeT("runtime.gateway.outsideAllowedFolders"),
         };
       case "invalid-file-url":
       case "invalid-path":
       case "unsafe-bypass":
       case "network-path-not-allowed":
       case "invalid-root":
-        return { available: false, code: "blocked-local-file", reason: "Blocked local file" };
+        return {
+          available: false,
+          code: "blocked-local-file",
+          reason: runtimeT("runtime.gateway.blockedLocalFile"),
+        };
       case "not-found":
-        return { available: false, code: "file-not-found", reason: "File not found" };
+        return {
+          available: false,
+          code: "file-not-found",
+          reason: runtimeT("runtime.gateway.fileNotFound"),
+        };
       case "not-file":
-        return { available: false, code: "not-a-file", reason: "Not a file" };
+        return {
+          available: false,
+          code: "not-a-file",
+          reason: runtimeT("runtime.gateway.notAFile"),
+        };
       default:
         break;
     }
   }
-  return { available: false, code: "attachment-unavailable", reason: "Attachment unavailable" };
+  return {
+    available: false,
+    code: "attachment-unavailable",
+    reason: runtimeT("runtime.gateway.attachmentUnavailable"),
+  };
 }
 
 async function resolveAssistantMediaAvailability(

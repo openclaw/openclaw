@@ -1,5 +1,6 @@
 /** Active-run queue admission for prepared reply turns. */
 import { logVerbose } from "../../globals.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import type { ReplyPayload } from "../types.js";
 import type { ActiveRunQueueAction } from "./queue-policy.js";
 import type { QueueSettings } from "./queue.js";
@@ -11,8 +12,9 @@ export type ReplyRunQueueBusyState = {
   isStreaming: boolean;
 };
 
-export const REPLY_RUN_STILL_SHUTTING_DOWN_TEXT =
-  "⚠️ Previous run is still shutting down. Please try again in a moment.";
+export const REPLY_RUN_STILL_SHUTTING_DOWN_TEXT = runtimeT(
+  "runtime.channel.previousRunStillShuttingDown",
+);
 
 /** Resolves whether a new reply may continue after active-run queue handling. */
 export async function resolvePreparedReplyQueueState(params: {

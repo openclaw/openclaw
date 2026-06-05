@@ -2,6 +2,7 @@
  * Classifies embedded-agent run results for model fallback decisions.
  */
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
@@ -17,6 +18,14 @@ import type { EmbeddedAgentRunResult } from "./types.js";
  */
 const EMPTY_TERMINAL_REPLY_RE = /Agent couldn't generate a response/i;
 const PLAN_ONLY_TERMINAL_REPLY_RE = /Agent stopped after repeated plan-only turns/i;
+
+function isEmptyTerminalReplyText(text: string): boolean {
+  return (
+    EMPTY_TERMINAL_REPLY_RE.test(text) ||
+    text.includes(runtimeT("runtime.channel.agentCouldntGenerateResponse")) ||
+    text.includes(runtimeT("runtime.channel.agentCouldntGenerateResponseWithSideEffects"))
+  );
+}
 
 function isEmbeddedAgentRunResult(value: unknown): value is EmbeddedAgentRunResult {
   return Boolean(
@@ -130,7 +139,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     .filter((payload) => payload?.isError === true)
     .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
     .join("\n");
-  if (EMPTY_TERMINAL_REPLY_RE.test(errorText)) {
+  if (isEmptyTerminalReplyText(errorText)) {
     return {
       message: `${params.provider}/${params.model} ended with an incomplete terminal response`,
       reason: "format",
@@ -176,7 +185,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
       code: "planning_only_result",
     };
   }
-  if (!EMPTY_TERMINAL_REPLY_RE.test(errorText)) {
+  if (!isEmptyTerminalReplyText(errorText)) {
     return null;
   }
 

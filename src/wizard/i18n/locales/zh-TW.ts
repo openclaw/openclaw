@@ -18,6 +18,102 @@ export const zh_TW = {
     skipForNow: "暫時略過",
     tokenRecommended: "權杖（建議）",
   },
+  runtime: {
+    channel: {
+      aiServiceOverloaded: "AI 服務暫時過載。請稍後再試。",
+      aiServiceRateLimited: "AI 服務暫時觸發限流。請稍後再試。",
+      agentFailedBeforeReply:
+        "⚠️ Agent 在回覆前失敗：{detail}{suffix} 請重試，或使用 /new 開始新工作階段。",
+      agentFailedBeforeReplyWithLogs:
+        "⚠️ Agent 在回覆前失敗：{detail}。\n記錄：openclaw logs --follow",
+      agentCouldntGenerateResponse: "⚠️ Agent 未能產生回覆。請重試。",
+      agentCouldntGenerateResponseWithSideEffects:
+        "⚠️ Agent 未能產生回覆。注意：部分工具操作可能已經執行，請先確認結果後再重試。",
+      apiBillingError:
+        "⚠️ API 提供者回傳計費錯誤：你的 API Key 額度已用盡或餘額不足。請檢查提供者的計費面板並儲值，或切換到其他 API Key。",
+      apiBillingErrorForProvider:
+        "⚠️ {providerLabel} 回傳計費錯誤：你的 API Key 額度已用盡或餘額不足。請檢查 {providerName} 的計費面板並儲值，或切換到其他 API Key。",
+      apiRateLimitReached: "⚠️ API 已觸發限流。請稍後再試。",
+      autoCompactionComplete: "🧹 自動壓縮已完成{suffix}。",
+      cliBackendTimeout:
+        "⚠️ CLI 子行程{routingSuffix}：{modeLabel} 逾時，已執行 {seconds} 秒。Gateway 可能仍然正常。請嘗試 `/new`、更輕量的模型，或提高 `agents.defaults.timeoutSeconds` 以及 `cliBackends.<your-runtime>` 下的 watchdog `noOutputTimeoutMs`。",
+      codexAppServerConnectionClosed:
+        "⚠️ Codex app-server 連線在本輪完成前關閉。OpenClaw 已在 stdio 回放仍安全時重試一次；如果持續發生，請再試一次。",
+      codexAppServerStopped:
+        "⚠️ Codex app-server 在確認本輪完成前停止。OpenClaw 未自動回放，因為該輪可能仍在執行；請重試，或在工作階段持續卡住時使用 /new。",
+      compactionComplete: "🧹 壓縮已完成",
+      compactionIncomplete: "🧹 壓縮未完成",
+      compactingContext: "🧹 正在壓縮上下文...",
+      contextAutoCompactionCouldNotRecover:
+        "⚠️ 自動壓縮未能恢復本輪。我已保留這段對話到目前工作階段的映射。請重試，使用 /compact，或使用 /new 開始新工作階段。",
+      contextLimitExceededDuringCompaction:
+        "⚠️ 壓縮期間上下文超出限制。我已重設對話並重新開始，請再試一次。",
+      contextLimitExceededReset: "⚠️ 上下文超出限制。我已重設對話並重新開始，請再試一次。",
+      contextOverflowConversationTooLarge:
+        "⚠️ 上下文超出限制：這段對話對目前模型來說太長了。請使用 /new 開始新工作階段。",
+      contextOverflowPromptTooLarge:
+        "⚠️ 上下文超出限制：這次請求對目前模型來說太長了。請縮短訊息，或改用更大上下文的模型。",
+      fallbackBackendNoVisibleReply:
+        "⚠️ 無法連接設定的模型後端 {selectedModelRef}。已使用備用模型 {activeModelRef}，但沒有產生可見回覆。",
+      gatewayRestarting: "⚠️ Gateway 正在重新啟動。請稍等幾秒後再試。",
+      genericExternalRunFailure: "⚠️ 處理你的請求時發生問題。請重試，或使用 /new 開始新工作階段。",
+      heartbeatExternalRunFailure: "⚠️ 心跳檢查未能產生更新。主聊天工作階段仍可繼續使用。",
+      llmConnectionFailed:
+        "⚠️ LLM 連線失敗。可能是伺服器問題、網路問題，或上下文長度超限（例如 LM Studio 等本機 LLM）。原始錯誤：",
+      mediaFailed: "⚠️ 媒體傳送失敗。",
+      memoryFlushExhausted: "⚠️ 記憶刷新連續 {attempts} 次失敗；本輪將略過。下次壓縮後會再次嘗試。",
+      missingApiKeyOpenAi:
+        '⚠️ 缺少 provider "openai" 的 API Key。請執行 `openclaw doctor --fix` 修復過期的 OpenAI 模型/工作階段路由；如果 doctor 提示，請重新啟動 gateway 後再試。如果 doctor 沒有可修復項或錯誤仍然存在，請使用 `openclaw models auth login --provider openai` 重新認證，或執行 `openclaw configure`。',
+      missingApiKeyOpenAiOAuth:
+        "⚠️ Gateway 缺少 OpenAI API Key。請使用帶 OpenAI OAuth profile 的 `openai/gpt-5.5`，或為直接 OpenAI API Key 執行設定 `OPENAI_API_KEY`。",
+      missingApiKeyProvider:
+        '⚠️ 缺少 provider "{provider}" 的 API Key。請為 gateway 設定該 provider 的認證後再試。',
+      missingApiKeySelectedProvider:
+        "⚠️ Gateway 缺少目前所選 provider 的 API Key。請設定 provider 認證後再試。",
+      modelAtCapacity: "⚠️ 目前所選模型容量已滿。請切換模型，或稍後重試。",
+      modelLoginExpired:
+        "⚠️ Gateway 上的模型登入已過期{providerSuffix}。請使用 `{loginCommand}` 重新認證後再試。",
+      modelLoginFailed:
+        "⚠️ Gateway 上的模型登入失敗{providerSuffix}。請重試。如果持續發生，請使用 `{loginCommand}` 重新認證。",
+      modelLoginProviderSuffix: "（{provider}）",
+      modelSwitchCouldNotComplete: "⚠️ 模型切換未能完成。請求的模型可能暫時不可用。請稍後重試。",
+      modelSwitchFailedBeforeReply:
+        "⚠️ Agent 在回覆前失敗：模型切換未能完成。請求的模型可能暫時不可用。請稍後重試。",
+      modelSwitchFailedBeforeReplyWithLogs:
+        "⚠️ Agent 在回覆前失敗：模型切換未能完成。請求的模型可能暫時不可用。\n記錄：openclaw logs --follow",
+      newSession: "🧭 新工作階段：{sessionId}",
+      preflightCompactionFailure:
+        "⚠️ 上下文過大，自動壓縮未能恢復本輪。{reasonSuffix} 請重試，使用 /compact，或使用 /new 開始新工作階段。",
+      preflightCompactionReason: " 原因：{reason}。",
+      previousRunStillShuttingDown: "⚠️ 上一次執行仍在關閉中。請稍後再試。",
+      providerConversationStateError:
+        "⚠️ 模型提供者拒絕了目前對話狀態。請重試，或使用 /new 開始新工作階段。",
+      sessionReset: "✅ 工作階段已重設。",
+      sessionResetAcpFailed: "⚠️ ACP 工作階段重設失敗。請檢查 /acp status 後再試。",
+      sessionResetAcpInPlace: "✅ ACP 工作階段已原地重設。",
+      sessionStarted: "✅ 新工作階段已開始。",
+      toolFailed: "⚠️ {toolSummary} 失敗{errorSuffix}",
+      unknownError: "未知錯誤",
+      warningMessage: "⚠️ {message}",
+      rateLimitAllModels: "⚠️ 所有模型暫時觸發限流。請幾分鐘後再試。",
+      rateLimitReadyMinutes: "⚠️ 已觸發限流，約 {minutes} 分鐘後可重試。請稍後再試。",
+      rateLimitReadySeconds: "⚠️ 已觸發限流，約 {seconds} 秒後可重試。請稍等。",
+    },
+    gateway: {
+      attachmentUnavailable: "附件不可用",
+      blockedLocalFile: "本機檔案被阻擋",
+      fileNotFound: "找不到檔案",
+      invalidFile: "檔案無效",
+      mediaReplyCouldNotBeDisplayed: "媒體回覆無法顯示。",
+      notAFile: "不是檔案",
+      outsideAllowedFolders: "不在允許存取的資料夾內",
+      sessionStillActive: "工作階段 {sessionKey} 仍在執行；請稍後再試。",
+      tooManyFailedAuthAttempts: "認證失敗次數過多。請稍後再試。",
+    },
+    tui: {
+      thinking: "思考",
+    },
+  },
   wizard: {
     customProvider: {
       apiBaseUrl: "API 基礎 URL",

@@ -5149,6 +5149,35 @@ describe("runAgentTurnWithFallback", () => {
     },
   );
 
+  it("keeps localized generated runner failure boilerplate out of non-direct chats", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    state.isInternalMessageChannelMock.mockReturnValue(true);
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error("INVALID_ARGUMENT: localized failure"),
+    );
+
+    try {
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]!),
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+      }
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+  });
+
   it.each(["group", "channel"] as const)(
     "surfaces raw runner failure copy in Discord %s chats when silentReply.group is set to disallow",
     async (chatType) => {

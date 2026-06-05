@@ -80,6 +80,7 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -841,7 +842,7 @@ async function interruptSessionRunIfActive(params: {
         interrupted: true,
         error: errorShape(
           ErrorCodes.UNAVAILABLE,
-          `Session ${params.requestedKey} is still active; try again in a moment.`,
+          runtimeT("runtime.gateway.sessionStillActive", { sessionKey: params.requestedKey }),
         ),
       };
     }

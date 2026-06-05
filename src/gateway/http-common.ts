@@ -5,6 +5,7 @@ import {
   logRejectedLargePayload,
   parseContentLengthHeader,
 } from "../logging/diagnostic-payload.js";
+import { t as runtimeT } from "../wizard/i18n/index.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { readJsonBody } from "./hooks.js";
 
@@ -56,7 +57,7 @@ export function sendRateLimited(res: ServerResponse, retryAfterMs?: number) {
   }
   sendJson(res, 429, {
     error: {
-      message: "Too many failed authentication attempts. Please try again later.",
+      message: runtimeT("runtime.gateway.tooManyFailedAuthAttempts"),
       type: "rate_limited",
     },
   });

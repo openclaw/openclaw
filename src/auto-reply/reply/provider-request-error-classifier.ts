@@ -1,6 +1,7 @@
 // Classifies provider request failures into retry and user-facing categories.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 
 /** Provider request error classes that get a specialized user-facing reply. */
 export type ProviderRequestErrorCode = "provider_conversation_state_error";
@@ -13,8 +14,9 @@ export type ProviderRequestErrorClassification = {
 };
 
 /** User-facing copy for provider-side broken conversation state. */
-export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
-  "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
+export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE = runtimeT(
+  "runtime.channel.providerConversationStateError",
+);
 
 /** Classifies provider request failures that are actionable for users. */
 export function classifyProviderRequestError(

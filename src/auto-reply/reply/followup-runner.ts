@@ -29,6 +29,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -1142,7 +1143,7 @@ export function createFollowupRunner(params: {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           deliveryPayloads = [
             {
-              text: `🧹 Auto-compaction complete${suffix}.`,
+              text: runtimeT("runtime.channel.autoCompactionComplete", { suffix }),
             },
             ...finalPayloads,
           ];
