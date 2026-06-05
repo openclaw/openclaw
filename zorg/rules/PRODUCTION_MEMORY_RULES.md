@@ -11,3 +11,5 @@
 - Active operating rules belong in `zorg_logic_rules`; older compatibility rule tables must not remain active recall sources after canonical migration.
 - Before production DB structural, indexing, vector, weighted-memory, or schema changes, create and verify a temporary local PostgreSQL backup only.
 - Do not commit, mirror, or push live DB dumps, rows, contacts, transcripts, credentials, or private memory to GitHub from the public MemoryDB update path.
+- Runtime memory writers must not create retired markdown memory files. Generated durable memory belongs in PostgreSQL-backed ingestion; any accidental file is imported then removed.
+- Visible operational replies include the operator request timestamp, actual response timestamp, and elapsed duration based on those two times.

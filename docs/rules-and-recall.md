@@ -54,6 +54,18 @@ Clean installs must enforce DB-only memory in both rules and runtime configurati
 
 The `memory/` subdirectory is retired. It must not be used for daily notes, project notes, people research, source notes, heartbeat state, JSON logs, or any durable memory. If a `memory/` directory appears during or after install, the auto-heal path archives/imports it into PostgreSQL, removes it from the filesystem, and records the repair in DB memory.
 
+Runtime memory writers are part of the clean-install contract. Bundled
+session-memory hooks, memoryFlush/compaction paths, heartbeat notes, and
+generated-note paths must not create retired markdown memory files such as
+`memory/YYYY-MM-DD.md` or `memory/YYYY-MM-DD-HHMM.md`. If such a file appears,
+the repair path imports it into PostgreSQL, removes the file after successful
+import, and patches the writer path back to DB-only behavior.
+
+Operational replies that report memory, repair, publication, or system changes
+must include the operator request timestamp, actual response/send timestamp, and
+elapsed duration computed from those two timestamps. Work-start time is useful
+for diagnostics but must not be substituted for request time.
+
 ## End-to-end ingestion definition
 
 Memory is not healthy merely because the database accepts connections or a recall query returns old rows. A compliant installation must prove that new data is flowing through the memory gates:

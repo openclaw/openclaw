@@ -227,7 +227,13 @@ ensure_postgres_database() {
     warn "Schema apply failed. Create database/role or set ZORG_DB_* variables, then rerun this script."
     return 0
   }
+  if [[ -f "$ZORG_WORKSPACE_DIR/db/memory_file_archive_schema.sql" ]]; then
+    PGPASSWORD="$ZORG_DB_PASSWORD" psql -h "$ZORG_DB_HOST" -p "$ZORG_DB_PORT" -U "$ZORG_DB_USER" -d "$ZORG_DB_NAME" -v ON_ERROR_STOP=1 -f "$ZORG_WORKSPACE_DIR/db/memory_file_archive_schema.sql" || true
+  fi
   PGPASSWORD="$ZORG_DB_PASSWORD" psql -h "$ZORG_DB_HOST" -p "$ZORG_DB_PORT" -U "$ZORG_DB_USER" -d "$ZORG_DB_NAME" -v ON_ERROR_STOP=1 -f "$ZORG_WORKSPACE_DIR/db/seed_rules.sql" || true
+  if [[ -f "$ZORG_WORKSPACE_DIR/db/runtime_db_only_memory_writer_rules_2026_06_04.sql" ]]; then
+    PGPASSWORD="$ZORG_DB_PASSWORD" psql -h "$ZORG_DB_HOST" -p "$ZORG_DB_PORT" -U "$ZORG_DB_USER" -d "$ZORG_DB_NAME" -v ON_ERROR_STOP=1 -f "$ZORG_WORKSPACE_DIR/db/runtime_db_only_memory_writer_rules_2026_06_04.sql" || true
+  fi
 }
 
 write_memory_config() {
@@ -254,7 +260,15 @@ write_memory_config() {
 JSON
   cp "$ZORG_WORKSPACE_DIR/memory/memory_sql_tool.py" "$OPENCLAW_WORKSPACE/memory_sql_tool.py"
   cp "$ZORG_WORKSPACE_DIR/memory/memory_recall_router.py" "$OPENCLAW_WORKSPACE/memory_recall_router.py"
+  if [[ -f "$ZORG_WORKSPACE_DIR/memory/archive_retired_memory_dir.py" ]]; then
+    cp "$ZORG_WORKSPACE_DIR/memory/archive_retired_memory_dir.py" "$OPENCLAW_WORKSPACE/archive_retired_memory_dir.py"
+  fi
+  if [[ -f "$ZORG_WORKSPACE_DIR/memory/enforce_db_memory_search.py" ]]; then
+    cp "$ZORG_WORKSPACE_DIR/memory/enforce_db_memory_search.py" "$OPENCLAW_WORKSPACE/enforce_db_memory_search.py"
+  fi
   chmod +x "$OPENCLAW_WORKSPACE/memory_sql_tool.py" "$OPENCLAW_WORKSPACE/memory_recall_router.py"
+  [[ -f "$OPENCLAW_WORKSPACE/archive_retired_memory_dir.py" ]] && chmod +x "$OPENCLAW_WORKSPACE/archive_retired_memory_dir.py"
+  [[ -f "$OPENCLAW_WORKSPACE/enforce_db_memory_search.py" ]] && chmod +x "$OPENCLAW_WORKSPACE/enforce_db_memory_search.py"
 }
 
 write_gateway_tui_compat_config() {
@@ -336,6 +350,8 @@ Zorg MemoryDB is the active durable memory backend for this OpenClaw workspace. 
 4. If legacy markdown memory files exist, import them into Zorg MemoryDB, then treat them as retired source files rather than active memory.
 5. If DB recall is unavailable, repair or restore the DB path and fail closed instead of silently falling back to files.
 6. Preserve original memory data. Improve recall with additive DB structures such as indexes, source chunks, entities, associations, observations, and rule rows.
+7. Runtime hooks must not create retired memory markdown files. If a generated memory file appears anyway, import it into PostgreSQL immediately and remove the file after successful import.
+8. User-visible operational replies must include the operator request timestamp, actual response timestamp, and elapsed duration computed from those two times.
 
 ### Local DB Memory Files
 
@@ -504,6 +520,12 @@ main() {
   fi
   install_agent_readable_markdown
   import_markdown_rules
+  if [[ -x "$OPENCLAW_WORKSPACE/enforce_db_memory_search.py" ]]; then
+    "$OPENCLAW_WORKSPACE/.venv-sqlmem/bin/python" "$OPENCLAW_WORKSPACE/enforce_db_memory_search.py" || true
+  fi
+  if [[ -d "$OPENCLAW_WORKSPACE/memory" && -x "$OPENCLAW_WORKSPACE/archive_retired_memory_dir.py" ]]; then
+    ZORG_SKIP_RECALL_REFRESH=1 "$OPENCLAW_WORKSPACE/.venv-sqlmem/bin/python" "$OPENCLAW_WORKSPACE/archive_retired_memory_dir.py" || true
+  fi
   prepare_lan_chat
   maybe_chown_sudo_workspace
   install_lan_chat_service
