@@ -229,6 +229,7 @@ message bodies are also approved for export.
 - `openclaw.session.recovery.requested` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.completed` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.status`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.age_ms` (histogram, attrs: same as the matching recovery counter)
+- `openclaw.session.activity.evicted` (counter, attrs: `openclaw.reason`; counts orphaned tool/model activity markers evicted when no embedded owner remains)
 - `openclaw.run.attempt` (counter, attrs: `openclaw.attempt`)
 
 ### Session liveness telemetry
@@ -262,9 +263,10 @@ When a run ends and no embedded-run owner remains for the session, any leftover
 native tool or model-call activity is orphaned (it can never report completion).
 OpenClaw evicts those markers and emits a structured `session.activity.evicted`
 event (`reason=orphaned_no_owner`, with `evictedTools`/`evictedModelCalls`
-counts) so operators can distinguish recovered stale state from a real active
-tool. This prevents an orphaned `tool_call` record from surviving to re-block
-later turns on the same session key as `blocked_tool_call`.
+counts), exported as the `openclaw.session.activity.evicted` counter, so
+operators can distinguish recovered stale state from a real active tool. This
+prevents an orphaned `tool_call` record from surviving to re-block later turns
+on the same session key as `blocked_tool_call`.
 
 Only `session.stuck` emits the `openclaw.session.stuck` counter, the
 `openclaw.session.stuck_age_ms` histogram, and the `openclaw.session.stuck`
