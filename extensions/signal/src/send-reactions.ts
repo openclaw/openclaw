@@ -5,9 +5,15 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client-adapter.js";
+import { normalizeSignalUuidForCompare } from "./normalize.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
+import {
+  rememberSignalSelfReplyEcho,
+  resolveSignalSelfReplyReactionEchoText,
+} from "./self-reply-echoes.js";
 
 export type SignalReactionOpts = {
   cfg: OpenClawConfig;
@@ -70,6 +76,21 @@ function resolveTargetAuthorParams(params: {
   return {};
 }
 
+function isSignalSelfReactionTarget(params: {
+  recipient: string;
+  account?: string | null;
+  accountUuid?: string | null;
+}): boolean {
+  const recipientUuid = normalizeSignalUuidForCompare(params.recipient);
+  const accountUuid = normalizeSignalUuidForCompare(params.accountUuid);
+  if (recipientUuid && accountUuid && recipientUuid === accountUuid) {
+    return true;
+  }
+  const recipientPhone = normalizeE164(params.recipient);
+  const accountPhone = normalizeE164(params.account ?? "");
+  return Boolean(recipientPhone && accountPhone && recipientPhone === accountPhone);
+}
+
 async function sendReactionSignalCore(params: {
   recipient: string;
   targetTimestamp: number;
@@ -129,6 +150,32 @@ async function sendReactionSignalCore(params: {
     timeoutMs: params.opts.timeoutMs,
     apiMode,
   });
+
+  if (
+    accountInfo.config.ingressMode === "note-to-self" &&
+    !groupId &&
+    isSignalSelfReactionTarget({
+      recipient: normalizedRecipient,
+      account,
+      accountUuid: accountInfo.config.accountUuid,
+    })
+  ) {
+    const reactionEchoText = resolveSignalSelfReplyReactionEchoText({
+      emoji: normalizedEmoji,
+      remove: params.remove,
+      targetTimestamp: params.targetTimestamp,
+      targetAuthor: params.opts.targetAuthor,
+      targetAuthorUuid: params.opts.targetAuthorUuid,
+    });
+    await rememberSignalSelfReplyEcho({
+      accountId: accountInfo.accountId,
+      accountIdentity: accountInfo.config.accountUuid ?? account,
+      messageId: result?.timestamp != null ? String(result.timestamp) : undefined,
+      timestamp: result?.timestamp,
+      text: reactionEchoText,
+      includeTextWithPrimary: true,
+    });
+  }
 
   return {
     ok: true,

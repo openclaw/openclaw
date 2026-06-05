@@ -59,6 +59,7 @@ import {
   hasSignalSelfReplyEcho,
   rememberSignalSelfReplyEcho,
   resolveSignalSelfReplyMediaEchoText,
+  resolveSignalSelfReplyReactionEchoText,
 } from "../self-reply-echoes.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
@@ -165,7 +166,23 @@ function resolveSentSyncDataMessage(sentMessage: SignalSentSyncMessage): SignalD
   };
 }
 
-function resolveSelfReplyEchoText(dataMessage: SignalDataMessage | null): string | undefined {
+function resolveSelfReplyEchoText(
+  dataMessage: SignalDataMessage | null,
+  reaction?: SignalReactionMessage | null,
+): string | undefined {
+  if (reaction) {
+    const reactionEchoText = resolveSignalSelfReplyReactionEchoText({
+      emoji: reaction.emoji,
+      remove: reaction.isRemove,
+      targetTimestamp: reaction.targetSentTimestamp,
+      targetAuthor: reaction.targetAuthor,
+      targetAuthorUuid: reaction.targetAuthorUuid,
+      groupId: reaction.groupInfo?.groupId,
+    });
+    if (reactionEchoText) {
+      return reactionEchoText;
+    }
+  }
   const text = dataMessage?.message?.trim();
   if (text) {
     return dataMessage?.message ?? undefined;
@@ -308,7 +325,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         : typeof dataMessage?.timestamp === "number"
           ? dataMessage.timestamp
           : undefined;
-    const echoText = resolveSelfReplyEchoText(dataMessage);
+    const reaction = deps.isSignalReactionMessage(envelope.reactionMessage)
+      ? envelope.reactionMessage
+      : deps.isSignalReactionMessage(dataMessage?.reaction)
+        ? dataMessage?.reaction
+        : null;
+    const echoText = resolveSelfReplyEchoText(dataMessage, reaction);
     const editedEchoId = options?.ignorePrimaryId
       ? resolveEditedSelfReplyEchoId({ timestamp, text: echoText })
       : undefined;

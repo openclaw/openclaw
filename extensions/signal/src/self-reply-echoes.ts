@@ -55,6 +55,33 @@ export function resolveSignalSelfReplyMediaEchoText(params: {
   return `<media:${kind}:${normalizedContentType}:${params.size}>`;
 }
 
+export function resolveSignalSelfReplyReactionEchoText(params: {
+  emoji?: string | null;
+  remove?: boolean | null;
+  targetTimestamp?: number | null;
+  targetAuthor?: string | null;
+  targetAuthorUuid?: string | null;
+  groupId?: string | null;
+}): string | undefined {
+  const emoji = params.emoji?.trim();
+  if (
+    !emoji ||
+    typeof params.targetTimestamp !== "number" ||
+    !Number.isFinite(params.targetTimestamp)
+  ) {
+    return undefined;
+  }
+  const targetAuthor = params.targetAuthorUuid?.trim() ?? params.targetAuthor?.trim() ?? "";
+  return `${[
+    "<reaction",
+    params.remove ? "remove" : "add",
+    params.targetTimestamp,
+    emoji,
+    normalizeSignalUuidForCompare(targetAuthor) ?? targetAuthor.toLowerCase(),
+    params.groupId?.trim() ?? "",
+  ].join(":")}>`;
+}
+
 function echoTtlMs(id: string): number {
   return isTextEchoId(id) ? TEXT_ECHO_TTL_MS : ECHO_TTL_MS;
 }

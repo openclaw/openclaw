@@ -95,26 +95,37 @@ function materializeInheritedNoteToSelfAccounts(params: {
       const entry = account ?? {};
       const inheritedNoteToSelf =
         (entry.ingressMode ?? originalSignal?.ingressMode) === "note-to-self";
-      if (inheritedNoteToSelf) {
+      const entryAccount = typeof entry.account === "string" ? entry.account : undefined;
+      const entryMatchesRootAccount =
+        !entryAccount || normalizeE164(entryAccount) === normalizeE164(rootAccount);
+      const inheritedRootUuid = Boolean(
+        originalSignal?.accountUuid && !entry.accountUuid && entryMatchesRootAccount,
+      );
+      if (inheritedNoteToSelf || inheritedRootUuid) {
         const materialized: Record<string, unknown> = { ...entry };
         if (!materialized.account) {
           materialized.account = rootAccount;
         }
-        for (const field of INHERITED_NOTE_TO_SELF_FIELDS) {
-          if (field in materialized) {
-            continue;
+        if (inheritedNoteToSelf) {
+          for (const field of INHERITED_NOTE_TO_SELF_FIELDS) {
+            if (field in materialized) {
+              continue;
+            }
+            if (
+              field === "accountUuid" &&
+              normalizeE164(
+                typeof materialized.account === "string" ? materialized.account : "",
+              ) !== normalizeE164(rootAccount)
+            ) {
+              continue;
+            }
+            const value = originalSignal?.[field];
+            if (value !== undefined) {
+              materialized[field] = value;
+            }
           }
-          if (
-            field === "accountUuid" &&
-            normalizeE164(typeof materialized.account === "string" ? materialized.account : "") !==
-              normalizeE164(rootAccount)
-          ) {
-            continue;
-          }
-          const value = originalSignal?.[field];
-          if (value !== undefined) {
-            materialized[field] = value;
-          }
+        } else if (originalSignal?.accountUuid) {
+          materialized.accountUuid = originalSignal.accountUuid;
         }
         const hasChanged = INHERITED_NOTE_TO_SELF_FIELDS.some(
           (field) => materialized[field] !== entry[field],

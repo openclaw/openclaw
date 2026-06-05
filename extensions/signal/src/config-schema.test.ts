@@ -146,6 +146,41 @@ describe("signal groups schema", () => {
     expectValidSignalConfig(updated?.channels?.signal);
   });
 
+  it("materializes inherited UUIDs for standard named accounts when deleting the default account", () => {
+    const updated = signalConfigAdapter.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            accounts: {
+              work: {
+                account: "+15555550123",
+              },
+              inherited: {},
+              other: {
+                account: "+15555550999",
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(updated?.channels?.signal?.accounts?.work).toMatchObject({
+      account: "+15555550123",
+      accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+    });
+    expect(updated?.channels?.signal?.accounts?.inherited).toMatchObject({
+      account: "+15555550123",
+      accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+    });
+    expect(updated?.channels?.signal?.accounts?.other?.accountUuid).toBeUndefined();
+    expect(updated?.channels?.signal?.accountUuid).toBeUndefined();
+    expectValidSignalConfig(updated?.channels?.signal);
+  });
+
   it("does not copy the default UUID onto explicit accounts with a different number", () => {
     const updated = signalConfigAdapter.deleteAccount?.({
       cfg: {

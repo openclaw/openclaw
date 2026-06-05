@@ -63,6 +63,28 @@ vi.mock("../self-reply-echoes.js", () => ({
     const contentType = params.contentType?.trim().toLowerCase();
     return contentType && params.size ? `<media:image:${contentType}:${params.size}>` : undefined;
   },
+  resolveSignalSelfReplyReactionEchoText: (params: {
+    emoji?: string | null;
+    remove?: boolean | null;
+    targetTimestamp?: number | null;
+    targetAuthor?: string | null;
+    targetAuthorUuid?: string | null;
+    groupId?: string | null;
+  }) => {
+    const emoji = params.emoji?.trim();
+    if (!emoji || typeof params.targetTimestamp !== "number") {
+      return undefined;
+    }
+    const targetAuthor = params.targetAuthorUuid?.trim() ?? params.targetAuthor?.trim() ?? "";
+    return `${[
+      "<reaction",
+      params.remove ? "remove" : "add",
+      params.targetTimestamp,
+      emoji,
+      targetAuthor.toLowerCase(),
+      params.groupId?.trim() ?? "",
+    ].join(":")}>`;
+  },
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
@@ -1503,6 +1525,53 @@ describe("signal createSignalEventHandler inbound context", () => {
       messageId: "1700000000103",
       timestamp: 1700000000103,
       text: "echoed agent reply",
+      includeTextWithPrimary: true,
+    });
+  });
+
+  it("drops remembered self-reaction echoes in note-to-self mode", async () => {
+    hasSignalSelfReplyEchoMock.mockResolvedValueOnce(true);
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550001111",
+        accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+        ingressMode: "note-to-self",
+        isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceUuid: "123e4567-e89b-12d3-a456-426614174000",
+        timestamp: 1700000000104,
+        syncMessage: {
+          sentMessage: {
+            destinationUuid: "123e4567-e89b-12d3-a456-426614174000",
+            timestamp: 1700000000104,
+            reaction: {
+              emoji: "👍",
+              targetAuthor: "+15550001111",
+              targetSentTimestamp: 1700000000100,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(hasSignalSelfReplyEchoMock).toHaveBeenCalledWith({
+      accountId: "default",
+      accountIdentity: "123e4567-e89b-12d3-a456-426614174000",
+      messageId: "1700000000104",
+      timestamp: 1700000000104,
+      text: "<reaction:add:1700000000100:👍:+15550001111:>",
       includeTextWithPrimary: true,
     });
   });
