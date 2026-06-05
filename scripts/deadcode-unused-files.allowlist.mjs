@@ -2,6 +2,19 @@
 // generated/build inputs, manifest-discovered plugin surfaces, live-test
 // helpers, or package bridge files that static production scanning cannot see.
 export const KNIP_UNUSED_FILE_ALLOWLIST = [
+  // openclaw-governance plugin entrypoints and primitives. Discovered via the
+  // plugin manifest (openclaw.plugin.json) at runtime; the INFERENCE_END /
+  // OUTBOUND_PAYLOAD / SKILL_INVOKE event-bus wiring is intentionally deferred
+  // so upstream review can shape the hook surface.
+  "extensions/openclaw-governance/src/aibom/record.ts",
+  "extensions/openclaw-governance/src/aibom/recorder.ts",
+  "extensions/openclaw-governance/src/aibom/signer.ts",
+  "extensions/openclaw-governance/src/aibom/verifier.ts",
+  "extensions/openclaw-governance/src/config.ts",
+  "extensions/openclaw-governance/src/cost/ledger.ts",
+  "extensions/openclaw-governance/src/dlp/scanner.ts",
+  "extensions/openclaw-governance/src/index.ts",
+  "extensions/openclaw-governance/src/store/sqlite.ts",
   // Per-agent SQLite scaffold is intentionally ahead of mainline runtime callers.
   // The pending SQLite session/runtime branch wires these files into production.
   "src/agents/cache/agent-cache-store.sqlite.ts",
