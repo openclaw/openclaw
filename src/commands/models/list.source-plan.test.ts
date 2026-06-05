@@ -9,20 +9,6 @@ const mocks = vi.hoisted(() => ({
   hasProviderStaticCatalogForFilter: vi.fn(),
 }));
 
-vi.mock("./list.manifest-catalog.js", () => ({
-  loadStaticManifestCatalogRowsForList: mocks.loadStaticManifestCatalogRowsForList,
-  loadSupplementalManifestCatalogRowsForList: mocks.loadSupplementalManifestCatalogRowsForList,
-}));
-
-vi.mock("./list.provider-index-catalog.js", () => ({
-  loadProviderIndexCatalogRowsForList: mocks.loadProviderIndexCatalogRowsForList,
-}));
-
-vi.mock("./list.provider-catalog.js", () => ({
-  hasProviderRuntimeCatalogForFilter: mocks.hasProviderRuntimeCatalogForFilter,
-  hasProviderStaticCatalogForFilter: mocks.hasProviderStaticCatalogForFilter,
-}));
-
 const catalogRow = {
   provider: "moonshot",
   id: "kimi-k2.6",
@@ -37,7 +23,7 @@ const catalogRow = {
 
 describe("planAllModelListSources", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mocks.loadStaticManifestCatalogRowsForList.mockReturnValue([]);
     mocks.loadSupplementalManifestCatalogRowsForList.mockReturnValue([]);
     mocks.loadProviderIndexCatalogRowsForList.mockReturnValue([]);
@@ -53,6 +39,7 @@ describe("planAllModelListSources", () => {
       all: true,
       providerFilter: "moonshot",
       cfg: {},
+      dependencies: mocks,
     });
 
     expect(plan.kind).toBe("manifest");
@@ -77,6 +64,7 @@ describe("planAllModelListSources", () => {
       all: true,
       providerFilter: "openai",
       cfg: {},
+      dependencies: mocks,
     });
 
     expect(plan.kind).toBe("provider-runtime-scoped");
@@ -95,6 +83,7 @@ describe("planAllModelListSources", () => {
       all: true,
       providerFilter: "moonshot",
       cfg: {},
+      dependencies: mocks,
     });
 
     expect(plan.kind).toBe("provider-index");
@@ -112,6 +101,7 @@ describe("planAllModelListSources", () => {
       all: true,
       providerFilter: "openai",
       cfg: {},
+      dependencies: mocks,
     });
 
     expect(plan.kind).toBe("registry");
@@ -136,6 +126,7 @@ describe("planAllModelListSources", () => {
       all: true,
       providerFilter: "openrouter",
       cfg: {},
+      dependencies: mocks,
     });
     expect(plan.kind).toBe("provider-runtime-scoped");
     expect(plan.requiresInitialRegistry).toBe(false);
@@ -152,6 +143,7 @@ describe("planAllModelListSources", () => {
     const plan = await planAllModelListSources({
       all: true,
       cfg: {},
+      dependencies: mocks,
     });
 
     expect(plan.kind).toBe("registry");
@@ -174,6 +166,7 @@ describe("planAllModelListSources", () => {
       all: true,
       providerFilter: "codex",
       cfg: {},
+      dependencies: mocks,
     });
     expect(plan.kind).toBe("provider-runtime-static");
     expect(plan.requiresInitialRegistry).toBe(false);
@@ -190,6 +183,7 @@ describe("planAllModelListSources", () => {
       all: true,
       providerFilter: "openai",
       cfg: {},
+      dependencies: mocks,
     });
     expect(plan.kind).toBe("provider-runtime-scoped");
     expect(plan.requiresInitialRegistry).toBe(false);

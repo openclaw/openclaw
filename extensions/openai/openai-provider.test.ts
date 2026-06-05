@@ -128,7 +128,8 @@ function expectCatalogEntry(entries: unknown, id: string, expected: Record<strin
 
 function expectNoCatalogEntry(entries: unknown, id: string): void {
   expect(Array.isArray(entries)).toBe(true);
-  expect((entries as Array<Record<string, unknown>>).map((entry) => entry.id)).not.toContain(id);
+  const entryIds = new Set((entries as Array<Record<string, unknown>>).map((entry) => entry.id));
+  expect(entryIds.has(id)).toBe(false);
 }
 
 describe("buildOpenAIProvider", () => {
@@ -347,8 +348,9 @@ describe("buildOpenAIProvider", () => {
         maxTokens: 64_000,
       });
       expect(fetchSpy).toHaveBeenCalledOnce();
-      const fetchUrl = String(fetchSpy.mock.calls[0]?.[0]);
-      expect(fetchUrl).toBe("https://chatgpt.com/backend-api/codex/models?client_version=1.0.0");
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+        "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      );
       const headers = fetchSpy.mock.calls[0]?.[1]?.headers;
       expect(headers).toBeInstanceOf(Headers);
       if (!(headers instanceof Headers)) {
@@ -470,7 +472,8 @@ describe("buildOpenAIProvider", () => {
     expect(fetchParams?.url).toBe(
       "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
     );
-    const headers = fetchParams?.init.headers;
+    const init = fetchParams?.init;
+    const headers = init?.headers;
     expect(headers).toBeInstanceOf(Headers);
     if (!(headers instanceof Headers)) {
       throw new Error("expected fetch headers");
