@@ -37,7 +37,7 @@ import {
 } from "../chat-display-projection.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { waitForAgentJob } from "./agent-job.js";
+import { __testing as agentJobTesting, waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -591,6 +591,22 @@ describe("waitForAgentJob", () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
+  });
+
+  it("caps agentRunCache at AGENT_RUN_CACHE_MAX_ENTRIES via FIFO drop", () => {
+    agentJobTesting.resetAgentRunCache();
+    const max = agentJobTesting.agentRunCacheMaxEntries;
+    const overflow = 25;
+    const prefix = `cap-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    for (let i = 0; i < max + overflow; i++) {
+      emitAgentEvent({
+        runId: `${prefix}-${i}`,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: i, endedAt: i + 1 },
+      });
+    }
+    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
+    agentJobTesting.resetAgentRunCache();
   });
 });
 
