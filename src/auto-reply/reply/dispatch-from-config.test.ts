@@ -8426,7 +8426,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(result.queuedFinal).toBe(true);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(sourceReply);
-    expect(dispatcher.waitForIdle).toHaveBeenCalledTimes(1);
+    expect(dispatcher.waitForIdle).toHaveBeenCalledTimes(2);
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
