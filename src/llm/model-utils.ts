@@ -75,6 +75,19 @@ function mappedReasoningEffortIsSupported(mapped: unknown, supportedEfforts: Set
   );
 }
 
+function compatExplicitlySupportsExtendedThinkingLevel(
+  level: ModelThinkingLevel,
+  mapped: unknown,
+  supportedEfforts: Set<string>,
+): boolean {
+  if (supportedEfforts.has(level)) {
+    return true;
+  }
+
+  const normalizedMapped = normalizeReasoningEffort(mapped);
+  return level === "max" && normalizedMapped === "xhigh" && supportedEfforts.has("xhigh");
+}
+
 function compatSupportsThinkingLevel<TApi extends Api>(
   model: Model<TApi>,
   level: ModelThinkingLevel,
@@ -86,6 +99,11 @@ function compatSupportsThinkingLevel<TApi extends Api>(
   if (mappedEffort === null) {
     return false;
   }
+
+  if (!compatExplicitlySupportsExtendedThinkingLevel(level, mappedEffort, supportedEfforts)) {
+    return false;
+  }
+
   if (mappedReasoningEffortIsSupported(mappedEffort, supportedEfforts)) {
     return true;
   }
