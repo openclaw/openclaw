@@ -18,7 +18,9 @@ const hoisted = vi.hoisted(() => {
     loadModelPricingCacheModule: vi.fn(),
     isVitestRuntimeEnv: vi.fn(() => false),
     recoverPendingDeliveries: vi.fn(async () => undefined),
-    recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
+    recoverPendingRestartContinuationDeliveries: vi.fn<
+      (args: { deps: unknown; maxEnqueuedAt: number; log: unknown }) => Promise<undefined>
+    >(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
   };
 });
