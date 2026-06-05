@@ -66,8 +66,8 @@ export function loadQaRuntimeModule(): QaRuntimeSurface {
   });
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- QA runtime loader uses caller-supplied test API surface type.
 /** Load a bundled QA runner plugin test API facade by plugin id. */
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- QA runtime loader uses caller-supplied test API surface type.
 export function loadQaRunnerBundledPluginTestApi<T extends object>(pluginId: string): T {
   const env = resolvePrivateQaBundledPluginsEnv();
   return loadBundledPluginPublicSurfaceModuleSync<T>({

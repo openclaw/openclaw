@@ -1,3 +1,4 @@
+// Measures plugin lifecycle matrix E2E command timings.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

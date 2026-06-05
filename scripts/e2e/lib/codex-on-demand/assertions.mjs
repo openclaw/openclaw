@@ -1,3 +1,4 @@
+// Assertions for Codex on-demand plugin E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
