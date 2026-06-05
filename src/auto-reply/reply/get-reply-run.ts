@@ -1202,6 +1202,14 @@ export async function runPreparedReply(
                 mediaOnlyText: "[User sent media without caption]",
               }
             : {}),
+          // Propagate sender identity for group chat JSONL records.
+          ...(sessionCtx.SenderId
+            ? {
+                senderId: sessionCtx.SenderId,
+                senderName: sessionCtx.SenderName ?? null,
+                senderUsername: sessionCtx.SenderUsername ?? null,
+              }
+            : {}),
         }
       : undefined;
   const userTurnTranscriptRecorder =
