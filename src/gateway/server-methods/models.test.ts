@@ -261,6 +261,62 @@ describe("models.list", () => {
     );
   });
 
+  it("marks legacy OpenAI Codex aliases available through ChatGPT OAuth", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-models-list-codex-alias-",
+        agentEnv: "main",
+      },
+      async (state) => {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "openai:chatgpt": {
+              type: "oauth",
+              provider: "openai",
+              access: "chatgpt-access",
+              refresh: "chatgpt-refresh",
+              expires: Date.now() + 30 * 60_000,
+            },
+          },
+        });
+
+        const { request, respond } = requestModelsList({
+          view: "all",
+          loadGatewayModelCatalog: vi.fn(() =>
+            Promise.resolve([
+              {
+                id: "gpt-5.4-codex",
+                name: "GPT-5.4 Codex",
+                provider: "openai",
+                api: "openai-responses",
+              },
+            ]),
+          ),
+          reqId: "req-models-list-codex-alias",
+        });
+        await request;
+
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              {
+                id: "gpt-5.4-codex",
+                name: "GPT-5.4 Codex",
+                provider: "openai",
+                api: "openai-responses",
+                available: true,
+              },
+            ],
+          },
+          undefined,
+        );
+      },
+    );
+  });
+
   it("keeps file SecretRef provider availability unknown instead of forcing unavailable", async () => {
     const catalog = [{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }];
     const cfg = {

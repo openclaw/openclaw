@@ -43,6 +43,7 @@ const OPENAI_CODEX_ROUTABLE_MODEL_IDS = new Set([
   "gpt-5.5",
   "gpt-5.5-pro",
   "gpt-5.4",
+  "gpt-5.4-codex",
   "gpt-5.4-pro",
   "gpt-5.4-mini",
 ]);
