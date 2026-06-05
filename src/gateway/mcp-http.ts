@@ -1,3 +1,5 @@
+// MCP loopback HTTP server.
+// Exposes Gateway-scoped tools to local MCP clients over bearer-auth loopback.
 import crypto from "node:crypto";
 import {
   createServer as createHttpServer,
@@ -23,6 +25,9 @@ import {
 } from "./mcp-http.request.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 
+// Loopback MCP server exposes gateway-scoped tools to local MCP clients over a
+// bearer-token HTTP endpoint bound to 127.0.0.1. Only one active server/runtime
+// is registered per process.
 export {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
@@ -51,6 +56,8 @@ function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): 
   console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
 }
 
+// Abort tool calls when the request disconnects before completion, but keep
+// completed responses alive through normal response close notifications.
 function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
   const controller = new AbortController();
   const abort = () => {
@@ -82,6 +89,7 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
   };
 }
 
+/** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
 export async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;
   close: () => Promise<void>;
@@ -201,6 +209,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   if (!address || typeof address === "string") {
     throw new Error("mcp loopback did not bind to a TCP port");
   }
+  // Register tokens only after the TCP listener is live so clients never learn
+  // a bearer token for a server that failed to bind.
   setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
@@ -226,6 +236,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   return server;
 }
 
+/** Returns the active MCP loopback server or starts one if none exists. */
 export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServer> {
   if (activeMcpLoopbackServer) {
     return activeMcpLoopbackServer;
@@ -243,6 +254,7 @@ export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServ
   return activeMcpLoopbackServerPromise;
 }
 
+/** Closes the active MCP loopback server if one has been started. */
 export async function closeMcpLoopbackServer(): Promise<void> {
   const server =
     activeMcpLoopbackServer ??

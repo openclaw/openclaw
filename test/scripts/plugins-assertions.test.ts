@@ -1,3 +1,4 @@
+// Plugins Assertions tests cover plugins assertions script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,

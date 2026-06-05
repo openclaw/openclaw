@@ -1,3 +1,6 @@
+/**
+ * Gateway node catalog regression tests.
+ */
 import { describe, expect, it } from "vitest";
 import {
   createKnownNodeCatalog,

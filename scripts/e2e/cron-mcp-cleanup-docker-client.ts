@@ -1,3 +1,4 @@
+// Cron Mcp Cleanup Docker Client script supports OpenClaw repository automation.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -6,8 +7,8 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import type { GatewayRpcClient } from "./mcp-channels-harness.ts";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import type { GatewayRpcClient } from "./mcp-channels-harness.ts";
 
 const execFileAsync = promisify(execFile);
 const PROBE_PID_WAIT_MS = readCronMcpCleanupProbePidWaitMs();

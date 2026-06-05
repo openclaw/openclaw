@@ -1,3 +1,8 @@
+/**
+ * Ensures the agent-local models.json and plugin model catalog sidecars match
+ * runtime config, discovered providers, auth-profile state, and generated
+ * catalog ownership.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -18,6 +23,7 @@ import {
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
+import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 import {
@@ -62,9 +68,9 @@ async function buildModelsJsonFingerprint(params: {
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
 }): Promise<string> {
-  const authProfilesMtimeMs = await readFileMtimeMs(
-    path.join(params.agentDir, "auth-profiles.json"),
-  );
+  const authProfilesSqlitePath = resolveAuthProfileDatabasePath(params.agentDir);
+  const authProfilesMtimeMs = await readFileMtimeMs(authProfilesSqlitePath);
+  const authProfilesWalMtimeMs = await readFileMtimeMs(`${authProfilesSqlitePath}-wal`);
   const modelsFileMtimeMs = await readFileMtimeMs(path.join(params.agentDir, "models.json"));
   const pluginCatalogMtimes = await readPluginCatalogMtimes(params.agentDir);
   const envShape = createConfigRuntimeEnv(params.config, {});
@@ -76,6 +82,7 @@ async function buildModelsJsonFingerprint(params: {
     sourceConfigForSecrets: params.sourceConfigForSecrets,
     envShape,
     authProfilesMtimeMs,
+    authProfilesWalMtimeMs,
     modelsFileMtimeMs,
     pluginCatalogMtimes,
     workspaceDir: params.workspaceDir,
@@ -116,12 +123,14 @@ async function readExistingModelsFile(pathname: string): Promise<{
   }
 }
 
+/** Best-effort chmod for generated models.json and plugin catalog files. */
 export async function ensureModelsFileModeForModelsJson(pathname: string): Promise<void> {
   await fs.chmod(pathname, 0o600).catch(() => {
     // best-effort
   });
 }
 
+/** Atomic private-file-store write used by models.json generation. */
 export async function writeModelsFileAtomicForModelsJson(
   targetPath: string,
   contents: string,
@@ -280,6 +289,7 @@ async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise
   }
 }
 
+/** Ensures models.json and plugin catalog sidecars are current for an agent. */
 export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,

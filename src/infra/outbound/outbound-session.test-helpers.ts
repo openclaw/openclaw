@@ -1,3 +1,5 @@
+// Test helpers build minimal plugin registries for outbound session-route
+// scenarios without importing real channel implementations.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -22,6 +24,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 
+// Session route fixtures cover direct, group, and threaded outbound routes without real plugins.
 function createSessionRouteTestPlugin(params: {
   id: ChannelPlugin["id"];
   label: string;
@@ -506,6 +509,7 @@ function resolveTlonOutboundSessionRouteForTest(params: ChannelOutboundSessionRo
   });
 }
 
+/** Installs a minimal channel registry for outbound session route tests. */
 export function setMinimalOutboundSessionPluginRegistryForTests(): void {
   const plugins: ChannelPlugin[] = [
     createSessionRouteTestPlugin({

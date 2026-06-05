@@ -1,3 +1,4 @@
+// Ios Pull Gateway Log tests cover ios pull gateway log script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 

@@ -1,3 +1,4 @@
+// Control UI chat module implements build chat items behavior.
 import type { ChatItem, MessageGroup, NormalizedMessage, ToolCard } from "../types/chat-types.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
 import {
@@ -9,6 +10,7 @@ import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage, stripMessageDisplayMetadataText } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
+import { trimAccumulatedStreamPrefix } from "./stream-text.ts";
 import { extractToolCardsCached, extractToolPreview } from "./tool-cards.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
@@ -191,13 +193,17 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
-    const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
+    const senderLabel =
+      role.toLowerCase() === "user" || role.toLowerCase() === "assistant"
+        ? (normalized.senderLabel ?? null)
+        : null;
     const timestamp = normalized.timestamp || Date.now();
+    const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
 
     if (
       !currentGroup ||
       currentGroup.role !== role ||
-      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
+      (shouldSplitBySender && currentGroup.senderLabel !== senderLabel)
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -253,7 +259,8 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
   if (!text) {
     return null;
   }
-  const senderLabel = role === "user" ? (normalized.senderLabel ?? "").trim() : "";
+  const senderLabel =
+    role === "user" || role === "assistant" ? (normalized.senderLabel ?? "").trim() : "";
   return `${role}:${senderLabel}:${text}`;
 }
 
@@ -285,19 +292,14 @@ function hasRenderableNormalizedMessage(message: unknown): boolean {
   if (!normalized) {
     return false;
   }
-  return normalized.content.length > 0 || Boolean(normalized.replyTarget);
+  const role = normalizeRoleForGrouping(normalized.role);
+  const hasVisibleSenderLabel = role === "assistant" && Boolean(normalized.senderLabel?.trim());
+  return normalized.content.length > 0 || Boolean(normalized.replyTarget) || hasVisibleSenderLabel;
 }
 
 function sanitizeStreamText(text: string): string {
   const stripped = stripMessageDisplayMetadataText(text);
   return stripped.trim().length > 0 ? stripped : "";
-}
-
-function trimAccumulatedStreamPrefix(text: string, previousText: string | null): string {
-  if (!previousText || !text.startsWith(previousText)) {
-    return text;
-  }
-  return text.slice(previousText.length).trimStart();
 }
 
 function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
@@ -347,6 +349,19 @@ function chatItemTimestamp(item: ChatItem): number | null {
       return null;
   }
   return null;
+}
+
+function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: number): number {
+  const latestTimestamp = items.reduce<number | null>((latest, item) => {
+    const timestamp = chatItemTimestamp(item);
+    if (timestamp == null) {
+      return latest;
+    }
+    return latest == null || timestamp > latest ? timestamp : latest;
+  }, null);
+  return latestTimestamp != null && desiredTimestamp <= latestTimestamp
+    ? latestTimestamp + 1
+    : desiredTimestamp;
 }
 
 function sortChatItemsByVisibleTime(items: ChatItem[]): ChatItem[] {
@@ -660,13 +675,14 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
     const text = sanitizeStreamText(props.stream);
     const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+    const startedAt = timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now());
     if (visibleText.length > 0) {
       if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
         items.push({
           kind: "stream",
           key,
           text: visibleText,
-          startedAt: props.streamStartedAt ?? Date.now(),
+          startedAt,
           isStreaming: true,
         });
       }

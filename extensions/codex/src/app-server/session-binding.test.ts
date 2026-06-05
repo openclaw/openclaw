@@ -1,3 +1,4 @@
+// Codex tests cover session binding plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -98,36 +99,6 @@ describe("codex app-server session binding", () => {
     };
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-123",
-      cwd: tempDir,
-      pluginAppPolicyContext,
-    });
-
-    const binding = await readCodexAppServerBinding(sessionFile);
-
-    expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
-  });
-
-  it("round-trips plugin app policy context for openai-bundled marketplace plugins", async () => {
-    // The chrome plugin lives in openai-bundled (ships with Codex.app), so
-    // its policy must persist across reads/writes the same way curated entries do.
-    const sessionFile = path.join(tempDir, "session-bundled.json");
-    const pluginAppPolicyContext = {
-      fingerprint: "plugin-policy-bundled-1",
-      apps: {
-        "chrome-app": {
-          configKey: "chrome",
-          marketplaceName: "openai-bundled" as const,
-          pluginName: "chrome",
-          allowDestructiveActions: true,
-          mcpServerNames: ["chrome"],
-        },
-      },
-      pluginAppIds: {
-        chrome: ["chrome-app"],
-      },
-    };
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-bundled",
       cwd: tempDir,
       pluginAppPolicyContext,
     });

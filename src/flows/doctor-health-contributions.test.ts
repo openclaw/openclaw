@@ -1,3 +1,4 @@
+// Doctor health contribution tests cover plugin-provided health checks.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
@@ -81,7 +82,8 @@ vi.mock("../agents/model-selection.js", () => ({
   resolveHooksGmailModel: mocks.resolveHooksGmailModel,
 }));
 
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async () => ({
+  ...(await vi.importActual<typeof import("../version.js")>("../version.js")),
   VERSION: "2026.5.2-test",
 }));
 

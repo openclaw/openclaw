@@ -1,3 +1,4 @@
+// Discord plugin module implements runtime.messaging.send behavior.
 import { createChannelPagedActionResult } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
