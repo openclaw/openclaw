@@ -1,4 +1,6 @@
 // Verifies optional media/PDF tool factory planning from plugin metadata and auth.
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -228,6 +230,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(["github-copilot"]),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -274,6 +277,133 @@ describe("optional media tool factory planning", () => {
     ).toBe(true);
   });
 
+  it("does not plan the image tool from the default snapshot for an explicit workspace", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      createPlugin({
+        id: "media-owner",
+        contracts: { mediaUnderstandingProviders: ["media-owner"] },
+        setupProviders: [{ id: "media-owner", envVars: ["MEDIA_OWNER_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        agentDir: "/tmp/openclaw-agent-main",
+        workspaceDir: "/workspace/a",
+        authStore: createAuthStore(["media-owner"]),
+      }).image,
+    ).toBe(false);
+  });
+
+  it("plans the image tool from workspace manifest fallback without a current snapshot", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-plan-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const bundledDir = path.join(tempRoot, "bundled");
+    const stateDir = path.join(tempRoot, "state");
+    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-media");
+    const config: OpenClawConfig = {
+      plugins: {
+        allow: ["workspace-media"],
+      },
+    };
+
+    try {
+      await fs.mkdir(pluginDir, { recursive: true });
+      await fs.mkdir(bundledDir, { recursive: true });
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(path.join(pluginDir, "index.ts"), "export default {}\n", "utf8");
+      await fs.writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "workspace-media",
+          configSchema: { type: "object" },
+          contracts: { mediaUnderstandingProviders: ["workspace-media"] },
+          setup: {
+            providers: [
+              {
+                id: "workspace-media",
+                envVars: ["WORKSPACE_MEDIA_API_KEY"],
+              },
+            ],
+          },
+        }),
+        "utf8",
+      );
+      setBundledPluginsDirOverrideForTest(bundledDir);
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+      expect(
+        resolveOptionalMediaToolFactoryPlan({
+          config,
+          agentDir: "/tmp/openclaw-agent-main",
+          workspaceDir,
+          authStore: createAuthStore(["workspace-media"]),
+        }).image,
+      ).toBe(true);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("plans the image tool from workspace manifest fallback when a default current snapshot exists", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-plan-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const bundledDir = path.join(tempRoot, "bundled");
+    const stateDir = path.join(tempRoot, "state");
+    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-media");
+    const config: OpenClawConfig = {
+      plugins: {
+        allow: ["workspace-media"],
+      },
+    };
+
+    try {
+      await fs.mkdir(pluginDir, { recursive: true });
+      await fs.mkdir(bundledDir, { recursive: true });
+      await fs.mkdir(stateDir, { recursive: true });
+      setBundledPluginsDirOverrideForTest(bundledDir);
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      installSnapshot(config, [
+        createPlugin({
+          id: "default-media",
+          contracts: { mediaUnderstandingProviders: ["default-media"] },
+          setupProviders: [{ id: "default-media", envVars: ["DEFAULT_MEDIA_API_KEY"] }],
+        }),
+      ]);
+      await fs.writeFile(path.join(pluginDir, "index.ts"), "export default {}\n", "utf8");
+      await fs.writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "workspace-media",
+          configSchema: { type: "object" },
+          contracts: { mediaUnderstandingProviders: ["workspace-media"] },
+          setup: {
+            providers: [
+              {
+                id: "workspace-media",
+                envVars: ["WORKSPACE_MEDIA_API_KEY"],
+              },
+            ],
+          },
+        }),
+        "utf8",
+      );
+
+      expect(
+        resolveOptionalMediaToolFactoryPlan({
+          config,
+          agentDir: "/tmp/openclaw-agent-main",
+          workspaceDir,
+          authStore: createAuthStore(["workspace-media"]),
+        }).image,
+      ).toBe(true);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("keeps explicit model configs on the factory path", () => {
     const config: OpenClawConfig = {
       agents: {
@@ -293,6 +423,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: true,
       musicGenerate: true,
@@ -312,6 +443,7 @@ describe("optional media tool factory planning", () => {
       },
     };
     const allowlistFromAlsoAllowOnlyPolicy = ["group:memory", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY];
+
     installSnapshot(config, []);
 
     expect(
@@ -321,6 +453,7 @@ describe("optional media tool factory planning", () => {
         toolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: true,
       musicGenerate: true,
@@ -339,6 +472,22 @@ describe("optional media tool factory planning", () => {
     expect(toolNames).toContain("video_generate");
     expect(toolNames).toContain("music_generate");
     expect(toolNames).toContain("pdf");
+  });
+
+  it("plans the image tool from already resolved vision evidence", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, []);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        agentDir: "/tmp/openclaw-agent",
+        modelHasVision: true,
+        authStore: createAuthStore(),
+      }),
+    ).toMatchObject({
+      image: true,
+    });
   });
 
   it("keeps denylists authoritative when alsoAllow-only policies preserve factory construction", () => {
@@ -362,9 +511,51 @@ describe("optional media tool factory planning", () => {
         toolDenylist: ["video_generate", "pdf"],
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: false,
       musicGenerate: true,
+      pdf: false,
+    });
+  });
+
+  it("does not plan the image tool without an agent directory", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      createPlugin({
+        id: "media-owner",
+        contracts: { mediaUnderstandingProviders: ["media-owner"] },
+        setupProviders: [{ id: "media-owner", envVars: ["MEDIA_OWNER_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["media-owner"]),
+      }),
+    ).toMatchObject({
+      image: false,
+      pdf: true,
+    });
+  });
+
+  it("keeps model vision image planning when plugin tools are disabled", () => {
+    const config: OpenClawConfig = { plugins: { enabled: false } };
+    installSnapshot(config, []);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        agentDir: "/tmp/openclaw-agent",
+        modelHasVision: true,
+        authStore: createAuthStore(),
+      }),
+    ).toEqual({
+      image: true,
+      imageGenerate: false,
+      videoGenerate: false,
+      musicGenerate: false,
       pdf: false,
     });
   });
@@ -391,6 +582,7 @@ describe("optional media tool factory planning", () => {
         toolAllowlist: ["image_generate"],
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: false,
       musicGenerate: false,
@@ -420,6 +612,7 @@ describe("optional media tool factory planning", () => {
         toolDenylist: ["image_generate", "pdf"],
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -477,6 +670,7 @@ describe("optional media tool factory planning", () => {
         toolDenylist: ["*_generate", "p*"],
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -516,6 +710,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(["image-owner", "music-owner", "media-owner"]),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: true,
       musicGenerate: true,
@@ -600,6 +795,7 @@ describe("optional media tool factory planning", () => {
         ]),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: true,
       musicGenerate: true,
@@ -761,6 +957,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -838,6 +1035,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -1067,6 +1265,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(["external-image"]),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -1084,6 +1283,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
