@@ -250,6 +250,14 @@ export async function processChatMessage(
             ? ` topicName:${JSON.stringify(resolution.topicName)}`
             : "";
           topicContext = ` [topicId:${resolution.topicId}${namePart} useSlaveTopic:${resolution.useSlaveTopic}]`;
+          // A user can own several topics; list them all (sorted by topicId
+          // upstream) so the agent never has to guess beyond the prefix.
+          if (resolution.topics.length > 1) {
+            const all = resolution.topics
+              .map((t) => `${t.topicId}${t.topicName ? `:${JSON.stringify(t.topicName)}` : ""}`)
+              .join(", ");
+            topicContext += ` [allTopics: ${all}]`;
+          }
           logger.info(
             `[CHAT_PIPELINE] Injecting topic context for userId=${userId}:${topicContext}`,
           );

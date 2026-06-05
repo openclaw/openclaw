@@ -253,7 +253,13 @@ describe("processChatMessage", () => {
     const topicResolver = {
       getTopicIdsByUser: async (uid: string) => {
         expect(uid).toBe(USER_ID);
-        return { topicId: 585, useSlaveTopic: true, masterId: 270, topicName: "广本监测专项" };
+        return {
+          topicId: 585,
+          useSlaveTopic: true,
+          masterId: 270,
+          topicName: "广本监测专项",
+          topics: [{ topicId: 585, useSlaveTopic: true, masterId: 270, topicName: "广本监测专项" }],
+        };
       },
     } as unknown as TopicResolver;
 
@@ -269,6 +275,47 @@ describe("processChatMessage", () => {
 
     expect(capturedMessage).toBe(
       `[userId:${USER_ID}] [topicId:585 topicName:"广本监测专项" useSlaveTopic:true] hi there`,
+    );
+  });
+
+  it("lists every owned topic when the user has more than one", async () => {
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const topicResolver = {
+      getTopicIdsByUser: async () => ({
+        topicId: 585,
+        useSlaveTopic: false,
+        masterId: 585,
+        topicName: "专题E",
+        topics: [
+          { topicId: 116, useSlaveTopic: false, masterId: 116, topicName: "专题A" },
+          { topicId: 357, useSlaveTopic: false, masterId: 357, topicName: null },
+          { topicId: 585, useSlaveTopic: false, masterId: 585, topicName: "专题E" },
+        ],
+      }),
+    } as unknown as TopicResolver;
+
+    await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      topicResolver,
+    );
+
+    expect(capturedMessage).toBe(
+      `[userId:${USER_ID}] [topicId:585 topicName:"专题E" useSlaveTopic:false]` +
+        ` [allTopics: 116:"专题A", 357, 585:"专题E"] hi there`,
     );
   });
 
@@ -289,6 +336,9 @@ describe("processChatMessage", () => {
         useSlaveTopic: true,
         masterId: 270,
         topicName: '专项[A] "测试"',
+        topics: [
+          { topicId: 585, useSlaveTopic: true, masterId: 270, topicName: '专项[A] "测试"' },
+        ],
       }),
     } as unknown as TopicResolver;
 
@@ -324,6 +374,7 @@ describe("processChatMessage", () => {
         useSlaveTopic: true,
         masterId: 270,
         topicName: null,
+        topics: [{ topicId: 585, useSlaveTopic: true, masterId: 270, topicName: null }],
       }),
     } as unknown as TopicResolver;
 
@@ -388,6 +439,7 @@ describe("processChatMessage", () => {
         useSlaveTopic: false,
         masterId: 0,
         topicName: null,
+        topics: [],
       }),
     } as unknown as TopicResolver;
 

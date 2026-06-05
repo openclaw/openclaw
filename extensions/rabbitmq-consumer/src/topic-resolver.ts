@@ -1,7 +1,19 @@
 import mysql from "mysql2/promise";
 import type { HistoryDbConfig } from "./types.js";
 
+/** One topic the user is authorized to view. */
+export interface TopicInfo {
+  topicId: number;
+  /** True when the topicId came from slaveId and matches slaveTopicId downstream. */
+  useSlaveTopic: boolean;
+  /** Master topic id from entity_auth (0 when absent). */
+  masterId: number;
+  /** Project title from feed_topic (null when missing or lookup failed). */
+  topicName: string | null;
+}
+
 export interface TopicResolution {
+  /** Primary topic id: the user's most recently granted mapping (null when unmapped). */
   topicId: number | null;
   /** True when the topicId came from slaveId and matches slaveTopicId downstream. */
   useSlaveTopic: boolean;
@@ -9,6 +21,8 @@ export interface TopicResolution {
   masterId: number;
   /** Project title from feed_topic (null when unmapped or lookup failed). */
   topicName: string | null;
+  /** Every distinct topic the user owns, sorted by topicId for deterministic prompts. */
+  topics: TopicInfo[];
 }
 
 interface TopicResolverConfig {
@@ -24,6 +38,14 @@ interface TopicCacheEntry {
   expiresAt: number;
 }
 
+const EMPTY_RESOLUTION: TopicResolution = {
+  topicId: null,
+  useSlaveTopic: false,
+  masterId: 0,
+  topicName: null,
+  topics: [],
+};
+
 /**
  * uid -> topic mappings change rarely, so a short TTL keeps every chat
  * message from hitting the DB while staying fresh enough for re-binding.
@@ -33,24 +55,32 @@ interface TopicCacheEntry {
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 /**
- * Map an entity_auth row to a TopicResolution:
+ * Map entity_auth rows to distinct topic mappings, preserving row order
+ * (callers pass rows most-recent-first). Per-row rule:
  * - slaveId > 0: topicId = slaveId (matches slaveTopicId downstream)
  * - masterId > 0 and slaveId == 0: topicId = masterId
- * - otherwise: no mapping (topicId null)
+ * - otherwise: no mapping
+ * A uid can hold many entity_auth rows (one per granted entity), often
+ * repeating the same topic — duplicates keep their first (most recent) entry.
  */
-function resolveFromRow(row: mysql.RowDataPacket | undefined): TopicResolution {
-  if (!row) {
-    return { topicId: null, useSlaveTopic: false, masterId: 0, topicName: null };
+function dedupeMappings(rows: mysql.RowDataPacket[]): Omit<TopicInfo, "topicName">[] {
+  const seen = new Set<number>();
+  const mappings: Omit<TopicInfo, "topicName">[] = [];
+  for (const row of rows) {
+    const masterId = Number(row.masterId) || 0;
+    const slaveId = Number(row.slaveId) || 0;
+    const mapping =
+      slaveId > 0
+        ? { topicId: slaveId, useSlaveTopic: true, masterId }
+        : masterId > 0
+          ? { topicId: masterId, useSlaveTopic: false, masterId }
+          : null;
+    if (mapping && !seen.has(mapping.topicId)) {
+      seen.add(mapping.topicId);
+      mappings.push(mapping);
+    }
   }
-  const masterId = Number(row.masterId) || 0;
-  const slaveId = Number(row.slaveId) || 0;
-  if (slaveId > 0) {
-    return { topicId: slaveId, useSlaveTopic: true, masterId, topicName: null };
-  }
-  if (masterId > 0) {
-    return { topicId: masterId, useSlaveTopic: false, masterId, topicName: null };
-  }
-  return { topicId: null, useSlaveTopic: false, masterId: 0, topicName: null };
+  return mappings;
 }
 
 export class TopicResolver {
@@ -86,14 +116,15 @@ export class TopicResolver {
   }
 
   /**
-   * Look up topicId, useSlaveTopic and the feed_topic title for a given
-   * userId (entity_auth.uid). Results are cached per uid for CACHE_TTL_MS;
-   * on a DB failure a stale entry (if any) is served instead of throwing.
-   * Row-to-resolution mapping lives in resolveFromRow.
+   * Look up every topic a user owns (entity_auth.uid -> masterId/slaveId,
+   * many rows per uid) plus their feed_topic titles. The primary topic
+   * (top-level fields) is the most recently granted mapping. Results are
+   * cached per uid for CACHE_TTL_MS; on a DB failure a stale entry (if any)
+   * is served instead of throwing.
    */
   async getTopicIdsByUser(userId: string): Promise<TopicResolution> {
     if (!userId) {
-      return { topicId: null, useSlaveTopic: false, masterId: 0, topicName: null };
+      return EMPTY_RESOLUTION;
     }
 
     const cached = this.cache.get(userId);
@@ -102,18 +133,31 @@ export class TopicResolver {
     }
 
     const pool = await this.getPool();
-    const sql = "SELECT masterId, slaveId FROM entity_auth WHERE uid = ? LIMIT 1";
+    // id DESC = grant order, newest first, so mappings[0] is the user's
+    // most recent (current) project.
+    const sql = "SELECT masterId, slaveId FROM entity_auth WHERE uid = ? ORDER BY id DESC";
 
     try {
       const [rows] = await pool.execute<mysql.RowDataPacket[]>(sql, [userId]);
-      const base = resolveFromRow(rows?.[0]);
-      const freshName = await this.lookupTopicName(pool, base.topicId);
-      // A transient feed_topic blip must not blank a previously known title
-      // for the same topicId: that would flip the injected prefix shape for
-      // 5 minutes and invalidate the prompt-cache prefix for the user.
-      const previousName =
-        cached && cached.resolution.topicId === base.topicId ? cached.resolution.topicName : null;
-      const resolution = { ...base, topicName: freshName ?? previousName };
+      const mappings = dedupeMappings(rows ?? []);
+      const names = await this.lookupTopicNames(
+        pool,
+        mappings.map((m) => m.topicId),
+      );
+      // A transient feed_topic blip must not blank previously known titles:
+      // that would flip the injected prefix shape for 5 minutes and
+      // invalidate the prompt-cache prefix for the user.
+      const previousNames = new Map(
+        (cached?.resolution.topics ?? []).map((t) => [t.topicId, t.topicName]),
+      );
+      const topics = mappings.map((m) => ({
+        ...m,
+        topicName: names.get(m.topicId) ?? previousNames.get(m.topicId) ?? null,
+      }));
+      const primary = topics[0];
+      const resolution: TopicResolution = primary
+        ? { ...primary, topics: topics.toSorted((a, b) => a.topicId - b.topicId) }
+        : EMPTY_RESOLUTION;
       this.cache.set(userId, { resolution, expiresAt: Date.now() + CACHE_TTL_MS });
       return resolution;
     } catch (error) {
@@ -129,23 +173,35 @@ export class TopicResolver {
   }
 
   /**
-   * Fetch the project title for a resolved topicId from feed_topic. The name
-   * is contextual sugar for the agent prompt, so any failure (missing row,
-   * DB blip) degrades to null instead of failing the resolution.
+   * Fetch project titles for the resolved topicIds from feed_topic in one
+   * IN query. Titles are contextual sugar for the agent prompt, so any
+   * failure (missing rows, DB blip) degrades to an empty map instead of
+   * failing the resolution.
    */
-  private async lookupTopicName(pool: mysql.Pool, topicId: number | null): Promise<string | null> {
-    if (!topicId || topicId <= 0) {
-      return null;
+  private async lookupTopicNames(
+    pool: mysql.Pool,
+    topicIds: number[],
+  ): Promise<Map<number, string>> {
+    if (topicIds.length === 0) {
+      return new Map();
     }
     try {
+      const placeholders = topicIds.map(() => "?").join(",");
       const [rows] = await pool.execute<mysql.RowDataPacket[]>(
-        "SELECT title FROM feed_topic WHERE id = ? LIMIT 1",
-        [topicId],
+        `SELECT id, title FROM feed_topic WHERE id IN (${placeholders})`,
+        topicIds,
       );
-      const title = rows?.[0]?.title;
-      return typeof title === "string" && title.trim() ? title.trim() : null;
+      const names = new Map<number, string>();
+      for (const row of rows ?? []) {
+        const id = Number(row.id) || 0;
+        const title = typeof row.title === "string" ? row.title.trim() : "";
+        if (id > 0 && title) {
+          names.set(id, title);
+        }
+      }
+      return names;
     } catch {
-      return null;
+      return new Map();
     }
   }
 
