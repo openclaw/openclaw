@@ -1997,6 +1997,23 @@ async function waitForSubagentPartialTimeoutData(
   }
 }
 
+async function waitForTerminalMemorySearchSubagentResult(
+  subagentPromise: Promise<RecallSubagentResult>,
+): Promise<RecallSubagentResult | undefined> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<undefined>((resolve) => {
+    timeoutId = setTimeout(() => resolve(undefined), timeoutPartialDataGraceMs);
+    timeoutId.unref?.();
+  });
+  try {
+    return await Promise.race([subagentPromise.catch(() => undefined), timeoutPromise]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 async function buildTimeoutRecallResult(params: {
   elapsedMs: number;
   maxSummaryChars: number;
@@ -2035,6 +2052,65 @@ async function buildTimeoutRecallResult(params: {
     summary,
     searchDebug,
   };
+}
+
+function buildSubagentRecallResult(params: {
+  subagentResult: RecallSubagentResult;
+  fallbackSearchDebug?: ActiveMemorySearchDebug;
+  elapsedMs: number;
+  maxSummaryChars: number;
+}): ActiveRecallResult {
+  const { rawReply, resultStatus } = params.subagentResult;
+  const searchDebug = params.subagentResult.searchDebug ?? params.fallbackSearchDebug;
+  const summary = truncateSummary(normalizeActiveSummary(rawReply) ?? "", params.maxSummaryChars);
+  return summary.length > 0 && !isUnavailableDiagnosticSummary(summary, searchDebug)
+    ? {
+        status: "ok",
+        elapsedMs: params.elapsedMs,
+        rawReply,
+        summary,
+        searchDebug,
+      }
+    : resultStatus === "failed"
+      ? {
+          status: "failed",
+          elapsedMs: params.elapsedMs,
+          summary: null,
+          searchDebug,
+        }
+      : resultStatus === "unavailable" || isUnavailableMemorySearchDebug(searchDebug)
+        ? {
+            status: "unavailable",
+            elapsedMs: params.elapsedMs,
+            summary: null,
+            searchDebug,
+          }
+        : {
+            status: "no_relevant_memory",
+            elapsedMs: params.elapsedMs,
+            summary: null,
+            searchDebug,
+          };
+}
+
+function normalizeDiagnosticText(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function isUnavailableDiagnosticSummary(
+  summary: string,
+  searchDebug: ActiveMemorySearchDebug | undefined,
+): boolean {
+  const normalizedSummary = normalizeDiagnosticText(summary);
+  const diagnostics = [searchDebug?.warning, searchDebug?.action, searchDebug?.error]
+    .map((value) => (value ? normalizeDiagnosticText(value) : ""))
+    .filter(Boolean);
+  return diagnostics.some(
+    (diagnostic) =>
+      normalizedSummary === diagnostic ||
+      normalizedSummary.includes(diagnostic) ||
+      diagnostic.includes(normalizedSummary),
+  );
 }
 
 function escapeXml(str: string): string {
@@ -2734,16 +2810,31 @@ async function maybeResolveActiveRecall(params: {
     }
 
     if ("status" in raceResult) {
-      controller.abort(new Error("active-memory terminal memory search result"));
-      const result: ActiveRecallResult = {
-        status: raceResult.status,
-        elapsedMs: Date.now() - startedAt,
-        summary: null,
-        searchDebug: raceResult.searchDebug,
-      };
+      const completedSubagentResult =
+        await waitForTerminalMemorySearchSubagentResult(subagentPromise);
+      const recoveredResult = completedSubagentResult
+        ? buildSubagentRecallResult({
+            subagentResult: completedSubagentResult,
+            fallbackSearchDebug: raceResult.searchDebug,
+            elapsedMs: Date.now() - startedAt,
+            maxSummaryChars: params.config.maxSummaryChars,
+          })
+        : undefined;
+      const result: ActiveRecallResult =
+        recoveredResult?.status === "ok"
+          ? recoveredResult
+          : {
+              status: raceResult.status,
+              elapsedMs: Date.now() - startedAt,
+              summary: null,
+              searchDebug: raceResult.searchDebug,
+            };
+      if (!completedSubagentResult) {
+        controller.abort(new Error("active-memory terminal memory search result"));
+      }
       if (params.config.logging) {
         params.api.logger.info?.(
-          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=0`,
+          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
         );
       }
       await persistPluginStatusLines({
@@ -2760,43 +2851,15 @@ async function maybeResolveActiveRecall(params: {
       return result;
     }
 
-    const { rawReply, resultStatus, transcriptPath, searchDebug } = raceResult;
-    const summary = truncateSummary(
-      normalizeActiveSummary(rawReply) ?? "",
-      params.config.maxSummaryChars,
-    );
+    const { transcriptPath } = raceResult;
     if (params.config.logging && transcriptPath) {
       params.api.logger.info?.(`${logPrefix} transcript=${transcriptPath}`);
     }
-    const result: ActiveRecallResult =
-      summary.length > 0
-        ? {
-            status: "ok",
-            elapsedMs: Date.now() - startedAt,
-            rawReply,
-            summary,
-            searchDebug,
-          }
-        : resultStatus === "failed"
-          ? {
-              status: "failed",
-              elapsedMs: Date.now() - startedAt,
-              summary: null,
-              searchDebug,
-            }
-          : resultStatus === "unavailable" || isUnavailableMemorySearchDebug(searchDebug)
-            ? {
-                status: "unavailable",
-                elapsedMs: Date.now() - startedAt,
-                summary: null,
-                searchDebug,
-              }
-            : {
-                status: "no_relevant_memory",
-                elapsedMs: Date.now() - startedAt,
-                summary: null,
-                searchDebug,
-              };
+    const result = buildSubagentRecallResult({
+      subagentResult: raceResult,
+      elapsedMs: Date.now() - startedAt,
+      maxSummaryChars: params.config.maxSummaryChars,
+    });
     if (params.config.logging) {
       params.api.logger.info?.(
         `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,

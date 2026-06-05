@@ -3162,6 +3162,124 @@ describe("active-memory plugin", () => {
     expectLinesToContain(lines, "🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0");
   });
 
+  it("uses verbose assistant text that arrives after an unavailable memory_search trace", async () => {
+    const CONFIGURED_TIMEOUT_MS = 1_000;
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    testing.setTimeoutPartialDataGraceMsForTests(200);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      maxSummaryChars: 120,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:terminal-unavailable-then-summary";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-terminal-unavailable-then-summary",
+      updatedAt: 0,
+    };
+    const verboseSummary =
+      "This memory says the user usually orders tonkotsu ramen, keeps chili crisp nearby, and prefers short dinner suggestions without menu preamble.";
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              disabled: true,
+              warning: "Memory search is unavailable due to an embedding/provider error.",
+              action: "Check the embedding provider configuration, then retry memory_search.",
+              error: "embedding request failed",
+            },
+          },
+        },
+      ]);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 35);
+      });
+      return { payloads: [{ text: verboseSummary }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? unavailable then summary", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(requirePrependContext(result)).toContain(
+      "This memory says the user usually orders tonkotsu ramen",
+    );
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expectLinesToContain(infoLines, "done status=ok");
+    expectLinesNotToContain(infoLines, "done status=unavailable");
+    const lines = getActiveMemoryLines(sessionKey);
+    expect(lines).toHaveLength(2);
+    expectLinesToContain(lines, "Active Memory: status=ok");
+    expectLinesToContain(
+      lines,
+      "Active Memory Debug: Memory search is unavailable due to an embedding/provider error. Check the embedding provider configuration, then retry memory_search.",
+    );
+  });
+
+  it("does not recover unavailable diagnostics as memory context", async () => {
+    const CONFIGURED_TIMEOUT_MS = 1_000;
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    testing.setTimeoutPartialDataGraceMsForTests(200);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:terminal-unavailable-then-diagnostic";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-terminal-unavailable-then-diagnostic",
+      updatedAt: 0,
+    };
+    const warning = "Memory search is unavailable due to an embedding/provider error.";
+    const action = "Check the embedding provider configuration, then retry memory_search.";
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              disabled: true,
+              warning,
+              action,
+              error: "embedding request failed",
+            },
+          },
+        },
+      ]);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 35);
+      });
+      return { payloads: [{ text: warning }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? unavailable diagnostic", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expectLinesToContain(infoLines, "done status=unavailable");
+    expectLinesNotToContain(infoLines, "done status=ok");
+    const lines = getActiveMemoryLines(sessionKey);
+    expect(lines).toHaveLength(2);
+    expectLinesToContain(lines, "Active Memory: status=unavailable");
+    expectLinesToContain(lines, `Active Memory Debug: ${warning} ${action}`);
+  });
+
   it("fast-fails configured-provider-missing memory_search results without injecting provider errors", async () => {
     const CONFIGURED_TIMEOUT_MS = 1_000;
     testing.setMinimumTimeoutMsForTests(1);
