@@ -3449,6 +3449,48 @@ describe("task-registry", () => {
     });
   });
 
+  it("cancels cron tasks through the ACP session manager", async () => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.cancelSessionMock.mockResolvedValue(undefined);
+
+      const task = createTaskRecord({
+        runtime: "cron",
+        ownerKey: "system:cron:task-90630",
+        scopeKind: "system",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        childSessionKey: "agent:cron:task:child",
+        runId: "run-cancel-cron",
+        task: "Daily digest",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      const cancelArgs = firstMockArg(hoisted.cancelSessionMock, "cancelSession");
+      expectRecordFields(cancelArgs, {
+        cfg: {},
+        sessionKey: "agent:cron:task:child",
+        reason: "task-cancel",
+      });
+      expectRecordFields(result, {
+        found: true,
+        cancelled: true,
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        status: "cancelled",
+        error: "Cancelled by operator.",
+      });
+    });
+  });
+
   it("cancels CLI-tracked tasks in the registry without ACP or subagent teardown", async () => {
     await withTaskRegistryTempDir(async () => {
       hoisted.cancelSessionMock.mockClear();

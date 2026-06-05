@@ -2094,7 +2094,7 @@ export async function cancelTaskById(params: {
         // Codex native subagents are mirrored from the Codex app server and do
         // not have OpenClaw child sessions to terminate. Cancellation clears
         // the stale task-registry record only.
-      } else if (task.runtime === "acp") {
+      } else if (task.runtime === "acp" || task.runtime === "cron") {
         const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
         await getAcpSessionManager().cancelSession({
           cfg: params.cfg,
