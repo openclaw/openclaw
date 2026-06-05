@@ -1738,6 +1738,60 @@ describe("loadModelCatalog", () => {
     );
   });
 
+  it("hydrates exact allowlisted rows that discovery already returned without metadata", async () => {
+    mockAgentDiscoveryModels([
+      {
+        id: "minimax-m3:cloud",
+        provider: "ollama",
+        name: "minimax-m3:cloud",
+      },
+    ]);
+    runDynamicModelMock.mockReturnValueOnce({
+      id: "minimax-m3:cloud",
+      name: "minimax-m3:cloud",
+      provider: "ollama",
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 8192,
+      compat: { supportsTools: true },
+      mediaInput: { image: { maxBytes: 1_000_000 } },
+    });
+
+    const result = await loadModelCatalog({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "ollama/minimax-m3:cloud": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const entry = requireCatalogEntry(result, "ollama", "minimax-m3:cloud");
+    expect(entry.reasoning).toBe(true);
+    expect(entry.contextWindow).toBe(1_048_576);
+    expect(entry.api).toBe("ollama");
+    expect(entry.input).toEqual(["text"]);
+    expect(entry.compat).toEqual({ supportsTools: true });
+    expect(entry.mediaInput).toEqual({ image: { maxBytes: 1_000_000 } });
+    expect(runDynamicModelMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps discovered catalog entries when dynamic allowlist metadata fails", async () => {
     mockAgentDiscoveryModels([{ id: "llama3.2", provider: "ollama", name: "Llama 3.2" }]);
     runDynamicModelMock
@@ -1782,6 +1836,15 @@ describe("loadModelCatalog", () => {
 
   it("retries exact allowlisted dynamic model metadata after a partial cache load", async () => {
     mockAgentDiscoveryModels([{ id: "llama3.2", provider: "ollama", name: "Llama 3.2" }]);
+    const stateCache = new Map<string, ModelCatalogEntry[]>();
+    readCachedAgentModelCatalogMock.mockImplementation(({ catalogKey }: { catalogKey: string }) =>
+      stateCache.get(catalogKey),
+    );
+    writeCachedAgentModelCatalogMock.mockImplementation(
+      ({ catalogKey, entries }: { catalogKey: string; entries: ModelCatalogEntry[] }) => {
+        stateCache.set(catalogKey, entries);
+      },
+    );
     runDynamicModelMock
       .mockImplementationOnce(() => {
         throw new Error("show failed");
@@ -1813,10 +1876,12 @@ describe("loadModelCatalog", () => {
       const partial = await loadModelCatalog({ config });
       expect(requireCatalogEntry(partial, "ollama", "llama3.2").name).toBe("Llama 3.2");
       expectNoCatalogEntry(partial, "ollama", "minimax-m3:cloud");
+      expect(writeCachedAgentModelCatalogMock).not.toHaveBeenCalled();
 
       const retry = await loadModelCatalog({ config });
       expect(requireCatalogEntry(retry, "ollama", "minimax-m3:cloud").reasoning).toBe(true);
       expect(runDynamicModelMock).toHaveBeenCalledTimes(2);
+      expect(writeCachedAgentModelCatalogMock).toHaveBeenCalledTimes(1);
     } finally {
       resetLogger();
     }

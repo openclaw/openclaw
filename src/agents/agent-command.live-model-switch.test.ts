@@ -51,7 +51,26 @@ const state = vi.hoisted(() => ({
   isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
-  loadManifestModelCatalogMock: vi.fn(() => []),
+  loadManifestModelCatalogMock: vi.fn(
+    (): Array<{
+      provider: string;
+      id: string;
+      name?: string;
+      reasoning?: boolean;
+      compat?: unknown;
+    }> => [],
+  ),
+  loadModelCatalogMock: vi.fn(
+    async (): Promise<
+      Array<{
+        provider: string;
+        id: string;
+        name?: string;
+        reasoning?: boolean;
+        compat?: unknown;
+      }>
+    > => [],
+  ),
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
     prompt: "",
     skills: [],
@@ -414,6 +433,7 @@ vi.mock("./lanes.js", () => ({
 
 vi.mock("./model-catalog.js", () => ({
   loadManifestModelCatalog: state.loadManifestModelCatalogMock,
+  loadModelCatalog: state.loadModelCatalogMock,
 }));
 
 vi.mock("./model-selection.js", () => {
@@ -942,6 +962,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.loadModelCatalogMock.mockResolvedValue([]);
     state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(false);
     state.resolveAutoFallbackPrimaryProbeMock.mockReturnValue(undefined);
     state.resolveChannelModelOverrideMock.mockImplementation((params: unknown) => {
@@ -2308,6 +2329,80 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       provider: "gmn",
       id: "gpt-5.4",
       compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+    });
+  });
+
+  it("hydrates allowlisted model metadata before rejecting explicit thinking", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/minimax-m3:cloud" },
+          models: {
+            "ollama/minimax-m3:cloud": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([
+      {
+        provider: "ollama",
+        id: "minimax-m3:cloud",
+        name: "minimax-m3:cloud",
+      },
+    ]);
+    state.loadModelCatalogMock.mockResolvedValue([
+      {
+        provider: "ollama",
+        id: "minimax-m3:cloud",
+        name: "minimax-m3:cloud",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+      },
+    ]);
+    state.isThinkingLevelSupportedMock.mockImplementation((args: unknown) => {
+      const input = args as { catalog?: Array<{ reasoning?: boolean }> };
+      return input.catalog?.some((entry) => entry.reasoning === true) ?? false;
+    });
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("ollama", "minimax-m3:cloud"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      thinking: "low",
+      provider: "ollama",
+      model: "minimax-m3:cloud",
+    });
+
+    expect(state.loadModelCatalogMock).toHaveBeenCalledWith({
+      config: state.runtimeConfigMock,
+    });
+    expect(state.isThinkingLevelSupportedMock).toHaveBeenCalledTimes(2);
+    const hydratedThinkingArgs = requireRecord(
+      mockCallArg(state.isThinkingLevelSupportedMock, 1),
+      "hydrated thinking args",
+    );
+    const catalog = requireArray(hydratedThinkingArgs.catalog, "hydrated thinking catalog");
+    expectRecordFields(catalog[0], {
+      provider: "ollama",
+      id: "minimax-m3:cloud",
+      reasoning: true,
     });
   });
 

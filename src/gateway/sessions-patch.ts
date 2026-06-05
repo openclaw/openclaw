@@ -137,7 +137,7 @@ export async function applySessionsPatchToStore(params: {
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
-  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalog?: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, store, storeKey, patch } = params;
   const now = Date.now();
@@ -157,7 +157,9 @@ export async function applySessionsPatchToStore(params: {
     if (!params.loadGatewayModelCatalog) {
       return undefined;
     }
-    const catalog = await params.loadGatewayModelCatalog();
+    // Model/thinking patches need live metadata; read-only catalog can omit
+    // exact allowlisted rows that provider hooks hydrate on full loads.
+    const catalog = await params.loadGatewayModelCatalog({ readOnly: false });
     loadedModelCatalog = Array.isArray(catalog) ? catalog : [];
     return loadedModelCatalog;
   };

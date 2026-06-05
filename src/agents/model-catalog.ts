@@ -204,6 +204,7 @@ function overlayCatalogMetadata(
   const params = mergeCatalogParams(base.params, overlay.params);
   return {
     ...base,
+    ...(overlay.alias !== undefined ? { alias: overlay.alias } : {}),
     ...(overlay.api !== undefined ? { api: overlay.api } : {}),
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
@@ -211,6 +212,7 @@ function overlayCatalogMetadata(
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
     ...(params ? { params } : {}),
     compat: mergeCatalogCompat(base.compat, overlay.compat),
+    ...(overlay.mediaInput !== undefined ? { mediaInput: overlay.mediaInput } : {}),
   };
 }
 
@@ -238,6 +240,35 @@ function mergeCatalogEntries(models: ModelCatalogEntry[], entries: ModelCatalogE
     }
     models[existingIndex] = overlayCatalogMetadata(models[existingIndex], entry);
   }
+}
+
+function dynamicLiveModelNeedsMetadata(entry: DynamicLiveModel): boolean {
+  return (
+    entry.reasoning === undefined ||
+    (entry.contextWindow === undefined && entry.contextTokens === undefined) ||
+    !entry.api ||
+    !Array.isArray(entry.input) ||
+    !entry.compat
+  );
+}
+
+function filterDynamicHydrationBaseModels(
+  models: DynamicLiveModel[],
+  ref: { provider: string; id: string },
+): { models: DynamicLiveModel[]; hadIncompleteMatch: boolean } {
+  const refKey = catalogEntryDedupeKey(ref.provider, ref.id);
+  let hadIncompleteMatch = false;
+  const filtered = models.filter((entry) => {
+    if (catalogEntryDedupeKey(entry.provider, entry.id) !== refKey) {
+      return true;
+    }
+    if (!dynamicLiveModelNeedsMetadata(entry)) {
+      return true;
+    }
+    hadIncompleteMatch = true;
+    return false;
+  });
+  return { models: filtered, hadIncompleteMatch };
 }
 
 export function loadManifestModelCatalog(params: {
@@ -695,8 +726,12 @@ export async function loadModelCatalog(params?: {
         });
         for (const ref of configuredExactRefs) {
           try {
+            const hydrationBase = filterDynamicHydrationBaseModels(
+              liveEntries as DynamicLiveModel[],
+              ref,
+            );
             const augmented = await appendPrioritizedDynamicLiveModels({
-              models: liveEntries as DynamicLiveModel[],
+              models: hydrationBase.models,
               config: cfg,
               agentDir,
               workspaceDir,
@@ -705,7 +740,10 @@ export async function loadModelCatalog(params?: {
               normalizeModel: (model) => model,
               refs: [ref],
             });
-            liveEntries = augmented.models as DiscoveredModel[];
+            liveEntries =
+              augmented.added.length > 0 || !hydrationBase.hadIncompleteMatch
+                ? (augmented.models as DiscoveredModel[])
+                : liveEntries;
             logStage("dynamic-allowlist-models", `added=${augmented.added.length}`);
           } catch (error) {
             dynamicAllowlistHydrationFailed = true;
@@ -842,7 +880,7 @@ export async function loadModelCatalog(params?: {
       }
 
       const sorted = sortModels(models);
-      if (!readOnly) {
+      if (!readOnly && !dynamicAllowlistHydrationFailed) {
         writeCachedAgentModelCatalog({
           agentDir,
           catalogKey,

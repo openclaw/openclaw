@@ -101,7 +101,7 @@ import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
 import { prepareInternalSessionEffectsTranscript } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
-import { loadManifestModelCatalog } from "./model-catalog.js";
+import { loadManifestModelCatalog, loadModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
@@ -155,6 +155,15 @@ function hasConfiguredProvider(params: { cfg: OpenClawConfig; provider: string }
   return Object.keys(params.cfg.models?.providers ?? {}).some(
     (providerId) => normalizeProviderId(providerId) === normalizedProvider,
   );
+}
+
+function findCatalogEntry(
+  catalog: readonly { provider: string; id: string; reasoning?: boolean }[] | undefined,
+  provider: string,
+  model: string,
+): { provider: string; id: string; reasoning?: boolean } | undefined {
+  const selectedKey = modelKey(normalizeProviderId(provider), model);
+  return catalog?.find((entry) => modelKey(entry.provider, entry.id) === selectedKey);
 }
 
 function allowPluginModelNormalizationForRef(params: {
@@ -1513,13 +1522,13 @@ async function agentCommandInternal(
       }
     }
 
-    const catalogForThinking =
+    let catalogForThinking =
       allowedModelCatalog.length > 0
         ? allowedModelCatalog
         : modelCatalog && modelCatalog.length > 0
           ? modelCatalog
           : configuredThinkingCatalog;
-    const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
+    let thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
     if (!resolvedThinkLevel) {
       resolvedThinkLevel =
         normalizeThinkLevel(resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault) ??
@@ -1530,14 +1539,41 @@ async function agentCommandInternal(
           catalog: thinkingCatalog,
         });
     }
+    let thinkingLevelSupported = isThinkingLevelSupported({
+      provider,
+      model,
+      level: resolvedThinkLevel,
+      catalog: thinkingCatalog,
+    });
+    const selectedThinkingEntry = findCatalogEntry(thinkingCatalog, provider, model);
     if (
-      !isThinkingLevelSupported({
+      !thinkingLevelSupported &&
+      resolvedThinkLevel &&
+      selectedThinkingEntry?.reasoning === undefined
+    ) {
+      // Agent-command validates explicit thinking before reply-run model selection;
+      // exact allowlist rows can be sparse until the full catalog hydrates provider metadata.
+      modelCatalog = await loadModelCatalog({ config: cfg });
+      const fullVisibilityPolicy = createModelVisibilityPolicy({
+        cfg,
+        catalog: modelCatalog,
+        defaultProvider,
+        defaultModel,
+        agentId: sessionAgentId,
+        allowManifestNormalization: true,
+        allowPluginNormalization: pluginsEnabled,
+        ...modelManifestContext,
+      });
+      catalogForThinking = hasAllowlist ? fullVisibilityPolicy.allowedCatalog : modelCatalog;
+      thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
+      thinkingLevelSupported = isThinkingLevelSupported({
         provider,
         model,
         level: resolvedThinkLevel,
         catalog: thinkingCatalog,
-      })
-    ) {
+      });
+    }
+    if (!thinkingLevelSupported) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
       if (explicitThink) {
         throw new Error(
