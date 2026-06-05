@@ -400,8 +400,11 @@ export function shouldIgnoreSkillsWatchPath(
   if (!stats) {
     return false;
   }
-  const normalized = watchPath.replaceAll("\\", "/");
-  return path.posix.basename(normalized) !== "SKILL.md";
+  // Ignore all regular files (including SKILL.md) to prevent chokidar from
+  // opening persistent file descriptors on individual skill files.
+  // Directory-level watching still detects skill additions and removals;
+  // SKILL.md content edits are picked up on the next snapshot rebuild.
+  return true;
 }
 
 function resolveWatchDebounceMs(config?: OpenClawConfig): number {
