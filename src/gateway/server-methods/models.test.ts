@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDeferred } from "../test-helpers.deferred.js";
 import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 import { modelsHandlers } from "./models.js";
@@ -329,6 +330,53 @@ describe("models.list", () => {
       true,
       { models: [{ id: "llama-managed", name: "Llama Managed", provider: "vllm" }] },
       undefined,
+    );
+  });
+
+  it("does not mark catalog rows available from expired provider profiles", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-models-list-expired-profile-",
+        agentEnv: "main",
+      },
+      async (state) => {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "demo-provider:expired": {
+              type: "token",
+              provider: "demo-provider",
+              token: "expired-token",
+              expires: Date.now() - 60_000,
+            },
+          },
+        });
+
+        const { request, respond } = requestModelsList({
+          view: "all",
+          loadGatewayModelCatalog: vi.fn(() =>
+            Promise.resolve([{ id: "demo-model", name: "Demo Model", provider: "demo-provider" }]),
+          ),
+          reqId: "req-models-list-expired-profile",
+        });
+        await request;
+
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              {
+                id: "demo-model",
+                name: "Demo Model",
+                provider: "demo-provider",
+                available: false,
+              },
+            ],
+          },
+          undefined,
+        );
+      },
     );
   });
 

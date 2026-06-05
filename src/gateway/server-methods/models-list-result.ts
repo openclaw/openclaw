@@ -2,12 +2,15 @@
 // strips runtime-only provider params before sending the browse API payload.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
+  resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
+import { hasAvailableAuthForProvider } from "../../agents/model-auth.js";
 import {
   loadModelCatalogForBrowse,
   type ModelCatalogBrowseView,
@@ -18,7 +21,6 @@ import {
   resolveVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSecretRef } from "../../config/types.secrets.js";
@@ -72,6 +74,27 @@ function createInFlightProviderAuthChecker(
   };
 }
 
+function createModelsListProviderAuthChecker(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  workspaceDir: string;
+}): ProviderAuthChecker {
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+    allowKeychainPrompt: false,
+  });
+  return createInFlightProviderAuthChecker((provider, modelApi) =>
+    hasAvailableAuthForProvider({
+      provider,
+      modelApi,
+      cfg: params.cfg,
+      agentDir,
+      workspaceDir: params.workspaceDir,
+      store,
+    }),
+  );
+}
+
 async function buildPublicModelsListEntry(params: {
   entry: ModelCatalogEntry;
   cfg: OpenClawConfig;
@@ -96,21 +119,13 @@ async function buildPublicModelsListEntries(params: {
   agentId: string;
   workspaceDir: string;
 }): Promise<ModelsListEntry[]> {
-  const inFlightProviderAuthChecker = createInFlightProviderAuthChecker(
-    createProviderAuthChecker({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      workspaceDir: params.workspaceDir,
-      allowPluginSyntheticAuth: false,
-      discoverExternalCliAuth: false,
-    }),
-  );
+  const providerAuthChecker = createModelsListProviderAuthChecker(params);
   return await Promise.all(
     params.catalog.map((entry) =>
       buildPublicModelsListEntry({
         entry,
         cfg: params.cfg,
-        providerAuthChecker: inFlightProviderAuthChecker,
+        providerAuthChecker,
       }),
     ),
   );
