@@ -493,7 +493,12 @@ function shouldApplyRunScopedStatusUpdate(params: {
   if (!isTerminalTaskStatus(params.nextStatus)) {
     return false;
   }
-  return params.currentStatus === "succeeded" && params.nextStatus !== "lost";
+  if (params.currentStatus === "succeeded") {
+    return params.nextStatus !== "lost";
+  }
+  // Authoritative lifecycle COMPLETE overrides maintenance-inferred lost: the
+  // sweep may fire before the COMPLETE event writes succeeded to the registry.
+  return params.currentStatus === "lost" && params.nextStatus === "succeeded";
 }
 
 function resolveTaskTerminalOutcome(params: {
@@ -1894,6 +1899,12 @@ function updateTaskStateByRunId(params: {
           summary: eventSummary,
         })
       : undefined;
+    // Late COMPLETE overrides maintenance-lost: clear lost-derived error and
+    // cleanup window so the record reflects the actual succeeded outcome.
+    if (current.status === "lost" && nextStatus === "succeeded") {
+      patch.error = undefined;
+      patch.cleanupAfter = undefined;
+    }
     const task = updateTask(current.taskId, patch);
     if (task) {
       updated.push(task);

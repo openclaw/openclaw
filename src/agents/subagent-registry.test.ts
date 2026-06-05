@@ -104,6 +104,9 @@ const mocks = vi.hoisted(() => ({
   runSubagentEnded: vi.fn(async () => {}),
   resolveAgentTimeoutMs: vi.fn(() => 1_000),
   scheduleOrphanRecovery: vi.fn(),
+  failTaskRunByRunId: vi.fn(),
+  completeTaskRunByRunId: vi.fn(),
+  setDetachedTaskDeliveryStatusByRunId: vi.fn(),
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -166,6 +169,13 @@ vi.mock("./timeout.js", () => ({
 
 vi.mock("./subagent-orphan-recovery.js", () => ({
   scheduleOrphanRecovery: mocks.scheduleOrphanRecovery,
+}));
+
+vi.mock("../tasks/detached-task-runtime.js", () => ({
+  createRunningTaskRun: vi.fn(),
+  failTaskRunByRunId: mocks.failTaskRunByRunId,
+  completeTaskRunByRunId: mocks.completeTaskRunByRunId,
+  setDetachedTaskDeliveryStatusByRunId: mocks.setDetachedTaskDeliveryStatusByRunId,
 }));
 
 describe("subagent registry seam flow", () => {
@@ -3175,6 +3185,51 @@ describe("subagent registry seam flow", () => {
     await waitForFast(async () => {
       await expectPathMissing(attachmentsDir);
     });
+  });
+
+  it("marks delivery not_applicable when a run is killed", () => {
+    // Regression: the kill path persisted subagent run terminal state but
+    // never finalized the mirrored task row, leaving it stuck in running so
+    // cancel and maintenance could not clear it (#90444).
+    // The fix: mark delivery not_applicable immediately (killed runs skip the
+    // announce flow) and defer task-row status finalization to maintenance,
+    // which avoids the kill-vs-complete race where a premature "failed" write
+    // blocks a concurrent lifecycle completion from writing "succeeded".
+    mod.registerSubagentRun({
+      runId: "run-task-kill-finalize",
+      childSessionKey: "agent:main:subagent:task-kill",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "task finalized on kill",
+      cleanup: "keep",
+    });
+
+    mocks.failTaskRunByRunId.mockClear();
+    mocks.setDetachedTaskDeliveryStatusByRunId.mockClear();
+
+    const updated = mod.markSubagentRunTerminated({
+      runId: "run-task-kill-finalize",
+      reason: "killed",
+    });
+
+    expect(updated).toBe(1);
+    expect(mocks.failTaskRunByRunId).not.toHaveBeenCalled();
+    expect(mocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledOnce();
+    expectRecordFields(
+      getMockCallArg(
+        mocks.setDetachedTaskDeliveryStatusByRunId,
+        0,
+        0,
+        "setDetachedTaskDeliveryStatusByRunId call",
+      ),
+      {
+        runId: "run-task-kill-finalize",
+        runtime: "subagent",
+        sessionKey: "agent:main:subagent:task-kill",
+        deliveryStatus: "not_applicable",
+      },
+      "setDetachedTaskDeliveryStatusByRunId params",
+    );
   });
 
   it("announces readable failure when an interrupted run is finalized", async () => {

@@ -40,6 +40,7 @@ import {
   linkTaskToFlowById,
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
+  markTaskLostById,
   markTaskRunningByRunId,
   markTaskTerminalById,
   markTaskTerminalByRunId,
@@ -786,6 +787,45 @@ describe("task-registry", () => {
         endedAt: 200,
         error: "delivery failed",
       });
+    });
+  });
+
+  it("upgrades maintenance-lost subagent task when late successful COMPLETE arrives", async () => {
+    // Regression for #90444: if maintenance marks a killed subagent task lost
+    // before the lifecycle COMPLETE event fires, the authoritative succeeded
+    // write must still win over the inferred lost state.
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:late-complete-90444",
+        runId: "run-lost-then-complete-90444",
+        task: "Process data",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      // Maintenance sweep fires first and marks the task lost.
+      markTaskLostById({ taskId: task.taskId, endedAt: 200, error: "backing session missing" });
+      expectRecordFields(requireTaskByRunId("run-lost-then-complete-90444"), { status: "lost" });
+
+      // Late lifecycle COMPLETE arrives; authoritative succeeded must win.
+      markTaskTerminalByRunId({
+        runId: "run-lost-then-complete-90444",
+        runtime: "subagent",
+        status: "succeeded",
+        endedAt: 300,
+      });
+
+      const upgraded = requireTaskByRunId("run-lost-then-complete-90444");
+      expectRecordFields(upgraded, { status: "succeeded", endedAt: 300 });
+      // Lost-derived error and cleanup window must be replaced by succeeded values.
+      expect(upgraded.error).toBeUndefined();
+      expect(upgraded.cleanupAfter).toBe(300 + DEFAULT_TASK_RETENTION_MS);
     });
   });
 

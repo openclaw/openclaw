@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
+import {
+  createRunningTaskRun,
+  setDetachedTaskDeliveryStatusByRunId,
+} from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
@@ -788,6 +791,23 @@ export function createSubagentRunManager(params: {
     if (updated > 0) {
       params.persist();
       for (const entry of entriesByChildSessionKey.values()) {
+        // Mark delivery not_applicable immediately; task-row status is left to
+        // maintenance to avoid writing "failed" before a concurrent lifecycle
+        // COMPLETE can write "succeeded" (terminal-to-terminal guard blocks it).
+        try {
+          setDetachedTaskDeliveryStatusByRunId({
+            runId: entry.runId,
+            runtime: "subagent",
+            sessionKey: entry.childSessionKey,
+            deliveryStatus: "not_applicable",
+          });
+        } catch (err) {
+          log.warn("failed to update killed subagent background task delivery state", {
+            err,
+            runId: entry.runId,
+            childSessionKey: entry.childSessionKey,
+          });
+        }
         const emitEndedHook = () =>
           emitSubagentEndedHookOnce({
             entry,

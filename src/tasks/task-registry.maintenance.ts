@@ -14,6 +14,8 @@ import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
 } from "../agents/subagent-recovery-state.js";
+import { subagentRuns } from "../agents/subagent-registry-memory.js";
+import { getSubagentRunsSnapshotForRead } from "../agents/subagent-registry-state.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -118,6 +120,7 @@ type TaskRegistryMaintenanceRuntime = {
   resolveCronJobsStorePath: typeof resolveCronJobsStorePath;
   loadCronJobsStoreSync: typeof loadCronJobsStoreSync;
   readCronRunLogEntriesSync: typeof readCronRunLogEntriesSync;
+  getSubagentRunEndedAt?: (runId: string) => number | undefined;
 };
 
 const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
@@ -158,7 +161,16 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   resolveCronJobsStorePath: () => configuredCronStorePath ?? resolveCronJobsStorePath(),
   loadCronJobsStoreSync,
   readCronRunLogEntriesSync,
+  getSubagentRunEndedAt: (runId: string) => {
+    const run = (subagentRunsSnapshotForSweep ?? subagentRuns).get(runId);
+    return typeof run?.endedAt === "number" ? run.endedAt : undefined;
+  },
 };
+
+// Populated at the start of each sweep so terminal runs persisted to SQLite
+// by other processes (e.g. the gateway kill path) are visible to CLI
+// maintenance without a per-task database round-trip.
+let subagentRunsSnapshotForSweep: typeof subagentRuns | null = null;
 
 let taskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime =
   defaultTaskRegistryMaintenanceRuntime;
@@ -516,6 +528,13 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
         return false;
       }
     }
+    // Both subagent and same-run CLI peer rows have no backing session once the
+    // subagent run is terminal; skip the session lookup to avoid the
+    // kill-vs-complete terminal-to-terminal race.
+    const runId = normalizeOptionalString(task.runId) ?? normalizeOptionalString(task.sourceId);
+    if (runId && taskRegistryMaintenanceRuntime.getSubagentRunEndedAt?.(runId) !== undefined) {
+      return false;
+    }
     const entry = findTaskSessionEntry(task, context);
     if (task.runtime === "subagent" && isSubagentRecoveryWedgedEntry(entry)) {
       return false;
@@ -546,6 +565,16 @@ function shouldMarkLost(
 ): boolean {
   if (!isActiveTask(task)) {
     return false;
+  }
+  // Terminal subagent and same-run CLI peer rows skip the lost-grace window:
+  // the kill path persists endedAt to SQLite before returning, and embedded
+  // runs complete in the same event loop, so the sweep interval is enough
+  // buffer for a late COMPLETE.
+  if (task.runtime === "subagent" || task.runtime === "cli") {
+    const runId = normalizeOptionalString(task.runId) ?? normalizeOptionalString(task.sourceId);
+    if (runId && taskRegistryMaintenanceRuntime.getSubagentRunEndedAt?.(runId) !== undefined) {
+      return true;
+    }
   }
   if (!hasLostGraceExpired(task, now)) {
     return false;
@@ -975,26 +1004,31 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
   let recovered = 0;
   let cleanupStamped = 0;
   let pruned = 0;
-  const cronRecoveryContext = createCronRecoveryContext();
-  const backingSessionContext = createBackingSessionLookupContext();
-  for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
-    if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
-      recovered += 1;
-      continue;
+  subagentRunsSnapshotForSweep = getSubagentRunsSnapshotForRead(subagentRuns);
+  try {
+    const cronRecoveryContext = createCronRecoveryContext();
+    const backingSessionContext = createBackingSessionLookupContext();
+    for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
+      if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
+        recovered += 1;
+        continue;
+      }
+      if (shouldMarkLost(task, now, backingSessionContext)) {
+        reconciled += 1;
+        continue;
+      }
+      if (shouldPruneTerminalTask(task, now)) {
+        pruned += 1;
+        continue;
+      }
+      if (shouldStampCleanupAfter(task)) {
+        cleanupStamped += 1;
+      }
     }
-    if (shouldMarkLost(task, now, backingSessionContext)) {
-      reconciled += 1;
-      continue;
-    }
-    if (shouldPruneTerminalTask(task, now)) {
-      pruned += 1;
-      continue;
-    }
-    if (shouldStampCleanupAfter(task)) {
-      cleanupStamped += 1;
-    }
+    return { reconciled, recovered, cleanupStamped, pruned };
+  } finally {
+    subagentRunsSnapshotForSweep = null;
   }
-  return { reconciled, recovered, cleanupStamped, pruned };
 }
 
 function explainActiveTaskRetention(params: {
@@ -1033,34 +1067,39 @@ function explainActiveTaskRetention(params: {
 export function getTaskRegistryMaintenanceDiagnostics(): TaskRegistryMaintenanceDiagnostics {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const now = Date.now();
-  const cronRecoveryContext = createCronRecoveryContext();
-  const backingSessionContext = createBackingSessionLookupContext();
-  const staleRunningTasks: TaskRegistryMaintenanceTaskDiagnostic[] = [];
-  for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
-    if (task.status !== "running") {
-      continue;
+  subagentRunsSnapshotForSweep = getSubagentRunsSnapshotForRead(subagentRuns);
+  try {
+    const cronRecoveryContext = createCronRecoveryContext();
+    const backingSessionContext = createBackingSessionLookupContext();
+    const staleRunningTasks: TaskRegistryMaintenanceTaskDiagnostic[] = [];
+    for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
+      if (task.status !== "running") {
+        continue;
+      }
+      const ageMs = Math.max(0, now - taskReferenceAt(task));
+      if (ageMs < TASK_STALE_RUNNING_MS) {
+        continue;
+      }
+      if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
+        continue;
+      }
+      const decision = explainActiveTaskRetention({ task, now, context: backingSessionContext });
+      staleRunningTasks.push({
+        taskId: task.taskId,
+        runtime: task.runtime,
+        status: task.status,
+        decision: decision.decision,
+        reason: decision.reason,
+        ageMs,
+        ...(decision.detail ? { detail: decision.detail } : {}),
+        ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
+        ...(task.runId ? { runId: task.runId } : {}),
+      });
     }
-    const ageMs = Math.max(0, now - taskReferenceAt(task));
-    if (ageMs < TASK_STALE_RUNNING_MS) {
-      continue;
-    }
-    if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
-      continue;
-    }
-    const decision = explainActiveTaskRetention({ task, now, context: backingSessionContext });
-    staleRunningTasks.push({
-      taskId: task.taskId,
-      runtime: task.runtime,
-      status: task.status,
-      decision: decision.decision,
-      reason: decision.reason,
-      ageMs,
-      ...(decision.detail ? { detail: decision.detail } : {}),
-      ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
-      ...(task.runId ? { runId: task.runId } : {}),
-    });
+    return { staleRunningTasks };
+  } finally {
+    subagentRunsSnapshotForSweep = null;
   }
-  return { staleRunningTasks };
 }
 
 /**
@@ -1093,108 +1132,113 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   let cleanupStamped = 0;
   let pruned = 0;
   const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
-  const cronRecoveryContext = createCronRecoveryContext();
-  const backingSessionContext = createBackingSessionLookupContext();
-  const recoveryHookRegistered = hasDetachedTaskRecoveryHook();
-  let processed = 0;
-  for (const task of tasks) {
-    const current = taskRegistryMaintenanceRuntime.getTaskById(task.taskId);
-    if (!current) {
-      continue;
-    }
-    const cronRecovery = resolveDurableCronTaskRecovery(current, cronRecoveryContext);
-    if (cronRecovery) {
-      const next = markTaskRecovered(current, cronRecovery);
-      if (next.status !== current.status) {
-        recovered += 1;
+  subagentRunsSnapshotForSweep = getSubagentRunsSnapshotForRead(subagentRuns);
+  try {
+    const cronRecoveryContext = createCronRecoveryContext();
+    const backingSessionContext = createBackingSessionLookupContext();
+    const recoveryHookRegistered = hasDetachedTaskRecoveryHook();
+    let processed = 0;
+    for (const task of tasks) {
+      const current = taskRegistryMaintenanceRuntime.getTaskById(task.taskId);
+      if (!current) {
+        continue;
       }
-      processed += 1;
-      if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
-        await yieldToEventLoop();
-      }
-      continue;
-    }
-    if (shouldMarkLost(current, now, backingSessionContext)) {
-      const recovery = await tryRecoverTaskBeforeMarkLost({
-        taskId: current.taskId,
-        runtime: current.runtime,
-        task: current,
-        now,
-      });
-      const freshAfterHook = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
-      if (!freshAfterHook) {
+      const cronRecovery = resolveDurableCronTaskRecovery(current, cronRecoveryContext);
+      if (cronRecovery) {
+        const next = markTaskRecovered(current, cronRecovery);
+        if (next.status !== current.status) {
+          recovered += 1;
+        }
         processed += 1;
         if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
           await yieldToEventLoop();
         }
         continue;
       }
-      const shouldRecheckFreshTask =
-        recoveryHookRegistered || hasTaskLostDecisionInputChanged(current, freshAfterHook);
-      let lostContext = backingSessionContext;
-      if (shouldRecheckFreshTask) {
-        lostContext = createBackingSessionLookupContext();
-        if (!shouldMarkLost(freshAfterHook, now, lostContext)) {
+      if (shouldMarkLost(current, now, backingSessionContext)) {
+        const recovery = await tryRecoverTaskBeforeMarkLost({
+          taskId: current.taskId,
+          runtime: current.runtime,
+          task: current,
+          now,
+        });
+        const freshAfterHook = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
+        if (!freshAfterHook) {
           processed += 1;
           if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
             await yieldToEventLoop();
           }
           continue;
         }
-      }
-      if (recovery.recovered) {
-        recovered += 1;
+        const shouldRecheckFreshTask =
+          recoveryHookRegistered || hasTaskLostDecisionInputChanged(current, freshAfterHook);
+        let lostContext = backingSessionContext;
+        if (shouldRecheckFreshTask) {
+          lostContext = createBackingSessionLookupContext();
+          if (!shouldMarkLost(freshAfterHook, now, lostContext)) {
+            processed += 1;
+            if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+              await yieldToEventLoop();
+            }
+            continue;
+          }
+        }
+        if (recovery.recovered) {
+          recovered += 1;
+          processed += 1;
+          if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+            await yieldToEventLoop();
+          }
+          continue;
+        }
+        const next = markTaskLost(freshAfterHook, now, lostContext);
+        if (next.status === "lost") {
+          reconciled += 1;
+        }
         processed += 1;
         if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
           await yieldToEventLoop();
         }
         continue;
       }
-      const next = markTaskLost(freshAfterHook, now, lostContext);
-      if (next.status === "lost") {
-        reconciled += 1;
+      await cleanupTerminalAcpSession(current);
+      if (
+        shouldPruneTerminalTask(current, now) &&
+        taskRegistryMaintenanceRuntime.deleteTaskRecordById(current.taskId)
+      ) {
+        pruned += 1;
+        processed += 1;
+        if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+          await yieldToEventLoop();
+        }
+        continue;
+      }
+      if (
+        shouldStampCleanupAfter(current) &&
+        taskRegistryMaintenanceRuntime.setTaskCleanupAfterById({
+          taskId: current.taskId,
+          cleanupAfter: resolveCleanupAfter(current),
+        })
+      ) {
+        cleanupStamped += 1;
       }
       processed += 1;
       if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
         await yieldToEventLoop();
       }
-      continue;
     }
-    await cleanupTerminalAcpSession(current);
-    if (
-      shouldPruneTerminalTask(current, now) &&
-      taskRegistryMaintenanceRuntime.deleteTaskRecordById(current.taskId)
-    ) {
-      pruned += 1;
-      processed += 1;
-      if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
-        await yieldToEventLoop();
+    await cleanupOrphanedParentOwnedAcpSessions();
+    if (isPluginStateDatabaseOpen()) {
+      try {
+        sweepExpiredPluginStateEntries();
+      } catch (error) {
+        log.warn("Failed to sweep expired plugin state entries", { error });
       }
-      continue;
     }
-    if (
-      shouldStampCleanupAfter(current) &&
-      taskRegistryMaintenanceRuntime.setTaskCleanupAfterById({
-        taskId: current.taskId,
-        cleanupAfter: resolveCleanupAfter(current),
-      })
-    ) {
-      cleanupStamped += 1;
-    }
-    processed += 1;
-    if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
-      await yieldToEventLoop();
-    }
+    return { reconciled, recovered, cleanupStamped, pruned };
+  } finally {
+    subagentRunsSnapshotForSweep = null;
   }
-  await cleanupOrphanedParentOwnedAcpSessions();
-  if (isPluginStateDatabaseOpen()) {
-    try {
-      sweepExpiredPluginStateEntries();
-    } catch (error) {
-      log.warn("Failed to sweep expired plugin state entries", { error });
-    }
-  }
-  return { reconciled, recovered, cleanupStamped, pruned };
 }
 
 export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummary> {
