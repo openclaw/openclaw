@@ -272,17 +272,15 @@ function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
 
 /**
  * Compute an effective priority that promotes entries that have waited longer
- * than STARVATION_PROMOTION_MS above all standard priorities, preventing
- * indefinite starvation of low-priority work.
+ * than STARVATION_PROMOTION_MS by one tier, preventing indefinite starvation
+ * of low-priority work while preserving the foreground > background invariant.
+ *
+ * One-tier promotion means background (-1) promotes to normal (0), which is
+ * still below foreground (1). Fresh user/foreground work always runs first.
  */
-// Promoted entries all share a single tier above any static priority so
-// original priority differences no longer influence ordering once an entry
-// has been starved. Within the promoted tier, FIFO by enqueue time applies.
-const STARVATION_PROMOTED_PRIORITY = Number.MAX_SAFE_INTEGER;
-
 function effectivePriority(entry: QueueEntry): number {
   if (Date.now() - entry.enqueuedAt >= STARVATION_PROMOTION_MS) {
-    return STARVATION_PROMOTED_PRIORITY;
+    return entry.priority + 1;
   }
   return entry.priority;
 }
