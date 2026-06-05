@@ -41,6 +41,12 @@ export function isOpenAIGpt54MiniModel(model: OpenAIReasoningModel): boolean {
   return /^gpt-5\.4-mini(?:-|$)/u.test(id);
 }
 
+/** Return whether a model is the GPT-5.5 family. */
+export function isOpenAIGpt55Model(model: OpenAIReasoningModel): boolean {
+  const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  return /^gpt-5\.5(?:-|$)/u.test(id);
+}
+
 /** Normalize user-facing reasoning effort names to API effort names. */
 export function normalizeOpenAIReasoningEffort(effort: string): string {
   return effort === "minimal" ? "minimal" : effort;
