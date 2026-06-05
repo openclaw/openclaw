@@ -125,7 +125,6 @@ export type GatewayClientOptions = {
   password?: string;
   approvalRuntimeToken?: string;
   instanceId?: string;
-  signInstanceId?: boolean;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;

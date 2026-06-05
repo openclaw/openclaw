@@ -233,16 +233,9 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const config = await ensureNodeHostConfig();
-  const requestedNodeId = opts.nodeId?.trim();
-  const nodeId = requestedNodeId || config.nodeId;
-  const nodeIdSource = requestedNodeId ? "user" : config.nodeIdSource;
-  // See config.ts for legacy UUID-like unmarked node.json handling:
-  // - If no explicit --node-id and legacy entry is UUID-like -> "generated" (unsigned).
-  // - Passing --node-id forces "user" (signed v4 instanceId).
-  // This documents the intentional compatibility tradeoff.
-  if (nodeId !== config.nodeId || nodeIdSource !== config.nodeIdSource) {
+  const nodeId = opts.nodeId?.trim() || config.nodeId;
+  if (nodeId !== config.nodeId) {
     config.nodeId = nodeId;
-    config.nodeIdSource = nodeIdSource;
   }
   const displayName =
     opts.displayName?.trim() || config.displayName || (await getMachineDisplayName());
@@ -277,7 +270,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     password: password || undefined,
     preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs,
     instanceId: nodeId,
-    signInstanceId: config.nodeIdSource === "user",
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,
     clientVersion: VERSION,

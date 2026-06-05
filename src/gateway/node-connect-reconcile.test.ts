@@ -156,7 +156,7 @@ describe("reconcileNodePairingOnConnect", () => {
     );
   });
 
-  it("falls back to device id when instanceId was not covered by device auth", async () => {
+  it("uses instanceId from authenticated device when no paired node exists", async () => {
     const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
       status: "pending" as const,
       request: { ...input, requestId: "req-unsigned-instance", ts: 1 },
@@ -176,12 +176,11 @@ describe("reconcileNodePairingOnConnect", () => {
         device: makeDevice("device-uuid"),
       }),
       pairedNode: null,
-      trustInstanceId: false,
       requestPairing,
     });
 
-    expect(result.nodeId).toBe("device-uuid");
-    expect(result.registrationNodeId).toBe("device-uuid");
+    expect(result.nodeId).toBe("custom-node-id");
+    expect(result.registrationNodeId).toBe("custom-node-id");
     expect(requestPairing).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "device-uuid",

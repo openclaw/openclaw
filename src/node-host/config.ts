@@ -19,12 +19,9 @@ export type NodeHostGatewayConfig = {
   tlsFingerprint?: string;
 };
 
-type NodeHostNodeIdSource = "generated" | "user";
-
 type NodeHostConfig = {
   version: 1;
   nodeId: string;
-  nodeIdSource?: NodeHostNodeIdSource;
   token?: string;
   displayName?: string;
   gateway?: NodeHostGatewayConfig;
@@ -34,26 +31,6 @@ const NODE_HOST_FILE = "node.json";
 
 function resolveNodeHostConfigPath(): string {
   return path.join(resolveStateDir(), NODE_HOST_FILE);
-}
-
-function isUuidLike(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
-}
-
-function normalizeNodeIdSource(
-  config: Partial<NodeHostConfig> | null,
-  nodeId: string,
-): NodeHostNodeIdSource {
-  if (config?.nodeIdSource === "generated" || config?.nodeIdSource === "user") {
-    return config.nodeIdSource;
-  }
-  // Legacy compatibility: unmarked legacy node.json entries whose nodeId looks like a UUID (isUuidLike)
-  // are treated as "generated" (unsigned path, signInstanceId=false in runner).
-  // This preserves exact pre-PR behavior for existing installs that never used --node-id.
-  // Users who want a signed custom node id must pass --node-id again post-upgrade.
-  // The compatibility tradeoff (legacy UUID-like ids stay unsigned) is intentionally accepted
-  // rather than forcing a broader migration that would also affect generated-id behavior.
-  return isUuidLike(nodeId) ? "generated" : "user";
 }
 
 function normalizeConfig(config: Partial<NodeHostConfig> | null): NodeHostConfig {
@@ -69,9 +46,6 @@ function normalizeConfig(config: Partial<NodeHostConfig> | null): NodeHostConfig
   }
   if (!base.nodeId) {
     base.nodeId = crypto.randomUUID();
-    base.nodeIdSource = "generated";
-  } else {
-    base.nodeIdSource = normalizeNodeIdSource(config, base.nodeId);
   }
   return base;
 }

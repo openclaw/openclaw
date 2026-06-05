@@ -25,7 +25,7 @@ import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/st
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import ipaddr from "ipaddr.js";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
-import { buildDeviceAuthPayloadV3, buildDeviceAuthPayloadV4 } from "./device-auth.js";
+import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { resolveConnectChallengeTimeoutMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
 
 export type DeviceIdentity = {
@@ -344,9 +344,8 @@ type AssembledConnect = {
   params: ConnectParams;
   authApprovalRuntimeToken: string | undefined;
   resolvedDeviceToken: string | undefined;
-  signedInstanceId: boolean;
   storedToken: string | undefined;
-  usingStoredDeviceToken: boolean | undefined;
+  usingStoredDeviceToken: boolean;
 };
 
 type FingerprintCheckingClientOptions = Omit<ClientOptions, "checkServerIdentity"> & {
@@ -418,7 +417,6 @@ export type GatewayClientOptions = {
   password?: string;
   approvalRuntimeToken?: string;
   instanceId?: string;
-  signInstanceId?: boolean;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
@@ -524,8 +522,6 @@ export class GatewayClient {
   private deviceTokenRetryBudgetUsed = false;
   private approvalRuntimeTokenCompatibilityDisabled = false;
   private approvalRuntimeTokenRetryBudgetUsed = false;
-  private instanceIdSignatureCompatibilityDisabled = false;
-  private instanceIdSignatureRetryBudgetUsed = false;
   private pendingStartupReconnectDelayMs: number | null = null;
   private pendingConnectErrorDetailCode: string | null = null;
   private pendingConnectErrorDetails: unknown = null;
@@ -941,19 +937,6 @@ export class GatewayClient {
           this.ws?.close(1008, "connect retry");
           return;
         }
-        if (
-          this.shouldRetryWithoutSignedInstanceId({
-            error: err,
-            signedInstanceId: assembled.signedInstanceId,
-          })
-        ) {
-          this.instanceIdSignatureCompatibilityDisabled = true;
-          this.instanceIdSignatureRetryBudgetUsed = true;
-          this.backoffMs = Math.min(this.backoffMs, 250);
-          this.logDebug("gateway rejected signed instance id; retrying with v3 device auth");
-          this.ws?.close(1008, "connect retry");
-          return;
-        }
         this.notifyConnectError(err instanceof Error ? err : new Error(String(err)));
         const msg = `gateway connect failed: ${formatGatewayClientErrorForLog(err)}`;
         if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE || isGatewayClientStoppedError(err)) {
@@ -1007,8 +990,6 @@ export class GatewayClient {
       storedScopes,
     });
     const platform = this.opts.platform ?? process.platform;
-    const signedInstanceId =
-      this.opts.signInstanceId === true && !this.instanceIdSignatureCompatibilityDisabled;
 
     return {
       params: {
@@ -1040,13 +1021,10 @@ export class GatewayClient {
           signatureToken,
           signedAtMs,
           platform,
-          instanceId: this.opts.instanceId,
-          signInstanceId: signedInstanceId,
         }),
       },
       authApprovalRuntimeToken,
       resolvedDeviceToken,
-      signedInstanceId,
       storedToken,
       usingStoredDeviceToken,
     };
@@ -1059,13 +1037,11 @@ export class GatewayClient {
     signatureToken: string | undefined;
     signedAtMs: number;
     platform: string;
-    instanceId?: string;
-    signInstanceId?: boolean;
   }): ConnectParams["device"] {
     if (!this.opts.deviceIdentity) {
       return undefined;
     }
-    const { nonce, role, scopes, signatureToken, signedAtMs, platform, instanceId } = params;
+    const { nonce, role, scopes, signatureToken, signedAtMs, platform } = params;
     // The signed payload mirrors server verification exactly; keep metadata
     // normalized here so different hosts sign the same logical device facts.
     const payloadParams = {
@@ -1080,13 +1056,7 @@ export class GatewayClient {
       platform,
       deviceFamily: this.opts.deviceFamily,
     };
-    const payload =
-      params.signInstanceId === true
-        ? buildDeviceAuthPayloadV4({
-            ...payloadParams,
-            instanceId,
-          })
-        : buildDeviceAuthPayloadV3(payloadParams);
+    const payload = buildDeviceAuthPayloadV3(payloadParams);
     const signature = this.deps.signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
     return {
       id: this.opts.deviceIdentity.deviceId,
@@ -1246,22 +1216,6 @@ export class GatewayClient {
     }
     const message = normalizeLowercaseStringOrEmpty(params.error.message);
     return message.includes("invalid connect params") && message.includes("approvalruntimetoken");
-  }
-
-  private shouldRetryWithoutSignedInstanceId(params: {
-    error: unknown;
-    signedInstanceId: boolean;
-  }): boolean {
-    if (!params.signedInstanceId || this.instanceIdSignatureRetryBudgetUsed) {
-      return false;
-    }
-    if (!(params.error instanceof GatewayClientRequestError)) {
-      return false;
-    }
-    return (
-      readConnectErrorDetailCode(params.error.details) ===
-      ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID
-    );
   }
 
   private isTrustedDeviceRetryEndpoint(): boolean {

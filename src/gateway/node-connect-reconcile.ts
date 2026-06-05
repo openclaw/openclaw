@@ -131,15 +131,11 @@ export async function reconcileNodePairingOnConnect(params: {
   cfg: OpenClawConfig;
   connectParams: ConnectParams;
   pairedNode: NodePairingPairedNode | null;
-  trustInstanceId?: boolean;
   reportedClientIp?: string;
   requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult | null>;
 }): Promise<NodeConnectPairingReconcileResult> {
   const nodeId =
-    resolveNodeIdentityId(
-      { connect: params.connectParams },
-      { trustInstanceId: params.trustInstanceId },
-    ) ?? params.connectParams.client.id;
+    resolveNodeIdentityId({ connect: params.connectParams }) ?? params.connectParams.client.id;
   const deviceId = normalizeTrimmedString(params.connectParams.device?.id);
   const pairedNodeIsOwned =
     params.pairedNode && deviceId

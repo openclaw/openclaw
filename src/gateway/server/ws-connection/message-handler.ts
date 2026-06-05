@@ -754,7 +754,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
         const deviceRaw = connectParams.device;
         let devicePublicKey: string | null = null;
-        let deviceAuthPayloadVersion: "v2" | "v3" | "v4" | null = null;
+        let deviceAuthPayloadVersion: "v2" | "v3" | null = null;
         const hasTokenAuth = Boolean(connectParams.auth?.token);
         const hasPasswordAuth = Boolean(connectParams.auth?.password);
         const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
@@ -1617,10 +1617,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
         let nodeIdentity: GatewayWsClient["nodeIdentity"];
         if (role === "node") {
-          const trustInstanceId = deviceAuthPayloadVersion === "v4";
           const nodeId =
-            resolveNodeIdentityId({ connect: connectParams }, { trustInstanceId }) ??
-            connectParams.client.id;
+            resolveNodeIdentityId({ connect: connectParams }) ?? connectParams.client.id;
           const deviceNodeId =
             typeof connectParams.device?.id === "string" ? connectParams.device.id.trim() : "";
           const pairedNode =
@@ -1638,7 +1636,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               cfg: getRuntimeConfig(),
               connectParams,
               pairedNode,
-              trustInstanceId,
               reportedClientIp,
               requestPairing: async (input) => {
                 try {

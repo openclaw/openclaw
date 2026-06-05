@@ -10,7 +10,6 @@ import {
 type TestNodeHostConfig = {
   version: 1;
   nodeId: string;
-  nodeIdSource?: "generated" | "user";
 };
 
 const mocks = vi.hoisted(() => ({
@@ -109,10 +108,9 @@ describe("runNodeHost", () => {
     expect(mocks.capturedGatewayClientOptions[0]?.deviceFamily).toBe(
       resolveNodeHostGatewayDeviceFamily(process.platform),
     );
-    expect(mocks.capturedGatewayClientOptions[0]?.signInstanceId).toBe(false);
   });
 
-  it("signs instanceId for an explicit node id override", async () => {
+  it("passes the custom node id to Gateway client when --node-id provided", async () => {
     await expect(
       runNodeHost({
         gatewayHost: "127.0.0.1",
@@ -123,50 +121,10 @@ describe("runNodeHost", () => {
 
     const opts = mocks.capturedGatewayClientOptions.at(-1);
     expect(opts?.instanceId).toBe("custom-node-id");
-    expect(opts?.signInstanceId).toBe(true);
     expect(mocks.saveNodeHostConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({
         nodeId: "custom-node-id",
-        nodeIdSource: "user",
       }),
     );
-  });
-
-  it("keeps signing a persisted user node id on restart", async () => {
-    mocks.ensureNodeHostConfig.mockResolvedValueOnce({
-      version: 1,
-      nodeId: "custom-node-id",
-      nodeIdSource: "user",
-    });
-
-    await expect(
-      runNodeHost({
-        gatewayHost: "127.0.0.1",
-        gatewayPort: 18789,
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    const opts = mocks.capturedGatewayClientOptions.at(-1);
-    expect(opts?.instanceId).toBe("custom-node-id");
-    expect(opts?.signInstanceId).toBe(true);
-  });
-
-  it("does not sign generated node ids by default", async () => {
-    mocks.ensureNodeHostConfig.mockResolvedValueOnce({
-      version: 1,
-      nodeId: "92b639fe-3b09-44d4-9f32-22dd794b9e84",
-      nodeIdSource: "generated",
-    });
-
-    await expect(
-      runNodeHost({
-        gatewayHost: "127.0.0.1",
-        gatewayPort: 18789,
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    const opts = mocks.capturedGatewayClientOptions.at(-1);
-    expect(opts?.instanceId).toBe("92b639fe-3b09-44d4-9f32-22dd794b9e84");
-    expect(opts?.signInstanceId).toBe(false);
   });
 });

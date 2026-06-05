@@ -60,25 +60,6 @@ describe("resolveNodeIdentityId", () => {
     ).toBe("custom-node-id");
   });
 
-  it("ignores instanceId when the caller has not verified it in the device signature", () => {
-    expect(
-      resolveNodeIdentityId(
-        {
-          connect: makeConnectParams({
-            client: {
-              id: GATEWAY_CLIENT_IDS.NODE_HOST,
-              version: "1.0.0",
-              platform: "darwin",
-              mode: "node",
-              instanceId: "custom-node-id",
-            },
-          }),
-        },
-        { trustInstanceId: false },
-      ),
-    ).toBe("device-uuid");
-  });
-
   it("falls back from blank instanceId to deviceId", () => {
     expect(
       resolveNodeIdentityId({

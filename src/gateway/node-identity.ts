@@ -11,21 +11,19 @@ function normalizeTrimmedString(value: unknown): string {
 
 export function resolveNodeIdentityId(
   params: ClientForNodeIdentity | null | undefined,
-  options?: { trustInstanceId?: boolean },
 ): string | null {
   const resolvedNodeId = normalizeTrimmedString(params?.nodeIdentity?.nodeId);
   if (resolvedNodeId) {
     return resolvedNodeId;
   }
   const connect = params?.connect;
-  // Keep every node-facing gateway path on the same identity contract:
-  // signed CLI --node-id arrives as client.instanceId and wins before device/client fallbacks.
-  // v4 signed instanceId is only used when trustInstanceId (set for role="node" device-auth v4).
-  if (options?.trustInstanceId !== false) {
-    const instanceId = normalizeTrimmedString(connect?.client?.instanceId);
-    if (instanceId) {
-      return instanceId;
-    }
+  // Trust client.instanceId from an already-authenticated device connection
+  // (device auth is verified before this resolver is called).
+  // CLI --node-id arrives as client.instanceId and takes priority over
+  // device id / client id fallbacks.
+  const instanceId = normalizeTrimmedString(connect?.client?.instanceId);
+  if (instanceId) {
+    return instanceId;
   }
   const deviceId = normalizeTrimmedString(connect?.device?.id);
   if (deviceId) {
