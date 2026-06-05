@@ -22,6 +22,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import {
+  createUserTurnTranscriptRecorder,
   preparePersistedUserTurnMessageForTranscriptWrite,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
@@ -676,6 +677,31 @@ export function runAgentAttempt(params: {
       params.opts.inputProvenance?.kind === "inter_session"
         ? effectivePrompt
         : injectTimestamp(effectivePrompt, timestampOptsFromConfig(params.cfg));
+    const cliTranscriptPrompt = params.transcriptBody ?? params.body;
+    const cliUserTurnTranscriptRecorder =
+      params.suppressPromptPersistenceOnRetry === true || !cliTranscriptPrompt
+        ? undefined
+        : createUserTurnTranscriptRecorder({
+            input: {
+              text: cliTranscriptPrompt,
+              timestamp: Date.now(),
+            },
+            target: {
+              transcriptPath: params.sessionFile,
+              sessionId: params.sessionId,
+              agentId: params.sessionAgentId,
+              sessionKey: params.sessionKey ?? params.sessionId,
+              cwd: cliProcessCwd,
+              config: params.cfg,
+            },
+            beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+            errorContext: `CLI user turn transcript for ${params.sessionKey ?? params.sessionId}`,
+            onPersistenceError: (error) => {
+              log.warn(
+                `CLI user turn transcript persistence failed for ${params.sessionKey ?? params.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            },
+          });
     const mutableCliSessionStore =
       params.sessionKey && params.sessionStore && params.storePath
         ? {
@@ -758,6 +784,9 @@ export function runAgentAttempt(params: {
         senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
         toolsAllow: params.opts.toolsAllow,
+        suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+        userTurnTranscriptRecorder: cliUserTurnTranscriptRecorder,
+        onUserMessagePersisted: params.onUserMessagePersisted,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
         oneShotCliRun: params.opts.oneShotCliRun,
@@ -782,45 +811,7 @@ export function runAgentAttempt(params: {
             }
           : {}),
       });
-    const persistCurrentCliUserTurn = async () => {
-      if (params.suppressPromptPersistenceOnRetry === true) {
-        return;
-      }
-      const transcriptSessionEntry: SessionEntry = {
-        ...(params.sessionEntry ?? {
-          sessionId: params.sessionId,
-          updatedAt: Date.now(),
-          sessionStartedAt: Date.now(),
-        }),
-        sessionId: params.sessionId,
-        sessionFile: params.sessionFile,
-      };
-      try {
-        const result = await persistUserTurnTranscript({
-          body: params.body,
-          transcriptBody: params.transcriptBody,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey ?? params.sessionId,
-          sessionEntry: transcriptSessionEntry,
-          sessionFileOverride:
-            params.sessionStore && params.storePath ? undefined : params.sessionFile,
-          sessionStore: params.sessionStore,
-          storePath: params.storePath,
-          sessionAgentId: params.sessionAgentId,
-          threadId: params.opts.threadId,
-          sessionCwd: cliProcessCwd,
-          config: params.cfg,
-          onUserMessagePersisted: params.onUserMessagePersisted,
-        });
-        params.sessionEntry = result.sessionEntry ?? params.sessionEntry;
-      } catch (error) {
-        log.warn(
-          `CLI user turn transcript persistence failed for ${params.sessionKey ?? params.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    };
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
-      await persistCurrentCliUserTurn();
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
       } catch (err) {
