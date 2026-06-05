@@ -147,6 +147,7 @@ export type TuiBackend = {
     runId: string;
   }) => Promise<{ ok: boolean; aborted: boolean }>;
   loadHistory: (opts: { sessionKey: string; agentId?: string; limit?: number }) => Promise<unknown>;
+  prewarmAgentRuntime?: (opts: { sessionKey: string; agentId?: string }) => Promise<unknown>;
   listSessions: (opts?: SessionsListParams) => Promise<TuiSessionList>;
   listAgents: () => Promise<TuiAgentsList>;
   patchSession: (opts: SessionsPatchParams) => Promise<SessionsPatchResult>;

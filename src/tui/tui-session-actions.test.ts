@@ -566,6 +566,42 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
   });
 
+  it("prewarms local runtime plugins while loading the first history snapshot", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [],
+    });
+    const prewarmAgentRuntime = vi.fn().mockResolvedValue({
+      runtimePluginsPrewarm: { status: "warmed" },
+    });
+    const state = createBaseState({ historyLoaded: false });
+    const setActivityStatus = vi.fn((text: string) => {
+      state.activityStatus = text;
+    });
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn().mockResolvedValue({ sessions: [], defaults: {} }),
+        loadHistory,
+        prewarmAgentRuntime,
+      } as unknown as TuiBackend,
+      state,
+      setActivityStatus,
+    });
+
+    await runLoadHistory();
+
+    expect(prewarmAgentRuntime).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+    });
+    expect(loadHistory).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      limit: 200,
+    });
+    expect(setActivityStatus).toHaveBeenNthCalledWith(1, "warming runtime");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+  });
+
   it("stays idle when chat.history reports no in-flight run", async () => {
     const loadHistory = vi.fn().mockResolvedValue({ sessionId: "session-x", messages: [] });
     const updateAssistant = vi.fn();

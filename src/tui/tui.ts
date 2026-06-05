@@ -372,11 +372,15 @@ export function canSubmitTuiChatMessage(params: {
   activeChatRunId?: string | null;
   pendingChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
+  activityStatus?: string;
   message?: string;
 }): boolean {
   const stopText = params.message ? isChatStopCommandText(params.message) : false;
   if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
     return true;
+  }
+  if (params.activityStatus === "warming runtime") {
+    return false;
   }
   const pending = Boolean(params.pendingChatRunId) || params.pendingOptimisticUserMessage === true;
   if (!params.local && params.activeChatRunId) {
@@ -390,6 +394,7 @@ const TUI_BUSY_ACTIVITY_STATUSES = new Set([
   "waiting",
   "streaming",
   "running",
+  "warming runtime",
   "finishing context",
 ]);
 
@@ -1381,6 +1386,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       activeChatRunId: state.activeChatRunId,
       pendingChatRunId: state.pendingChatRunId,
       pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
+      activityStatus,
       message,
     });
   const notifyBlockedChatSubmit = () => {

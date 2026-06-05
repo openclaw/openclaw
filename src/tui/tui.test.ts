@@ -148,11 +148,23 @@ describe("canSubmitTuiChatMessage", () => {
       }),
     ).toBe(false);
   });
+
+  it("blocks submit while runtime prewarm is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        activityStatus: "warming runtime",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("isTuiBusyActivityStatus", () => {
   it("treats finishing context as a visible busy status", () => {
     expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
+  });
+
+  it("treats runtime warmup as a visible busy status", () => {
+    expect(isTuiBusyActivityStatus("warming runtime")).toBe(true);
   });
 });
 

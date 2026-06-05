@@ -2,7 +2,11 @@
 import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
-import { resolveDefaultAgentId, resolveSessionAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+} from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -10,6 +14,7 @@ import {
   buildConfiguredModelCatalog,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
 import { parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -479,6 +484,23 @@ export class EmbeddedTuiBackend implements TuiBackend {
       fastMode: entry?.fastMode,
       verboseLevel: sessionInfo.verboseLevel,
     };
+  }
+
+  async prewarmAgentRuntime(opts: { sessionKey: string; agentId?: string }) {
+    const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
+    const { cfg, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
+    const sessionAgentId = resolveSessionAgentId({
+      sessionKey: opts.sessionKey,
+      config: cfg,
+      agentId: opts.agentId,
+    });
+    const workspaceDir =
+      entry?.spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
+    ensureRuntimePluginsLoaded({
+      config: cfg,
+      workspaceDir,
+    });
+    return { runtimePluginsPrewarm: { status: "warmed" as const } };
   }
 
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
