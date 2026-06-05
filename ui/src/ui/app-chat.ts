@@ -266,16 +266,21 @@ function chatRunWatchdogResultIsTerminal(
   result: ChatRunWatchdogWaitResult | null | undefined,
 ): boolean {
   const status = chatRunWatchdogStatus(result);
+  if (status === "pending") {
+    return false;
+  }
   if (status !== "timeout" && status !== "timed_out") {
     return true;
+  }
+  if (result?.pendingError === true) {
+    return false;
   }
   return (
     result?.endedAt != null ||
     result?.error != null ||
     result?.stopReason != null ||
     result?.livenessState != null ||
-    result?.yielded === true ||
-    result?.pendingError === true
+    result?.yielded === true
   );
 }
 
