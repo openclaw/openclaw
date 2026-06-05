@@ -152,6 +152,14 @@ const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-d
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
 
+function isInternalToolWarningPayload(payload: ReplyPayload): boolean {
+  return (
+    payload.isError === true &&
+    isReplyPayloadNonTerminalToolErrorWarning(payload) &&
+    !resolveSendableOutboundReplyParts(payload).hasMedia
+  );
+}
+
 type DraftPartialTextUpdate = {
   text: string;
   delta?: string;
@@ -1682,6 +1690,19 @@ export const dispatchTelegramMessage = async ({
                   beforeDeliver: async (payload) => payload,
                   deliver: async (payload, info) => {
                     if (isDispatchSuperseded()) {
+                      return;
+                    }
+                    if (payload.isError === true) {
+                      hadErrorReplyFailureOrSkip = true;
+                    }
+                    if (
+                      isGroup &&
+                      (info.kind === "tool" || info.kind === "final") &&
+                      isInternalToolWarningPayload(payload)
+                    ) {
+                      logVerbose(
+                        "telegram: suppressed internal tool-warning payload in group chat",
+                      );
                       return;
                     }
 

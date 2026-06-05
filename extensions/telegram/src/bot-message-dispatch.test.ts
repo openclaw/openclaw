@@ -1988,6 +1988,48 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createNativeTelegramToolProgressDraft).not.toHaveBeenCalled();
   });
 
+  it("suppresses internal tool-warning payloads in groups", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        setReplyPayloadMetadata(
+          {
+            text: '⚠️ 🛠️ search "Sent Alex a planning menu|system messages|NO_REPLY|Telegram|telegram" in ~/agent-state (agent) failed',
+            isError: true,
+          },
+          {
+            deliverDespiteSourceReplySuppression: true,
+            nonTerminalToolErrorWarning: true,
+          },
+        ),
+        { kind: "tool" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:group:-100123",
+          ChatType: "group",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -100123, type: "supergroup" },
+          message_id: 99,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -100123,
+        isGroup: true,
+        threadSpec: { id: undefined, scope: "none" },
+      }),
+      streamMode: "partial",
+      telegramCfg: {
+        streaming: { mode: "partial", preview: { toolProgress: true } },
+      },
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("does not hide text-only tool output after answer streaming starts", async () => {
     const nativeDraft = createNativeToolProgressDraft();
     createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
