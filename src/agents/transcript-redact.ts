@@ -180,6 +180,31 @@ function shouldPreserveNestedImageDataUrlFields(
   );
 }
 
+const OPAQUE_PROVIDER_FIELD_KEYS = new Set([
+  "encrypted_content",
+  "thinkingSignature",
+  "thoughtSignature",
+  "thought_signature",
+]);
+
+function shouldPreserveOpaqueProviderPayload(
+  source: Record<string, unknown>,
+  key: string,
+  item: unknown,
+): boolean {
+  if (typeof item !== "string") {
+    return false;
+  }
+  if (OPAQUE_PROVIDER_FIELD_KEYS.has(key)) {
+    return true;
+  }
+  const type = source.type;
+  return (
+    (type === "redacted_thinking" && key === "data") ||
+    ((type === "thinking" || type === "redacted_thinking") && key === "signature")
+  );
+}
+
 function redactTranscriptStructuredValue(
   value: unknown,
   cfg?: OpenClawConfig,
@@ -235,6 +260,10 @@ function redactTranscriptStructuredValue(
     next = { ...source };
   }
   for (const [key, item] of Object.entries(source)) {
+    // Provider-signed/encrypted bytes must remain exact or replayed tool turns fail.
+    if (shouldPreserveOpaqueProviderPayload(source, key, item)) {
+      continue;
+    }
     if (typeof item === "string") {
       const sanitizedDataUrl =
         preserveImageDataUrlFields && key === "url"
