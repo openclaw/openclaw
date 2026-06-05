@@ -24,7 +24,9 @@ import {
 import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import { syncControlUiDocumentTitle } from "./document-title.ts";
 import type { Tab } from "./navigation.ts";
+import type { SessionsListResult } from "./types.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
 const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
@@ -55,6 +57,7 @@ type LifecycleHost = {
   chatManualRefreshInFlight: boolean;
   settings?: { gatewayUrl?: string | null };
   sessionKey: string;
+  sessionsResult?: SessionsListResult | null;
   chatMessage: string;
   chatQueue: ChatQueueItem[];
   chatComposerProvisionalRestore?: {
@@ -97,6 +100,7 @@ type LifecycleHost = {
 export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
+  syncControlUiDocumentTitle(host);
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   host.controlUiBootstrapReady = loadControlUiBootstrapConfig(
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
@@ -229,6 +233,9 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  if (changed.has("sessionKey") || changed.has("sessionsResult")) {
+    syncControlUiDocumentTitle(host);
+  }
   if (changed.has("chatQueue")) {
     clearPendingChatComposerPersistence(host);
     persistChatComposerState(host);
