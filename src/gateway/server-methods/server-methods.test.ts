@@ -628,6 +628,49 @@ describe("waitForAgentJob", () => {
       vi.useRealTimers();
     }
   });
+
+  it("preserves retry grace for soft timeout before grace window expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-soft-timeout-retry-grace-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 10_000 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 10_000,
+          endedAt: 11_000,
+          aborted: true,
+          // No timeoutPhase: this is a soft/retry timeout, not a hard one.
+        },
+      });
+
+      // Advance past the wait-timer timeout (5_000ms) but before the grace window (15_000ms)
+      // The soft timeout must NOT be surfaced yet; the outer timer must return null.
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).toBeNull();
+
+      // After the grace window expires, the pending soft timeout should be recorded.
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      const cached = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expect(cached).not.toBeNull();
+      expect(cached?.status).toBe("timeout");
+      expect(cached?.endedAt).toBe(11_000);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {

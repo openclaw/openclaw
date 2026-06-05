@@ -2,6 +2,7 @@
 // recent run outcomes even after the live event stream has moved on.
 import {
   buildAgentRunTerminalOutcome,
+  isHardAgentRunTimeoutPhase,
   mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
@@ -476,7 +477,11 @@ export async function waitForAgentJob(params: {
         return;
       }
       const pendingTimeout = getPendingAgentRunTimeout(runId);
-      finish(pendingTimeout ? pendingTimeout.snapshot : null);
+      if (pendingTimeout && isHardAgentRunTimeoutPhase(pendingTimeout.snapshot.timeoutPhase)) {
+        finish(pendingTimeout.snapshot);
+        return;
+      }
+      finish(null);
     }, timeoutMs);
     const onAbort: (() => void) | undefined = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });
