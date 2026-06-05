@@ -106,10 +106,10 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     expect(downloadMSTeamsGraphMedia).toHaveBeenCalled();
   });
 
-  it("does NOT trigger Graph fallback for mention-only HTML (no <attachment> tags)", async () => {
+  it("triggers Graph fallback for channel/group mention-only HTML (no <attachment> tags)", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     // Mention cards include `<at>` markers but no `<attachment id="...">`,
-    // so the extractor returns an empty ID list. The fallback must skip.
+    // so the extractor returns an empty ID list, but the Graph fetch must still run for channel/group threads.
     vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
     vi.mocked(downloadMSTeamsGraphMedia).mockClear();
     vi.mocked(buildMSTeamsGraphMessageUrls).mockClear();
@@ -124,8 +124,7 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
       ],
     });
 
-    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
-    expect(buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
+    expect(buildMSTeamsGraphMessageUrls).toHaveBeenCalled();
   });
 
   it("does NOT trigger Graph fallback when no attachments are text/html", async () => {

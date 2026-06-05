@@ -267,6 +267,27 @@ describe("msteams attachment helpers", () => {
       expect(urls[0]).toContain(expectedPath);
     });
 
+    it("uses team.aadGroupId and fetches a channel reply under its root, not the bare root", () => {
+      const urls = buildMSTeamsGraphMessageUrls({
+        conversationType: "channel",
+        messageId: "reply-id",
+        conversationMessageId: "root-id",
+        channelData: {
+          team: { id: "19:thread@thread.tacv2", aadGroupId: "team-guid" },
+          channel: { id: "chan-id" },
+        },
+      });
+      // The team segment must use the AAD group GUID (not the 19:..@thread.tacv2 thread id), and a
+      // reply is addressable only under its root — never as a top-level message, and never the bare
+      // root (which would return the root message's attachment instead of the reply's).
+      expect(urls[0]).toBe(
+        "https://graph.microsoft.com/v1.0/teams/team-guid/channels/chan-id/messages/root-id/replies/reply-id",
+      );
+      expect(urls).not.toContain(
+        "https://graph.microsoft.com/v1.0/teams/team-guid/channels/chan-id/messages/root-id",
+      );
+    });
+
     it("uses resolved Graph chat ID for personal DMs instead of Bot Framework a: ID", () => {
       const urls = buildMSTeamsGraphMessageUrls({
         conversationType: "personal",

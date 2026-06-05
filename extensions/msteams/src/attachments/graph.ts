@@ -78,6 +78,8 @@ export function buildMSTeamsGraphMessageUrls(params: {
 
   if (conversationType === "channel") {
     const teamId =
+      readNestedString(params.channelData, ["team", "aadGroupId"]) ??
+      readNestedString(params.channelData, ["aadGroupId"]) ??
       readNestedString(params.channelData, ["team", "id"]) ??
       readNestedString(params.channelData, ["teamId"]);
     const channelId =
@@ -87,24 +89,39 @@ export function buildMSTeamsGraphMessageUrls(params: {
     if (!teamId || !channelId) {
       return [];
     }
-    const urls: string[] = [];
-    if (replyToId) {
-      for (const candidate of messageIdCandidates) {
-        if (candidate === replyToId) {
-          continue;
-        }
-        urls.push(
-          `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(replyToId)}/replies/${encodeURIComponent(candidate)}`,
-        );
-      }
-    }
+    const selfId = normalizeOptionalString(params.messageId) ?? "";
     if (messageIdCandidates.size === 0 && replyToId) {
       messageIdCandidates.add(replyToId);
     }
+    const urls: string[] = [];
+    // A channel reply is addressable only at /messages/{rootId}/replies/{replyId} — never at
+    // /messages/{replyId} (which 404s), and fetching the bare root returns the wrong (root) file.
+    // The thread root arrives as replyToId and/or conversationMessageId, so treat any candidate
+    // that is not the current message id as a potential parent and build the reply URL first.
+    const parentIds = new Set<string>();
+    if (replyToId) {
+      parentIds.add(replyToId);
+    }
     for (const candidate of messageIdCandidates) {
+      if (candidate !== selfId) {
+        parentIds.add(candidate);
+      }
+    }
+    if (selfId) {
+      for (const parentId of parentIds) {
+        urls.push(
+          `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(parentId)}/replies/${encodeURIComponent(selfId)}`,
+        );
+      }
       urls.push(
-        `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(candidate)}`,
+        `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(selfId)}`,
       );
+    } else {
+      for (const candidate of messageIdCandidates) {
+        urls.push(
+          `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(candidate)}`,
+        );
+      }
     }
     return uniqueStrings(urls);
   }

@@ -123,11 +123,7 @@ export async function resolveMSTeamsInboundMedia(params: {
       }
     }
 
-    if (
-      hasHtmlFileAttachment &&
-      mediaList.length === 0 &&
-      !isBotFrameworkPersonalChatId(conversationId)
-    ) {
+    if (mediaList.length === 0 && !isBotFrameworkPersonalChatId(conversationId)) {
       const messageUrls = buildMSTeamsGraphMessageUrls({
         conversationType,
         conversationId,
