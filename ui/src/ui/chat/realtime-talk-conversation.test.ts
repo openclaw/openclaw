@@ -78,6 +78,69 @@ describe("realtime Talk conversation", () => {
     ]);
   });
 
+  it("keeps a late final assistant transcript in the original assistant bubble", () => {
+    let state = createRealtimeTalkConversationState();
+
+    for (const [index, text] of ["Hey", " there", "!", " What", "’s", " up", "?"].entries()) {
+      state = updateRealtimeTalkConversation(state, {
+        role: "assistant",
+        text,
+        final: false,
+        nowMs: index + 1,
+      });
+    }
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "Hello",
+      final: true,
+      nowMs: 10,
+    });
+    state = updateRealtimeTalkConversation(state, {
+      role: "assistant",
+      text: "Hey there! What’s up?",
+      final: true,
+      nowMs: 11,
+    });
+
+    expect(state.entries).toMatchObject([
+      { role: "assistant", text: "Hey there! What’s up?", isStreaming: false },
+      { role: "user", text: "Hello", isStreaming: false },
+    ]);
+  });
+
+  it("starts a new assistant bubble when the final transcript arrives past the rewrite window", () => {
+    let state = createRealtimeTalkConversationState();
+
+    for (const [index, text] of ["Hey", " there", "!", " What", "’s", " up", "?"].entries()) {
+      state = updateRealtimeTalkConversation(state, {
+        role: "assistant",
+        text,
+        final: false,
+        nowMs: index + 1,
+      });
+    }
+    state = updateRealtimeTalkConversation(state, {
+      role: "user",
+      text: "Hello",
+      final: true,
+      nowMs: 10,
+    });
+    // Past the rewrite grace window the final is treated as a new turn, even when
+    // its text matches the earlier streamed bubble.
+    state = updateRealtimeTalkConversation(state, {
+      role: "assistant",
+      text: "Hey there! What’s up?",
+      final: true,
+      nowMs: 10 + 2_001,
+    });
+
+    expect(state.entries).toMatchObject([
+      { role: "assistant", text: "Hey there! What’s up?", isStreaming: false },
+      { role: "user", text: "Hello", isStreaming: false },
+      { role: "assistant", text: "Hey there! What’s up?", isStreaming: false },
+    ]);
+  });
+
   it("creates a new bubble for the next final user turn after assistant output starts", () => {
     let state = createRealtimeTalkConversationState();
 
