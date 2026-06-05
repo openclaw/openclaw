@@ -1573,6 +1573,30 @@ describe("runCodexAppServerAttempt", () => {
     expect(request.mock.calls.map(([method]) => method)).not.toContain("app/list");
   });
 
+  it("disables bundled MCP when runtime policy disables native tool surfaces", () => {
+    expect(
+      testing.resolveCodexBundleMcpToolsAllow({
+        nodeExecBlocksNativeExecution: false,
+        nativeToolSurfaceEnabled: false,
+        toolsAllow: ["web_search"],
+      }),
+    ).toEqual([]);
+    expect(
+      testing.resolveCodexBundleMcpToolsAllow({
+        nodeExecBlocksNativeExecution: true,
+        nativeToolSurfaceEnabled: true,
+        toolsAllow: ["web_search"],
+      }),
+    ).toEqual([]);
+    expect(
+      testing.resolveCodexBundleMcpToolsAllow({
+        nodeExecBlocksNativeExecution: false,
+        nativeToolSurfaceEnabled: true,
+        toolsAllow: ["web_search"],
+      }),
+    ).toEqual(["web_search"]);
+  });
+
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("message")]);
     const params = createParams(

@@ -17,7 +17,6 @@ describe("Codex native hook relay config", () => {
 
     expect(config).toEqual({
       "features.hooks": true,
-      bypass_hook_trust: true,
       "hooks.PreToolUse": [
         {
           hooks: [
@@ -123,7 +122,6 @@ describe("Codex native hook relay config", () => {
       }),
     ).toEqual({
       "features.hooks": true,
-      bypass_hook_trust: true,
       "hooks.PermissionRequest": [
         {
           hooks: [
@@ -159,7 +157,6 @@ describe("Codex native hook relay config", () => {
       }),
     ).toEqual({
       "features.hooks": true,
-      bypass_hook_trust: true,
       "hooks.PreToolUse": [
         {
           hooks: [
@@ -197,7 +194,6 @@ describe("Codex native hook relay config", () => {
       }),
     ).toEqual({
       "features.hooks": true,
-      bypass_hook_trust: true,
       "hooks.PreToolUse": [
         {
           hooks: [
@@ -234,7 +230,6 @@ describe("Codex native hook relay config", () => {
       }),
     ).toEqual({
       "features.hooks": true,
-      bypass_hook_trust: true,
       "hooks.PreToolUse": [],
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [

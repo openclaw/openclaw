@@ -669,6 +669,87 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(savedAfterAllowed?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
+  it("resumes and updates bindings for policy-disabled replacement dynamic tools", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-native",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      dynamicToolsContainDeferred: false,
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-native");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createNamedDynamicTool("exec")],
+      appServer,
+      nativeCodeModeEnabled: false,
+      preserveBindingWhenNativeCodeModeDisabled: true,
+      userMcpServersEnabled: false,
+    });
+
+    const requestCalls = request.mock.calls as unknown as Array<
+      [string, { config?: Record<string, unknown> }]
+    >;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
+    expect(requestCalls[0]?.[1].config?.["features.code_mode"]).toBe(false);
+    expect(requestCalls[0]?.[1].config?.["features.code_mode_only"]).toBe(false);
+    expect(binding.threadId).toBe("thread-native");
+    expect(binding.dynamicToolsFingerprint).not.toBe("[]");
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-native");
+    expect(savedBinding?.dynamicToolsFingerprint).toBe(binding.dynamicToolsFingerprint);
+  });
+
+  it("keeps zero-tool policy-disabled turns transient", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-native",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "native-tool-fingerprint",
+      dynamicToolsContainDeferred: false,
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-transient");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      nativeCodeModeEnabled: false,
+      preserveBindingWhenNativeCodeModeDisabled: true,
+      userMcpServersEnabled: false,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-native");
+    expect(savedBinding?.dynamicToolsFingerprint).toBe("native-tool-fingerprint");
+  });
+
   it("preserves the binding when the app-server closes during thread resume", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

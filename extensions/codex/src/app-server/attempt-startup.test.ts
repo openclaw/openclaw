@@ -120,6 +120,7 @@ function startThreadWithHarness(
     finalConfigPatch: undefined,
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
+    preserveBindingWhenNativeCodeModeDisabled: false,
     sandboxExecServerEnabled: false,
     sandbox: null,
     contextEngineProjection: undefined,

@@ -241,9 +241,6 @@ export function buildCodexNativeHookRelayConfig(params: {
   const selectedEvents = new Set<NativeHookRelayEvent>(events);
   const config: JsonObject = {
     "features.hooks": true,
-    // OpenClaw owns this per-thread relay command and computes its trust state;
-    // tell Codex app-server not to suppress these managed hooks at startup.
-    bypass_hook_trust: true,
   };
   const hookState: JsonObject = {};
   for (const event of CODEX_NATIVE_HOOK_RELAY_EVENTS) {

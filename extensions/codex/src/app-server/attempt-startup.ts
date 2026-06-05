@@ -102,6 +102,7 @@ export async function startCodexAttemptThread(params: {
   nativeHookRelayGeneration?: string;
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   nativeToolSurfaceEnabled: boolean;
+  preserveBindingWhenNativeCodeModeDisabled: boolean;
   sandboxExecServerEnabled: boolean;
   sandbox: CodexSandboxContext;
   contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
@@ -308,6 +309,8 @@ export async function startCodexAttemptThread(params: {
                 nativeHookRelayGeneration: params.nativeHookRelayGeneration,
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
+                preserveBindingWhenNativeCodeModeDisabled:
+                  params.preserveBindingWhenNativeCodeModeDisabled,
                 userMcpServersEnabled: params.nativeToolSurfaceEnabled,
                 mcpServersFingerprint: params.bundleMcpThreadConfig.fingerprint,
                 mcpServersFingerprintEvaluated: params.bundleMcpThreadConfig.evaluated,

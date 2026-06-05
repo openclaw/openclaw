@@ -513,14 +513,6 @@ export async function runCodexAppServerAttempt(
     sandbox,
   });
   preDynamicStartupStages.mark("native-exec-policy");
-  const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
-    workspaceDir: effectiveWorkspace,
-    cfg: params.config,
-    toolsEnabled: supportsModelTools(params.model),
-    disableTools: params.disableTools,
-    toolsAllow: nodeExecBlocksNativeExecution ? [] : params.toolsAllow,
-  });
-  preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox, {
     agentId: sessionAgentId,
@@ -529,6 +521,18 @@ export async function runCodexAppServerAttempt(
     beforeToolCallPolicyActive,
   });
   preDynamicStartupStages.mark("native-tool-surface");
+  const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
+    workspaceDir: effectiveWorkspace,
+    cfg: params.config,
+    toolsEnabled: supportsModelTools(params.model),
+    disableTools: params.disableTools,
+    toolsAllow: resolveCodexBundleMcpToolsAllow({
+      nodeExecBlocksNativeExecution,
+      nativeToolSurfaceEnabled,
+      toolsAllow: params.toolsAllow,
+    }),
+  });
+  preDynamicStartupStages.mark("bundle-mcp");
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
@@ -1083,6 +1087,7 @@ export async function runCodexAppServerAttempt(
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled,
+      preserveBindingWhenNativeCodeModeDisabled: beforeToolCallPolicyActive,
       sandboxExecServerEnabled,
       sandbox,
       contextEngineProjection,
@@ -2648,6 +2653,16 @@ function waitForCodexNotificationDispatchTurn(): Promise<void> {
   });
 }
 
+function resolveCodexBundleMcpToolsAllow(params: {
+  nodeExecBlocksNativeExecution: boolean;
+  nativeToolSurfaceEnabled: boolean;
+  toolsAllow?: string[];
+}): string[] | undefined {
+  return params.nodeExecBlocksNativeExecution || !params.nativeToolSurfaceEnabled
+    ? []
+    : params.toolsAllow;
+}
+
 function handleApprovalRequest(params: {
   method: string;
   params: JsonValue | undefined;
@@ -2681,6 +2696,7 @@ export const testing = {
   resolveCodexAppServerHookChannelId,
   buildCodexAppServerPromptTimeoutOutcome,
   resolveOpenClawCodingToolsSessionKeys,
+  resolveCodexBundleMcpToolsAllow,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
   hasPendingDynamicToolTerminalDiagnostic,
