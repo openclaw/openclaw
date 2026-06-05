@@ -202,8 +202,8 @@ describe("server-runtime-services", () => {
     let call = hoisted.recoverPendingRestartContinuationDeliveries.mock.calls[0]?.[0];
     expect(call).toBeDefined();
     // Periodic retry uses Date.now() — known to be >= 1_250 + 60_000 = 61_250
-    expect(call!.maxEnqueuedAt).toBeGreaterThanOrEqual(61_250);
-    expect(call!.log).toBe(log.child.mock.results[2]?.value);
+    expect(call.maxEnqueuedAt).toBeGreaterThanOrEqual(61_250);
+    expect(call.log).toBe(log.child.mock.results[2]?.value);
 
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
 
@@ -214,8 +214,8 @@ describe("server-runtime-services", () => {
     // Each periodic retry uses a new Date.now() cutoff
     call = hoisted.recoverPendingRestartContinuationDeliveries.mock.calls[0]?.[0];
     expect(call).toBeDefined();
-    expect(call!.maxEnqueuedAt).toBeGreaterThanOrEqual(61_250 + 60_000);
-    expect(call!.log).toBe(log.child.mock.results[3]?.value);
+    expect(call.maxEnqueuedAt).toBeGreaterThanOrEqual(61_250 + 60_000);
+    expect(call.log).toBe(log.child.mock.results[3]?.value);
   });
 
   it("recovers delivery entries enqueued after startup maxEnqueuedAt via periodic retry", async () => {
@@ -248,7 +248,7 @@ describe("server-runtime-services", () => {
     // is eligible
     const periodicCall = hoisted.recoverPendingRestartContinuationDeliveries.mock.calls[0]?.[0];
     expect(periodicCall).toBeDefined();
-    expect(periodicCall!.maxEnqueuedAt).toBeGreaterThanOrEqual(61_250);
+    expect(periodicCall.maxEnqueuedAt).toBeGreaterThanOrEqual(61_250);
   });
 
   it("stops session delivery periodic retry after close — no retry fires after stop handle is called", async () => {
