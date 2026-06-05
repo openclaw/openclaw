@@ -50,7 +50,7 @@ describe("vercel-ai-gateway provider resolution", () => {
 
     const auth = resolveAuth("vercel-ai-gateway");
     // Persist the env marker, not the resolved plaintext profile key.
-    expect(auth.apiKey).toBe("AI_GATEWAY_API_KEY");
+    expect(auth.apiKey).toBe("secretref-env:AI_GATEWAY_API_KEY");
     expect(auth.mode).toBe("api_key");
     expect(auth.source).toBe("profile");
     expect(auth.profileId).toBe("vercel-ai-gateway:default");

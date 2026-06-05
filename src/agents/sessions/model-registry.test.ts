@@ -178,6 +178,40 @@ describe("ModelRegistry models.json auth", () => {
     });
   });
 
+  it("resolves models.json env SecretRef apiKey markers from process env", async () => {
+    const previous = process.env.TENSORIX_API_KEY;
+    process.env.TENSORIX_API_KEY = "sk-tensorix-runtime"; // pragma: allowlist secret
+    try {
+      const modelsPath = writeModelsJson({
+        providers: {
+          tensorix: {
+            baseUrl: "https://api.tensorix.ai/v1",
+            api: "openai-completions",
+            apiKey: "secretref-env:TENSORIX_API_KEY",
+            models: [{ id: "tensorix/deepseek/deepseek-v4-pro" }],
+          },
+        },
+      });
+
+      const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+      const model = registry.find("tensorix", "tensorix/deepseek/deepseek-v4-pro");
+
+      expect(registry.getError()).toBeUndefined();
+      expect(model).toBeDefined();
+      await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
+        ok: true,
+        apiKey: "sk-tensorix-runtime",
+        headers: undefined,
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TENSORIX_API_KEY;
+      } else {
+        process.env.TENSORIX_API_KEY = previous;
+      }
+    }
+  });
+
   it("ignores non-generated plugin catalog files", () => {
     // Plugin catalog shards are codegen artifacts; hand-written lookalikes must
     // not extend the provider registry.

@@ -4,6 +4,7 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import { getBashShellConfig } from "../shell-utils.js";
 
 // Cache for shell command results (persists for process lifetime)
@@ -15,6 +16,10 @@ const commandResultCache = new Map<string, string | undefined>();
  * - Otherwise checks environment variable first, then treats as literal (not cached)
  */
 export function resolveConfigValue(config: string): string | undefined {
+  const secretRef = coerceSecretRef(config);
+  if (secretRef) {
+    return secretRef.source === "env" ? process.env[secretRef.id] : undefined;
+  }
   if (config.startsWith("!")) {
     return executeCommand(config);
   }
@@ -94,6 +99,10 @@ function executeCommand(commandConfig: string): string | undefined {
  * Resolve all header values using the same resolution logic as API keys.
  */
 export function resolveConfigValueUncached(config: string): string | undefined {
+  const secretRef = coerceSecretRef(config);
+  if (secretRef) {
+    return secretRef.source === "env" ? process.env[secretRef.id] : undefined;
+  }
   if (config.startsWith("!")) {
     return executeCommandUncached(config);
   }

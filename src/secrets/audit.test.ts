@@ -492,6 +492,22 @@ describe("secrets audit", () => {
     });
   });
 
+  it("does not flag models.json env SecretRef apiKey markers as plaintext", async () => {
+    await writeModelsProvider({ apiKey: "secretref-env:TENSORIX_API_KEY" }); // pragma: allowlist secret
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+      present: false,
+    });
+    expectModelsFinding(report, {
+      code: "REF_UNRESOLVED",
+      jsonPath: "providers.openai.apiKey",
+      present: false,
+    });
+  });
+
   it("flags arbitrary all-caps models.json apiKey values as plaintext", async () => {
     await writeModelsProvider({ apiKey: "ALLCAPS_SAMPLE" }); // pragma: allowlist secret
 

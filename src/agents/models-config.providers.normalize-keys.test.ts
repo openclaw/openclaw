@@ -271,7 +271,7 @@ describe("normalizeProviders", () => {
         secretRefManagedProviders,
       });
 
-      expect(normalized?.custom?.apiKey).toBe("CUSTOM_PROVIDER_API_KEY"); // pragma: allowlist secret
+      expect(normalized?.custom?.apiKey).toBe("secretref-env:CUSTOM_PROVIDER_API_KEY"); // pragma: allowlist secret
       expect(secretRefManagedProviders.has("custom")).toBe(true);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
@@ -315,7 +315,7 @@ describe("normalizeProviders", () => {
         env: process.env,
       });
 
-      expect(resolved?.apiKey).toBe("MINIMAX_API_KEY"); // pragma: allowlist secret
+      expect(resolved?.apiKey).toBe("secretref-env:MINIMAX_API_KEY"); // pragma: allowlist secret
       expect(resolved?.source).toBe("env-ref");
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
@@ -380,7 +380,7 @@ describe("normalizeProviders", () => {
       sourceProviders,
     });
     expect((enforced as Record<string, unknown>).openai).toBeNull();
-    expect(enforced?.moonshot?.apiKey).toBe("MOONSHOT_API_KEY"); // pragma: allowlist secret
+    expect(enforced?.moonshot?.apiKey).toBe("secretref-env:MOONSHOT_API_KEY"); // pragma: allowlist secret
   });
 
   it("canonicalizes LM Studio baseUrl after merge-style explicit overwrite", async () => {

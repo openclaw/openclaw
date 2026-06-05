@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
 import {
+  resolveEnvSecretRefApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
   resolveNonEnvSecretRefHeaderValueMarker,
   resolveEnvSecretRefHeaderValueMarker,
@@ -48,7 +49,7 @@ function resolveSourceManagedApiKeyMarker(params: {
     return undefined;
   }
   return sourceApiKeyRef.source === "env"
-    ? sourceApiKeyRef.id.trim()
+    ? resolveEnvSecretRefApiKeyMarker(sourceApiKeyRef.id)
     : resolveNonEnvSecretRefApiKeyMarker(sourceApiKeyRef.source);
 }
 

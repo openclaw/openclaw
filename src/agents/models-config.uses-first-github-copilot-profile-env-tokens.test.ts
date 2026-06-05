@@ -218,7 +218,7 @@ describe("models-config", () => {
     );
 
     expect(auth("github-copilot")).toEqual({
-      apiKey: "COPILOT_REF_TOKEN",
+      apiKey: "secretref-env:COPILOT_REF_TOKEN",
       discoveryApiKey: "token-from-ref-env",
       mode: "token",
       source: "profile",

@@ -140,13 +140,13 @@ describe("provider auth aliases", () => {
     });
 
     expectAuthResult(resolveAuth("fixture-provider"), {
-      apiKey: "FIXTURE_PROVIDER_API_KEY",
+      apiKey: "secretref-env:FIXTURE_PROVIDER_API_KEY",
       mode: "api_key",
       source: "profile",
       profileId: "fixture-provider:default",
     });
     expectAuthResult(resolveAuth("fixture-provider-plan"), {
-      apiKey: "FIXTURE_PROVIDER_API_KEY",
+      apiKey: "secretref-env:FIXTURE_PROVIDER_API_KEY",
       mode: "api_key",
       source: "profile",
       profileId: "fixture-provider:default",

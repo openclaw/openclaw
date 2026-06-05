@@ -27,6 +27,7 @@ export const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 export const NON_ENV_SECRETREF_MARKER = "secretref-managed"; // pragma: allowlist secret
 /** Prefix for secret-ref header markers that name an env-backed source. */
 export const SECRETREF_ENV_HEADER_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
+export const SECRETREF_ENV_API_KEY_MARKER_PREFIX = SECRETREF_ENV_HEADER_MARKER_PREFIX;
 
 const AWS_SDK_ENV_MARKERS = new Set([
   "AWS_BEARER_TOKEN_BEDROCK",
@@ -100,6 +101,11 @@ export function isOAuthApiKeyMarker(value: string): boolean {
 /** Resolve the API-key placeholder for a non-env secret-ref source. */
 export function resolveNonEnvSecretRefApiKeyMarker(_source: SecretRefSource): string {
   return NON_ENV_SECRETREF_MARKER;
+}
+
+/** Resolve the API-key placeholder for an env-backed secret-ref source. */
+export function resolveEnvSecretRefApiKeyMarker(envVarName: string): string {
+  return `${SECRETREF_ENV_API_KEY_MARKER_PREFIX}${envVarName.trim()}`;
 }
 
 /** Resolve the header-value placeholder for a non-env secret-ref source. */

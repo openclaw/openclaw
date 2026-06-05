@@ -369,15 +369,18 @@ function collectModelsJsonSecrets(params: {
       continue;
     }
     const apiKey = providerValue.apiKey;
-    if (coerceSecretRef(apiKey)) {
-      addFinding(params.collector, {
-        code: "REF_UNRESOLVED",
-        severity: "error",
-        file: params.modelsJsonPath,
-        jsonPath: `providers.${providerId}.apiKey`,
-        message: "models.json contains an unresolved SecretRef object; regenerate models.json.",
-        provider: providerId,
-      });
+    const apiKeyRef = coerceSecretRef(apiKey);
+    if (apiKeyRef) {
+      if (typeof apiKey !== "string") {
+        addFinding(params.collector, {
+          code: "REF_UNRESOLVED",
+          severity: "error",
+          file: params.modelsJsonPath,
+          jsonPath: `providers.${providerId}.apiKey`,
+          message: "models.json contains an unresolved SecretRef object; regenerate models.json.",
+          provider: providerId,
+        });
+      }
     } else if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
       addFinding(params.collector, {
         code: "PLAINTEXT_FOUND",

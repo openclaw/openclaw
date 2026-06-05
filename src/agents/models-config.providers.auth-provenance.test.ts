@@ -80,9 +80,9 @@ describe("models-config provider auth provenance", () => {
       })?.apiKey;
       const volcengineProviders = buildPairedApiKeyProviders(volcengineApiKey ?? "");
 
-      expect(volcengineProviders.provider.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
-      expect(volcengineProviders.paired.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
-      expect(togetherApiKey).toBe("TOGETHER_API_KEY");
+      expect(volcengineProviders.provider.apiKey).toBe("secretref-env:VOLCANO_ENGINE_API_KEY");
+      expect(volcengineProviders.paired.apiKey).toBe("secretref-env:VOLCANO_ENGINE_API_KEY");
+      expect(togetherApiKey).toBe("secretref-env:TOGETHER_API_KEY");
     } finally {
       envSnapshot.restore();
     }
@@ -137,7 +137,7 @@ describe("models-config provider auth provenance", () => {
     );
 
     expect(auth("openai")).toEqual({
-      apiKey: "OPENAI_PROFILE_KEY",
+      apiKey: "secretref-env:OPENAI_PROFILE_KEY",
       discoveryApiKey: undefined,
       mode: "api_key",
       source: "profile",

@@ -55,7 +55,7 @@ describe("cloudflare-ai-gateway profile provenance", () => {
           },
         },
       });
-      expect(provider?.apiKey).toBe("CLOUDFLARE_AI_GATEWAY_API_KEY");
+      expect(provider?.apiKey).toBe("secretref-env:CLOUDFLARE_AI_GATEWAY_API_KEY");
     } finally {
       envSnapshot.restore();
     }

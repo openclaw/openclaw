@@ -292,7 +292,7 @@ describe("models-config runtime source snapshot", () => {
       providers: runtimeConfig.models!.providers!,
       sourceProviders: sourceConfig.models!.providers,
     })!;
-    expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    expect(providers.openai?.apiKey).toBe("secretref-env:OPENAI_API_KEY"); // pragma: allowlist secret
     expect(providers.moonshot?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
   });
 
@@ -314,7 +314,7 @@ describe("models-config runtime source snapshot", () => {
       try {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
         await ensureOpenClawModelsJson(clonedRuntimeConfig, agentDir);
-        await expectGeneratedProviderApiKey(agentDir, "openai", "OPENAI_API_KEY"); // pragma: allowlist secret
+        await expectGeneratedProviderApiKey(agentDir, "openai", "secretref-env:OPENAI_API_KEY"); // pragma: allowlist secret
       } finally {
         clearRuntimeConfigSnapshot();
         clearConfigCache();
@@ -332,7 +332,11 @@ describe("models-config runtime source snapshot", () => {
       try {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
         await ensureOpenClawModelsJson(runtimeConfig, agentDir);
-        await expectGeneratedProviderApiKey(agentDir, "litellm", "OPENCLAW_MODEL_LITELLM_API_KEY"); // pragma: allowlist secret
+        await expectGeneratedProviderApiKey(
+          agentDir,
+          "litellm",
+          "secretref-env:OPENCLAW_MODEL_LITELLM_API_KEY", // pragma: allowlist secret
+        );
       } finally {
         clearRuntimeConfigSnapshot();
         clearConfigCache();
@@ -385,7 +389,7 @@ describe("models-config runtime source snapshot", () => {
           >;
         }>(agentDir);
         expect(parsed.providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
-        expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+        expect(parsed.providers.openai?.apiKey).toBe("secretref-env:OPENAI_API_KEY"); // pragma: allowlist secret
         expect(parsed.providers.openai?.headers?.["X-OpenClaw-Test"]).toBe("one");
 
         // Header changes still rewrite models.json, but merge mode preserves the existing baseUrl.
@@ -397,7 +401,7 @@ describe("models-config runtime source snapshot", () => {
           >;
         }>(agentDir);
         expect(parsed.providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
-        expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+        expect(parsed.providers.openai?.apiKey).toBe("secretref-env:OPENAI_API_KEY"); // pragma: allowlist secret
         expect(parsed.providers.openai?.headers?.["X-OpenClaw-Test"]).toBe("two");
       } finally {
         clearRuntimeConfigSnapshot();
@@ -419,7 +423,7 @@ describe("models-config runtime source snapshot", () => {
       config: createOpenAiRuntimeConfigWithHeadersAndApiKey(),
       sourceConfigForSecrets: withGatewayTokenMode(createOpenAiSourceConfigWithHeadersAndApiKey()),
     });
-    expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    expect(providers.openai?.apiKey).toBe("secretref-env:OPENAI_API_KEY"); // pragma: allowlist secret
     expectOpenAiHeaderMarkers(providers);
   });
 });
