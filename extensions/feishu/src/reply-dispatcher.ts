@@ -118,6 +118,8 @@ type CreateFeishuReplyDispatcherParams = {
   agentId: string;
   runtime: RuntimeEnv;
   chatId: string;
+  /** Actual target for top-level sends. Defaults to chatId. */
+  deliveryTarget?: string;
   allowReasoningPreview?: boolean;
   replyToMessageId?: string;
   /** When true, preserve typing indicator on reply target but send messages without reply metadata */
@@ -140,6 +142,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     cfg,
     agentId,
     chatId,
+    deliveryTarget,
     replyToMessageId,
     skipReplyToInMessages,
     replyInThread,
@@ -148,6 +151,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     accountId,
     identity,
   } = params;
+  const sendTarget = deliveryTarget ?? chatId;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
@@ -366,7 +370,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       try {
         const cardHeader = resolveCardHeader(agentId, identity);
         const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-        await streaming.start(chatId, resolveReceiveIdType(chatId), {
+        await streaming.start(sendTarget, resolveReceiveIdType(sendTarget), {
           replyToMessageId,
           replyInThread: effectiveReplyInThread,
           rootId,
@@ -492,7 +496,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       send: async ({ mediaUrl }) => {
         const result = await sendMediaFeishu({
           cfg,
-          to: chatId,
+          to: sendTarget,
           mediaUrl,
           replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
@@ -509,7 +513,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             sendChunk: async ({ chunk }) => {
               await sendMessageFeishu({
                 cfg,
-                to: chatId,
+                to: sendTarget,
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
                 replyInThread: effectiveReplyInThread,
@@ -536,7 +540,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 sendChunk: async ({ chunk }) => {
                   await sendMessageFeishu({
                     cfg,
-                    to: chatId,
+                    to: sendTarget,
                     text: chunk,
                     replyToMessageId: sendReplyToMessageId,
                     replyInThread: effectiveReplyInThread,
@@ -562,7 +566,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     await sendMessageFeishu({
       cfg,
-      to: chatId,
+      to: sendTarget,
       text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
       replyToMessageId: sendReplyToMessageId,
       replyInThread: effectiveReplyInThread,
@@ -594,7 +598,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         cfg,
         sessionKey: params.sessionKey,
         surface: "feishu",
-        conversationType: chatId.startsWith("oc_") ? "group" : "direct",
+        conversationType: resolveReceiveIdType(sendTarget) === "chat_id" ? "group" : "direct",
       },
       onSkip: (_payload, info) => {
         if (info.kind === "final") {
@@ -724,7 +728,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               sendChunk: async ({ chunk }) => {
                 await sendStructuredCardFeishu({
                   cfg,
-                  to: chatId,
+                  to: sendTarget,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
@@ -743,7 +747,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               sendChunk: async ({ chunk }) => {
                 await sendMessageFeishu({
                   cfg,
-                  to: chatId,
+                  to: sendTarget,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,

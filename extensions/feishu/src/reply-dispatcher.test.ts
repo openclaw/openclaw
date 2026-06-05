@@ -392,6 +392,38 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("sends p2p direct replies to the sender open id target", async () => {
+    useNonStreamingAutoAccount();
+    resolveReceiveIdTypeMock.mockImplementation((id: string) =>
+      id.startsWith("user:") ? "open_id" : "chat_id",
+    );
+
+    const { options } = createDispatcherHarness({
+      chatId: "oc_p2p_chat",
+      deliveryTarget: "user:ou_sender",
+      replyToMessageId: "om_parent",
+      skipReplyToInMessages: true,
+    });
+
+    await options.onReplyStart?.();
+    await options.deliver({ text: "hello dm" }, { kind: "final" });
+
+    expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(addTypingIndicatorMock, "typing indicator params", {
+      messageId: "om_parent",
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    const sendParams = expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      to: "user:ou_sender",
+      text: "hello dm",
+      replyToMessageId: undefined,
+    });
+    expect(sendParams.replyToMessageId).not.toBe("om_parent");
+    expectRecordFields(options.silentReplyContext, "silent reply context", {
+      conversationType: "direct",
+    });
+  });
+
   it("streams auto mode plain final text when streaming is enabled", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "plain text" }, { kind: "final" });
