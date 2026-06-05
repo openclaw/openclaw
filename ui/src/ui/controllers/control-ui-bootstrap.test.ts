@@ -413,6 +413,38 @@ describe("loadControlUiBootstrapConfig", () => {
     vi.unstubAllGlobals();
   });
 
+  it("clears a previously set timezone when payload omits it", async () => {
+    setTimezone("Europe/Berlin");
+    expect(getTimezone()).toBe("Europe/Berlin");
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Bot",
+        assistantAvatar: "",
+        assistantAgentId: "main",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+    expect(getTimezone()).toBeUndefined();
+
+    vi.unstubAllGlobals();
+  });
+
   it("does not set timezone when payload omits it", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

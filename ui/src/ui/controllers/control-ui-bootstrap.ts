@@ -137,9 +137,9 @@ export async function loadControlUiBootstrapConfig(
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth
         : null;
-    if (typeof parsed.timezone === "string" && parsed.timezone) {
-      setTimezone(parsed.timezone);
-    }
+    setTimezone(
+      typeof parsed.timezone === "string" && parsed.timezone ? parsed.timezone : undefined,
+    );
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }
