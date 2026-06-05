@@ -355,4 +355,24 @@ struct GatewayChannelConnectTests {
             Issue.record("unexpected error: \(error)")
         }
     }
+
+    @Test func `connect is no-op when already connected regardless of task state`() async throws {
+        let session = self.makeSession(response: .helloOk(delayMs: 0))
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            session: WebSocketSessionBox(session: session))
+
+        // First connect succeeds
+        try await channel.connect()
+        #expect(session.snapshotMakeCount() == 1)
+
+        // Simulate the macOS bug: task state flips to non-.running while connected is still true
+        let task = try #require(session.latestTask())
+        task.state = .suspended
+
+        // Second connect should be a no-op (guard returns early on self.connected)
+        try await channel.connect()
+        #expect(session.snapshotMakeCount() == 1)
+    }
 }

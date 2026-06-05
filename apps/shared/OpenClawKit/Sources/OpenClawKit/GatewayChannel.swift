@@ -340,7 +340,7 @@ public actor GatewayChannelActor {
     }
 
     public func connect() async throws {
-        if self.connected, self.task?.state == .running { return }
+        if self.connected { return }
         if self.isConnecting {
             try await withCheckedThrowingContinuation { cont in
                 self.connectWaiters.append(cont)
