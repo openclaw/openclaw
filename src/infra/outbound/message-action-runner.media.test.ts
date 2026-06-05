@@ -1,3 +1,5 @@
+// Covers message-action media hydration, sandbox path normalization,
+// attachments, and channel/plugin media source aliases.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -361,6 +363,15 @@ describe("runMessageAction media behavior", () => {
       }
       expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "one.png"));
       expect(result.sendResult?.mediaUrls).toEqual([
+        path.join(sandboxDir, "one.png"),
+        path.join(sandboxDir, "two.png"),
+      ]);
+      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendCtx = requireRecord(sendArgs.ctx);
+      const sendParams = requireRecord(sendCtx.params);
+      const sendMediaAccess = requireRecord(sendCtx.mediaAccess);
+      expect(sendMediaAccess.localRoots).toEqual(expect.arrayContaining([sandboxDir]));
+      expect(sendParams.mediaUrls).toEqual([
         path.join(sandboxDir, "one.png"),
         path.join(sandboxDir, "two.png"),
       ]);

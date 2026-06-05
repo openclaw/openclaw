@@ -1,3 +1,6 @@
+/**
+ * Knip configuration for OpenClaw root and bundled plugin dependency hygiene.
+ */
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 
 function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""): string {
@@ -165,6 +168,8 @@ const config = {
         "vite.config.ts!",
         "vitest*.ts!",
       ],
+      // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
+      ignoreDependencies: ["three"],
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/sdk": {

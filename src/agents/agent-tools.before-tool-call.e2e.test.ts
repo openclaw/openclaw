@@ -1,6 +1,11 @@
+/**
+ * Integration-style tests for before_tool_call behavior.
+ * Covers loop detection, diagnostics, plugin approval, and skill telemetry
+ * around wrapped tool execution.
+ */
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -16,6 +21,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import {
+  getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
@@ -29,7 +35,7 @@ vi.mock("../plugins/hook-runner-global.js", async () => {
   );
   return {
     ...actual,
-    getGlobalHookRunner: vi.fn(),
+    getGlobalHookRunner: vi.fn(actual.getGlobalHookRunner),
   };
 });
 vi.mock("./tools/gateway.js", () => ({
@@ -37,6 +43,37 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
+const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+
+function setGlobalHookRunnerForTest(hookRunner: unknown): void {
+  const hookRunnerGlobalState = globalThis as Record<
+    symbol,
+    { hookRunner: unknown; registry?: unknown } | undefined
+  >;
+  if (!hookRunnerGlobalState[hookRunnerGlobalStateKey]) {
+    hookRunnerGlobalState[hookRunnerGlobalStateKey] = {
+      hookRunner: null,
+      registry: null,
+    };
+  }
+  hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
+}
+
+function getGlobalHookRunnerForTest(): unknown {
+  const hookRunnerGlobalState = globalThis as Record<
+    symbol,
+    { hookRunner: unknown; registry?: unknown } | undefined
+  >;
+  return hookRunnerGlobalState[hookRunnerGlobalStateKey]?.hookRunner ?? null;
+}
+
+afterEach(() => {
+  setGlobalHookRunnerForTest(null);
+  mockGetGlobalHookRunner.mockReset();
+  mockGetGlobalHookRunner.mockImplementation(
+    () => getGlobalHookRunnerForTest() as ReturnType<typeof getGlobalHookRunner>,
+  );
+});
 
 describe("before_tool_call loop detection behavior", () => {
   let hookRunner: {
@@ -749,7 +786,7 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("emits blocked diagnostics without error severity for intentional hook vetoes", async () => {
-    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
     hookRunner.runBeforeToolCall.mockResolvedValue({
       block: true,
       blockReason: "blocked by policy",
@@ -923,24 +960,13 @@ describe("before_tool_call requireApproval handling", () => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
     hookRunner = {
-      hasHooks: vi.fn().mockReturnValue(true),
+      hasHooks: vi.fn((hookName: string) => hookName === "before_tool_call"),
       runBeforeToolCall: vi.fn(),
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
     // Keep the global singleton aligned as a fallback in case another setup path
     // preloads hook-runner-global before this test's module reset/mocks take effect.
-    const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
-    const hookRunnerGlobalState = globalThis as Record<
-      symbol,
-      { hookRunner: unknown; registry?: unknown } | undefined
-    >;
-    if (!hookRunnerGlobalState[hookRunnerGlobalStateKey]) {
-      hookRunnerGlobalState[hookRunnerGlobalStateKey] = {
-        hookRunner: null,
-        registry: null,
-      };
-    }
-    hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
+    setGlobalHookRunnerForTest(hookRunner);
     mockCallGateway.mockReset();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
@@ -1175,6 +1201,63 @@ describe("before_tool_call requireApproval handling", () => {
       }),
     ).resolves.toEqual({ blocked: false, params });
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
+  });
+
+  it("reports trusted policy diagnostics through guarded readers", () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const registry = createEmptyPluginRegistry();
+    const unreadableIdPolicy: Record<string, unknown> = {
+      description: "synthetic trusted policy",
+      evaluate: () => undefined,
+    };
+    Object.defineProperty(unreadableIdPolicy, "id", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trusted policy id is unreadable");
+      },
+    });
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        pluginName: "Fuzz Plugin",
+        source: "test",
+        policy: unreadableIdPolicy as never,
+      },
+      {
+        pluginId: "mockplugin",
+        pluginName: "Mock Plugin",
+        source: "test",
+        policy: {
+          id: "mockpolicy",
+          description: "mock policy",
+          evaluate: () => undefined,
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    let state: ReturnType<typeof getBeforeToolCallPolicyDiagnosticState> | undefined;
+    try {
+      state = getBeforeToolCallPolicyDiagnosticState();
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    }
+
+    expect(state).toEqual({
+      hasBeforeToolCallHook: false,
+      trustedToolPolicies: [
+        {
+          id: "fuzzplugin",
+          pluginId: "fuzzplugin",
+          pluginName: "Fuzz Plugin",
+        },
+        {
+          id: "mockpolicy",
+          pluginId: "mockplugin",
+          pluginName: "Mock Plugin",
+        },
+      ],
+    });
   });
 
   it("recomputes host-derived paths after trusted policy param rewrites", async () => {

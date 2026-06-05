@@ -1,3 +1,4 @@
+// Verifies OpenAI model selections route between OpenClaw and Codex runtimes.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -21,6 +22,7 @@ describe("OpenAI runtime routing policy", () => {
   });
 
   it("does not force Codex for custom OpenAI-compatible base URLs", () => {
+    // A custom baseUrl means the provider key is only OpenAI-compatible, not official OpenAI.
     const config = {
       models: {
         providers: {
@@ -41,6 +43,22 @@ describe("OpenAI runtime routing policy", () => {
         config,
       }),
     ).toBe("openai");
+  });
+
+  it("normalizes OpenAI provider keys before checking custom base URLs", () => {
+    const config = {
+      models: {
+        providers: {
+          OpenAI: {
+            baseUrl: "https://example.test/v1",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(openAIProviderUsesCodexRuntimeByDefault({ provider: "openai", config })).toBe(false);
+    expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(false);
   });
 
   it("uses canonical OpenAI context config under the Codex runtime", () => {
@@ -74,6 +92,7 @@ describe("OpenAI runtime routing policy", () => {
   });
 
   it("keeps explicit OpenClaw plus Codex auth profile under the unified OpenAI provider", () => {
+    // OpenAI auth now stays canonical even when the runtime is not Codex.
     expect(
       listOpenAIAuthProfileProvidersForAgentRuntime({
         provider: "openai",

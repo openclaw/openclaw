@@ -1,3 +1,7 @@
+/**
+ * Test runtime factory for subagent announce delivery. It wires gateway,
+ * session-store, queue, and hook behavior to caller-provided mocks.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { callGateway } from "../gateway/call.js";
 import type { dispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
@@ -51,6 +55,7 @@ function resolveQueueSettings(params: {
   };
 }
 
+/** Create a mocked announce delivery runtime for focused subagent tests. */
 export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRuntimeMockOptions) {
   return {
     callGateway: (async <T = Record<string, unknown>>(request: Parameters<typeof callGateway>[0]) =>

@@ -1,3 +1,4 @@
+/** Timeout watchdogs for isolated cron agent setup and execution phases. */
 import type {
   CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
@@ -25,6 +26,8 @@ type CronAgentWatchdogState =
 
 type CronAgentPhaseWatchdogStage = "pre_execution" | "execution";
 
+// Phase ordering is not strictly monotonic during fallback attempts, so each
+// emitted phase is mapped to the watchdog bucket that should keep timing it.
 const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
   runner_entered: "pre_execution",
   workspace: "pre_execution",
@@ -42,6 +45,7 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
   model_call_started: "execution",
 } as const satisfies Record<CronAgentExecutionPhase, CronAgentPhaseWatchdogStage>;
 
+/** Handle for feeding isolated-agent progress into cron timeout watchdogs. */
 export type CronAgentWatchdog = {
   start: () => void;
   noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
@@ -50,6 +54,7 @@ export type CronAgentWatchdog = {
   dispose: () => void;
 };
 
+/** Tracks isolated-agent setup/execution progress and fires the correct cron timeout reason. */
 export function createCronAgentWatchdog(params: {
   deferUntilRunner: boolean;
   jobTimeoutMs: number;
@@ -107,11 +112,15 @@ export function createCronAgentWatchdog(params: {
     const previousPhase = activeExecution?.phase;
     activeExecution = { ...activeExecution, ...info };
     const stage = info.phase ? CRON_AGENT_PHASE_WATCHDOG_STAGE[info.phase] : undefined;
+    // A fallback attempt can return to setup-like phases after execution began;
+    // re-arm pre-execution timing so the fallback path cannot stall silently.
     if (
       state === "executing" &&
       previousPhase === "before_agent_reply" &&
       stage === "pre_execution"
     ) {
+      // Model fallback can move from an execution phase back into setup-like
+      // phases; restart the pre-execution watchdog so fallback stalls are seen.
       state = "waiting_for_execution";
       startPreExecutionTimeout();
       return;
@@ -164,6 +173,7 @@ export function createCronAgentWatchdog(params: {
   };
 }
 
+/** Runs timeout cleanup with a guard so stuck cleanup cannot block the cron lane. */
 export async function cleanupTimedOutCronAgentRun(
   state: CronServiceState,
   job: CronJob,

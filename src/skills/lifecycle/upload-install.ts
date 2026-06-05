@@ -1,3 +1,4 @@
+// Upload install helpers install skills from staged uploaded archives.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ArchiveLogger } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -13,8 +14,10 @@ import {
   type SkillUploadStore,
 } from "./upload-store.js";
 
+/** Error classes exposed by uploaded skill archive install attempts. */
 export type UploadedSkillInstallErrorKind = "invalid-request" | "unavailable";
 
+/** User-facing disabled message for archive upload installs. */
 export const UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE =
   "Uploaded skill archive installs are disabled by skills.install.allowUploadedArchives";
 
@@ -39,6 +42,7 @@ export type UploadedSkillInstallResult =
       errorKind: UploadedSkillInstallErrorKind;
     };
 
+// Preserve invalid-request failures for caller feedback; other install failures are unavailable.
 function uploadInstallFailureErrorKind(
   failureKind: SkillArchiveInstallFailureKind,
 ): UploadedSkillInstallErrorKind {
@@ -95,9 +99,16 @@ export async function installUploadedSkillArchive(params: {
         force: record.force,
         timeoutMs: params.timeoutMs,
         logger: params.log,
-        scan: {
+        policy: {
+          config: params.config,
           installId: "upload",
-          origin: "skill-upload",
+          origin: {
+            type: "upload",
+            uploadId: params.uploadId,
+            sha256: record.actualSha256,
+          },
+          source: { kind: "upload", authority: "user", mutable: false, network: false },
+          requestedSpecifier: `upload:${params.uploadId}`,
         },
       });
       if (!install.ok) {

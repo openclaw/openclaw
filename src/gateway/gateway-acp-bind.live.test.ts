@@ -1,3 +1,4 @@
+// ACP bind live gateway tests exercise real ACP runtime sessions, cron visibility, and image probe routing.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -199,18 +200,43 @@ function resolveModelObject(value: unknown): Record<string, unknown> {
     : {};
 }
 
-async function prepareCodexHomeForLiveBindTest(): Promise<void> {
+async function prepareCodexHomeForLiveBindTest(tempRoot: string): Promise<void> {
   const home = process.env.HOME?.trim();
-  if (!home) {
-    return;
-  }
+  const sourceCodexHome = process.env.CODEX_HOME?.trim() || (home ? path.join(home, ".codex") : "");
   const model = process.env.OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL?.trim() || DEFAULT_LIVE_CODEX_MODEL;
-  const codexHome = path.join(home, ".codex");
+  const codexHome = path.join(tempRoot, "codex-home");
   await fs.mkdir(codexHome, { recursive: true });
+  const targetAuthPath = path.join(codexHome, "auth.json");
+  let hasAuthFile = false;
+  if (sourceCodexHome) {
+    await fs.copyFile(path.join(sourceCodexHome, "auth.json"), targetAuthPath).then(
+      () => {
+        hasAuthFile = true;
+      },
+      (error: unknown) => {
+        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          throw error;
+        }
+      },
+    );
+  }
+  const apiKey = process.env.CODEX_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim();
+  if (apiKey && !hasAuthFile) {
+    await fs.writeFile(
+      targetAuthPath,
+      `${JSON.stringify({
+        OPENAI_API_KEY: apiKey,
+        tokens: null,
+        last_refresh: null,
+      })}\n`,
+      { mode: 0o600 },
+    );
+  }
   const configPath = path.join(codexHome, "config.toml");
+  const sourceConfigPath = sourceCodexHome ? path.join(sourceCodexHome, "config.toml") : "";
   let rawConfig = "";
   try {
-    rawConfig = await fs.readFile(configPath, "utf8");
+    rawConfig = sourceConfigPath ? await fs.readFile(sourceConfigPath, "utf8") : "";
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
       throw error;
@@ -555,9 +581,21 @@ async function pollCronJobVisibleViaCli(params: {
   env: NodeJS.ProcessEnv;
   expectedName: string;
   expectedMessage: string;
-}): Promise<{ job?: Awaited<ReturnType<typeof assertCronJobVisibleViaCli>>; pollsUsed: number }> {
+}): Promise<{
+  error?: string;
+  job?: Awaited<ReturnType<typeof assertCronJobVisibleViaCli>>;
+  pollsUsed: number;
+}> {
   for (let verifyAttempt = 0; verifyAttempt < ACP_CRON_MCP_PROBE_VERIFY_POLLS; verifyAttempt += 1) {
-    const job = await assertCronJobVisibleViaCli(params);
+    let job: Awaited<ReturnType<typeof assertCronJobVisibleViaCli>>;
+    try {
+      job = await assertCronJobVisibleViaCli(params);
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : String(error),
+        pollsUsed: verifyAttempt + 1,
+      };
+    }
     if (job) {
       return { job, pollsUsed: verifyAttempt + 1 };
     }
@@ -609,7 +647,7 @@ describeLive("gateway live (ACP bind)", () => {
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_GATEWAY_PORT = String(port);
       if (liveAgent === "codex" && !agentCommandOverride) {
-        await prepareCodexHomeForLiveBindTest();
+        await prepareCodexHomeForLiveBindTest(tempRoot);
       }
 
       const cfg = getRuntimeConfig();
@@ -1038,6 +1076,14 @@ describeLive("gateway live (ACP bind)", () => {
             expectedMessage: cronProbe.message,
           });
           const createdJob = verifyResult.job;
+          if (verifyResult.error) {
+            lastCronMismatch = verifyResult.error;
+            logLiveStep(
+              `cron cli verification failed after attempt ${String(
+                attempt + 1,
+              )}; polls=${String(verifyResult.pollsUsed)}; error=${lastCronMismatch}`,
+            );
+          }
           if (createdJob) {
             try {
               assertCronJobMatches({

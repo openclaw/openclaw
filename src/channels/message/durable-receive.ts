@@ -1,6 +1,12 @@
+/**
+ * Durable inbound receive journal.
+ *
+ * Tracks accepted, pending, completed, and retryable inbound platform events.
+ */
 import type { PluginStateKeyedStore } from "../../plugin-state/plugin-state-store.types.js";
 import type { ChannelIngressQueue, ChannelIngressQueuePruneOptions } from "./ingress-queue.js";
 
+/** Pending inbound receive record kept until agent dispatch or durable send completes. */
 export type DurableInboundReceivePendingRecord<TPayload, TMetadata = unknown> = {
   id: string;
   payload: TPayload;
@@ -12,12 +18,14 @@ export type DurableInboundReceivePendingRecord<TPayload, TMetadata = unknown> = 
   lastError?: string;
 };
 
+/** Completed inbound receive tombstone used to detect duplicate platform events. */
 export type DurableInboundReceiveCompletedRecord<TMetadata = unknown> = {
   id: string;
   completedAt: number;
   metadata?: TMetadata;
 };
 
+/** Accept result for a new or duplicate inbound platform event. */
 export type DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata> =
   | {
       kind: "accepted";
@@ -35,6 +43,7 @@ export type DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMet
       record: DurableInboundReceiveCompletedRecord<TCompletedMetadata>;
     };
 
+/** Store-backed durable receive journal options. */
 export type DurableInboundReceiveJournalOptions<TPayload, TMetadata, TCompletedMetadata> = {
   pendingStore: PluginStateKeyedStore<DurableInboundReceivePendingRecord<TPayload, TMetadata>>;
   completedStore: PluginStateKeyedStore<DurableInboundReceiveCompletedRecord<TCompletedMetadata>>;
@@ -43,21 +52,25 @@ export type DurableInboundReceiveJournalOptions<TPayload, TMetadata, TCompletedM
   completedTtlMs?: number;
 };
 
+/** Options recorded when accepting a pending inbound event. */
 export type DurableInboundReceiveAcceptOptions<TMetadata> = {
   metadata?: TMetadata;
   receivedAt?: number;
 };
 
+/** Options recorded when marking an inbound event complete. */
 export type DurableInboundReceiveCompleteOptions<TCompletedMetadata> = {
   metadata?: TCompletedMetadata;
   completedAt?: number;
 };
 
+/** Options recorded when releasing an inbound event for retry. */
 export type DurableInboundReceiveReleaseOptions = {
   lastError?: string;
   releasedAt?: number;
 };
 
+/** Durable receive journal facade used by channel receive pipelines. */
 export type DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> = {
   accept(
     id: string,
@@ -73,6 +86,7 @@ export type DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata
   deletePending(id: string): Promise<boolean>;
 };
 
+/** Queue-backed durable receive journal options with optional retention pruning. */
 export type DurableInboundReceiveQueueJournalOptions<TPayload, TMetadata, TCompletedMetadata> = {
   queue: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
   retention?: ChannelIngressQueuePruneOptions;
@@ -92,6 +106,7 @@ function sortPendingRecords<TPayload, TMetadata>(
   return records.toSorted((a, b) => a.receivedAt - b.receivedAt || a.id.localeCompare(b.id));
 }
 
+/** Creates a store-backed journal for accepting, completing, and retrying inbound events. */
 export function createDurableInboundReceiveJournal<
   TPayload,
   TMetadata = unknown,
@@ -127,6 +142,7 @@ export function createDurableInboundReceiveJournal<
     const acceptInsertedRecord = async (): Promise<
       DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata>
     > => {
+      // Completion can win the register race; remove the pending copy before reporting duplicate.
       const completedAfterInsertRace = await options.completedStore.lookup(key);
       if (completedAfterInsertRace) {
         await options.pendingStore.delete(key);
@@ -229,6 +245,7 @@ export function createDurableInboundReceiveJournal<
   };
 }
 
+/** Adapts the shared channel ingress queue to the durable receive journal API. */
 export function createDurableInboundReceiveJournalFromQueue<
   TPayload,
   TMetadata = unknown,

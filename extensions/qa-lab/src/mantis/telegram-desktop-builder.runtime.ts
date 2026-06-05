@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements telegram desktop builder behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -887,5 +888,5 @@ export async function runMantisTelegramDesktopBuilder(
 }
 
 function toErrorObject(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+  return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }

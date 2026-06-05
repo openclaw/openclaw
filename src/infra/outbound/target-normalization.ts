@@ -1,3 +1,5 @@
+// Outbound target normalization trims user input, applies plugin normalizers,
+// and optionally resolves directory-backed destinations.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -9,6 +11,9 @@ import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugin
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 
+/**
+ * Normalizes raw user/channel target input before provider-specific parsing.
+ */
 export function normalizeChannelTargetInput(raw: string): string {
   return raw.trim();
 }
@@ -39,6 +44,7 @@ function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
   if (cached && cached.version === version) {
     return cached.normalizer;
   }
+  // Plugin channel metadata is process-stable between registry version bumps.
   const plugin = resolveChannelPluginForTargetRead(channelId);
   const normalizer = plugin?.messaging?.normalizeTarget;
   targetNormalizerCacheByChannelId.set(channelId, {
@@ -48,6 +54,9 @@ function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
   return normalizer;
 }
 
+/**
+ * Applies a channel plugin normalizer and falls back to trimmed input.
+ */
 export function normalizeTargetForProvider(provider: string, raw?: string): string | undefined {
   if (!raw) {
     return undefined;
@@ -61,8 +70,14 @@ export function normalizeTargetForProvider(provider: string, raw?: string): stri
   return normalizeOptionalString(normalizer?.(raw) ?? fallback);
 }
 
+/**
+ * Directory target kinds accepted by plugin-backed target resolution.
+ */
 export type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
 
+/**
+ * Resolved outbound target returned by a channel plugin target resolver.
+ */
 export type ResolvedPluginMessagingTarget = {
   to: string;
   kind: TargetResolveKindLike;
@@ -71,6 +86,9 @@ export type ResolvedPluginMessagingTarget = {
   resolutionSource: "plugin";
 };
 
+/**
+ * Produces raw and provider-normalized forms of a nonblank target input.
+ */
 export function resolveNormalizedTargetInput(
   provider: string,
   raw?: string,
@@ -85,6 +103,9 @@ export function resolveNormalizedTargetInput(
   };
 }
 
+/**
+ * Detects whether input is specific enough to invoke plugin target resolution.
+ */
 export function looksLikeTargetId(params: {
   channel: ChannelId;
   raw: string;
@@ -95,6 +116,8 @@ export function looksLikeTargetId(params: {
   const lookup = resolveChannelPluginForTargetRead(params.channel)?.messaging?.targetResolver
     ?.looksLikeId;
   if (lookup) {
+    // Plugin heuristics win so provider-specific ids do not fall through to
+    // generic phone/mention checks.
     return lookup(params.raw, normalizedInput ?? params.raw);
   }
   if (/^(channel|group|user):/i.test(params.raw)) {
@@ -112,6 +135,9 @@ export function looksLikeTargetId(params: {
   return /^(conversation|user):/i.test(params.raw);
 }
 
+/**
+ * Resolves a normalized target through the channel plugin when a resolver is available.
+ */
 export async function maybeResolvePluginMessagingTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -157,11 +183,15 @@ export async function maybeResolvePluginMessagingTarget(params: {
   };
 }
 
+/**
+ * Builds a cache signature for target-resolution behavior exposed by a channel plugin.
+ */
 export function buildTargetResolverSignature(channel: ChannelId): string {
   const plugin = resolveChannelPluginForTargetRead(channel);
   const resolver = plugin?.messaging?.targetResolver;
   const hint = resolver?.hint ?? "";
   const looksLike = resolver?.looksLikeId;
+  // Function source is only a cheap invalidation hint; resolver behavior still belongs to the plugin.
   const source = looksLike ? looksLike.toString() : "";
   return hashSignature(`${hint}|${source}`);
 }

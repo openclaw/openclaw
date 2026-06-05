@@ -1,3 +1,5 @@
+// Gateway agent methods implement agent.run, agent.wait, agent.reset, identity,
+// and related session-aware RPC handlers used by UI and operator clients.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
@@ -1205,6 +1207,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             status: "accepted" as const,
             sessionKey,
             ...(dedupeSessionResolvesGlobal && dedupeAgentId ? { agentId: dedupeAgentId } : {}),
+            controlUiVisible: !suppressVisibleSessionEffects,
             acceptedAt,
             dedupeKeys: agentDedupeKeys,
             expiresAtMs: resolveAgentRunExpiresAtMs({
@@ -2204,6 +2207,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         ownerDeviceId,
         providerId: activeModelProvider,
         authProviderId: activeAuthProvider,
+        controlUiVisible: !suppressVisibleSessionEffects,
         kind: "agent",
       });
       const existingRunAbort = context.chatAbortControllers.get(runId);
@@ -2258,6 +2262,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       };
       const acceptedDedupePayload = {
         ...accepted,
+        controlUiVisible: !suppressVisibleSessionEffects,
         dedupeKeys: agentDedupeKeys,
         ownerConnId,
         ownerDeviceId,

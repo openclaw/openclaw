@@ -1,3 +1,5 @@
+// MCP loopback HTTP request helpers.
+// Authenticates local MCP POST requests and extracts scoped Gateway context.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
@@ -12,6 +14,7 @@ import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
 const MAX_MCP_BODY_BYTES = 1_048_576;
+const MCP_HTTP_BODY_TOO_LARGE_CODE = "ETOOBIG";
 
 function shouldLogMcpLoopbackHttp(): boolean {
   return (
@@ -33,6 +36,7 @@ type McpRequestContext = {
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | undefined;
+  currentInboundAudio: boolean | undefined;
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
@@ -54,6 +58,11 @@ function normalizeMcpSourceReplyDeliveryMode(
 ): SourceReplyDeliveryMode | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
+}
+
+function normalizeMcpCurrentInboundAudio(value: string | undefined): boolean | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed ? isTruthyEnvValue(trimmed) : undefined;
 }
 
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
@@ -168,18 +177,62 @@ export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
   return await new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let received = 0;
-    req.on("data", (chunk: Buffer) => {
+    let settled = false;
+    // Remove listeners on every terminal path; oversized bodies keep the error
+    // listener briefly so Node can deliver the pause/error safely.
+    const cleanup = (options?: { keepErrorListener?: boolean }) => {
+      req.off("data", onData);
+      req.off("end", onEnd);
+      if (options?.keepErrorListener !== true) {
+        req.off("error", onError);
+      }
+    };
+    const rejectOnce = (error: Error, options?: { keepErrorListener?: boolean }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup(options);
+      reject(error);
+    };
+    const onData = (chunk: Buffer) => {
       received += chunk.length;
       if (received > MAX_MCP_BODY_BYTES) {
-        req.destroy();
-        reject(new Error(`Request body exceeds ${MAX_MCP_BODY_BYTES} bytes`));
+        req.pause();
+        rejectOnce(createMcpHttpBodyTooLargeError(), { keepErrorListener: true });
         return;
       }
       chunks.push(chunk);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
+    };
+    const onEnd = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(Buffer.concat(chunks).toString("utf-8"));
+    };
+    const onError = (error: Error) => {
+      rejectOnce(error);
+    };
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
   });
+}
+
+function createMcpHttpBodyTooLargeError(): Error & { code: string } {
+  return Object.assign(new Error(`Request body exceeds ${MAX_MCP_BODY_BYTES} bytes`), {
+    code: MCP_HTTP_BODY_TOO_LARGE_CODE,
+  });
+}
+
+export function isMcpHttpBodyTooLargeError(error: unknown): error is Error & { code: string } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === MCP_HTTP_BODY_TOO_LARGE_CODE
+  );
 }
 
 export function resolveMcpRequestContext(
@@ -194,6 +247,9 @@ export function resolveMcpRequestContext(
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
+    currentInboundAudio: normalizeMcpCurrentInboundAudio(
+      getHeader(req, "x-openclaw-current-inbound-audio"),
+    ),
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
     inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
     sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(

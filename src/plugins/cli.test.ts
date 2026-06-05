@@ -1,3 +1,4 @@
+/** CLI integration coverage for plugin commands, setup, status, and registry flows. */
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -370,6 +371,7 @@ describe("registerPluginCliCommands", () => {
     });
     expect(loadOptions.activate).toBe(false);
     expect(loadOptions.cache).toBe(false);
+    expect(loadOptions.forceFullRuntimeForChannelPlugins).toBe(true);
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
   });
 

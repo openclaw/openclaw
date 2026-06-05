@@ -1,3 +1,4 @@
+// Discord plugin module implements thread bindings.manager behavior.
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
@@ -45,7 +46,6 @@ import {
   resolveThreadBindingInactivityExpiresAt,
   resolveThreadBindingMaxAgeExpiresAt,
   resolveThreadBindingMaxAgeMs,
-  resolveThreadBindingsPath,
   saveBindingsToDisk,
   setBindingRecord,
   THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
@@ -544,7 +544,6 @@ export function getThreadBindingManager(accountId?: string): ThreadBindingManage
 }
 
 export const testing = {
-  resolveThreadBindingsPath,
   resolveThreadBindingThreadName,
   resetThreadBindingsForTests,
   runThreadBindingSweepForAccount: async (accountId?: string) => {

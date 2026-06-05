@@ -1,6 +1,8 @@
+/** Legacy JSONL run-log parser used during migrations/imports. */
 import type { CronRunLogEntry } from "./run-log-types.js";
 import { parseCronRunLogEntryObject } from "./run-log/entry-codec.js";
 
+/** Parses legacy cron run-log JSONL, skipping malformed or non-matching rows. */
 export function parseCronRunLogEntriesFromJsonl(
   raw: string,
   opts?: { jobId?: string },

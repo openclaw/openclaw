@@ -44,31 +44,8 @@ const loadSessionsMock = vi.hoisted(() =>
     }
   }),
 );
-
-function requireFirstAttachmentsChange(
-  onAttachmentsChange: ReturnType<typeof vi.fn>,
-): ChatAttachment[] {
-  const [call] = onAttachmentsChange.mock.calls;
-  if (!call) {
-    throw new Error("expected attachments change call");
-  }
-  const [attachments] = call;
-  if (!Array.isArray(attachments)) {
-    throw new Error("expected attachments array");
-  }
-  return attachments as ChatAttachment[];
-}
-
-vi.mock("../icons.ts", () => ({
-  icons: {},
-}));
-
-vi.mock("../chat/build-chat-items.ts", () => ({
-  buildChatItems: (props: {
-    messages: unknown[];
-    stream: string | null;
-    streamStartedAt: number | null;
-  }) => {
+const buildChatItemsMock = vi.hoisted(() =>
+  vi.fn((props: { messages: unknown[]; stream: string | null; streamStartedAt: number | null }) => {
     if (
       props.messages.some(
         (message) =>
@@ -121,11 +98,10 @@ vi.mock("../chat/build-chat-items.ts", () => ({
         : [{ kind: "reading-indicator", key: "reading:test" }];
     }
     return [];
-  },
-}));
-
-vi.mock("../chat/grouped-render.ts", () => ({
-  renderMessageGroup: (group: { messages: Array<{ message: unknown }> }) => {
+  }),
+);
+const renderMessageGroupMock = vi.hoisted(() =>
+  vi.fn((group: { messages: Array<{ message: unknown }> }) => {
     const element = document.createElement("div");
     element.className = "chat-group";
     element.textContent = group.messages
@@ -141,7 +117,35 @@ vi.mock("../chat/grouped-render.ts", () => ({
       })
       .join("\n");
     return element;
-  },
+  }),
+);
+const assistantAttachmentRenderVersionMock = vi.hoisted(() => ({ value: 0 }));
+
+function requireFirstAttachmentsChange(
+  onAttachmentsChange: ReturnType<typeof vi.fn>,
+): ChatAttachment[] {
+  const [call] = onAttachmentsChange.mock.calls;
+  if (!call) {
+    throw new Error("expected attachments change call");
+  }
+  const [attachments] = call;
+  if (!Array.isArray(attachments)) {
+    throw new Error("expected attachments array");
+  }
+  return attachments as ChatAttachment[];
+}
+
+vi.mock("../icons.ts", () => ({
+  icons: {},
+}));
+
+vi.mock("../chat/build-chat-items.ts", () => ({
+  buildChatItems: buildChatItemsMock,
+}));
+
+vi.mock("../chat/grouped-render.ts", () => ({
+  getAssistantAttachmentAvailabilityRenderVersion: () => assistantAttachmentRenderVersionMock.value,
+  renderMessageGroup: renderMessageGroupMock,
   renderReadingIndicatorGroup: () => {
     const element = document.createElement("div");
     element.className = "chat-reading-indicator";
@@ -473,84 +477,105 @@ function requireElement(container: Element, selector: string, label: string): El
   return element;
 }
 
+function getTalkSelectOptionValues(container: Element, name: string): string[] {
+  return Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      `[data-talk-select="${name}"] [data-talk-select-option]`,
+    ),
+  ).map((option) => option.dataset.talkSelectOption ?? "");
+}
+
+function clickTalkSelectOption(container: Element, name: string, value: string): void {
+  const option = container.querySelector<HTMLButtonElement>(
+    `[data-talk-select="${name}"] [data-talk-select-option="${value}"]`,
+  );
+  if (option === null) {
+    throw new Error(`expected Talk ${name} option ${value}`);
+  }
+  option.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+}
+
+function createChatProps(
+  overrides: Partial<Parameters<typeof renderChat>[0]> = {},
+): Parameters<typeof renderChat>[0] {
+  return {
+    sessionKey: "main",
+    onSessionKeyChange: () => undefined,
+    thinkingLevel: null,
+    showThinking: false,
+    showToolCalls: true,
+    loading: false,
+    sending: false,
+    compactionStatus: null,
+    fallbackStatus: null,
+    messages: [],
+    sideResult: null,
+    toolMessages: [],
+    streamSegments: [],
+    stream: null,
+    streamStartedAt: null,
+    assistantAvatarUrl: null,
+    draft: "",
+    queue: [],
+    realtimeTalkActive: false,
+    realtimeTalkStatus: "idle",
+    realtimeTalkDetail: null,
+    realtimeTalkTranscript: null,
+    connected: true,
+    canSend: true,
+    disabledReason: null,
+    error: null,
+    sessions: null,
+    sidebarOpen: false,
+    sidebarContent: null,
+    sidebarError: null,
+    splitRatio: 0.6,
+    canvasPluginSurfaceUrl: null,
+    embedSandboxMode: "scripts",
+    allowExternalEmbedUrls: false,
+    assistantName: "Val",
+    assistantAvatar: null,
+    userName: null,
+    userAvatar: null,
+    localMediaPreviewRoots: [],
+    assistantAttachmentAuthToken: null,
+    autoExpandToolCalls: false,
+    attachments: [],
+    onAttachmentsChange: () => undefined,
+    showNewMessages: false,
+    onScrollToBottom: () => undefined,
+    onRefresh: () => undefined,
+    getDraft: () => "",
+    onDraftChange: () => undefined,
+    onRequestUpdate: () => undefined,
+    onSend: () => undefined,
+    onCompact: () => undefined,
+    onToggleRealtimeTalk: () => undefined,
+    onDismissError: () => undefined,
+    onAbort: () => undefined,
+    onQueueRemove: () => undefined,
+    onQueueSteer: () => undefined,
+    onDismissSideResult: () => undefined,
+    onNewSession: () => undefined,
+    onClearHistory: () => undefined,
+    onOpenSessionCheckpoints: () => undefined,
+    agentsList: null,
+    currentAgentId: "main",
+    onAgentChange: () => undefined,
+    onNavigateToAgent: () => undefined,
+    onSessionSelect: () => undefined,
+    onOpenSidebar: () => undefined,
+    onCloseSidebar: () => undefined,
+    onSplitRatioChange: () => undefined,
+    onChatScroll: () => undefined,
+    basePath: "",
+    ...overrides,
+  };
+}
+
 function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {}) {
   const container = document.createElement("div");
-  render(
-    renderChat({
-      sessionKey: "main",
-      onSessionKeyChange: () => undefined,
-      thinkingLevel: null,
-      showThinking: false,
-      showToolCalls: true,
-      loading: false,
-      sending: false,
-      compactionStatus: null,
-      fallbackStatus: null,
-      messages: [],
-      sideResult: null,
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      assistantAvatarUrl: null,
-      draft: "",
-      queue: [],
-      realtimeTalkActive: false,
-      realtimeTalkStatus: "idle",
-      realtimeTalkDetail: null,
-      realtimeTalkTranscript: null,
-      connected: true,
-      canSend: true,
-      disabledReason: null,
-      error: null,
-      sessions: null,
-      sidebarOpen: false,
-      sidebarContent: null,
-      sidebarError: null,
-      splitRatio: 0.6,
-      canvasPluginSurfaceUrl: null,
-      embedSandboxMode: "scripts",
-      allowExternalEmbedUrls: false,
-      assistantName: "Val",
-      assistantAvatar: null,
-      userName: null,
-      userAvatar: null,
-      localMediaPreviewRoots: [],
-      assistantAttachmentAuthToken: null,
-      autoExpandToolCalls: false,
-      attachments: [],
-      onAttachmentsChange: () => undefined,
-      showNewMessages: false,
-      onScrollToBottom: () => undefined,
-      onRefresh: () => undefined,
-      getDraft: () => "",
-      onDraftChange: () => undefined,
-      onRequestUpdate: () => undefined,
-      onSend: () => undefined,
-      onCompact: () => undefined,
-      onToggleRealtimeTalk: () => undefined,
-      onDismissError: () => undefined,
-      onAbort: () => undefined,
-      onQueueRemove: () => undefined,
-      onQueueSteer: () => undefined,
-      onDismissSideResult: () => undefined,
-      onNewSession: () => undefined,
-      onClearHistory: () => undefined,
-      onOpenSessionCheckpoints: () => undefined,
-      agentsList: null,
-      currentAgentId: "main",
-      onAgentChange: () => undefined,
-      onNavigateToAgent: () => undefined,
-      onSessionSelect: () => undefined,
-      onOpenSidebar: () => undefined,
-      onCloseSidebar: () => undefined,
-      onSplitRatioChange: () => undefined,
-      onChatScroll: () => undefined,
-      basePath: "",
-      ...overrides,
-    }),
-    container,
-  );
+  render(renderChat(createChatProps(overrides)), container);
   return container;
 }
 
@@ -573,6 +598,236 @@ describe("chat compaction divider", () => {
     button!.click();
 
     expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chat history render window", () => {
+  it("starts freshly loaded large histories with a small render window", () => {
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+
+    renderChatView({ messages });
+
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 30,
+      }),
+    );
+  });
+
+  it("expands the history render window when the user scrolls to the top", () => {
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+    const onRequestUpdate = vi.fn();
+    const onChatScroll = vi.fn();
+
+    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
+    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
+    thread.scrollTop = 120;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    expect(onChatScroll).toHaveBeenCalledTimes(2);
+
+    buildChatItemsMock.mockClear();
+    renderChatView({ messages, onRequestUpdate, onChatScroll });
+
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 60,
+      }),
+    );
+  });
+
+  it("preserves the visible anchor across repeated top-scroll expansion", () => {
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+    const onRequestUpdate = vi.fn();
+    const onChatScroll = vi.fn();
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
+    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
+    Object.defineProperties(thread, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 300 },
+    });
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 600 });
+    buildChatItemsMock.mockClear();
+    renderChatView({ messages, onRequestUpdate, onChatScroll });
+
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 60,
+      }),
+    );
+    const firstExpandedThread = requireElement(
+      container,
+      ".chat-thread",
+      "chat thread",
+    ) as HTMLElement;
+    Object.defineProperties(firstExpandedThread, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 600 },
+    });
+    for (const callback of frameCallbacks.splice(0)) {
+      callback(0);
+    }
+    expect(firstExpandedThread.scrollTop).toBe(300);
+
+    firstExpandedThread.scrollTop = 0;
+    firstExpandedThread.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    buildChatItemsMock.mockClear();
+    renderChatView({ messages, onRequestUpdate, onChatScroll });
+
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 80,
+      }),
+    );
+    const secondExpandedThread = requireElement(
+      container,
+      ".chat-thread",
+      "chat thread",
+    ) as HTMLElement;
+    Object.defineProperties(secondExpandedThread, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 900 },
+    });
+    for (const callback of frameCallbacks.splice(0)) {
+      callback(0);
+    }
+    expect(secondExpandedThread.scrollTop).toBe(300);
+    expect(onRequestUpdate).toHaveBeenCalledTimes(2);
+    expect(onChatScroll).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not expand the history render window for bottom auto-scrolls inside the top threshold", () => {
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+    const onRequestUpdate = vi.fn();
+    const onChatScroll = vi.fn();
+
+    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
+    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
+    thread.scrollTop = 30;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(onChatScroll).toHaveBeenCalledTimes(1);
+
+    buildChatItemsMock.mockClear();
+    const rerenderedContainer = renderChatView({ messages, onRequestUpdate, onChatScroll });
+
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 30,
+      }),
+    );
+
+    const rerenderedThread = requireElement(
+      rerenderedContainer,
+      ".chat-thread",
+      "chat thread",
+    ) as HTMLElement;
+    rerenderedThread.scrollTop = 0;
+    rerenderedThread.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    expect(onChatScroll).toHaveBeenCalledTimes(2);
+  });
+
+  it("expands the history render window when the thread is already at the top", () => {
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+    const onRequestUpdate = vi.fn();
+    const onChatScroll = vi.fn();
+
+    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
+    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    expect(onChatScroll).toHaveBeenCalledTimes(1);
+  });
+
+  it("expands the render window after render when the initial window cannot scroll", () => {
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+    const onRequestUpdate = vi.fn();
+    const onScrollToBottom = vi.fn();
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    renderChatView({ messages, onRequestUpdate, onScrollToBottom });
+
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 30,
+      }),
+    );
+    expect(frameCallbacks).toHaveLength(1);
+
+    frameCallbacks[0](0);
+
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    expect(onScrollToBottom).toHaveBeenCalledTimes(1);
+
+    buildChatItemsMock.mockClear();
+    renderChatView({ messages, onRequestUpdate, onScrollToBottom });
+
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 60,
+      }),
+    );
   });
 });
 
@@ -651,15 +906,167 @@ describe("chat composer workbench", () => {
 
     expect(onOpenFile).toHaveBeenCalledWith("AGENTS.md");
   });
+
+  it("keeps the secondary New session and Export controls suppressed in the composer", () => {
+    const container = renderChatView({
+      messages: [{ role: "assistant", content: "ready" }],
+    });
+
+    const toolbarRight = container.querySelector(".agent-chat__toolbar-right");
+    expect(toolbarRight).not.toBeNull();
+    const labels = Array.from(toolbarRight?.querySelectorAll("button") ?? []).map((button) =>
+      button.getAttribute("aria-label"),
+    );
+    expect(labels).not.toContain(t("chat.runControls.newSession"));
+    expect(labels).not.toContain(t("chat.runControls.exportChat"));
+  });
+
+  it("exposes aria-expanded on the Talk settings button reflecting open state", () => {
+    const collapsed = renderChatView({
+      onToggleRealtimeTalk: () => undefined,
+      onToggleRealtimeTalkOptions: () => undefined,
+      realtimeTalkOptionsOpen: false,
+    });
+    const collapsedBtn = collapsed.querySelector<HTMLButtonElement>(
+      'button[aria-label="Talk settings"]',
+    );
+    expect(collapsedBtn).not.toBeNull();
+    expect(collapsedBtn?.getAttribute("aria-expanded")).toBe("false");
+
+    const expanded = renderChatView({
+      onToggleRealtimeTalk: () => undefined,
+      onToggleRealtimeTalkOptions: () => undefined,
+      realtimeTalkOptionsOpen: true,
+    });
+    const expandedBtn = expanded.querySelector<HTMLButtonElement>(
+      'button[aria-label="Talk settings"]',
+    );
+    expect(expandedBtn?.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("renders Talk settings from its own callback contract", () => {
+    const onToggleRealtimeTalkOptions = vi.fn();
+    const container = renderChatView({
+      onToggleRealtimeTalk: undefined,
+      onToggleRealtimeTalkOptions,
+      realtimeTalkOptionsOpen: false,
+    });
+
+    const settings = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Talk settings"]',
+    );
+    expect(settings).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Start Talk"]')).toBeNull();
+
+    settings?.click();
+
+    expect(onToggleRealtimeTalkOptions).toHaveBeenCalledOnce();
+  });
+
+  it("does not render a dead Talk settings button without its callback", () => {
+    const container = renderChatView({
+      onToggleRealtimeTalk: () => undefined,
+      realtimeTalkOptionsOpen: true,
+    });
+
+    expect(container.querySelector('button[aria-label="Start Talk"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Talk settings"]')).toBeNull();
+  });
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  buildChatItemsMock.mockClear();
+  renderMessageGroupMock.mockClear();
+  assistantAttachmentRenderVersionMock.value = 0;
   loadSessionsMock.mockClear();
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
   resetChatViewState();
   resetChatAttachmentPayloadStoreForTest();
   vi.unstubAllGlobals();
+});
+
+describe("chat transcript rendering cache", () => {
+  it("does not rebuild transcript items for draft-only rerenders", () => {
+    const messages = [{ role: "assistant", content: "ready" }];
+    const toolMessages: unknown[] = [];
+    const streamSegments: Array<{ text: string; ts: number }> = [];
+    const queue: ChatQueueItem[] = [];
+
+    renderChatView({ messages, toolMessages, streamSegments, queue, draft: "" });
+    renderChatView({ messages, toolMessages, streamSegments, queue, draft: "h" });
+    renderChatView({ messages, toolMessages, streamSegments, queue, draft: "hello" });
+
+    expect(buildChatItemsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not rerender transcript groups for draft-only rerenders", () => {
+    const messages = [{ role: "assistant", content: "ready" }];
+    const toolMessages: unknown[] = [];
+    const streamSegments: Array<{ text: string; ts: number }> = [];
+    const queue: ChatQueueItem[] = [];
+    const container = document.createElement("div");
+
+    render(
+      renderChat(createChatProps({ messages, toolMessages, streamSegments, queue })),
+      container,
+    );
+    render(
+      renderChat(createChatProps({ messages, toolMessages, streamSegments, queue, draft: "h" })),
+      container,
+    );
+    render(
+      renderChat(
+        createChatProps({ messages, toolMessages, streamSegments, queue, draft: "hello" }),
+      ),
+      container,
+    );
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rerenders transcript groups when assistant attachment availability changes", () => {
+    const messages = [{ role: "assistant", content: "ready" }];
+    const toolMessages: unknown[] = [];
+    const streamSegments: Array<{ text: string; ts: number }> = [];
+    const queue: ChatQueueItem[] = [];
+    const container = document.createElement("div");
+
+    render(
+      renderChat(createChatProps({ messages, toolMessages, streamSegments, queue })),
+      container,
+    );
+    assistantAttachmentRenderVersionMock.value += 1;
+    render(
+      renderChat(createChatProps({ messages, toolMessages, streamSegments, queue, draft: "h" })),
+      container,
+    );
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rebuilds transcript items when the transcript reference changes", () => {
+    const toolMessages: unknown[] = [];
+    const streamSegments: Array<{ text: string; ts: number }> = [];
+    const queue: ChatQueueItem[] = [];
+
+    renderChatView({
+      messages: [{ role: "assistant", content: "ready" }],
+      toolMessages,
+      streamSegments,
+      queue,
+      draft: "",
+    });
+    renderChatView({
+      messages: [{ role: "assistant", content: "new reply" }],
+      toolMessages,
+      streamSegments,
+      queue,
+      draft: "",
+    });
+
+    expect(buildChatItemsMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("chat loading skeleton", () => {
@@ -845,26 +1252,13 @@ describe("chat voice controls", () => {
     const model = container.querySelector<HTMLInputElement>(
       '.agent-chat__talk-options-primary input[placeholder="Auto"]',
     );
-    const voice = container.querySelector<HTMLElement>('[data-talk-select="voice"]');
-    const sensitivity = container.querySelector<HTMLElement>('[data-talk-select="sensitivity"]');
-    const voiceOptions = Array.from(
-      container.querySelectorAll<HTMLOptionElement>(
-        '[data-talk-select="voice"] [data-talk-select-option]',
-      ),
-    ).map((option) => option.dataset.talkSelectOption ?? "");
-    const reasoningOptions = Array.from(
-      container.querySelectorAll<HTMLOptionElement>(
-        '[data-talk-select="reasoning"] [data-talk-select-option]',
-      ),
-    ).map((option) => option.dataset.talkSelectOption ?? "");
+    const sensitivityLabel = requireElement(
+      container,
+      '[data-talk-select="sensitivity"] .agent-chat__talk-select-label',
+      "Talk sensitivity selected label",
+    );
 
-    if (voice === null) {
-      throw new Error("expected Talk voice select");
-    }
-    if (sensitivity === null) {
-      throw new Error("expected Talk sensitivity select");
-    }
-    expect(voiceOptions).toEqual([
+    expect(getTalkSelectOptionValues(container, "voice")).toEqual([
       "",
       "alloy",
       "ash",
@@ -877,15 +1271,21 @@ describe("chat voice controls", () => {
       "marin",
       "cedar",
     ]);
-    expect(
-      sensitivity.querySelector<HTMLElement>('[aria-selected="true"]')?.dataset.talkSelectOption,
-    ).toBe("__custom");
-    expect(
-      Array.from(sensitivity.querySelectorAll<HTMLElement>("[data-talk-select-option]")).map(
-        (option) => option.dataset.talkSelectOption ?? "",
-      ),
-    ).toEqual(["", "0.65", "0.5", "0.35", "__custom"]);
-    expect(reasoningOptions).toEqual(["", "minimal", "low", "medium", "high"]);
+    expect(sensitivityLabel.textContent).toBe("Custom");
+    expect(getTalkSelectOptionValues(container, "sensitivity")).toEqual([
+      "",
+      "0.65",
+      "0.5",
+      "0.35",
+      "__custom",
+    ]);
+    expect(getTalkSelectOptionValues(container, "reasoning")).toEqual([
+      "",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
     expect(container.textContent).toContain("Sensitivity");
     expect(container.textContent).toContain("Advanced");
     expect(container.textContent).toContain("Pause before send");
@@ -894,19 +1294,10 @@ describe("chat voice controls", () => {
     if (model === null) {
       throw new Error("expected Talk model input");
     }
-    const chooseOption = (root: HTMLElement, value: string) => {
-      const option = Array.from(
-        root.querySelectorAll<HTMLButtonElement>("[data-talk-select-option]"),
-      ).find((button) => button.dataset.talkSelectOption === value);
-      if (!option) {
-        throw new Error(`expected Talk option ${value}`);
-      }
-      option.click();
-    };
     model.value = "gpt-realtime-mini";
     model.dispatchEvent(new Event("input", { bubbles: true }));
-    chooseOption(sensitivity, "0.35");
-    chooseOption(sensitivity, "");
+    clickTalkSelectOption(container, "sensitivity", "0.35");
+    clickTalkSelectOption(container, "sensitivity", "");
 
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ model: "gpt-realtime-mini" });
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ vadThreshold: "0.35" });
@@ -926,18 +1317,18 @@ describe("chat voice controls", () => {
       },
       onRealtimeTalkOptionsChange,
     });
-    const defaultSensitivity = defaultContainer.querySelector<HTMLElement>(
-      '[data-talk-select="sensitivity"]',
+    const defaultSensitivityLabel = requireElement(
+      defaultContainer,
+      '[data-talk-select="sensitivity"] .agent-chat__talk-select-label',
+      "default Talk sensitivity selected label",
     );
-    expect(
-      defaultSensitivity?.querySelector<HTMLElement>('[aria-selected="true"]')?.dataset
-        .talkSelectOption,
-    ).toBe("");
-    expect(
-      Array.from(
-        defaultSensitivity?.querySelectorAll<HTMLElement>("[data-talk-select-option]") ?? [],
-      ).map((option) => option.dataset.talkSelectOption ?? ""),
-    ).toEqual(["", "0.65", "0.5", "0.35"]);
+    expect(defaultSensitivityLabel.textContent).toBe("Default");
+    expect(getTalkSelectOptionValues(defaultContainer, "sensitivity")).toEqual([
+      "",
+      "0.65",
+      "0.5",
+      "0.35",
+    ]);
   });
 
   it("renders composer and Talk labels from the active locale", async () => {
@@ -1031,6 +1422,106 @@ describe("chat slash menu accessibility", () => {
     expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
     textarea!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   }
+
+  it("keeps plain draft input local until send while suggestions are closed", () => {
+    const onDraftChange = vi.fn();
+    const onRequestUpdate = vi.fn();
+    const onSend = vi.fn();
+    const container = renderChatView({ onDraftChange, onRequestUpdate, onSend });
+
+    inputDraft(container, "plain first message");
+
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(onRequestUpdate).not.toHaveBeenCalled();
+
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+    expect(onDraftChange).toHaveBeenCalledWith("plain first message");
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the visible local draft immediately when send clears the host draft", () => {
+    let draft = "";
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn(() => {
+      draft = "";
+    });
+    const renderWithDraft = () => {
+      render(
+        renderChat(createChatProps({ draft, getDraft: () => draft, onDraftChange, onSend })),
+        container,
+      );
+    };
+
+    renderWithDraft();
+    inputDraft(container, "submitted message");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+    expect(onDraftChange).toHaveBeenCalledWith("submitted message");
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+  });
+
+  it("commits local draft input before Enter sends", () => {
+    const onDraftChange = vi.fn();
+    const onSend = vi.fn();
+    const container = renderChatView({ onDraftChange, onSend });
+
+    inputDraft(container, "send from enter");
+    keydownComposer(container, "Enter");
+
+    expect(onDraftChange).toHaveBeenCalledWith("send from enter");
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("commits local draft input on blur", () => {
+    const onDraftChange = vi.fn();
+    const container = renderChatView({ onDraftChange });
+
+    inputDraft(container, "persist before leaving composer");
+    container
+      .querySelector<HTMLTextAreaElement>("textarea")!
+      .dispatchEvent(new FocusEvent("blur", { bubbles: false }));
+
+    expect(onDraftChange).toHaveBeenCalledWith("persist before leaving composer");
+  });
+
+  it("commits plain draft input while a send is active", () => {
+    const onDraftChange = vi.fn();
+    const container = renderChatView({ onDraftChange, sending: true });
+
+    inputDraft(container, "do not let failed send restore over this");
+
+    expect(onDraftChange).toHaveBeenCalledWith("do not let failed send restore over this");
+  });
+
+  it("preserves local draft input across unrelated rerenders", () => {
+    const onDraftChange = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderChat(createChatProps({ onDraftChange })), container);
+    inputDraft(container, "still typing locally");
+    render(renderChat(createChatProps({ onDraftChange, loading: true })), container);
+
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+      "still typing locally",
+    );
+    expect(onDraftChange).not.toHaveBeenCalled();
+  });
+
+  it("replaces local draft input when the host draft changes", () => {
+    const onDraftChange = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderChat(createChatProps({ onDraftChange, draft: "" })), container);
+    inputDraft(container, "still typing locally");
+    render(renderChat(createChatProps({ onDraftChange, draft: "history recall" })), container);
+
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("history recall");
+  });
 
   it("wires command suggestions to the composer with stable active option ids", () => {
     let draft = "";
@@ -2538,6 +3029,67 @@ describe("chat session controls", () => {
       key: "global",
       agentId: "beta",
       fastMode: true,
+    });
+  });
+
+  it("scopes composer model changes for a selected global-session agent", async () => {
+    const { state, request } = createChatHeaderState();
+    state.sessionKey = "global";
+    state.settings.sessionKey = "global";
+    state.assistantAgentId = "beta";
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "global",
+        kind: "global",
+        modelProvider: "minimax",
+        model: "MiniMax-M2.7",
+        updatedAt: 1,
+      },
+    ]);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    clickChatModelOption(container, "openai/gpt-5-mini");
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "global",
+      agentId: "beta",
+      model: "openai/gpt-5-mini",
+    });
+  });
+
+  it("scopes composer thinking changes for a selected global-session agent", async () => {
+    const { state, request } = createChatHeaderState();
+    state.sessionKey = "global";
+    state.settings.sessionKey = "global";
+    state.assistantAgentId = "beta";
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "global",
+        kind: "global",
+        modelProvider: "openai",
+        model: "gpt-5",
+        thinkingLevel: "off",
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "adaptive", label: "adaptive" },
+        ],
+        updatedAt: 1,
+      },
+    ]);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const adaptive = getThinkingOptions(container).find(
+      (option) => option.dataset.chatThinkingOption === "adaptive",
+    );
+    expect(adaptive).toBeInstanceOf(HTMLButtonElement);
+    adaptive?.click();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "global",
+      agentId: "beta",
+      thinkingLevel: "adaptive",
     });
   });
 

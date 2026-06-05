@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
+// Runs grouped Vitest plans for one or more bundled plugins.
 import path from "node:path";
 import {
   listTrackedTestFilesForRoots,
   resolveExtensionBatchPlan,
 } from "./lib/extension-test-plan.mjs";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mjs";
 
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
@@ -21,6 +23,9 @@ function printUsage() {
   );
 }
 
+/**
+ * Parses comma-separated plugin ids and separates Vitest passthrough args.
+ */
 export function parseExtensionIds(rawArgs) {
   const normalizedArgs = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
   const separatorIndex = normalizedArgs.indexOf("--");
@@ -45,14 +50,13 @@ export function parseExtensionIds(rawArgs) {
   };
 }
 
-function parsePositiveInt(value) {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
+/**
+ * Resolves bounded parallelism for extension test config groups.
+ */
 export function resolveExtensionBatchParallelism(groupCount, env = process.env) {
-  const override = parsePositiveInt(env[PARALLEL_ENV_KEY]);
-  return Math.min(Math.max(1, override ?? 1), Math.max(1, groupCount));
+  const raw = env[PARALLEL_ENV_KEY]?.trim();
+  const override = raw ? parsePositiveInt(raw, PARALLEL_ENV_KEY) : 1;
+  return Math.min(Math.max(1, override), Math.max(1, groupCount));
 }
 
 function sanitizeCacheSegment(value) {
@@ -107,6 +111,9 @@ function isExactExcludePath(inputPath) {
   return !/[*!?[\]{}]/u.test(inputPath);
 }
 
+/**
+ * Collects exact --exclude paths so empty groups can be reported accurately.
+ */
 export function parseExactVitestExcludePaths(vitestArgs) {
   const excludePaths = new Set();
   for (let index = 0; index < vitestArgs.length; index += 1) {
@@ -166,6 +173,9 @@ async function runPlanGroup(group, params) {
   });
 }
 
+/**
+ * Runs a resolved extension batch plan, optionally in parallel config groups.
+ */
 export async function runExtensionBatchPlan(batchPlan, params = {}) {
   const env = params.env ?? process.env;
   const vitestArgs = params.vitestArgs ?? [];

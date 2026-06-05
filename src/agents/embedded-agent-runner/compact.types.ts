@@ -1,3 +1,6 @@
+/**
+ * Shared parameter and metric types for embedded-agent compaction.
+ */
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -27,6 +30,8 @@ export type CompactEmbeddedAgentSessionParams = {
   senderUsername?: string;
   senderE164?: string;
   authProfileId?: string;
+  /** Host-resolved provider credential for native harness compaction. */
+  resolvedApiKey?: string;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label (e.g. #general) for channel-level tool policy resolution. */

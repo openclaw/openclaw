@@ -1,3 +1,6 @@
+/**
+ * Tests managed-service update handoff behavior exposed by gateway methods.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,11 +20,10 @@ const { spawnMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    { spawn: spawnMock as unknown as typeof import("node:child_process").spawn },
-  );
+  const { mockNodeChildProcessModule } = await import("./node-child-process.test-support.js");
+  return mockNodeChildProcessModule({
+    spawn: spawnMock as unknown as typeof import("node:child_process").spawn,
+  });
 });
 
 const tempDirs = new Set<string>();

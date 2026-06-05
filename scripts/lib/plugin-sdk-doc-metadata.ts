@@ -1,3 +1,4 @@
+// Plugin Sdk Doc Metadata script supports OpenClaw repository automation.
 export type PluginSdkDocCategory =
   | "channel"
   | "core"
@@ -54,6 +55,9 @@ export const pluginSdkDocMetadata = {
     category: "channel",
   },
   "channel-config-schema-legacy": {
+    category: "channel",
+  },
+  "chat-channel-ids": {
     category: "channel",
   },
   "channel-contract": {

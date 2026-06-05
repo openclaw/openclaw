@@ -1,3 +1,4 @@
+/** Normalizes cron create/patch payloads before validation and persistence. */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -27,7 +28,7 @@ type UnknownRecord = Record<string, unknown>;
 
 type NormalizeOptions = {
   applyDefaults?: boolean;
-  /** Session context for resolving "current" sessionTarget or auto-binding when not specified */
+  /** Session context used to resolve "current" sessionTarget during create-time defaulting. */
   sessionContext?: { sessionKey?: string };
 };
 
@@ -93,6 +94,8 @@ function coerceSchedule(schedule: UnknownRecord) {
   }
 
   if (next.kind === "at") {
+    // Keep each schedule variant canonical so persisted jobs do not carry stale
+    // fields from a previous kind after CLI/API normalization.
     delete next.everyMs;
     delete next.anchorMs;
     delete next.expr;
@@ -126,12 +129,16 @@ function coercePayload(payload: UnknownRecord) {
     const trimmed = normalizeOptionalString(next.message) ?? "";
     if (trimmed) {
       next.message = trimmed;
+    } else {
+      next.message = "";
     }
   }
   if (typeof next.text === "string") {
     const trimmed = normalizeOptionalString(next.text) ?? "";
     if (trimmed) {
       next.text = trimmed;
+    } else {
+      next.text = "";
     }
   }
   if ("model" in next) {
@@ -203,27 +210,47 @@ function coerceDelivery(delivery: UnknownRecord) {
   } else if ("mode" in next) {
     delete next.mode;
   }
-  if (parsed.channel !== undefined) {
+  if ("channel" in delivery && delivery.channel === null) {
+    next.channel = null;
+  } else if (parsed.channel !== undefined) {
     next.channel = parsed.channel;
   } else if ("channel" in next) {
     delete next.channel;
   }
-  if (parsed.to !== undefined) {
+  if ("to" in delivery && delivery.to === null) {
+    next.to = null;
+  } else if (parsed.to !== undefined) {
     next.to = parsed.to;
   } else if ("to" in next) {
     delete next.to;
   }
-  if (parsed.threadId !== undefined) {
+  if ("threadId" in delivery && delivery.threadId === null) {
+    next.threadId = null;
+  } else if (parsed.threadId !== undefined) {
     next.threadId = parsed.threadId;
   } else if ("threadId" in next) {
     delete next.threadId;
   }
-  if (parsed.accountId !== undefined) {
+  if ("accountId" in delivery && delivery.accountId === null) {
+    next.accountId = null;
+  } else if (parsed.accountId !== undefined) {
     next.accountId = parsed.accountId;
   } else if ("accountId" in next) {
     delete next.accountId;
   }
+  if ("failureDestination" in next) {
+    // Null is an explicit clear signal in patches; invalid objects are dropped.
+    if (next.failureDestination === null) {
+      next.failureDestination = null;
+    } else if (isRecord(next.failureDestination)) {
+      next.failureDestination = coerceFailureDestination(next.failureDestination);
+    } else {
+      delete next.failureDestination;
+    }
+  }
   if ("completionDestination" in next) {
+    // Completion destinations are currently webhook-only, so other shapes are
+    // discarded before they can persist as ambiguous config.
     if (next.completionDestination === null) {
       next.completionDestination = null;
     } else {
@@ -252,6 +279,67 @@ function coerceCompletionDestination(value: UnknownRecord) {
   } satisfies UnknownRecord;
 }
 
+function coerceFailureDestination(value: UnknownRecord) {
+  const next: UnknownRecord = { ...value };
+  if ("channel" in next) {
+    if (next.channel === null) {
+      next.channel = null;
+    } else if (next.channel === undefined) {
+      next.channel = undefined;
+    } else {
+      const channel = normalizeOptionalLowercaseString(next.channel);
+      if (channel) {
+        next.channel = channel;
+      } else {
+        delete next.channel;
+      }
+    }
+  }
+  if ("to" in next) {
+    if (next.to === null) {
+      next.to = null;
+    } else if (next.to === undefined) {
+      next.to = undefined;
+    } else {
+      const to = normalizeOptionalString(next.to);
+      if (to) {
+        next.to = to;
+      } else {
+        delete next.to;
+      }
+    }
+  }
+  if ("accountId" in next) {
+    if (next.accountId === null) {
+      next.accountId = null;
+    } else if (next.accountId === undefined) {
+      next.accountId = undefined;
+    } else {
+      const accountId = normalizeOptionalString(next.accountId);
+      if (accountId) {
+        next.accountId = accountId;
+      } else {
+        delete next.accountId;
+      }
+    }
+  }
+  if ("mode" in next) {
+    if (next.mode === null) {
+      next.mode = null;
+    } else if (next.mode === undefined) {
+      next.mode = undefined;
+    } else {
+      const mode = normalizeOptionalLowercaseString(next.mode);
+      if (mode === "announce" || mode === "webhook") {
+        next.mode = mode;
+      } else {
+        delete next.mode;
+      }
+    }
+  }
+  return next;
+}
+
 function normalizeSessionTarget(raw: unknown) {
   if (typeof raw !== "string") {
     return undefined;
@@ -261,7 +349,8 @@ function normalizeSessionTarget(raw: unknown) {
   if (lower === "main" || lower === "isolated" || lower === "current") {
     return lower;
   }
-  // Support custom session IDs with "session:" prefix
+  // Custom session targets must still pass the same session-id safety gate used
+  // by runtime session resolution.
   if (lower.startsWith("session:")) {
     return `session:${assertSafeCronSessionTargetId(trimmed.slice(8))}`;
   }
@@ -279,6 +368,7 @@ function normalizeWakeMode(raw: unknown) {
   return undefined;
 }
 
+/** Normalizes raw cron job input without deciding whether create-time defaults apply. */
 export function normalizeCronJobInput(
   raw: unknown,
   options: NormalizeOptions = DEFAULT_OPTIONS,
@@ -363,6 +453,8 @@ export function normalizeCronJobInput(
   }
 
   if (options.applyDefaults) {
+    // Defaults apply only on create; patch normalization must preserve omitted
+    // fields so partial updates do not rewrite unrelated cron settings.
     if (!next.wakeMode) {
       next.wakeMode = "now";
     }
@@ -386,10 +478,8 @@ export function normalizeCronJobInput(
     }
     if (!next.sessionTarget && isRecord(next.payload)) {
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
-      // Keep default behavior unchanged for backward compatibility:
-      // - systemEvent defaults to "main"
-      // - agentTurn defaults to "isolated" (NOT "current", to avoid token accumulation)
-      // Users must explicitly specify "current" or "session:xxx" for custom session binding
+      // Keep create-time defaults explicit: system events join main, while agent
+      // turns isolate by default to avoid unbounded token accumulation.
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
       } else if (kind === "agentTurn") {
@@ -430,7 +520,8 @@ export function normalizeCronJobInput(
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
-    // Support "isolated", custom session IDs (session:xxx), and resolved "current" as isolated-like targets
+    // Resolved "current" and custom session ids still use isolated-agent
+    // delivery semantics, so they get the same default announce behavior.
     const isIsolatedAgentTurn =
       sessionTarget === "isolated" ||
       sessionTarget === "current" ||
@@ -445,6 +536,7 @@ export function normalizeCronJobInput(
   return next;
 }
 
+/** Normalizes a raw cron create request and applies create-time defaults. */
 export function normalizeCronJobCreate(
   raw: unknown,
   options?: Omit<NormalizeOptions, "applyDefaults">,
@@ -455,6 +547,7 @@ export function normalizeCronJobCreate(
   }) as CronJobCreate | null;
 }
 
+/** Normalizes a raw cron patch request without filling omitted fields. */
 export function normalizeCronJobPatch(
   raw: unknown,
   options?: NormalizeOptions,

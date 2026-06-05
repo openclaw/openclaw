@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Runs secret-provider integration E2E checks with fixture processes.
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -22,7 +23,14 @@ const OPENAI_LIVE_PROOF_MODEL = "openai/gpt-5.5";
 const COMMAND_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS, 120000);
 const READY_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_READY_MS, 120000);
 const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_RPC_MS, 15000);
-const TEARDOWN_GRACE_MS = 5000;
+const TEARDOWN_GRACE_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS,
+  5000,
+);
+const OUTPUT_CAPTURE_LIMIT_BYTES = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES,
+  4 * 1024 * 1024,
+);
 const RESULTS_PATH =
   process.env.OPENCLAW_SECRET_PROOF_RESULTS_PATH?.trim() ||
   path.join(os.tmpdir(), `openclaw-secret-provider-e2e-results-${process.pid}.json`);
@@ -82,6 +90,44 @@ function scrub(text) {
     .replaceAll(MANUAL_EXEC_TOKEN, "<manual-exec-token>")
     .replaceAll(PLUGIN_EXEC_TOKEN, "<plugin-exec-token>")
     .replace(/sk-[A-Za-z0-9_-]{20,}/gu, "<openai-key>");
+}
+
+function createOutputCapture(label, options = {}) {
+  let output = "";
+  let bytes = 0;
+  let truncated = false;
+  let scanTail = "";
+  let leakedForbiddenValue = null;
+  const forbiddenValues = options.forbiddenValues ?? [];
+  const scanTailLength = Math.max(0, ...forbiddenValues.map((value) => value.length - 1));
+  return {
+    append(chunk) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      if (forbiddenValues.length > 0) {
+        const scanText = `${scanTail}${buffer.toString("utf8")}`;
+        leakedForbiddenValue ??= forbiddenValues.find((value) => scanText.includes(value)) ?? null;
+        scanTail = scanTailLength > 0 ? scanText.slice(-scanTailLength) : "";
+      }
+      const remaining = Math.max(0, OUTPUT_CAPTURE_LIMIT_BYTES - bytes);
+      if (remaining > 0) {
+        const slice = buffer.subarray(0, remaining);
+        output += slice.toString("utf8");
+        bytes += slice.length;
+      }
+      if (buffer.length > remaining && !truncated) {
+        truncated = true;
+        output += `\n[secret-provider-proof] ${label} truncated after ${String(
+          OUTPUT_CAPTURE_LIMIT_BYTES,
+        )} bytes\n`;
+      }
+    },
+    text() {
+      return output;
+    },
+    leakedForbiddenValue() {
+      return leakedForbiddenValue;
+    },
+  };
 }
 
 function parseJsonOutput(stdout) {
@@ -158,19 +204,26 @@ function makeEnv(name) {
   return { root, home, stateDir, env };
 }
 
-async function cleanupEnv(root) {
+async function cleanupEnv(root, options = {}) {
   if (process.env.OPENCLAW_SECRET_PROOF_KEEP_TMP === "1") {
     console.log(`[keep] ${root}`);
     return;
   }
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  const attempts = options.attempts ?? 5;
+  const retryDelayMs = options.retryDelayMs ?? 250;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       fs.rmSync(root, { recursive: true, force: true });
       return;
-    } catch {
-      await delay(250);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) {
+        await delay(retryDelayMs);
+      }
     }
   }
+  throw new Error(`failed to remove secret proof temp root ${root}`, { cause: lastError });
 }
 
 function runCommand(command, args, options = {}) {
@@ -178,36 +231,95 @@ function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(command, args, {
       cwd: options.cwd ?? process.cwd(),
+      detached: options.detached ?? process.platform !== "win32",
       env: options.env ?? process.env,
       shell: options.shell,
       stdio: options.stdio ?? ["pipe", "pipe", "pipe"],
       windowsVerbatimArguments: options.windowsVerbatimArguments,
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout = createOutputCapture("stdout");
+    const stderr = createOutputCapture("stderr");
+    let timedOut = false;
+    let aborted = false;
+    let killTimer;
+    const abort = () => {
+      if (childHasExited(child)) {
+        return;
+      }
+      aborted = true;
+      terminateProcessTree(child, "SIGTERM");
+      killTimer ??= setTimeout(() => terminateProcessTree(child, "SIGKILL"), 1000);
+      killTimer.unref();
+    };
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 1000).unref();
-      reject(new Error(scrub(`command timed out: ${command} ${args.join(" ")}`)));
+      timedOut = true;
+      terminateProcessTree(child, "SIGTERM");
+      killTimer = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 1000);
+      killTimer.unref();
     }, timeoutMs);
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
+    const abortSignal = options.signal;
+    if (abortSignal?.aborted) {
+      abort();
+    } else {
+      abortSignal?.addEventListener("abort", abort, { once: true });
+    }
+    child.stdout?.on("data", (chunk) => {
+      stdout.append(chunk);
     });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
+    child.stderr?.on("data", (chunk) => {
+      stderr.append(chunk);
     });
+    const parentSignalHandlers = new Map();
+    const removeParentSignalHandlers = () => {
+      for (const [signal, handler] of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.clear();
+    };
+    if (process.platform !== "win32" && child.pid) {
+      for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
+        const handler = () => {
+          terminateProcessTree(child, signal);
+          removeParentSignalHandlers();
+          process.kill(process.pid, signal);
+        };
+        parentSignalHandlers.set(signal, handler);
+        process.once(signal, handler);
+      }
+    }
     child.on("error", (error) => {
       clearTimeout(timer);
-      reject(error);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      abortSignal?.removeEventListener("abort", abort);
+      removeParentSignalHandlers();
+      reject(error instanceof Error ? error : new Error(formatErrorMessage(error)));
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
-      const result = { code: code ?? 0, signal, stdout, stderr };
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      abortSignal?.removeEventListener("abort", abort);
+      removeParentSignalHandlers();
+      const result = { code: code ?? 0, signal, stdout: stdout.text(), stderr: stderr.text() };
+      if (aborted) {
+        reject(new Error(scrub(`command aborted: ${command} ${args.join(" ")}`)));
+        return;
+      }
+      if (timedOut) {
+        terminateProcessTree(child, "SIGKILL");
+        reject(new Error(scrub(`command timed out: ${command} ${args.join(" ")}`)));
+        return;
+      }
       if (result.code !== 0 && options.allowFailure !== true) {
         reject(
           new Error(
             scrub(
-              `command failed (${result.code}): ${command} ${args.join(" ")}\n${stderr || stdout}`,
+              `command failed (${result.code}): ${command} ${args.join(" ")}\n${
+                result.stderr || result.stdout
+              }`,
             ),
           ),
         );
@@ -271,7 +383,7 @@ async function allocatePort() {
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
   await new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
+    server.close((error) => (error ? reject(new Error(formatErrorMessage(error))) : resolve()));
   });
   if (!port) {
     throw new Error("failed to allocate a local port");
@@ -568,41 +680,78 @@ async function startGateway(envCtx, port, token = TOKEN_V1) {
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  let stdout = "";
-  let stderr = "";
+  const stdout = createOutputCapture("gateway stdout");
+  const stderr = createOutputCapture("gateway stderr");
   child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
+    stdout.append(chunk);
   });
   child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
+    stderr.append(chunk);
+  });
+  const gatewayExit = new Promise((resolve) => {
+    child.once("error", (error) => {
+      resolve({
+        kind: "gateway-error",
+        error: error instanceof Error ? error : new Error(formatErrorMessage(error)),
+      });
+    });
+    child.once("exit", (code, signal) => {
+      resolve({ kind: "gateway-exit", code, signal });
+    });
   });
   const started = Date.now();
   let lastHealthResult;
   let lastHealthError;
   while (Date.now() - started < READY_TIMEOUT_MS) {
-    if (child.exitCode !== null) {
+    if (childHasExited(child)) {
+      const exit = child.signalCode ? `signal ${child.signalCode}` : `code ${child.exitCode}`;
       throw new Error(
-        scrub(`gateway exited during startup (${child.exitCode})\n${stderr || stdout}`),
+        scrub(`gateway exited during startup (${exit})\n${stderr.text() || stdout.text()}`),
       );
     }
     const remainingMs = remainingDeadlineMs(started, READY_TIMEOUT_MS);
-    try {
-      const health = await gatewayCall(
-        envCtx.env,
-        port,
-        token,
-        "health",
-        {},
-        {
-          allowFailure: true,
-          timeoutMs: Math.min(RPC_TIMEOUT_MS + 10000, remainingMs),
-        },
+    const healthAbort = new AbortController();
+    const healthProbe = (async () => {
+      try {
+        const health = await gatewayCall(
+          envCtx.env,
+          port,
+          token,
+          "health",
+          {},
+          {
+            allowFailure: true,
+            signal: healthAbort.signal,
+            timeoutMs: Math.min(RPC_TIMEOUT_MS + 10000, remainingMs),
+          },
+        );
+        return { kind: "health", health };
+      } catch (error) {
+        return { kind: "health-error", error };
+      }
+    })();
+    const outcome = await Promise.race([healthProbe, gatewayExit]);
+    if (outcome.kind === "gateway-error") {
+      healthAbort.abort();
+      throw new Error(scrub(`gateway failed to start: ${outcome.error.message}`));
+    }
+    if (outcome.kind === "gateway-exit") {
+      healthAbort.abort();
+      const exit = outcome.signal ? `signal ${outcome.signal}` : `code ${outcome.code}`;
+      throw new Error(
+        scrub(`gateway exited during startup (${exit})\n${stderr.text() || stdout.text()}`),
       );
+    }
+    try {
+      if (outcome.kind === "health-error") {
+        throw outcome.error;
+      }
+      const health = outcome.health;
       lastHealthResult = health;
       if (health.code === 0) {
         return {
           child,
-          output: () => ({ stdout, stderr }),
+          output: () => ({ stdout: stdout.text(), stderr: stderr.text() }),
           stop: async () => {
             await stopGateway(child);
           },
@@ -613,7 +762,7 @@ async function startGateway(envCtx, port, token = TOKEN_V1) {
     }
     await delay(Math.min(500, remainingDeadlineMs(started, READY_TIMEOUT_MS)));
   }
-  terminateProcessTree(child, "SIGTERM");
+  await stopGateway(child);
   const lastHealthOutput =
     lastHealthError instanceof Error
       ? lastHealthError.message
@@ -622,22 +771,58 @@ async function startGateway(envCtx, port, token = TOKEN_V1) {
         : lastHealthResult
           ? lastHealthResult.stderr || lastHealthResult.stdout
           : "";
-  throw new Error(scrub(`gateway did not become ready\n${lastHealthOutput}\n${stderr || stdout}`));
+  throw new Error(
+    scrub(`gateway did not become ready\n${lastHealthOutput}\n${stderr.text() || stdout.text()}`),
+  );
 }
 
 async function stopGateway(child) {
-  if (!child || child.exitCode !== null) {
+  if (!child || !processTreeIsAlive(child)) {
     return;
   }
   terminateProcessTree(child, "SIGTERM");
   const started = Date.now();
   while (Date.now() - started < TEARDOWN_GRACE_MS) {
-    if (child.exitCode !== null) {
+    if (!processTreeIsAlive(child)) {
       return;
     }
     await delay(100);
   }
   terminateProcessTree(child, "SIGKILL");
+  await waitForProcessTreeExit(child, 1000);
+}
+
+function childHasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function processTreeIsAlive(child) {
+  if (!child || typeof child.pid !== "number") {
+    return false;
+  }
+  if (process.platform === "win32") {
+    return !childHasExited(child);
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    if (error && error.code === "EPERM") {
+      return true;
+    }
+    return false;
+  }
+}
+
+async function waitForProcessTreeExit(child, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!processTreeIsAlive(child)) {
+      return true;
+    }
+    await delay(50);
+  }
+  return !processTreeIsAlive(child);
 }
 
 function terminateProcessTree(child, signal) {
@@ -686,7 +871,11 @@ async function gatewayCall(env, port, token, method, params = {}, options = {}) 
       OPENCLAW_STATE_DIR: clientStateDir,
       OPENCLAW_HOME: clientStateDir,
     },
-    { timeoutMs: options.timeoutMs ?? RPC_TIMEOUT_MS + 10000, allowFailure: options.allowFailure },
+    {
+      timeoutMs: options.timeoutMs ?? RPC_TIMEOUT_MS + 10000,
+      allowFailure: options.allowFailure,
+      signal: options.signal,
+    },
   );
 }
 
@@ -729,30 +918,51 @@ async function expectGatewayStartupFails(envCtx, port, reason) {
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  let stdout = "";
-  let stderr = "";
+  const forbiddenStartupSecrets = [TOKEN_V1, TOKEN_V2, PLUGIN_EXEC_TOKEN];
+  const stdout = createOutputCapture("startup stdout", {
+    forbiddenValues: forbiddenStartupSecrets,
+  });
+  const stderr = createOutputCapture("startup stderr", {
+    forbiddenValues: forbiddenStartupSecrets,
+  });
   child.stdout.on("data", (chunk) => {
-    stdout += chunk.toString("utf8");
+    stdout.append(chunk);
   });
   child.stderr.on("data", (chunk) => {
-    stderr += chunk.toString("utf8");
+    stderr.append(chunk);
   });
   const code = await new Promise((resolve, reject) => {
+    let timedOut = false;
     const timer = setTimeout(() => {
-      terminateProcessTree(child, "SIGTERM");
-      reject(new Error(`gateway did not fail closed for ${reason}`));
+      timedOut = true;
+      void stopGateway(child).then(() => {
+        reject(new Error(`gateway did not fail closed for ${reason}`));
+      }, reject);
     }, 20000);
     child.on("close", (exitCode) => {
+      if (timedOut) {
+        return;
+      }
       clearTimeout(timer);
       resolve(exitCode);
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (timedOut) {
+        return;
+      }
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error(formatErrorMessage(error)));
+    });
   });
   if (code === 0) {
     throw new Error(`gateway unexpectedly started for ${reason}`);
   }
-  const rawCombined = `${stdout}\n${stderr}`;
-  for (const forbidden of [TOKEN_V1, TOKEN_V2, PLUGIN_EXEC_TOKEN]) {
+  const rawCombined = `${stdout.text()}\n${stderr.text()}`;
+  const streamedLeak = stdout.leakedForbiddenValue() ?? stderr.leakedForbiddenValue();
+  if (streamedLeak) {
+    throw new Error(`startup failure for ${reason} leaked a secret value`);
+  }
+  for (const forbidden of forbiddenStartupSecrets) {
     if (rawCombined.includes(forbidden)) {
       throw new Error(`startup failure for ${reason} leaked a secret value`);
     }
@@ -1586,7 +1796,14 @@ async function main() {
   }
 }
 
-export { gatewayCall, runCommand, startGateway, waitForManagedGatewayStatus };
+export {
+  cleanupEnv,
+  expectGatewayStartupFails,
+  gatewayCall,
+  runCommand,
+  startGateway,
+  waitForManagedGatewayStatus,
+};
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   await main();

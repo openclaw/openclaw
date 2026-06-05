@@ -1,3 +1,6 @@
+/**
+ * Builds embedded-agent payload objects from attempt inputs and outcomes.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -145,6 +148,11 @@ function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary):
   return lastToolError.middlewareError === true;
 }
 
+/**
+ * Chooses whether a tool failure needs a separate user-visible warning and
+ * whether to include raw details. Mutating failures are stricter because a
+ * silent failed write/send/delete can make the assistant look successful.
+ */
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
@@ -199,6 +207,12 @@ function resolveToolErrorWarningPolicy(params: {
   };
 }
 
+/**
+ * Converts a completed embedded attempt into reply payloads for channels. This
+ * is the boundary that suppresses duplicate source replies, filters raw API
+ * errors, preserves directive metadata, and decides when tool failures must be
+ * surfaced to the user.
+ */
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
@@ -267,6 +281,8 @@ export function buildEmbeddedRunPayloads(params: {
     ) {
       return;
     }
+    // Message-tool-only replies were already sent by the tool. Mirror them into
+    // the transcript while marking payloads so channel delivery suppresses a duplicate send.
     replyItems.push({
       text,
       ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
@@ -441,6 +457,8 @@ export function buildEmbeddedRunPayloads(params: {
       (!assistantTextsHaveMedia &&
         normalizedAssistantTexts.length > 0 &&
         normalizedAssistantTexts === normalizedRawAnswerText));
+  // When streamed text lost media directives but the canonical assistant answer
+  // still contains them, keep the raw answer so attachments are not dropped.
   const fallbackAnswerSourceText =
     shouldPreferRawAnswerText && fallbackRawAnswerText ? fallbackRawAnswerText : fallbackAnswerText;
   const normalizedFallbackAnswerSourceText = fallbackAnswerSourceText
@@ -585,6 +603,7 @@ export function buildEmbeddedRunPayloads(params: {
         payload.channelData = item.channelData;
       }
       if (item.sourceReplyMirror) {
+        // Source-reply mirrors are transcript artifacts, not channel sends.
         markReplyPayloadForSourceSuppressionDelivery(payload);
         if (params.sessionKey) {
           const sourceReplyTranscriptMirror: NonNullable<

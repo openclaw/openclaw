@@ -1,7 +1,9 @@
+// Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
+  hasLegacyAutoFallbackWithoutOrigin,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
   resolveAgentDir,
@@ -610,10 +612,13 @@ export async function getReplyFromConfig(
     primaryProvider,
     primaryModel,
   });
+  const staleLegacyAutoFallbackWithoutOrigin =
+    storedModelOverride?.source === "session" && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
   if (
     storedModelOverride?.model &&
     !hasResolvedHeartbeatModelOverride &&
-    !staleHeartbeatAutoFallbackOverride
+    !staleHeartbeatAutoFallbackOverride &&
+    !staleLegacyAutoFallbackWithoutOrigin
   ) {
     provider = storedModelOverride.provider ?? defaultProvider;
     model = storedModelOverride.model;
@@ -629,7 +634,9 @@ export async function getReplyFromConfig(
       })
     : undefined;
   const hasEffectiveSessionModelOverride =
-    hasSessionModelOverride && !staleHeartbeatAutoFallbackOverride;
+    hasSessionModelOverride &&
+    !staleHeartbeatAutoFallbackOverride &&
+    !staleLegacyAutoFallbackWithoutOrigin;
   if (
     !hasResolvedHeartbeatModelOverride &&
     !hasEffectiveSessionModelOverride &&

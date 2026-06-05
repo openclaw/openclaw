@@ -1,3 +1,5 @@
+// Gateway cron integration tests cover stored cron jobs, wakeups, isolated runs,
+// system events, SSRF-guarded delivery, and browser cleanup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1091,6 +1093,7 @@ describe("gateway server cron", () => {
       const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
       expect(Array.isArray(entries)).toBe(true);
       expect((entries as Array<{ jobId?: unknown }>).at(-1)?.jobId).toBe(jobId);
+      expect((entries as Array<{ jobName?: unknown }>).at(-1)?.jobName).toBe("log test");
       expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe("hello");
       expect((entries as Array<{ deliveryStatus?: unknown }>).at(-1)?.deliveryStatus).toBe(
         "not-requested",

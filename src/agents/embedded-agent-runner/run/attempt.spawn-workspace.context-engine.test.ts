@@ -1,3 +1,4 @@
+// Coverage for context-engine bootstrap, assembly, and turn finalization.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -72,6 +73,8 @@ function requireRecords(value: unknown, label: string): Array<Record<string, unk
 }
 
 function sumToolResultTextChars(messages: AgentMessage[]): number {
+  // Context-engine budget tests need deterministic text size accounting for
+  // toolResult blocks.
   return messages.reduce((sum, message) => {
     if (message.role !== "toolResult") {
       return sum;
@@ -131,6 +134,8 @@ function expectFields(actual: Record<string, unknown>, expected: Record<string, 
 }
 
 function trackSessionWriteLocks(): string[] {
+  // Context-engine finalization writes should release and reacquire transcript
+  // locks in a predictable order.
   const events: string[] = [];
   hoisted.acquireSessionWriteLockMock.mockImplementation(async () => {
     const lockId = hoisted.acquireSessionWriteLockMock.mock.calls.length;
@@ -172,6 +177,8 @@ async function runBootstrap(
   contextEngine: AttemptContextEngine,
   overrides: Partial<Parameters<typeof runAttemptContextEngineBootstrap>[0]> = {},
 ) {
+  // Shared bootstrap harness keeps session identifiers stable across context
+  // engine implementations.
   await runAttemptContextEngineBootstrap({
     hadSessionFile: true,
     contextEngine,
@@ -294,8 +301,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         execute: async () => ({ text: "ok" }),
       },
       {
-        name: "dofbot_move_angles",
-        label: "Dofbot Move Angles",
+        name: "fuzzplugin_move_angles",
+        label: "Fuzzplugin Move Angles",
         description: "Move robot joints.",
         parameters: {
           type: "object",
@@ -1738,6 +1745,44 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.promptError).toBeNull();
     expect(result.promptErrorSource).toBeNull();
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
+  });
+
+  it("repairs tool-result pairing after context engine assembly", async () => {
+    let promptMessages: AgentMessage[] = [];
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({
+        assemble: async () => ({
+          messages: [
+            { role: "user", content: "assembled context", timestamp: 1 },
+            {
+              role: "toolResult",
+              toolCallId: "call_orphan",
+              toolUseId: "call_orphan",
+              toolName: "read",
+              content: [{ type: "text", text: "orphaned result" }],
+              timestamp: 2,
+            },
+          ] as AgentMessage[],
+          estimatedTokens: 8,
+        }),
+      }),
+      sessionKey,
+      tempPaths,
+      sessionPrompt: async (session) => {
+        promptMessages = session.messages.map((message) => message as AgentMessage);
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 3 },
+        ];
+      },
+    });
+
+    expect(promptMessages).toContainEqual(
+      expect.objectContaining({ role: "user", content: "assembled context" }),
+    );
+    expect(promptMessages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(JSON.stringify(promptMessages)).not.toContain("orphaned result");
   });
 
   it("honors context engines that opt into preassembly overflow authority", async () => {

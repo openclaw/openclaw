@@ -1,3 +1,5 @@
+// Channel selection chooses a deliverable message channel from explicit input,
+// tool context fallback, or configured plugin accounts.
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -15,7 +17,9 @@ import {
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 
+/** Deliverable message channel id that can be selected for message actions. */
 export type MessageChannelId = DeliverableMessageChannel;
+/** Source that explains how message channel selection chose its result. */
 export type MessageChannelSelectionSource =
   | "explicit"
   | "tool-context-fallback"
@@ -67,6 +71,7 @@ function resolveAvailableKnownChannel(params: {
     : undefined;
 }
 
+/** Checks whether a channel has a non-disabled config entry. */
 export function isConfiguredChannel(cfg: OpenClawConfig, channelId: string): boolean {
   const channels = cfg.channels;
   if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
@@ -202,6 +207,7 @@ async function isPluginConfigured(plugin: ChannelPlugin, cfg: OpenClawConfig): P
   return false;
 }
 
+/** Lists deliverable channels with at least one enabled, configured account. */
 export async function listConfiguredMessageChannels(
   cfg: OpenClawConfig,
 ): Promise<MessageChannelId[]> {
@@ -217,6 +223,7 @@ export async function listConfiguredMessageChannels(
   return channels;
 }
 
+/** Resolves the message action channel from explicit input, context fallback, or config. */
 export async function resolveMessageChannelSelection(params: {
   cfg: OpenClawConfig;
   channel?: string | null;

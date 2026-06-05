@@ -1,8 +1,10 @@
+// Small interactive prompt helpers for CLI confirmations.
 import { stdin as input, stdout as output } from "node:process";
 import readline from "node:readline/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isVerbose, isYes } from "../globals.js";
 
+/** Signals that an interactive prompt lost stdin before a complete answer arrived. */
 export class PromptInputClosedError extends Error {
   constructor() {
     super("Prompt input closed before an answer was received.");
@@ -25,6 +27,7 @@ function questionUntilClose(rl: ReadlineInterface, question: string): Promise<st
     };
     const onClose = () => finish(() => reject(new PromptInputClosedError()));
 
+    // readline.question does not reject on interface close, so race it with the close event.
     rl.once("close", onClose);
     void rl.question(question).then(
       (answer) => finish(() => resolve(answer)),
@@ -33,11 +36,11 @@ function questionUntilClose(rl: ReadlineInterface, question: string): Promise<st
   });
 }
 
+/** Prompts for yes/no input, honoring global `--yes` before opening stdin. */
 export async function promptYesNo(question: string, defaultYes = false): Promise<boolean> {
-  // Simple Y/N prompt honoring global --yes and verbosity flags.
   if (isVerbose() && isYes()) {
     return true;
-  } // redundant guard when both flags set
+  }
   if (isYes()) {
     return true;
   }

@@ -189,8 +189,6 @@ class NodeRuntime(
     A2UIHandler(
       canvas = canvas,
       json = json,
-      getNodeCanvasHostUrl = { nodeSession.currentCanvasHostUrl() },
-      getOperatorCanvasHostUrl = { operatorSession.currentCanvasHostUrl() },
     )
 
   private val connectionManager: ConnectionManager =
@@ -207,6 +205,7 @@ class NodeRuntime(
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       photosAvailable = { SensitiveFeatureConfig.photosEnabled },
       hasRecordAudioPermission = { hasRecordAudioPermission() },
+      installedAppsSharingEnabled = { installedAppsSharingEnabled.value },
       manualTls = { manualTls.value },
     )
 
@@ -245,6 +244,7 @@ class NodeRuntime(
       smsTelephonyAvailable = { sms.hasTelephonyFeature() },
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       photosAvailable = { SensitiveFeatureConfig.photosEnabled },
+      installedAppsSharingEnabled = { installedAppsSharingEnabled.value },
       debugBuild = { BuildConfig.DEBUG },
       onCanvasA2uiPush = {
         _canvasA2uiHydrated.value = true
@@ -252,7 +252,6 @@ class NodeRuntime(
         _canvasRehydrateErrorText.value = null
       },
       onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
-      refreshCanvasHostUrl = { nodeSession.refreshCanvasHostUrl() },
       motionActivityAvailable = { motionHandler.isActivityAvailable() },
       motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
     )
@@ -866,6 +865,7 @@ class NodeRuntime(
 
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+  val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
   val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> =
     prefs.notificationForwardingMode
@@ -1075,6 +1075,12 @@ class NodeRuntime(
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
+  }
+
+  fun setInstalledAppsSharingEnabled(value: Boolean) {
+    if (prefs.installedAppsSharingEnabled.value == value) return
+    prefs.setInstalledAppsSharingEnabled(value)
+    refreshNodeSurfaceAfterSharingChange()
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
@@ -1411,6 +1417,11 @@ class NodeRuntime(
       }
     operatorStatusText = "Connecting…"
     updateStatus()
+    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(), reconnect = true)
+  }
+
+  private fun refreshNodeSurfaceAfterSharingChange() {
+    val endpoint = connectedEndpoint ?: return
     connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(), reconnect = true)
   }
 

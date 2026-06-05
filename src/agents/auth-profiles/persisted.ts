@@ -1,11 +1,18 @@
+/**
+ * Persisted auth profile store loading and migration.
+ * Normalizes legacy JSON stores, SQLite/raw payloads, runtime state metadata,
+ * legacy OAuth files, and merged main/agent stores.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { loadJsonFile } from "../../infra/json-file.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
+import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import {
   hasOAuthIdentity,
   hasUsableOAuthCredential,
@@ -13,7 +20,8 @@ import {
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-shared.js";
-import { resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
+import { resolveLegacyAuthStorePath } from "./paths.js";
+import { readPersistedAuthProfileStoreRaw } from "./sqlite.js";
 import {
   coerceAuthProfileState,
   loadPersistedAuthProfileState,
@@ -27,10 +35,12 @@ import type {
   OAuthCredentials,
 } from "./types.js";
 
+/** Legacy auth.json store shape before auth-profiles.json/SQLite. */
 export type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
 type LoadPersistedAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
+  database?: OpenClawAgentDatabase;
 };
 
 type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
@@ -38,6 +48,8 @@ type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
 
+// Persisted credential normalization accepts old field names and SecretRef-ish
+// values, then emits the current credential discriminated union.
 function normalizeOptionalCredentialString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -66,6 +78,8 @@ function normalizeCredentialMetadata(value: unknown): Record<string, string> | u
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
+// Secret-backed key/token fields may have been stored in the value field by old
+// writers. Move them to the ref field so secret values are not treated as text.
 function normalizeSecretBackedField(params: {
   entry: Record<string, unknown>;
   valueField: "key" | "token";
@@ -160,6 +174,9 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
       type: "oauth",
       ...normalizeCommonCredentialFields(entry),
     };
+    if (isLegacyOAuthRef(entry.oauthRef)) {
+      normalized.oauthRef = entry.oauthRef;
+    }
     for (const field of [
       "access",
       "refresh",
@@ -251,10 +268,8 @@ function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
   return Object.keys(entries).length > 0 ? entries : null;
 }
 
-export function coercePersistedAuthProfileStore(
-  raw: unknown,
-  _options?: LoadPersistedAuthProfileStoreOptions,
-): AuthProfileStore | null {
+/** Coerces a persisted auth profile store payload into the current store shape. */
+export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore | null {
   if (!isRecord(raw)) {
     return null;
   }
@@ -282,6 +297,8 @@ export function coercePersistedAuthProfileStore(
   };
 }
 
+// Merge store/state records by key. Undefined means "no persisted record", not
+// "empty override", so preserve the other side in that case.
 function mergeRecord<T>(
   base?: Record<string, T>,
   override?: Record<string, T>,
@@ -302,6 +319,8 @@ function dedupeMergedProfileOrder(profileIds: string[]): string[] {
   return uniqueStrings(profileIds);
 }
 
+// Legacy OAuth profiles may be replaced by safer main-store profiles when the
+// main store has a newer compatible credential for the same provider identity.
 function hasComparableOAuthIdentityConflict(
   existing: OAuthCredential,
   candidate: OAuthCredential,
@@ -494,6 +513,7 @@ function reconcileMainStoreOAuthProfileDrift(params: {
   });
 }
 
+/** Merges two auth profile stores, preserving valid runtime external profile metadata. */
 export function mergeAuthProfileStores(
   base: AuthProfileStore,
   override: AuthProfileStore,
@@ -521,6 +541,8 @@ export function mergeAuthProfileStores(
       : [],
   );
   const profiles = { ...base.profiles, ...override.profiles };
+  // Authoritative runtime snapshots may remove stale external profiles that are
+  // no longer observed, unless the caller is intentionally preserving base ones.
   for (const profileId of removedRuntimeExternalProfileIds) {
     delete profiles[profileId];
   }
@@ -592,6 +614,7 @@ export function mergeAuthProfileStores(
   });
 }
 
+/** Builds the persisted secrets store, stripping resolved literals when refs exist. */
 export function buildPersistedAuthProfileSecretsStore(
   store: AuthProfileStore,
   shouldPersistProfile?: (params: {
@@ -624,6 +647,7 @@ export function buildPersistedAuthProfileSecretsStore(
   };
 }
 
+/** Applies legacy auth.json credentials into an auth profile store. */
 export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuthStore): void {
   for (const [provider, cred] of Object.entries(legacy)) {
     const profileId = `${provider}:default`;
@@ -661,6 +685,7 @@ export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuth
   }
 }
 
+/** Imports the legacy oauth.json file into missing default OAuth profiles. */
 export function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
   const oauthPath = resolveOAuthPath();
   const oauthRaw = loadJsonFile(oauthPath);
@@ -687,23 +712,27 @@ export function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
   return mutated;
 }
 
+/** Loads the persisted auth profile store and merges runtime state. */
 export function loadPersistedAuthProfileStore(
   agentDir?: string,
   options?: LoadPersistedAuthProfileStoreOptions,
 ): AuthProfileStore | null {
-  const authPath = resolveAuthStorePath(agentDir);
-  const raw = loadJsonFile(authPath);
-  const store = coercePersistedAuthProfileStore(raw, options);
+  const raw = readPersistedAuthProfileStoreRaw(agentDir, options?.database);
+  const store = coercePersistedAuthProfileStore(raw);
   if (!store) {
     return null;
   }
   const merged = {
     ...store,
-    ...mergeAuthProfileState(coerceAuthProfileState(raw), loadPersistedAuthProfileState(agentDir)),
+    ...mergeAuthProfileState(
+      coerceAuthProfileState(raw),
+      loadPersistedAuthProfileState(agentDir, options?.database),
+    ),
   };
   return merged;
 }
 
+/** Loads the legacy auth.json auth profile store if present. */
 export function loadLegacyAuthProfileStore(agentDir?: string): LegacyAuthStore | null {
   return coerceLegacyAuthStore(loadJsonFile(resolveLegacyAuthStorePath(agentDir)));
 }

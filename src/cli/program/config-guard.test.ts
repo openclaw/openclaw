@@ -1,3 +1,4 @@
+// Config guard tests cover program-level config checks before command execution.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -228,6 +229,7 @@ describe("ensureConfigReady", () => {
 
   it.each([
     ["Discord model picker preferences", "discord/model-picker-preferences.json"],
+    ["Discord thread bindings", "discord/thread-bindings.json"],
     ["Feishu dedupe sidecar", "feishu/dedup/default.json"],
     ["Telegram bot info cache", "telegram/bot-info-default.json"],
     ["Telegram update offset", "telegram/update-offset-default.json"],

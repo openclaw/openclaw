@@ -1,8 +1,15 @@
+// Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import http from "node:http";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
-import { readBody, writeJson, writeSse } from "./lib/mock-openai-http.mjs";
+import {
+  boundedRequestLogBody,
+  isRequestBodyTooLargeError,
+  readBody,
+  writeRequestLogEntryOrFail,
+  writeJson,
+  writeSse,
+} from "./lib/mock-openai-http.mjs";
 
 const port =
   process.env.MOCK_PORT != null
@@ -298,18 +305,33 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    const bodyText = await readBody(req);
-    if (requestLog) {
-      fs.appendFileSync(
-        requestLog,
-        `${JSON.stringify({ method: req.method, path: url.pathname, body: bodyText })}\n`,
-      );
+    let bodyText;
+    try {
+      bodyText = await readBody(req);
+    } catch (error) {
+      if (isRequestBodyTooLargeError(error)) {
+        writeJson(res, 413, { error: { message: error.message } });
+        return;
+      }
+      throw error;
     }
     let body;
     try {
       body = bodyText ? JSON.parse(bodyText) : {};
     } catch {
       body = {};
+    }
+    if (
+      writeRequestLogEntryOrFail(res, {
+        requestLog,
+        entry: {
+          method: req.method,
+          path: url.pathname,
+          body: boundedRequestLogBody(bodyText, bodyText),
+        },
+      })
+    ) {
+      return;
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
@@ -373,7 +395,15 @@ const server = http.createServer((req, res) => {
     writeJson(res, 404, {
       error: { message: `unhandled mock route: ${req.method} ${url.pathname}` },
     });
-  })();
+  })().catch((/** @type {unknown} */ error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`mock-openai request handler failed: ${message}`);
+    if (!res.headersSent) {
+      writeJson(res, 500, { error: { message: `mock OpenAI handler failed: ${message}` } });
+      return;
+    }
+    res.destroy(error instanceof Error ? error : new Error(message));
+  });
 });
 
 server.listen(port, "127.0.0.1", () => {

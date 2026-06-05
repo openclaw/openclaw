@@ -1,3 +1,4 @@
+// Tool-call shaped text helpers detect malformed text that resembles tool calls.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readTrimmedString } from "@openclaw/normalization-core/string-coerce";
 
@@ -104,6 +105,8 @@ function findBalancedJsonEnd(text: string, start: number): number | null {
   let inString = false;
   let escaped = false;
   for (let index = start + 1; index < text.length; index += 1) {
+    // Cap candidate size so diagnostic scans cannot spend unbounded time on prose
+    // that happens to contain many braces.
     if (index - start > MAX_JSON_CANDIDATE_CHARS) {
       return null;
     }
@@ -215,6 +218,7 @@ function detectReactAction(text: string): ToolCallShapedTextDetection | null {
   return { kind: "react_action", toolName: match[1] };
 }
 
+/** Detects assistant-visible text that looks like an unexecuted tool call instead of prose. */
 export function detectToolCallShapedText(text: string): ToolCallShapedTextDetection | null {
   const trimmed = text.slice(0, MAX_SCAN_CHARS).trim();
   if (!trimmed || !TOOL_TEXT_PREFILTER_RE.test(trimmed)) {

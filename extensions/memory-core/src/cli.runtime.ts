@@ -1,3 +1,4 @@
+// Memory Core plugin module implements cli behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -70,6 +71,28 @@ type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManage
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
 
 type MemorySourceName = "memory" | "sessions";
+
+function formatMemoryIndexIdentityWarning(
+  status: ReturnType<MemoryManager["status"]>,
+  agentId: string,
+): {
+  reason: string;
+  fix: string;
+} | null {
+  const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
+  const reason =
+    (indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing") &&
+    typeof indexIdentity.reason === "string"
+      ? indexIdentity.reason
+      : undefined;
+  if (!reason) {
+    return null;
+  }
+  return {
+    reason,
+    fix: `Run: openclaw memory status --index --agent ${agentId}`,
+  };
+}
 
 type SourceScan = {
   source: MemorySourceName;
@@ -868,6 +891,12 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
     }
+    const identityWarning = formatMemoryIndexIdentityWarning(status, agentId);
+    if (identityWarning) {
+      lines.push(`${label("Index identity")} ${warn(identityWarning.reason)}`);
+      lines.push(`${label("Vector search")} ${warn("paused until memory is rebuilt")}`);
+      lines.push(`${label("Fix")} ${muted(identityWarning.fix)}`);
+    }
     if (status.sourceCounts?.length) {
       lines.push(label("By source"));
       for (const entry of status.sourceCounts) {
@@ -1255,6 +1284,15 @@ export async function runMemorySearch(
       if (opts.json) {
         defaultRuntime.writeJson({ results });
         return;
+      }
+      const identityWarning =
+        typeof manager.status === "function"
+          ? formatMemoryIndexIdentityWarning(manager.status(), agentId)
+          : null;
+      if (identityWarning) {
+        defaultRuntime.error(
+          `Memory index warning: ${identityWarning.reason}. Vector memory search is paused until the index is rebuilt. ${identityWarning.fix}`,
+        );
       }
       if (results.length === 0) {
         defaultRuntime.log("No matches.");

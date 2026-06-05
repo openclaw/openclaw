@@ -1,3 +1,5 @@
+// Simple completion transport tests cover provider-specific stream alias
+// selection before the generic completion helper invokes the LLM layer.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -10,6 +12,7 @@ const createOpenClawTransportStreamFnForModel = vi.fn();
 const createTransportAwareStreamFnForModel = vi.fn();
 const prepareTransportAwareSimpleModel = vi.fn();
 const resolveTransportAwareSimpleApi = vi.fn();
+const prepareGoogleSimpleCompletionModel = vi.fn((model: unknown) => model);
 
 vi.mock("./anthropic-vertex-stream.js", () => ({
   createAnthropicVertexStreamFnForModel,
@@ -17,6 +20,10 @@ vi.mock("./anthropic-vertex-stream.js", () => ({
 
 vi.mock("./custom-api-registry.js", () => ({
   ensureCustomApiRegistered,
+}));
+
+vi.mock("./google-simple-completion-stream.js", () => ({
+  prepareGoogleSimpleCompletionModel,
 }));
 
 vi.mock("./provider-transport-stream.js", () => ({
@@ -41,6 +48,8 @@ let prepareModelForSimpleCompletion: typeof import("./simple-completion-transpor
 
 describe("prepareModelForSimpleCompletion", () => {
   beforeAll(async () => {
+    // Dynamic import lets the mocked transport/provider modules settle before
+    // the unit under test captures custom stream registration helpers.
     ({ prepareModelForSimpleCompletion } = await import("./simple-completion-transport.js"));
   });
 
@@ -53,6 +62,7 @@ describe("prepareModelForSimpleCompletion", () => {
     createTransportAwareStreamFnForModel.mockReset();
     prepareTransportAwareSimpleModel.mockReset();
     resolveTransportAwareSimpleApi.mockReset();
+    prepareGoogleSimpleCompletionModel.mockReset();
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
     resolveProviderStreamFn.mockReturnValue("ollama-stream");
     buildTransportAwareSimpleStreamFn.mockReturnValue(undefined);
@@ -60,6 +70,7 @@ describe("prepareModelForSimpleCompletion", () => {
     createTransportAwareStreamFnForModel.mockReturnValue(undefined);
     prepareTransportAwareSimpleModel.mockImplementation((model) => model);
     resolveTransportAwareSimpleApi.mockReturnValue(undefined);
+    prepareGoogleSimpleCompletionModel.mockImplementation((model) => model);
   });
 
   it("registers the configured Ollama transport and keeps the original api", () => {
@@ -173,6 +184,71 @@ describe("prepareModelForSimpleCompletion", () => {
     });
   });
 
+  it("uses the Google simple-completion sanitizer alias after transport checks pass through", () => {
+    const model: Model<"google-generative-ai"> = {
+      id: "gemini-flash-latest",
+      name: "Gemini Flash Latest",
+      api: "google-generative-ai",
+      provider: "google",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 8192,
+      headers: {},
+    };
+    prepareGoogleSimpleCompletionModel.mockImplementationOnce((m: unknown) => ({
+      ...(m as Model<"google-generative-ai">),
+      api: "openclaw-google-generative-ai-simple",
+    }));
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+
+    const result = prepareModelForSimpleCompletion({ model });
+
+    expect(prepareTransportAwareSimpleModel).toHaveBeenCalledWith(model, { cfg: undefined });
+    expect(prepareGoogleSimpleCompletionModel).toHaveBeenCalledWith(model);
+    expect(buildTransportAwareSimpleStreamFn).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      ...model,
+      api: "openclaw-google-generative-ai-simple",
+    });
+  });
+
+  it("keeps Google transport-aware models on the transport alias", () => {
+    const model: Model<"google-generative-ai"> = {
+      id: "gemini-flash-latest",
+      name: "Gemini Flash Latest",
+      api: "google-generative-ai",
+      provider: "google",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 8192,
+      headers: {},
+    };
+
+    const transportModel = {
+      ...model,
+      api: "openclaw-google-generative-ai-transport",
+    };
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+    buildTransportAwareSimpleStreamFn.mockReturnValueOnce("google-transport-stream");
+    prepareTransportAwareSimpleModel.mockReturnValueOnce(transportModel);
+
+    const result = prepareModelForSimpleCompletion({ model });
+
+    expect(buildTransportAwareSimpleStreamFn).toHaveBeenCalledWith(model, { cfg: undefined });
+    expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
+      "openclaw-google-generative-ai-transport",
+      "google-transport-stream",
+    );
+    expect(prepareGoogleSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(result).toBe(transportModel);
+  });
+
   it.each([
     ["https://chatgpt.com/backend-api", "https://chatgpt.com/backend-api/codex"],
     ["https://chatgpt.com/backend-api/v1", "https://chatgpt.com/backend-api/codex"],
@@ -206,6 +282,8 @@ describe("prepareModelForSimpleCompletion", () => {
 
       const result = prepareModelForSimpleCompletion({ model });
 
+      // ChatGPT/Codex response endpoints share the transport stream, but the
+      // simple-completion API must normalize caller-supplied base URLs first.
       expect(createOpenClawTransportStreamFnForModel).toHaveBeenCalledWith(
         {
           ...model,

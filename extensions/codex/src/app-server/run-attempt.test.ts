@@ -1,3 +1,4 @@
+// Codex tests cover run attempt plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -3935,6 +3936,46 @@ describe("runCodexAppServerAttempt", () => {
     } finally {
       stopDiagnostics();
     }
+  });
+
+  it("does not install an active run handle when turn start resolves after abort", async () => {
+    let resolveTurnStart: ((value: ReturnType<typeof turnStartResult>) => void) | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return await new Promise<ReturnType<typeof turnStartResult>>((resolve) => {
+          resolveTurnStart = resolve;
+        });
+      }
+      return {};
+    });
+    setCodexAppServerClientFactoryForTest(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: () => () => undefined,
+          addRequestHandler: () => () => undefined,
+        }) as never,
+    );
+    const abortController = new AbortController();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.abortSignal = abortController.signal;
+
+    const run = runCodexAppServerAttempt(params);
+    await vi.waitFor(
+      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
+      fastWait,
+    );
+    abortController.abort("test_abort");
+    resolveTurnStart?.(turnStartResult());
+
+    await expect(run).rejects.toThrow("test_abort");
+    expect(queueActiveRunMessageForTest("session-1", "after abort")).toBe(false);
   });
 
   it("keeps extended history enabled when resuming a bound Codex thread", async () => {

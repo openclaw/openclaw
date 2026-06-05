@@ -1,3 +1,5 @@
+// Agents gateway methods expose agent listing, config mutation, workspace file
+// reads/writes, identity merging, and safe deletion for operator clients.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
@@ -32,6 +34,8 @@ import {
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   isWorkspaceSetupCompleted,
+  resolveWorkspaceAttestationPaths,
+  shouldRemoveWorkspaceAttestation,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
@@ -740,11 +744,20 @@ export const agentsHandlers: GatewayRequestHandlers = {
         deleteResult.workspaceDir,
       );
       const deleteWorkspace = workspaceSharedWith.length === 0;
-      await Promise.all([
-        ...(deleteWorkspace ? [moveToTrashBestEffort(deleteResult.workspaceDir)] : []),
-        moveToTrashBestEffort(deleteResult.agentDir),
-        moveToTrashBestEffort(deleteResult.sessionsDir),
-      ]);
+      const pathsToTrash = [deleteResult.agentDir, deleteResult.sessionsDir];
+      if (deleteWorkspace) {
+        pathsToTrash.unshift(deleteResult.workspaceDir);
+        for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
+          deleteResult.workspaceDir,
+        ).entries()) {
+          if (
+            await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })
+          ) {
+            pathsToTrash.push(attestationPath);
+          }
+        }
+      }
+      await Promise.all(pathsToTrash.map((pathname) => moveToTrashBestEffort(pathname)));
     }
 
     respond(true, { ok: true, agentId, removedBindings: deleteResult.removedBindings }, undefined);

@@ -1,3 +1,4 @@
+/** Converts cron jobs between public store shape and normalized SQLite rows. */
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -61,7 +62,63 @@ function bindScheduleColumns(
 
 function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
   const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
+  // job_json stores config shape only; runtime state lives in split columns and
+  // state_json so state-only writes never rewrite public job config.
   return { ...rest, state: {} };
+}
+
+function mergeFailureDestinationProjection(
+  configJob: Record<string, unknown>,
+  projectedJob: CronJob | null,
+): Record<string, unknown> {
+  const failureDestination = projectedJob?.delivery?.failureDestination;
+  if (!failureDestination) {
+    return configJob;
+  }
+  // Empty SQLite sentinels preserve explicit undefined fields for failure
+  // destination overrides; project them back into the config sidecar shape.
+  const delivery: Record<string, unknown> =
+    isRecord(configJob.delivery) && !Array.isArray(configJob.delivery)
+      ? { ...configJob.delivery }
+      : projectedJob?.delivery
+        ? {
+            mode: projectedJob.delivery.mode,
+            ...(projectedJob.delivery.channel ? { channel: projectedJob.delivery.channel } : {}),
+            ...(projectedJob.delivery.to ? { to: projectedJob.delivery.to } : {}),
+            ...(projectedJob.delivery.threadId !== undefined
+              ? { threadId: projectedJob.delivery.threadId }
+              : {}),
+            ...(projectedJob.delivery.accountId
+              ? { accountId: projectedJob.delivery.accountId }
+              : {}),
+            ...(projectedJob.delivery.bestEffort !== undefined
+              ? { bestEffort: projectedJob.delivery.bestEffort }
+              : {}),
+            ...(projectedJob.delivery.completionDestination
+              ? { completionDestination: projectedJob.delivery.completionDestination }
+              : {}),
+          }
+        : {};
+  const nextFailureDestination = isRecord(delivery.failureDestination)
+    ? { ...delivery.failureDestination }
+    : {};
+  if (Object.hasOwn(failureDestination, "channel")) {
+    nextFailureDestination.channel = failureDestination.channel;
+  }
+  if (Object.hasOwn(failureDestination, "to")) {
+    nextFailureDestination.to = failureDestination.to;
+  }
+  if (Object.hasOwn(failureDestination, "accountId")) {
+    nextFailureDestination.accountId = failureDestination.accountId;
+  }
+  if (Object.hasOwn(failureDestination, "mode")) {
+    nextFailureDestination.mode = failureDestination.mode;
+  }
+  delivery.failureDestination = nextFailureDestination;
+  return {
+    ...configJob,
+    delivery,
+  };
 }
 
 function bindCronJobRow(storeKey: string, job: CronJob, sortOrder: number): CronJobInsert {
@@ -100,6 +157,8 @@ function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronJob 
     return null;
   }
   if (!hadDeleteAfterRun) {
+    // Legacy rows omitted deleteAfterRun entirely; avoid writing the default
+    // back into job_json so config round-trips stay byte-light.
     delete normalized.deleteAfterRun;
   }
   const createdAtMs =
@@ -122,6 +181,7 @@ function countUnpersistableCronJobs(store: CronStoreFile): number {
   return store.jobs.reduce((count, job) => count + (normalizeCronJobForSqlite(job) ? 0 : 1), 0);
 }
 
+/** Fails before replacing SQLite rows when any config job cannot round-trip. */
 export function assertCronStoreCanPersist(store: CronStoreFile): void {
   const invalidJobs = countUnpersistableCronJobs(store);
   if (invalidJobs > 0) {
@@ -183,6 +243,7 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
   };
 }
 
+/** Loads cron rows in config order with deterministic fallbacks for old rows. */
 export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
   return executeSqliteQuerySync(
     db,
@@ -196,6 +257,7 @@ export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
   ).rows;
 }
 
+/** Replaces all persisted cron rows for one store key from the config store snapshot. */
 export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronStoreFile): void {
   executeSqliteQuerySync(
     db,
@@ -215,6 +277,7 @@ export function replaceCronRows(db: DatabaseSync, storeKey: string, store: CronS
   }
 }
 
+/** Updates only mutable runtime columns without rewriting full job config JSON. */
 export function updateCronRuntimeRows(
   db: DatabaseSync,
   storeKey: string,
@@ -237,13 +300,17 @@ export function updateCronRuntimeRows(
   }
 }
 
+/** Reconstructs loaded cron store data and config-runtime sidecars from SQLite rows. */
 export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
   const parsedJobs = rows.map(rowToCronJob);
   const jobs = parsedJobs.filter((job): job is CronJob => job !== null);
   const configJobs = rows.map((row, index) =>
-    parseJsonObject<Record<string, unknown>>(
-      row.job_json,
-      stripJobRuntimeFields(parsedJobs[index] ?? ({} as CronJob)),
+    mergeFailureDestinationProjection(
+      parseJsonObject<Record<string, unknown>>(
+        row.job_json,
+        stripJobRuntimeFields(parsedJobs[index] ?? ({} as CronJob)),
+      ),
+      parsedJobs[index] ?? null,
     ),
   );
   const configJobRuntimeEntries = rows.map((row) => ({

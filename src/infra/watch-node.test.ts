@@ -1,3 +1,4 @@
+// Tests watched node process restart and hashing behavior.
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -34,10 +35,19 @@ const createFakeProcess = () =>
     execPath: "/usr/local/bin/node",
   }) as unknown as NodeJS.Process;
 
-const createWatchHarness = () => {
+const createKillableChild = () => {
   const child = Object.assign(new EventEmitter(), {
-    kill: vi.fn(() => {}),
+    kill: vi.fn(),
   });
+  child.kill.mockImplementation((signal: NodeJS.Signals = "SIGTERM") => {
+    queueMicrotask(() => child.emit("exit", null, signal));
+    return true;
+  });
+  return child;
+};
+
+const createWatchHarness = () => {
+  const child = createKillableChild();
   const spawn = vi.fn(() => child);
   const watcher = Object.assign(new EventEmitter(), {
     close: vi.fn(async () => {}),
@@ -220,9 +230,7 @@ describe("watch-node script", () => {
   });
 
   it("starts the runner before loading chokidar", async () => {
-    const child = Object.assign(new EventEmitter(), {
-      kill: vi.fn(() => {}),
-    });
+    const child = createKillableChild();
     const spawn = vi.fn(() => child);
     const watcher = Object.assign(new EventEmitter(), {
       close: vi.fn(async () => {}),
@@ -329,7 +337,7 @@ describe("watch-node script", () => {
   it("runs doctor once and restarts when gateway exits nonzero", async () => {
     const gatewayA = Object.assign(new EventEmitter(), { kill: vi.fn() });
     const doctor = Object.assign(new EventEmitter(), { kill: vi.fn() });
-    const gatewayB = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const gatewayB = createKillableChild();
     const spawn = vi
       .fn()
       .mockReturnValueOnce(gatewayA)
@@ -395,9 +403,7 @@ describe("watch-node script", () => {
     const childA = Object.assign(new EventEmitter(), {
       kill: vi.fn(),
     });
-    const childB = Object.assign(new EventEmitter(), {
-      kill: vi.fn(() => {}),
-    });
+    const childB = createKillableChild();
     const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
     const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
 
@@ -447,9 +453,7 @@ describe("watch-node script", () => {
     const childA = createAutoExitChild();
     const childB = createAutoExitChild();
     const childC = createAutoExitChild();
-    const childD = Object.assign(new EventEmitter(), {
-      kill: vi.fn(() => {}),
-    });
+    const childD = createKillableChild();
     const spawn = vi
       .fn()
       .mockReturnValueOnce(childA)
@@ -538,9 +542,7 @@ describe("watch-node script", () => {
       ),
       { code: "ERR_INVALID_PACKAGE_CONFIG" },
     );
-    const child = Object.assign(new EventEmitter(), {
-      kill: vi.fn(() => {}),
-    });
+    const child = createKillableChild();
     const spawn = vi.fn(() => child);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -583,9 +585,7 @@ describe("watch-node script", () => {
     const error = Object.assign(new Error("Cannot find package 'chokidar'"), {
       code: "ERR_MODULE_NOT_FOUND",
     });
-    const child = Object.assign(new EventEmitter(), {
-      kill: vi.fn(() => {}),
-    });
+    const child = createKillableChild();
     const spawn = vi.fn(() => child);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 

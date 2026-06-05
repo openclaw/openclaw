@@ -1,3 +1,4 @@
+// Tests dispatch-from-config runtime selection, hooks, and provider handoff.
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
@@ -6,6 +7,11 @@ import {
   clearApprovalNativeRouteStateForTest,
   createApprovalNativeRouteReporter,
 } from "../../infra/approval-native-route-coordinator.js";
+import {
+  createDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type {
   AcpRuntime,
@@ -1351,7 +1357,9 @@ describe("dispatchReplyFromConfig", () => {
     const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
       | [
           {
+            originatingAccountId?: unknown;
             originatingChannel?: unknown;
+            originatingThreadId?: unknown;
             originatingTo?: unknown;
             shouldRouteToOriginating?: unknown;
           },
@@ -1362,6 +1370,72 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyDispatchCall?.[0]?.originatingChannel).toBe("telegram");
     expect(replyDispatchCall?.[0]?.originatingTo).toBe("telegram:999");
     expect(typeof replyDispatchCall?.[1]).toBe("object");
+  });
+
+  it("routes sessions_send internal webchat handoffs through persisted external delivery context", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    sessionStoreMocks.currentEntry = {
+      route: {
+        channel: "feishu",
+        accountId: "work",
+        target: { to: "user:ou_123" },
+        thread: { id: "thread:om_123", source: "explicit" },
+      },
+      deliveryContext: {
+        channel: "feishu",
+        to: "user:ou_123",
+        accountId: "work",
+        threadId: "thread:om_123",
+      },
+      lastChannel: "feishu",
+      lastTo: "user:ou_123",
+      lastAccountId: "work",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      SessionKey: "agent:main:feishu:direct:ou_123",
+      AccountId: undefined,
+      OriginatingChannel: "webchat",
+      OriginatingTo: "session:dashboard",
+      InputProvenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+        sourceChannel: "webchat",
+      },
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    const routeCall = firstRouteReplyCall() as
+      | { accountId?: unknown; channel?: unknown; threadId?: unknown; to?: unknown }
+      | undefined;
+    expect(routeCall?.channel).toBe("feishu");
+    expect(routeCall?.to).toBe("user:ou_123");
+    expect(routeCall?.accountId).toBe("work");
+    expect(routeCall?.threadId).toBe("thread:om_123");
+    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
+      | [
+          {
+            originatingAccountId?: unknown;
+            originatingChannel?: unknown;
+            originatingThreadId?: unknown;
+            originatingTo?: unknown;
+            shouldRouteToOriginating?: unknown;
+          },
+          unknown,
+        ]
+      | undefined;
+    expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(true);
+    expect(replyDispatchCall?.[0]?.originatingChannel).toBe("feishu");
+    expect(replyDispatchCall?.[0]?.originatingTo).toBe("user:ou_123");
+    expect(replyDispatchCall?.[0]?.originatingAccountId).toBe("work");
+    expect(replyDispatchCall?.[0]?.originatingThreadId).toBe("thread:om_123");
   });
 
   it("routes exec-event replies using last route fields when delivery context is missing", async () => {
@@ -6116,6 +6190,53 @@ describe("dispatchReplyFromConfig", () => {
     expect(skippedEvent?.reason).toBe("duplicate");
   });
 
+  it("keeps duplicate skip diagnostics inside the active inbound trace", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550123",
+      MessageSid: "msg-dup-trace",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+    const inboundTrace = createDiagnosticTraceContext();
+    const processedTraces: Array<{
+      outcome?: unknown;
+      reason?: unknown;
+      traceId?: string;
+      spanId?: string;
+    }> = [];
+
+    diagnosticMocks.logMessageProcessed.mockImplementation((event) => {
+      const activeTrace = getActiveDiagnosticTraceContext();
+      processedTraces.push({
+        outcome: event.outcome,
+        reason: event.reason,
+        traceId: activeTrace?.traceId,
+        spanId: activeTrace?.spanId,
+      });
+    });
+
+    try {
+      await runWithDiagnosticTraceContext(inboundTrace, () =>
+        dispatchTwiceWithFreshDispatchers({
+          ctx,
+          cfg,
+          replyResolver,
+        }),
+      );
+    } finally {
+      diagnosticMocks.logMessageProcessed.mockReset();
+    }
+
+    const skippedEvent = processedTraces.find((event) => event.outcome === "skipped");
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(skippedEvent?.reason).toBe("duplicate");
+    expect(skippedEvent?.traceId).toBe(inboundTrace.traceId);
+    expect(skippedEvent?.spanId).toBe(inboundTrace.spanId);
+  });
+
   it("releases inbound dedupe when dispatch fails before completion", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
@@ -6817,6 +6938,46 @@ describe("before_dispatch hook", () => {
     expect(routeCall?.payload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
     expect(routeCall?.payload?.audioAsVoice).toBe(true);
     expect(result.queuedFinal).toBe(true);
+  });
+
+  it("passes inbound reply metadata to before_dispatch event and context", async () => {
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
+    const dispatcher = createDispatcher();
+    const ctx = createHookCtx({
+      ReplyToId: "discord-reply-123",
+      ReplyToBody: "the quoted parent message",
+      ReplyToSender: "Ada",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher });
+
+    const beforeDispatchCall = firstMockCall(
+      hookMocks.runner.runBeforeDispatch,
+      "before dispatch hook",
+    ) as
+      | [
+          {
+            replyToId?: unknown;
+            replyToBody?: unknown;
+            replyToSender?: unknown;
+          },
+          {
+            replyToId?: unknown;
+            replyToBody?: unknown;
+            replyToSender?: unknown;
+          },
+        ]
+      | undefined;
+    expect(beforeDispatchCall?.[0]).toMatchObject({
+      replyToId: "discord-reply-123",
+      replyToBody: "the quoted parent message",
+      replyToSender: "Ada",
+    });
+    expect(beforeDispatchCall?.[1]).toMatchObject({
+      replyToId: "discord-reply-123",
+      replyToBody: "the quoted parent message",
+      replyToSender: "Ada",
+    });
   });
 
   it("suppresses before_dispatch handled reply when sendPolicy is deny", async () => {
@@ -7867,6 +8028,44 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     if (replyDispatchCall?.[1] === undefined) {
       throw new Error("Expected reply dispatch metadata");
     }
+  });
+
+  it("treats message-tool-only observed delivery as visible for fallback eligibility", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const observedReplyDelivery = vi.fn();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      await opts?.onObservedReplyDelivery?.();
+      return { text: "private final reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "channel",
+        SessionKey: "test:session",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        onObservedReplyDelivery: observedReplyDelivery,
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(observedReplyDelivery).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.observedReplyDelivery).toBe(true);
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("preserves hook-blocked metadata when source delivery is message-tool-only", async () => {

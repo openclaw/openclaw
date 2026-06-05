@@ -1,3 +1,5 @@
+// Account-scoped conversation binding managers adapt channel-local thread maps
+// into the shared session binding service.
 import { resolveThreadBindingConversationIdFromBindingId } from "../../channels/thread-binding-id.js";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -13,6 +15,7 @@ import {
   type SessionBindingRecord,
 } from "./session-binding-service.js";
 
+/** In-memory binding record scoped to one channel account and conversation id. */
 export type AccountScopedConversationBindingRecord<TKind extends string = string> = {
   accountId: string;
   conversationId: string;
@@ -25,6 +28,7 @@ export type AccountScopedConversationBindingRecord<TKind extends string = string
   lastActivityAt: number;
 };
 
+/** Account-local binding manager exposed by channel-specific conversation stores. */
 export type AccountScopedConversationBindingManager<TKind extends string = string> = {
   accountId: string;
   getByConversationId: (
@@ -115,6 +119,7 @@ function toSessionBindingRecord<TKind extends string>(params: {
   };
 }
 
+/** Creates a channel/account binding manager and registers it as a session-binding adapter. */
 export function createAccountScopedConversationBindingManager<TKind extends string>(params: {
   channel: string;
   cfg: OpenClawConfig;
@@ -127,6 +132,8 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
   const state = getState<TKind>(params.stateKey);
   const existing = state.managersByAccountId.get(accountId);
   if (existing) {
+    // Manager state is account-scoped and process-global so repeated channel
+    // setup calls reuse the same binding adapter instead of double-registering.
     return existing;
   }
 
@@ -338,6 +345,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
   return manager;
 }
 
+/** Stops registered managers and clears account-scoped binding state for one test key. */
 export function resetAccountScopedConversationBindingsForTests(params: { stateKey: symbol }) {
   const state = getState(params.stateKey);
   for (const manager of state.managersByAccountId.values()) {

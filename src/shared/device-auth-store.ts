@@ -1,3 +1,4 @@
+// Device auth store helpers persist and normalize paired device auth records.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   type DeviceAuthEntry,
@@ -46,6 +47,7 @@ function copyCanonicalDeviceAuthTokens(
   return out;
 }
 
+/** Coerces raw persisted device-auth JSON into the current canonical store shape. */
 export function coerceDeviceAuthStore(value: unknown): DeviceAuthStore | null {
   if (!isRecord(value) || value.version !== 1 || typeof value.deviceId !== "string") {
     return null;
@@ -88,6 +90,8 @@ export function storeDeviceAuthTokenInStore(params: {
     version: 1,
     deviceId: params.deviceId,
     tokens:
+      // Device-auth stores are scoped to one gateway device id; never merge stale
+      // tokens copied from another gateway identity.
       existing && existing.deviceId === params.deviceId && existing.tokens
         ? copyCanonicalDeviceAuthTokens(existing.tokens)
         : {},

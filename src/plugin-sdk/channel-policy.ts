@@ -1,3 +1,4 @@
+// Channel policy helpers evaluate plugin channel runtime policy and operator-facing warnings.
 import {
   normalizeStringEntries,
   uniqueStrings,
@@ -62,6 +63,7 @@ export {
 } from "./group-access.js";
 export { createAllowlistProviderRestrictSendersWarningCollector };
 
+/** Normalizes allowFrom entries into trimmed unique string identifiers. */
 export function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
   if (!Array.isArray(list)) {
     return [];
@@ -69,6 +71,7 @@ export function normalizeAllowFromList(list: Array<string | number> | undefined 
   return normalizeStringEntries(list);
 }
 
+/** Coerces native feature settings to the supported boolean/auto shape. */
 export function coerceNativeSetting(value: unknown): boolean | "auto" | undefined {
   if (value === true || value === false || value === "auto") {
     return value;
@@ -76,6 +79,10 @@ export function coerceNativeSetting(value: unknown): boolean | "auto" | undefine
   return undefined;
 }
 
+/**
+ * Candidate allowlist inspected for dangerous name/email/nick matching warnings.
+ * `pathLabel` is emitted in doctor output, so callers should pass the exact config path.
+ */
 export type ChannelMutableAllowlistCandidate = {
   pathLabel: string;
   list: unknown;
@@ -97,6 +104,7 @@ function collectMutableAllowlistWarningLines(
   const exampleLines = hits
     .slice(0, 8)
     .map((hit) => `- ${sanitizeForLog(hit.path)}: ${sanitizeForLog(hit.entry)}`);
+  // Keep doctor output actionable without dumping large allowlists into logs.
   const remaining =
     hits.length > 8 ? `- +${hits.length - 8} more mutable allowlist entries.` : null;
   const flagPaths = uniqueStrings(hits.map((hit) => hit.dangerousFlagPath));
@@ -113,6 +121,10 @@ function collectMutableAllowlistWarningLines(
   ];
 }
 
+/**
+ * Create a warning collector for mutable name/email/nick allowlists while stable-id matching is required.
+ * Channel plugins provide a detector for entries that depend on dangerous name matching.
+ */
 export function createDangerousNameMatchingMutableAllowlistWarningCollector(params: {
   channel: string;
   detector: (entry: string) => boolean;
@@ -149,27 +161,48 @@ export function createDangerousNameMatchingMutableAllowlistWarningCollector(para
   };
 }
 
-/** Compose the common DM policy resolver with restrict-senders group warnings. */
+/**
+ * Compose the common account-scoped DM policy resolver with restrict-senders group warnings.
+ * This is the shared adapter shape for channels whose DM security and group policy live together.
+ */
 export function createRestrictSendersChannelSecurity<
   ResolvedAccount extends { accountId?: string | null },
 >(params: {
+  /** Channel config key used for default account lookup and warning collection. */
   channelKey: string;
+  /** Reads the account-level DM policy value before shared defaults are applied. */
   resolveDmPolicy: (account: ResolvedAccount) => string | null | undefined;
+  /** Reads account-level sender allowlist entries for DM policy resolution. */
   resolveDmAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  /** Reads the group policy value used by restrict-senders warnings. */
   resolveGroupPolicy: (account: ResolvedAccount) => GroupPolicy | null | undefined;
+  /** Operator-facing surface name in warning text. */
   surface: string;
+  /** Operator-facing description of who can trigger when group policy is open. */
   openScope: string;
+  /** Config path shown for the group policy field that should be restricted. */
   groupPolicyPath: string;
+  /** Config path shown for the group sender allowlist field. */
   groupAllowFromPath: string;
+  /** Whether group replies require mentions, reducing open-policy warning severity. */
   mentionGated?: boolean;
+  /** Override for channels whose provider presence is not the channel config key itself. */
   providerConfigPresent?: (cfg: OpenClawConfig) => boolean;
+  /** Fallback account id used when scoped config inherits from another account. */
   resolveFallbackAccountId?: (account: ResolvedAccount) => string | null | undefined;
+  /** Default DM policy when the account and shared defaults omit one. */
   defaultDmPolicy?: string;
+  /** Account-scoped allowlist path suffix for warning/proof output. */
   allowFromPathSuffix?: string;
+  /** Account-scoped policy path suffix for warning/proof output. */
   policyPathSuffix?: string;
+  /** Channel id used when formatting pairing approval hints. */
   approveChannelId?: string;
+  /** Explicit pairing approval hint, when the default channel hint is not correct. */
   approveHint?: string;
+  /** Normalizes configured DM allowlist entries before sender matching. */
   normalizeDmEntry?: (raw: string) => string;
+  /** Allows non-default accounts to inherit shared defaults from the default account. */
   inheritSharedDefaultsFromDefaultAccount?: boolean;
 }): ChannelSecurityAdapter<ResolvedAccount> {
   return {

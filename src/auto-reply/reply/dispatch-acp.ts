@@ -1,3 +1,4 @@
+// Dispatches reply turns through ACP runtimes and projects their events.
 import { formatAcpRuntimeErrorText } from "@openclaw/acp-core/runtime/error-text";
 import { resolveAcpThreadSessionDetailLines } from "@openclaw/acp-core/runtime/session-identifiers";
 import {
@@ -371,6 +372,8 @@ export async function tryDispatchAcpReply(params: {
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
   shouldSendToolSummaries: boolean;
   shouldSendToolSummariesNow?: () => boolean;
   bypassForCommand: boolean;
@@ -427,6 +430,8 @@ export async function tryDispatchAcpReply(params: {
     shouldRouteToOriginating: params.shouldRouteToOriginating,
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
+    originatingAccountId: params.originatingAccountId,
+    originatingThreadId: params.originatingThreadId,
     onReplyStart: params.onReplyStart,
     abortSignal: params.abortSignal,
     runId: params.runId,

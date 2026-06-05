@@ -1,9 +1,10 @@
+// Control UI config module wires vite behavior.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig, type Plugin } from "vite";
+import type { Plugin, UserConfig } from "vite";
 import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -178,6 +179,10 @@ export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
   });
 }
 
+function normalizeViteImporterPath(importer: string): string {
+  return path.normalize(importer.replace(/[?#].*$/u, ""));
+}
+
 export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
   const browserRedactPath = path.join(here, "src/ui/browser-redact.ts");
   const sharedRedactImporters = new Set([
@@ -192,7 +197,7 @@ export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
       if (
         source === "../logging/redact.js" &&
         importer &&
-        sharedRedactImporters.has(path.normalize(importer))
+        sharedRedactImporters.has(normalizeViteImporterPath(importer))
       ) {
         return browserRedactPath;
       }
@@ -220,7 +225,7 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
   };
 }
 
-export default defineConfig(() => {
+export default function controlUiViteConfig(): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
   const controlUiBuildId = resolveControlUiBuildId();
@@ -282,4 +287,4 @@ export default defineConfig(() => {
       },
     ],
   };
-});
+}

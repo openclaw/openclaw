@@ -1,3 +1,4 @@
+// Unit-fast test discovery and classification helpers for fast local routing.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -261,7 +262,7 @@ const disqualifyingPatterns = [
   },
   {
     code: "module-mocking-helper",
-    pattern: /(?:runtime-module-mocks|plugins-cli-test-helpers)/u,
+    pattern: /(?:runtime-module-mocks|plugins-cli-test-helpers|manager\.test-helpers)/u,
   },
   {
     code: "vitest-mock-api",

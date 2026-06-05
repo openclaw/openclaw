@@ -1,3 +1,4 @@
+// Defines user-facing config field help text for docs and UI surfaces.
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 
@@ -1121,7 +1122,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.contextInjection":
     'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
   "agents.defaults.bootstrapMaxChars":
-    "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 12000).",
+    "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":
     "Max total characters across all injected workspace bootstrap files (default: 60000).",
   "agents.defaults.experimental":
@@ -1276,6 +1277,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Automatically starts the mcporter daemon when mcporter-backed QMD mode is enabled (default: true). Keep enabled unless process lifecycle is managed externally by your service supervisor.",
   "memory.qmd.searchMode":
     'Selects the QMD retrieval path: "query" uses standard query flow, "search" uses search-oriented retrieval, and "vsearch" emphasizes vector retrieval. Keep default unless tuning relevance quality.',
+  "memory.qmd.rerank":
+    'Controls QMD query reranking. Set to false with searchMode "query" and QMD 2.1+ to skip QMD reranking for faster hybrid results; leave unset for QMD defaults.',
   "memory.qmd.searchTool":
     "Overrides the exact mcporter tool name used for QMD searches while preserving `searchMode` as the semantic retrieval mode. Use this only when your QMD MCP server exposes a custom tool such as `hybrid_search` and keep it unset for the normal built-in tool mapping.",
   "memory.qmd.includeDefaultMemory":

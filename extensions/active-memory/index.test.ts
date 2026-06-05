@@ -1,3 +1,4 @@
+// Active Memory tests cover index plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -3218,7 +3219,7 @@ describe("active-memory plugin", () => {
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 100,
+      timeoutMs: 1_000,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
     hoisted.sessionStore["agent:main:memory-get-miss"] = {

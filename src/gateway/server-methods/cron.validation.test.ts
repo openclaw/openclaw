@@ -1,7 +1,9 @@
+// Cron validation tests cover channel target validation against plugin
+// prefixes/aliases and runtime config for cron delivery destinations.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronJob } from "../../cron/types.js";
+import type { CronDelivery, CronJob } from "../../cron/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -76,6 +78,7 @@ function createCronContext(currentJob?: CronJob) {
       add: vi.fn(async () => ({ id: "cron-1" })),
       update: vi.fn(async () => ({ id: "cron-1" })),
       remove: vi.fn(async () => ({ ok: true, removed: true })),
+      enqueueRun: vi.fn(async () => ({ ok: true, enqueued: true, runId: "run-1" })),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn(() => currentJob),
       wake: vi.fn(() => ({ ok: true }) as const),
@@ -116,8 +119,21 @@ async function invokeCronGet(params: Record<string, unknown>, currentJob?: CronJ
   return await invokeCron("cron.get", params, { currentJob });
 }
 
-async function invokeCronUpdate(params: Record<string, unknown>, currentJob: CronJob) {
+async function invokeCronUpdate(params: Record<string, unknown>, currentJob?: CronJob) {
   return await invokeCron("cron.update", params, { currentJob });
+}
+
+async function invokeCronUpdateDelivery(
+  delivery: Record<string, unknown>,
+  currentJob = createCronJob(),
+) {
+  return await invokeCronUpdate(
+    {
+      id: "cron-1",
+      patch: { delivery },
+    },
+    currentJob,
+  );
 }
 
 async function invokeCronRemove(
@@ -148,6 +164,21 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
     payload: { kind: "agentTurn", message: "hello" },
     delivery: { mode: "none" },
     state: {},
+    ...overrides,
+  };
+}
+
+function telegramDeliveryWithSlackFailure(overrides: Partial<CronDelivery> = {}): CronDelivery {
+  return {
+    mode: "announce",
+    channel: "telegram",
+    to: "telegram:123",
+    failureDestination: {
+      mode: "announce",
+      channel: "slack",
+      to: "C123",
+      accountId: "bot-b",
+    },
     ...overrides,
   };
 }
@@ -215,6 +246,19 @@ function slackSynologyConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function slackConfig(params: { includeMainSession?: boolean } = {}): OpenClawConfig {
+  return {
+    ...(params.includeMainSession ? { session: { mainKey: "main" } } : {}),
+    channels: {
+      slack: {
+        botToken: "xoxb-slack-token",
+        appToken: "xapp-slack-token",
+      },
+    },
+    plugins: pluginEntries("slack"),
+  } as OpenClawConfig;
+}
+
 function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
   return {
     name: "cron job",
@@ -264,6 +308,14 @@ function expectDeliveryFields(payload: Record<string, unknown>, expected: Record
   }
 }
 
+function expectCronUpdateDeliveryPatch(
+  context: ReturnType<typeof createCronContext>,
+  expected: unknown,
+) {
+  expect(context.cron.update).toHaveBeenCalled();
+  expect(requireCronUpdatePatch(context).delivery).toEqual(expected);
+}
+
 function expectResponseError(
   respond: ReturnType<typeof vi.fn>,
   expected: { code?: string; messageIncludes?: string },
@@ -281,6 +333,10 @@ function expectResponseError(
   if (expected.messageIncludes) {
     expect(String(error.message)).toContain(expected.messageIncludes);
   }
+}
+
+function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void {
+  expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "CronPattern" });
 }
 
 describe("cron method validation", () => {
@@ -403,6 +459,28 @@ describe("cron method validation", () => {
     expectResponseError(respond, { code: "INVALID_REQUEST" });
   });
 
+  it("rejects whitespace-only cron payloads before calling add", async () => {
+    const agentTurn = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "blank agent turn",
+        payload: { kind: "agentTurn", message: "   " },
+      }),
+    );
+    expect(agentTurn.context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(agentTurn.respond, { code: "INVALID_REQUEST", messageIncludes: "message" });
+
+    const systemEvent = await invokeCronAdd({
+      name: "blank system event",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "   " },
+    });
+    expect(systemEvent.context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(systemEvent.respond, { code: "INVALID_REQUEST", messageIncludes: "text" });
+  });
+
   it("rejects ambiguous announce delivery on add when multiple channels are configured", async () => {
     setRuntimeConfig(telegramSlackConfig({ includeMainSession: true }));
 
@@ -429,6 +507,48 @@ describe("cron method validation", () => {
 
     expect(context.cron.add).toHaveBeenCalled();
     expectCronSuccess(respond);
+  });
+
+  it("rejects blank announce delivery fields before normalization", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "blank delivery target",
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "   ",
+        },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.to must be a non-empty string",
+    });
+  });
+
+  it("rejects blank failure destination fields before normalization", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "blank failure target",
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:123",
+          failureDestination: {
+            mode: "announce",
+            channel: "   ",
+          },
+        },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.failureDestination.channel must be a non-empty string",
+    });
   });
 
   it("rejects announce targets prefixed for a different explicit delivery channel", async () => {
@@ -468,13 +588,8 @@ describe("cron method validation", () => {
   it("validates announce delivery patches that omit mode", async () => {
     setRuntimeConfig(telegramSlackConfig());
 
-    const { context, respond } = await invokeCronUpdate(
-      {
-        id: "cron-1",
-        patch: {
-          delivery: { channel: "slack", to: "telegram:123" },
-        },
-      },
+    const { context, respond } = await invokeCronUpdateDelivery(
+      { channel: "slack", to: "telegram:123" },
       createCronJob({
         delivery: { mode: "announce", channel: "telegram", to: "123" },
       }),
@@ -531,6 +646,113 @@ describe("cron method validation", () => {
     expect(clearDelivery.completionDestination).toBeNull();
   });
 
+  it("rejects blank delivery target patches before normalization", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: {
+            to: "\t",
+          },
+        },
+      },
+      createCronJob({
+        delivery: { mode: "announce", channel: "telegram", to: "telegram:123" },
+      }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.to must be a non-empty string",
+    });
+  });
+
+  it("rejects blank completion destination patches before normalization", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: {
+            completionDestination: {
+              mode: "webhook",
+              to: " ",
+            },
+          },
+        },
+      },
+      createCronJob({
+        delivery: { mode: "announce" },
+      }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.completionDestination.to must be a non-empty string",
+    });
+  });
+
+  it("accepts nullable delivery target clears on update", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: {
+            channel: null,
+            to: null,
+            threadId: null,
+            accountId: null,
+            failureDestination: null,
+          },
+        },
+      },
+      createCronJob({
+        delivery: telegramDeliveryWithSlackFailure({
+          threadId: "99",
+          accountId: "bot-a",
+        }),
+      }),
+    );
+
+    expectCronUpdateDeliveryPatch(context, {
+      channel: null,
+      to: null,
+      threadId: null,
+      accountId: null,
+      failureDestination: null,
+    });
+    expectCronSuccess(respond);
+  });
+
+  it("accepts nullable failure destination field clears on update", async () => {
+    setRuntimeConfig(telegramSlackConfig());
+
+    const { context, respond } = await invokeCronUpdateDelivery(
+      {
+        failureDestination: {
+          channel: null,
+          to: null,
+          accountId: null,
+          mode: null,
+        },
+      },
+      createCronJob({
+        delivery: telegramDeliveryWithSlackFailure(),
+      }),
+    );
+
+    expectCronUpdateDeliveryPatch(context, {
+      failureDestination: {
+        channel: null,
+        to: null,
+        accountId: null,
+        mode: null,
+      },
+    });
+    expectCronSuccess(respond);
+  });
+
   it("rejects underscored provider prefixes for a different explicit delivery channel", async () => {
     setRuntimeConfig(slackSynologyConfig());
 
@@ -548,33 +770,78 @@ describe("cron method validation", () => {
   it("rejects ambiguous announce delivery on update when multiple channels are configured", async () => {
     setRuntimeConfig(telegramSlackConfig({ includeMainSession: true }));
 
-    const { context, respond } = await invokeCronUpdate(
-      {
-        id: "cron-1",
-        patch: {
-          delivery: { mode: "announce" },
-        },
-      },
-      createCronJob(),
-    );
+    const { context, respond } = await invokeCronUpdateDelivery({ mode: "announce" });
 
     expect(context.cron.update).not.toHaveBeenCalled();
     expectResponseError(respond, { messageIncludes: "delivery.channel is required" });
   });
 
-  it("rejects target ids mistakenly supplied as delivery.channel providers", async () => {
-    setRuntimeConfig({
+  it("loads the cron job before validating update delivery patches", async () => {
+    getRuntimeConfig.mockReturnValue({
       session: {
         mainKey: "main",
       },
       channels: {
+        telegram: {
+          botToken: "telegram-token",
+        },
         slack: {
           botToken: "xoxb-slack-token",
           appToken: "xapp-slack-token",
         },
       },
-      plugins: pluginEntries("slack"),
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+          slack: { enabled: true },
+        },
+      },
     } as OpenClawConfig);
+
+    const context = createCronContext(createCronJob());
+    context.cron.getJob.mockReturnValue(undefined);
+    const respond = vi.fn();
+    await cronHandlers["cron.update"]({
+      req: {} as never,
+      params: {
+        id: "cron-1",
+        patch: {
+          delivery: { mode: "announce" },
+        },
+      } as never,
+      respond: respond as never,
+      context: context as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(context.cron.readJob).toHaveBeenCalledWith("cron-1");
+    expect(context.cron.getJob).not.toHaveBeenCalled();
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, { messageIncludes: "delivery.channel is required" });
+  });
+
+  it("does not revalidate stale delivery config for unrelated updates", async () => {
+    setRuntimeConfig(slackConfig({ includeMainSession: true }));
+
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          enabled: false,
+        },
+      },
+      createCronJob({
+        delivery: { mode: "announce", channel: "telegram", to: "telegram:123" },
+      }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { enabled: false });
+    expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+  });
+
+  it("rejects target ids mistakenly supplied as delivery.channel providers", async () => {
+    setRuntimeConfig(slackConfig({ includeMainSession: true }));
 
     const { context, respond } = await invokeCronAdd(
       agentTurnCronParams({
@@ -607,7 +874,34 @@ describe("cron method validation", () => {
       { context },
     );
 
-    expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "CronPattern" });
+    expectInvalidCronPatternError(respond);
+  });
+
+  it("returns INVALID_REQUEST when cron.add rejects an incompatible main agent", async () => {
+    const context = createCronContext();
+    context.cron.add.mockRejectedValueOnce(
+      new Error(
+        'cron: sessionTarget "main" is only valid for the default agent. Use sessionTarget "isolated" with payload.kind "agentTurn" for non-default agents (agentId: worker)',
+      ),
+    );
+    const { respond } = await invokeCron(
+      "cron.add",
+      {
+        name: "bad-main-agent",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "ping" },
+        agentId: "worker",
+      },
+      { context },
+    );
+
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: 'sessionTarget "main" is only valid',
+    });
   });
 
   it("returns INVALID_REQUEST when cron.update throws a croner parse error (#74066)", async () => {
@@ -627,7 +921,52 @@ describe("cron method validation", () => {
       { context },
     );
 
-    expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "CronPattern" });
+    expectInvalidCronPatternError(respond);
+  });
+
+  it("returns INVALID_REQUEST when cron.update cannot find the job", async () => {
+    const { context, respond } = await invokeCronUpdate({
+      id: "missing",
+      patch: { enabled: false },
+    });
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.update params: id not found",
+    });
+  });
+
+  it("rejects cron.update payload/session mismatches before calling the service update", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          payload: { kind: "systemEvent", text: "wake main" },
+        },
+      },
+      createCronJob({
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "hello" },
+      }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: 'isolated/current/session cron jobs require payload.kind="agentTurn"',
+    });
+  });
+
+  it("returns INVALID_REQUEST when cron.run cannot find the job", async () => {
+    const context = createCronContext();
+    context.cron.enqueueRun.mockRejectedValueOnce(new Error("unknown cron job id: missing"));
+    const { respond } = await invokeCron("cron.run", { id: "missing" }, { context });
+
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "unknown cron job id: missing",
+    });
   });
 
   it("re-throws non-parse errors from cron.add instead of masking as INVALID_REQUEST", async () => {
@@ -677,11 +1016,18 @@ describe("cron method validation", () => {
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     });
 
-    it("rejects empty-string sessionKey at schema", async () => {
+    it.each([
+      { name: "empty-string sessionKey at schema", sessionKey: "" },
+      { name: "non-string sessionKey at schema", sessionKey: 42 },
+      {
+        name: "subagent sessionKey targets before enqueueing",
+        sessionKey: "agent:main:subagent:worker",
+      },
+    ])("rejects $name", async ({ sessionKey }) => {
       const { context, respond } = await invokeWake({
         mode: "now",
         text: "ping",
-        sessionKey: "",
+        sessionKey,
       });
       expect(context.cron.wake).not.toHaveBeenCalled();
       expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
@@ -698,26 +1044,6 @@ describe("cron method validation", () => {
         text: "ping",
       });
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    });
-
-    it("rejects non-string sessionKey at schema", async () => {
-      const { context, respond } = await invokeWake({
-        mode: "now",
-        text: "ping",
-        sessionKey: 42,
-      });
-      expect(context.cron.wake).not.toHaveBeenCalled();
-      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
-    });
-
-    it("rejects subagent sessionKey targets before enqueueing", async () => {
-      const { context, respond } = await invokeWake({
-        mode: "now",
-        text: "ping",
-        sessionKey: "agent:main:subagent:worker",
-      });
-      expect(context.cron.wake).not.toHaveBeenCalled();
-      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
     });
   });
 });

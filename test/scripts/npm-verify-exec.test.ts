@@ -1,3 +1,4 @@
+// Npm Verify Exec tests cover npm verify exec script behavior.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +11,27 @@ function makeTempRoot(): string {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-npm-verify-exec-"));
   tempDirs.push(root);
   return root;
+}
+
+function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(env)) {
+    previous.set(key, process.env[key]);
+  }
+  for (const [key, value] of Object.entries(env)) {
+    process.env[key] = value;
+  }
+  try {
+    return callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 afterEach(() => {
@@ -64,5 +86,27 @@ describe("npm verifier command execution", () => {
         { maxBufferBytes: 1024, timeoutMs: 5_000 },
       ),
     ).toThrow(/ENOBUFS|maxBuffer/u);
+  });
+
+  it("rejects malformed command limit environment values", () => {
+    const root = makeTempRoot();
+
+    withProcessEnv({ OPENCLAW_NPM_VERIFY_COMMAND_TIMEOUT_MS: "5m" }, () => {
+      expect(() =>
+        runNpmVerifyCommand(
+          { command: process.execPath, args: ["-e", "process.stdout.write('ok')"] },
+          root,
+        ),
+      ).toThrow("invalid OPENCLAW_NPM_VERIFY_COMMAND_TIMEOUT_MS: 5m");
+    });
+
+    withProcessEnv({ OPENCLAW_NPM_VERIFY_COMMAND_MAX_BUFFER_BYTES: "16mb" }, () => {
+      expect(() =>
+        runNpmVerifyCommand(
+          { command: process.execPath, args: ["-e", "process.stdout.write('ok')"] },
+          root,
+        ),
+      ).toThrow("invalid OPENCLAW_NPM_VERIFY_COMMAND_MAX_BUFFER_BYTES: 16mb");
+    });
   });
 });

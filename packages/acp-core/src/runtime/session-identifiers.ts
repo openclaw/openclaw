@@ -1,3 +1,4 @@
+// ACP Core module implements session identifiers behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeText } from "../normalize-text.js";
 import type { SessionAcpIdentity, SessionAcpMeta } from "../types.js";
@@ -57,6 +58,7 @@ function resolveAcpAgentResumeHintLine(params: {
   return resolver ? resolver({ agentSessionId }) : undefined;
 }
 
+/** Renders status-safe ACP session identifier lines from persisted session metadata. */
 export function resolveAcpSessionIdentifierLines(params: {
   sessionKey: string;
   meta?: SessionAcpMeta;
@@ -70,6 +72,7 @@ export function resolveAcpSessionIdentifierLines(params: {
   });
 }
 
+/** Renders resolved ACP backend/agent ids, hiding pending ids from thread intros. */
 export function resolveAcpSessionIdentifierLinesFromIdentity(params: {
   backend: string;
   identity?: SessionAcpIdentity;
@@ -83,6 +86,8 @@ export function resolveAcpSessionIdentifierLinesFromIdentity(params: {
   const acpxRecordId = normalizeText(identity?.acpxRecordId);
   const hasIdentifier = Boolean(agentSessionId || acpxSessionId || acpxRecordId);
   if (isSessionIdentityPending(identity) && hasIdentifier) {
+    // Status views explain that ids are still settling; thread intros stay quiet so
+    // users do not copy provisional backend ids before the first reply resolves them.
     if (mode === "status") {
       return ["session ids: pending (available after the first reply)"];
     }
@@ -101,6 +106,7 @@ export function resolveAcpSessionIdentifierLinesFromIdentity(params: {
   return lines;
 }
 
+/** Resolves the runtime cwd, preferring modern runtimeOptions over legacy metadata. */
 export function resolveAcpSessionCwd(meta?: SessionAcpMeta): string | undefined {
   const runtimeCwd = normalizeText(meta?.runtimeOptions?.cwd);
   if (runtimeCwd) {
@@ -109,6 +115,7 @@ export function resolveAcpSessionCwd(meta?: SessionAcpMeta): string | undefined 
   return normalizeText(meta?.cwd);
 }
 
+/** Renders thread-detail identifier lines plus a backend-specific resume hint when stable. */
 export function resolveAcpThreadSessionDetailLines(params: {
   sessionKey: string;
   meta?: SessionAcpMeta;

@@ -1,3 +1,4 @@
+// Control UI module implements app settings behavior.
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
@@ -416,7 +417,7 @@ function loadConfigSchemaAfterPrimary(
   );
 }
 
-export async function refreshActiveTab(host: SettingsHost) {
+export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?: boolean }) {
   const app = host as unknown as SettingsAppHost;
   const refreshRun = beginControlUiRefresh(host, host.tab);
   try {
@@ -491,13 +492,18 @@ export async function refreshActiveTab(host: SettingsHost) {
         ]);
         break;
       case "chat": {
-        const modelAuthRefresh = loadModelAuthStatusState(app).catch(() => undefined);
-        await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
-        scheduleChatScroll(
-          host as unknown as Parameters<typeof scheduleChatScroll>[0],
-          !host.chatHasAutoScrolled,
-        );
-        void modelAuthRefresh;
+        try {
+          await refreshChat(host as unknown as Parameters<typeof refreshChat>[0], {
+            awaitHistory: opts?.chatStartup === true,
+            startup: opts?.chatStartup === true,
+          });
+          scheduleChatScroll(
+            host as unknown as Parameters<typeof scheduleChatScroll>[0],
+            !host.chatHasAutoScrolled,
+          );
+        } finally {
+          void loadModelAuthStatusState(app).catch(() => undefined);
+        }
         break;
       }
       case "debug":

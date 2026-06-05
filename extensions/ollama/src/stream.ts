@@ -1,3 +1,4 @@
+// Ollama plugin module implements stream behavior.
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -1224,7 +1225,7 @@ function createRawOllamaStreamFn(
             id: model.id,
             reasoning: model.reasoning,
           };
-          const shouldEmitThinking = model.reasoning || !Object.hasOwn(model, "reasoning");
+          const shouldEmitThinking = model.reasoning ?? true;
           const visibleContentSanitizer = createOllamaVisibleContentSanitizer(model.id);
           const cooperativeScheduler = createOllamaStreamCooperativeScheduler(options?.signal);
           let streamStarted = false;

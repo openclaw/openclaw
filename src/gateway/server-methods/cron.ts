@@ -1,3 +1,4 @@
+// Gateway RPC handlers for cron job CRUD, run logs, wake, and delivery previews.
 import {
   ErrorCodes,
   errorShape,
@@ -14,6 +15,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
+import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
   isInvalidCronRunLogJobIdError,
@@ -137,6 +139,14 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
 
   const failureDestination = params.delivery?.failureDestination;
   if (failureDestination && (failureDestination.mode ?? "announce") === "announce") {
+    if (
+      failureDestination.channel === undefined &&
+      failureDestination.to === undefined &&
+      failureDestination.accountId === undefined &&
+      failureDestination.mode === undefined
+    ) {
+      return;
+    }
     assertCompatibleAnnounceTarget({
       channel: failureDestination.channel,
       to: failureDestination.to,
@@ -160,26 +170,25 @@ function assertValidCronCreateDelivery(cfg: OpenClawConfig, jobCreate: CronJobCr
   });
 }
 
-function assertValidCronUpdateDelivery(params: {
+function assertValidCronUpdatePatch(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;
-  currentJob: CronJob | undefined;
+  currentJob: CronJob;
   patch: CronJobPatch;
 }) {
-  if (!params.currentJob || !("delivery" in params.patch)) {
-    return;
-  }
-
-  // Validate the post-patch job, not just the sparse patch, because delivery
-  // fields can be split across the existing job and the update payload.
+  // Apply the full patch so service-owned payload/session constraints are
+  // checked before mutation; configured-channel checks stay delivery-scoped so
+  // stale existing delivery does not block unrelated updates like disabling.
   const nextJob = structuredClone(params.currentJob);
   applyJobPatch(nextJob, params.patch, {
     defaultAgentId: params.defaultAgentId,
   });
-  assertValidCronAnnounceDelivery({
-    cfg: params.cfg,
-    delivery: nextJob.delivery,
-  });
+  if ("delivery" in params.patch) {
+    assertValidCronAnnounceDelivery({
+      cfg: params.cfg,
+      delivery: nextJob.delivery,
+    });
+  }
 }
 
 function resolveCronJobId(params: CronJobIdParams): string | undefined {
@@ -212,6 +221,26 @@ function cronRunLogPageFilters(params: CronRunsRequestParams) {
   };
 }
 
+function isCronInvalidRequestError(err: unknown): boolean {
+  const message = formatErrorMessage(err);
+  return (
+    message.startsWith("unknown cron job id:") ||
+    message.includes("cron job is missing sessionTarget") ||
+    message.includes("invalid cron sessionTarget session id") ||
+    message.includes('main cron jobs require payload.kind="systemEvent"') ||
+    message.includes('isolated/current/session cron jobs require payload.kind="agentTurn"') ||
+    message.includes('sessionTarget "main" is only valid for the default agent') ||
+    message.includes('cron.update payload.kind="systemEvent" requires text') ||
+    message.includes('cron.update payload.kind="agentTurn" requires message') ||
+    message.includes("cron webhook delivery requires") ||
+    message.includes("cron completion destination webhook requires") ||
+    message.includes("cron failure destination webhook requires") ||
+    message.includes("cron channel delivery config is only supported") ||
+    message.includes("cron delivery.failureDestination is only supported")
+  );
+}
+
+/** Gateway request handlers for cron jobs and cron run-log access. */
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
     if (!validateWakeParams(params)) {
@@ -338,6 +367,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         : undefined;
     let normalized: unknown;
     try {
+      assertCronDeliveryInputNonBlankFields((params as { delivery?: unknown } | null)?.delivery);
       normalized =
         normalizeCronJobCreate(params, {
           sessionContext: { sessionKey },
@@ -392,7 +422,11 @@ export const cronHandlers: GatewayRequestHandlers = {
     try {
       job = await context.cron.add(jobCreate);
     } catch (err) {
-      if (!(err instanceof TypeError) && !(err instanceof RangeError)) {
+      if (
+        !(err instanceof TypeError) &&
+        !(err instanceof RangeError) &&
+        !isCronInvalidRequestError(err)
+      ) {
         throw err;
       }
       respond(
@@ -411,7 +445,13 @@ export const cronHandlers: GatewayRequestHandlers = {
   "cron.update": async ({ params, respond, context }) => {
     let normalizedPatch: ReturnType<typeof normalizeCronJobPatch>;
     try {
-      normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
+      const rawPatch = (params as { patch?: unknown } | null)?.patch;
+      assertCronDeliveryInputNonBlankFields(
+        rawPatch && typeof rawPatch === "object"
+          ? (rawPatch as { delivery?: unknown }).delivery
+          : undefined,
+      );
+      normalizedPatch = normalizeCronJobPatch(rawPatch);
     } catch (err) {
       respond(
         false,
@@ -454,6 +494,11 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const patch = p.patch as unknown as CronJobPatch;
     const cfg = context.getRuntimeConfig();
+    const currentJob = await context.cron.readJob(jobId);
+    if (!currentJob) {
+      respondInvalidCronParams(respond, "cron.update", "id not found");
+      return;
+    }
     if (patch.schedule) {
       const timestampValidation = validateScheduleTimestamp(patch.schedule);
       if (!timestampValidation.ok) {
@@ -466,10 +511,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
     }
     try {
-      assertValidCronUpdateDelivery({
+      assertValidCronUpdatePatch({
         cfg,
         defaultAgentId: context.cron.getDefaultAgentId(),
-        currentJob: context.cron.getJob(jobId),
+        currentJob,
         patch,
       });
     } catch (err) {
@@ -487,7 +532,11 @@ export const cronHandlers: GatewayRequestHandlers = {
     try {
       job = await context.cron.update(jobId, patch);
     } catch (err) {
-      if (!(err instanceof TypeError) && !(err instanceof RangeError)) {
+      if (
+        !(err instanceof TypeError) &&
+        !(err instanceof RangeError) &&
+        !isCronInvalidRequestError(err)
+      ) {
         throw err;
       }
       respond(
@@ -552,6 +601,10 @@ export const cronHandlers: GatewayRequestHandlers = {
         respond(true, { ok: true, ran: false, reason: "invalid-spec" }, undefined);
         return;
       }
+      if (isCronInvalidRequestError(error)) {
+        respondInvalidCronParams(respond, "cron.run", formatErrorMessage(error));
+        return;
+      }
       throw error;
     }
     respond(true, result, undefined);
@@ -589,10 +642,17 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const jobs = await context.cron.list({ includeDisabled: true });
+      const matchedJob = jobs.find((job) => job.id === jobId);
+      const jobNameById =
+        matchedJob && typeof matchedJob.name === "string"
+          ? { [jobId as string]: matchedJob.name }
+          : undefined;
       const page = await readCronRunLogEntriesPage({
         storePath: context.cronStorePath,
         jobId: jobId as string,
         ...cronRunLogPageFilters(p),
+        jobNameById,
       });
       respond(true, page, undefined);
     } catch (err) {

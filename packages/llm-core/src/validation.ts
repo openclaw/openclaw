@@ -1,3 +1,4 @@
+// LLM Core module implements validation behavior.
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { Value } from "typebox/value";
@@ -297,6 +298,8 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
 
   const validator = getValidator(tool.parameters);
   if (!hasTypeBoxMetadata(tool.parameters) && isJsonSchemaObject(tool.parameters)) {
+    // TypeBox Value.Convert is intentionally conservative for plain JSON schemas;
+    // mirror the provider-facing coercions so model-emitted string numbers validate.
     const coerced = coerceWithJsonSchema(args, tool.parameters);
     if (coerced !== args) {
       if (isRecord(args) && isRecord(coerced)) {

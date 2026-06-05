@@ -1,3 +1,4 @@
+// ACP Core module implements session interaction mode behavior.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 type AcpSessionInteractionMode = "interactive" | "parent-owned-background";
@@ -23,6 +24,7 @@ function resolveAcpSessionInteractionMode(
   return "interactive";
 }
 
+/** Returns true for ACP sessions delegated from a parent session instead of user-facing chat. */
 export function isParentOwnedBackgroundAcpSession(entry?: SessionInteractionEntry | null): boolean {
   return resolveAcpSessionInteractionMode(entry) === "parent-owned-background";
 }
