@@ -1853,6 +1853,61 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toBe("second");
   });
 
+  it("drains a disableCollectBatching retry individually instead of collecting it", async () => {
+    // #85714: A stranded-reply retry must run as its own exact-once delivery
+    // attempt and keep its summaryLine marker, never merged into a collect batch.
+    const strandedReplyRetryMarker = "stranded-reply-retry";
+    const key = `test-collect-disable-batching-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 3;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
+    const retryPrompt = "[System] Please deliver this reply now by calling message(action=send).";
+
+    enqueueFollowupRun(key, createRun({ prompt: "normal one", ...route }), settings);
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: retryPrompt, ...route }),
+        summaryLine: strandedReplyRetryMarker,
+        disableCollectBatching: true,
+      },
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "normal two", ...route }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(3);
+    const retryCall = calls.find((call) => call.prompt === retryPrompt);
+    expect(retryCall).toBeDefined();
+    // The retry ran as its own exact call, not folded into a collect batch.
+    expect(retryCall?.prompt).not.toContain("[Queued messages while agent was busy]");
+    expect(retryCall?.prompt).not.toContain("Queued #");
+    expect(retryCall?.summaryLine).toBe(strandedReplyRetryMarker);
+    // No single call merged the retry prompt with a normal prompt.
+    for (const call of calls) {
+      if (call.prompt.includes(retryPrompt)) {
+        expect(call.prompt).not.toContain("normal one");
+        expect(call.prompt).not.toContain("normal two");
+      }
+    }
+  });
+
   it("carries image payloads across collected batches", async () => {
     const key = `test-collect-images-${Date.now()}`;
     const calls: FollowupRun[] = [];

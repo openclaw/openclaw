@@ -2628,6 +2628,11 @@ export async function runReplyAgent(params: {
               ...followupRun,
               prompt: retryPrompt,
               summaryLine: STRANDED_REPLY_RETRY_MARKER,
+              // #85714: This synthetic retry is the single exact-once delivery
+              // attempt. It must drain as its own follow-up so its exact prompt
+              // and summaryLine loop-guard marker survive; never let collect mode
+              // merge it into a batch with other queued prompts.
+              disableCollectBatching: true,
               // Clear transcript/persistence fields so the retry turn uses the
               // retry prompt, not the original user message. The followup runner
               // resolves `transcriptPrompt ?? extracted.text`, so a retained

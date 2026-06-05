@@ -3637,6 +3637,9 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     // so the enqueued run must suppress user-message persistence at run.* level.
     const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
     expect(retryRun?.run?.suppressNextUserMessagePersistence).toBe(true);
+    // The retry must drain individually so its exact prompt and summaryLine
+    // marker survive instead of being merged into a collect batch.
+    expect(retryRun?.disableCollectBatching).toBe(true);
   });
 
   it("does not enqueue a second retry when a stranded-reply retry strands again (#85714)", async () => {
