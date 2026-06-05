@@ -220,6 +220,38 @@ describe("createMsteamsRealtimeCall", () => {
     );
   });
 
+  it("refuses a background task (no ack) when the caller has no AAD delivery target", () => {
+    const ctx = createMockSession();
+    ctx.session.caller.aadId = null; // anonymous caller — no Teams chat to deliver to
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        toolPolicy: "owner",
+        agentRuntime: {} as unknown as CoreAgentDeps,
+        voiceConfig: {} as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+      },
+    });
+
+    mock.getRequest().onToolCall?.({
+      itemId: "item-3",
+      callId: "task-call-2",
+      name: "openclaw_agent_task",
+      args: { task: "do a big multi-step thing" },
+    });
+
+    const texts = mock.submitToolResult.mock.calls
+      .filter((args) => args[0] === "task-call-2")
+      .map((args) => (args[1] as { text: string }).text);
+    // Refused with the no-target message, and never acked a delivery it can't make.
+    expect(texts.some((t) => t.includes("don't have a Teams chat"))).toBe(true);
+    expect(texts.some((t) => t.includes("I'll message you"))).toBe(false);
+  });
+
   it("refuses a consult tool call until Teams recording status is active (Media Access API)", () => {
     const ctx = createMockSession("inactive");
     const mock = createMockProvider();
