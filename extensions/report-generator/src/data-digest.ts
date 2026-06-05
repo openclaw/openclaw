@@ -1,11 +1,27 @@
+import type { CollectedStats, AggregationResult } from "./query-plan.js";
 import type { FeedRecord } from "./types.js";
 
-/** Max records listed in detail; aggregates always cover the full set. */
-const DETAIL_LIMIT = 50;
 /** Max chars of summary/content excerpt per detailed record. */
 const EXCERPT_LIMIT = 120;
-/** Top-N high-influence records highlighted separately. */
-const TOP_INFLUENCE_LIMIT = 10;
+
+const DIMENSION_LABELS: Record<string, string> = {
+  platform: "平台分布",
+  emotion: "情感分布",
+  level: "风险级别分布",
+  mediaLevel: "媒体级别分布",
+  city: "城市分布",
+  contentType: "内容类型分布",
+  day: "每日走势",
+};
+
+const METRIC_LABELS: Record<string, string> = {
+  fansNumber: "粉丝量",
+  readCount: "阅读量",
+  comments: "评论量",
+  forwardNumber: "转发量",
+  praiseNum: "点赞量",
+  topicInteractionCount: "互动量",
+};
 
 function formatDate(date: Date | string): string {
   const d = date instanceof Date ? date : new Date(date);
@@ -16,19 +32,6 @@ function formatDate(date: Date | string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-function countBy(records: FeedRecord[], key: (r: FeedRecord) => string): [string, number][] {
-  const counts = new Map<string, number>();
-  for (const r of records) {
-    const k = key(r) || "未知";
-    counts.set(k, (counts.get(k) ?? 0) + 1);
-  }
-  return [...counts.entries()].toSorted((a, b) => b[1] - a[1]);
-}
-
-function distributionLine(entries: [string, number][]): string {
-  return entries.map(([k, v]) => `${k} ${v} 条`).join("，");
-}
-
 function excerpt(record: FeedRecord): string {
   const source = (record.summary || record.content || "").replace(/\s+/g, " ").trim();
   if (!source) {
@@ -37,11 +40,7 @@ function excerpt(record: FeedRecord): string {
   return source.length > EXCERPT_LIMIT ? `${source.slice(0, EXCERPT_LIMIT)}…` : source;
 }
 
-function influenceScore(record: FeedRecord): number {
-  return (record.fansNumber || 0) + (record.comments || 0) * 10;
-}
-
-function detailLine(record: FeedRecord, index: number): string {
+function detailLine(record: FeedRecord, index: number, metricSuffix = ""): string {
   const parts = [
     `${index + 1}. [${record.platform || "未知"}] ${record.title || "（无标题）"}`,
     formatDate(record.date),
@@ -57,9 +56,32 @@ function detailLine(record: FeedRecord, index: number): string {
   if (record.author) {
     parts.push(`作者:${record.author}`);
   }
+  if (metricSuffix) {
+    parts.push(metricSuffix);
+  }
   const head = parts.join(" | ");
   const body = excerpt(record);
   return body ? `${head}\n   摘要: ${body}` : head;
+}
+
+function aggregationLine(agg: AggregationResult): string {
+  const label = DIMENSION_LABELS[agg.dimension] ?? agg.dimension;
+  if (agg.buckets.length === 0) {
+    return `- ${label}：暂无数据`;
+  }
+  const rendered =
+    agg.dimension === "day"
+      ? agg.buckets.map((b) => `${b.key}(${b.count})`).join("，")
+      : agg.buckets.map((b) => `${b.key} ${b.count} 条`).join("，");
+  return `- ${label}：${rendered}`;
+}
+
+function bucketCount(stats: CollectedStats, dimension: string, keys: string[]): number | null {
+  const agg = stats.aggregations.find((a) => a.dimension === dimension);
+  if (!agg) {
+    return null;
+  }
+  return agg.buckets.filter((b) => keys.includes(b.key)).reduce((sum, b) => sum + b.count, 0);
 }
 
 /**
@@ -86,59 +108,54 @@ export function computeDailyAverage(
 }
 
 /**
- * Render the REAL query results (collected by FeedCollector from
- * feed_monitor_item) into a structured digest for the report prompt:
- * full-set aggregates + daily trend + top-influence highlights + a capped
- * detail list. The agent writes prose from this digest and never needs
- * (nor has) database access — keeping report numbers grounded in the
- * actual data instead of model guesses.
+ * Render code-collected, full-set statistics (CollectedStats from
+ * FeedCollector.collectStats — aggregations pushed down to SQL, never
+ * capped by a fetch limit) into a structured digest for the report prompt.
+ * The agent writes prose from this digest and never needs (nor has)
+ * database access — keeping report numbers grounded in the actual data
+ * instead of model guesses.
  */
-export function buildDataDigest(records: FeedRecord[]): string {
-  if (records.length === 0) {
+export function buildStatsDigest(stats: CollectedStats): string {
+  if (stats.total === 0) {
     return "该时间范围内没有查询到任何舆情数据（已按专题与日期过滤、排除 skip=1）。";
   }
 
-  const byPlatform = countBy(records, (r) => r.platform);
-  const byEmotion = countBy(records, (r) => r.emotion);
-  const byLevel = countBy(records, (r) => r.level);
-  const byDay = countBy(records, (r) => formatDate(r.date)).toSorted((a, b) =>
-    a[0].localeCompare(b[0]),
-  );
-
-  const negatives = records.filter((r) => r.emotion === "Negative");
-  const highRisk = records.filter((r) => r.level === "Red" || r.level === "Orange");
-
-  const topInfluence = records
-    .filter((r) => influenceScore(r) > 0)
-    .toSorted((a, b) => influenceScore(b) - influenceScore(a))
-    .slice(0, TOP_INFLUENCE_LIMIT);
-
-  const detailed = records.slice(0, DETAIL_LIMIT);
-
   const sections = [
-    `### 统计概览（全量 ${records.length} 条）`,
-    `- 平台分布：${distributionLine(byPlatform)}`,
-    `- 情感分布：${distributionLine(byEmotion)}`,
-    `- 风险级别分布：${distributionLine(byLevel)}`,
-    `- 负面(Negative)：${negatives.length} 条；高风险(Red/Orange)：${highRisk.length} 条`,
-    `- 每日走势：${byDay.map(([d, c]) => `${d}(${c})`).join("，")}`,
+    `### 统计概览（SQL 全量聚合，共 ${stats.total} 条）`,
+    ...stats.aggregations.map(aggregationLine),
   ];
 
-  if (topInfluence.length > 0) {
+  const negatives = bucketCount(stats, "emotion", ["Negative"]);
+  const highRisk = bucketCount(stats, "level", ["Red", "Orange"]);
+  if (negatives !== null || highRisk !== null) {
+    const parts = [];
+    if (negatives !== null) {
+      parts.push(`负面(Negative)：${negatives} 条`);
+    }
+    if (highRisk !== null) {
+      parts.push(`高风险(Red/Orange)：${highRisk} 条`);
+    }
+    sections.push(`- ${parts.join("；")}`);
+  }
+
+  if (stats.topN.records.length > 0) {
+    const metricLabel = METRIC_LABELS[stats.topN.metric] ?? stats.topN.metric;
     sections.push(
       "",
-      "### 高影响力条目（按粉丝量/评论量排序）",
-      ...topInfluence.map((r, i) => detailLine(r, i)),
+      `### 高影响力条目（按${metricLabel}排序，前 ${stats.topN.records.length} 条）`,
+      ...stats.topN.records.map((r, i) => detailLine(r, i, `${metricLabel}:${r.metricValue}`)),
     );
   }
 
-  sections.push(
-    "",
-    records.length > DETAIL_LIMIT
-      ? `### 条目明细（按时间倒序，前 ${DETAIL_LIMIT} 条，共 ${records.length} 条）`
-      : `### 条目明细（按时间倒序，共 ${records.length} 条）`,
-    ...detailed.map((r, i) => detailLine(r, i)),
-  );
+  if (stats.details.length > 0) {
+    sections.push(
+      "",
+      stats.total > stats.details.length
+        ? `### 条目明细（按时间倒序，前 ${stats.details.length} 条，全量共 ${stats.total} 条）`
+        : `### 条目明细（按时间倒序，共 ${stats.details.length} 条）`,
+      ...stats.details.map((r, i) => detailLine(r, i)),
+    );
+  }
 
   return sections.join("\n");
 }

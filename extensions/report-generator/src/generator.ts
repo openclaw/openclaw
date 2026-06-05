@@ -1,14 +1,26 @@
 import type { PluginRuntime } from "../api.js";
 import type { PluginLogger } from "../api.js";
-import { buildDataDigest, computeDailyAverage } from "./data-digest.js";
+import { buildStatsDigest, computeDailyAverage } from "./data-digest.js";
+import {
+  buildPlanPrompt,
+  DEFAULT_QUERY_PLAN,
+  extractQueryPlan,
+  type CollectedStats,
+  type QueryPlan,
+} from "./query-plan.js";
 import { ToolActivityNarrator } from "./tool-activity.js";
-import type { FeedRecord, GeneratedReport, ReportPeriod } from "./types.js";
+import type { GeneratedReport, ReportPeriod } from "./types.js";
 
 interface GenerateOptions {
   period: ReportPeriod;
   requirement: string;
   dateScope: string;
-  feedData: FeedRecord[];
+  /**
+   * Executes a validated QueryPlan against the database (injected by the
+   * caller — FeedCollector.collectStats). Generation never touches the DB
+   * directly; the LLM only proposes the plan.
+   */
+  collectStats: (plan: QueryPlan) => Promise<CollectedStats>;
   template: string;
   userId: string;
   /** Topic the report covers (download.topicId). */
@@ -81,14 +93,16 @@ export class ReportGenerator {
   }
 
   /**
-   * Generate a report using subagent with LLM based on feed data and template.
+   * Generate a report: LLM plans the queries from the template, code
+   * validates and executes them (full-set SQL aggregation), then the LLM
+   * writes the report from the real results.
    */
   async generate(options: GenerateOptions, logger: PluginLogger): Promise<GeneratedReport> {
     const {
       period,
       requirement,
       dateScope,
-      feedData,
+      collectStats,
       template,
       userId,
       agentId,
@@ -96,17 +110,21 @@ export class ReportGenerator {
       onActivity,
     } = options;
 
-    // Render the REAL collected rows (FeedCollector already queried the DB
-    // with the gateway's credentials) into aggregates + detail lines. The
-    // agent has no database access of its own — everything it reports must
-    // come from this digest.
-    const dataDigest = buildDataDigest(feedData);
-    const totalCount = feedData.length;
-
     logger.info(`[REPORT_GENERATOR] Generating ${period} report for requirement: ${requirement}`);
 
-    // Run under the requesting user's agent when known so the subagent has the
-    // same workspace skills (DB schema + query scripts) as the chat session.
+    // Step 1: LLM reads the template and proposes WHAT to aggregate
+    // (validated against whitelists; falls back to the default plan).
+    onActivity?.("正在分析模板数据需求…");
+    const plan = await this.planQueries(template, userId, logger);
+
+    // Step 2: code executes the plan — full-set SQL aggregation, real rows.
+    onActivity?.("正在统计舆情数据…");
+    const stats = await collectStats(plan);
+    const dataDigest = buildStatsDigest(stats);
+    const totalCount = stats.total;
+
+    // Run under the requesting user's agent when known so the report keeps
+    // the same workspace persona and templates as the chat session.
     const sessionKey = agentId
       ? `agent:${agentId}:report-gen:${userId}:${Date.now()}`
       : `report-gen:${userId}:${Date.now()}`;
@@ -239,6 +257,54 @@ export class ReportGenerator {
       throw error;
     } finally {
       unsubscribe();
+    }
+  }
+
+  /**
+   * Ask the LLM to read the template and emit a JSON QueryPlan. Any failure
+   * (timeout, unparseable output, hallucinated dimensions) degrades to
+   * DEFAULT_QUERY_PLAN — planning can improve a report, never break one.
+   */
+  private async planQueries(
+    template: string,
+    userId: string,
+    logger: PluginLogger,
+  ): Promise<QueryPlan> {
+    const sessionKey = `report-plan:${userId}:${Date.now()}`;
+    try {
+      const runResult = await this.runtime.subagent.run({
+        sessionKey,
+        message: buildPlanPrompt(template),
+        deliver: false,
+      });
+      const waitResult = await this.runtime.subagent.waitForRun({
+        runId: runResult.runId,
+        timeoutMs: 60_000,
+      });
+      if (waitResult.status !== "ok") {
+        throw new Error(`plan run ended with status ${waitResult.status}`);
+      }
+      const sessionMessages = await this.runtime.subagent.getSessionMessages({
+        sessionKey,
+        limit: 5,
+      });
+      for (const msg of (sessionMessages.messages ?? []).toReversed()) {
+        const m = msg as { role?: string; content?: unknown };
+        if (m.role !== "assistant") {
+          continue;
+        }
+        const plan = extractQueryPlan(extractMessageText(m.content));
+        if (plan) {
+          logger.info(`[REPORT_GENERATOR] Query plan: ${JSON.stringify(plan)}`);
+          return plan;
+        }
+      }
+      throw new Error("no parseable query plan in assistant reply");
+    } catch (error) {
+      logger.warn(
+        `[REPORT_GENERATOR] Query planning failed, using default plan: ${String(error)}`,
+      );
+      return DEFAULT_QUERY_PLAN;
     }
   }
 

@@ -33,8 +33,8 @@ export class TaskPoller {
 
   /**
    * Subquery resolving the recipient email from feed_report_subscriber
-   * (uid + topic match, active subscriptions only). user_topic_mapping has
-   * no email column — using it here used to break every poll.
+   * (uid + topic match, active subscriptions only). The topic mapping table
+   * (entity_auth) has no email column — using it here used to break every poll.
    */
   private static readonly EMAIL_SUBQUERY = `(
         SELECT s.email FROM feed_report_subscriber s

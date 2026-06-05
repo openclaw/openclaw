@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildDataDigest } from "./data-digest.js";
+import { buildStatsDigest, computeDailyAverage } from "./data-digest.js";
+import type { CollectedStats, TopRecord } from "./query-plan.js";
 import type { FeedRecord } from "./types.js";
 
 function record(overrides: Partial<FeedRecord>): FeedRecord {
@@ -27,73 +28,120 @@ function record(overrides: Partial<FeedRecord>): FeedRecord {
   };
 }
 
+function topRecord(overrides: Partial<TopRecord>): TopRecord {
+  return { ...record({}), metricValue: 0, ...overrides };
+}
+
+function stats(overrides: Partial<CollectedStats>): CollectedStats {
+  return {
+    total: 0,
+    aggregations: [],
+    topN: { metric: "fansNumber", records: [] },
+    details: [],
+    ...overrides,
+  };
+}
+
 describe("computeDailyAverage", () => {
-  it("computes days and average from a 'start ~ end' scope", async () => {
-    const { computeDailyAverage } = await import("./data-digest.js");
+  it("computes days and average from a 'start ~ end' scope", () => {
     const result = computeDailyAverage("2026-05-01 00:00:00 ~ 2026-06-01 00:00:00", 12);
     expect(result).toEqual({ days: 31, dailyAvg: "0.39" });
   });
 
-  it("returns null for an unparseable scope", async () => {
-    const { computeDailyAverage } = await import("./data-digest.js");
+  it("returns null for an unparseable scope", () => {
     expect(computeDailyAverage("invalid", 12)).toBeNull();
-    expect(
-      computeDailyAverage("2026-06-01 00:00:00 ~ 2026-05-01 00:00:00", 12),
-    ).toBeNull();
+    expect(computeDailyAverage("2026-06-01 00:00:00 ~ 2026-05-01 00:00:00", 12)).toBeNull();
   });
 });
 
-describe("buildDataDigest", () => {
+describe("buildStatsDigest", () => {
   it("reports an explicit empty marker for zero records", () => {
-    expect(buildDataDigest([])).toContain("没有查询到任何舆情数据");
+    expect(buildStatsDigest(stats({ total: 0 }))).toContain("没有查询到任何舆情数据");
   });
 
-  it("aggregates platform, emotion, level and daily counts over the full set", () => {
-    const digest = buildDataDigest([
-      record({ id: 1, platform: "微博", emotion: "Negative", level: "Red" }),
-      record({ id: 2, platform: "微博", emotion: "Neutral", level: "Blue" }),
-      record({ id: 3, platform: "微信", emotion: "Neutral", level: "Blue" }),
-    ]);
-
-    expect(digest).toContain("全量 3 条");
-    expect(digest).toContain("微博 2 条，微信 1 条");
-    expect(digest).toContain("Neutral 2 条，Negative 1 条");
-    expect(digest).toContain("负面(Negative)：1 条；高风险(Red/Orange)：1 条");
-    expect(digest).toContain("2026-05-10(3)");
-  });
-
-  it("highlights high-influence records sorted by fans/comments", () => {
-    const digest = buildDataDigest([
-      record({ id: 1, title: "小号发文", fansNumber: 10 }),
-      record({ id: 2, title: "大V爆料", fansNumber: 50000, comments: 200 }),
-    ]);
-
-    const influenceSection = digest.split("### 高影响力条目")[1];
-    expect(influenceSection).toBeDefined();
-    expect(influenceSection.indexOf("大V爆料")).toBeLessThan(influenceSection.indexOf("小号发文"));
-    expect(influenceSection).toContain("粉丝:50000");
-  });
-
-  it("lists record details with truncated excerpts", () => {
-    const digest = buildDataDigest([
-      record({ id: 1, title: "员工爆料裁员", summary: "长".repeat(300) }),
-    ]);
-
-    expect(digest).toContain("员工爆料裁员");
-    expect(digest).toContain("…");
-    expect(digest).not.toContain("长".repeat(200));
-  });
-
-  it("caps the detail list at 50 records while aggregating all of them", () => {
-    const records = Array.from({ length: 60 }, (_, i) =>
-      record({ id: i + 1, title: `条目${i + 1}` }),
+  it("renders full-set aggregations with Chinese labels", () => {
+    const digest = buildStatsDigest(
+      stats({
+        total: 1200,
+        aggregations: [
+          {
+            dimension: "platform",
+            buckets: [
+              { key: "微博", count: 800 },
+              { key: "微信", count: 400 },
+            ],
+          },
+          {
+            dimension: "day",
+            buckets: [
+              { key: "2026-05-01", count: 700 },
+              { key: "2026-05-02", count: 500 },
+            ],
+          },
+        ],
+      }),
     );
 
-    const digest = buildDataDigest(records);
+    expect(digest).toContain("共 1200 条");
+    expect(digest).toContain("平台分布：微博 800 条，微信 400 条");
+    expect(digest).toContain("每日走势：2026-05-01(700)，2026-05-02(500)");
+  });
 
-    expect(digest).toContain("全量 60 条");
-    expect(digest).toContain("前 50 条，共 60 条");
-    expect(digest).toContain("条目50");
-    expect(digest).not.toContain("条目51");
+  it("derives negative and high-risk counts from emotion/level buckets", () => {
+    const digest = buildStatsDigest(
+      stats({
+        total: 10,
+        aggregations: [
+          {
+            dimension: "emotion",
+            buckets: [
+              { key: "Neutral", count: 7 },
+              { key: "Negative", count: 3 },
+            ],
+          },
+          {
+            dimension: "level",
+            buckets: [
+              { key: "Blue", count: 8 },
+              { key: "Red", count: 1 },
+              { key: "Orange", count: 1 },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(digest).toContain("负面(Negative)：3 条；高风险(Red/Orange)：2 条");
+  });
+
+  it("renders top-N records with the ranking metric", () => {
+    const digest = buildStatsDigest(
+      stats({
+        total: 100,
+        topN: {
+          metric: "readCount",
+          records: [topRecord({ title: "爆款文章", metricValue: 98765 })],
+        },
+      }),
+    );
+
+    expect(digest).toContain("高影响力条目（按阅读量排序，前 1 条）");
+    expect(digest).toContain("爆款文章");
+    expect(digest).toContain("阅读量:98765");
+  });
+
+  it("labels a capped detail list against the full total", () => {
+    const digest = buildStatsDigest(
+      stats({
+        total: 800,
+        details: [record({ title: "员工爆料裁员", summary: "长".repeat(300) })],
+      }),
+    );
+
+    expect(digest).toContain("前 1 条，全量共 800 条");
+    expect(digest).toContain("员工爆料裁员");
+    // Excerpts are truncated for prompt size.
+    expect(digest).toContain("…");
+    expect(digest).not.toContain("长".repeat(200));
   });
 });

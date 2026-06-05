@@ -202,14 +202,6 @@ export default definePluginEntry({
               throw new Error(`Invalid dateScope in task params: ${task.params}`);
             }
 
-            // Collect feed data
-            const feedData = await feedCollector.collectFeedData(
-              task.topicId,
-              dateScope.start,
-              dateScope.end,
-              logger,
-            );
-
             // Load template (waterfall: topic-bound → user default → user any → system → code fallback)
             const rawTemplate = await templateLoader.loadTemplate(
               task.period,
@@ -218,19 +210,34 @@ export default definePluginEntry({
               task.topicId,
             );
 
-            // Generate report, streaming LLM deltas to the frontend in real time
+            // Generate report, streaming LLM deltas to the frontend in real
+            // time. Data flows LLM-plan -> code-validated SQL -> digest:
+            // collectStats runs the validated plan with full-set aggregation.
             const report: GeneratedReport = await reportGenerator.generate(
               {
                 period: task.period,
                 requirement: task.requirement,
                 dateScope: `${dateScope.start} ~ ${dateScope.end}`,
-                feedData,
+                collectStats: (plan) =>
+                  feedCollector.collectStats(
+                    task.topicId,
+                    task.slaveTopicId,
+                    dateScope.start,
+                    dateScope.end,
+                    plan,
+                    logger,
+                  ),
                 template: rawTemplate,
                 userId: String(task.uid),
                 topicId: task.topicId,
                 slaveTopicId: task.slaveTopicId,
                 agentId,
                 onDelta: (delta) => streamPusher.appendDelta(delta),
+                // Transient status lines for the tool phase (no text deltas
+                // flow then). Fire-and-forget: never blocks generation.
+                onActivity: (message) => {
+                  void mercurePusher.pushReportProgress(streamTopic, message, task.id);
+                },
               },
               logger,
             );

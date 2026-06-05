@@ -93,6 +93,16 @@ export class MercurePusher {
     return this.sendToMercure(topic, { type: "report_text", content, taskId });
   }
 
+  /**
+   * Push a sanitized generation-activity status line scoped to taskId
+   * (e.g. "正在查询分析数据（第 2 步）…"). Typed `report_progress` so the
+   * frontend shows it as a transient status on the report card instead of
+   * appending it to the report body.
+   */
+  async pushReportProgress(topic: string, content: string, taskId: number): Promise<boolean> {
+    return this.sendToMercure(topic, { type: "report_progress", content, taskId });
+  }
+
   /** Signal that the report progress stream for taskId is finished. */
   async pushReportDone(topic: string, taskId: number): Promise<boolean> {
     return this.sendToMercure(topic, { type: "report_done", taskId });
