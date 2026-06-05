@@ -83,12 +83,14 @@ export class CostLedger {
     opts: CostLedgerOptions = {},
   ) {
     this.estimateFromChars = opts.estimateFromChars ?? true;
-    this.prices = { ...DEFAULT_PRICES, ...(opts.pricesPerMillion ?? {}) };
+    this.prices = { ...DEFAULT_PRICES, ...opts.pricesPerMillion };
   }
 
   private priceFor(provider: string, modelId: string): PricePerMillion | undefined {
     const direct = this.prices[`${provider}/${modelId}`];
-    if (direct) return direct;
+    if (direct) {
+      return direct;
+    }
     return this.prices[modelId];
   }
 
@@ -142,12 +144,17 @@ export class CostLedger {
     };
   }
 
-  private computeCostUsd(input: CostRecordInput, tokens: ReturnType<CostLedger["deriveTokens"]>): number {
+  private computeCostUsd(
+    input: CostRecordInput,
+    tokens: ReturnType<CostLedger["deriveTokens"]>,
+  ): number {
     if (input.costUsdOverride !== undefined && Number.isFinite(input.costUsdOverride)) {
       return Math.max(0, input.costUsdOverride);
     }
     const price = this.priceFor(input.provider, input.modelId);
-    if (!price) return 0;
+    if (!price) {
+      return 0;
+    }
     const inputCost = (tokens.inputTokens / 1_000_000) * price.inputUsd;
     const outputCost = (tokens.outputTokens / 1_000_000) * price.outputUsd;
     return Math.max(0, inputCost + outputCost);
@@ -255,7 +262,7 @@ export class CostLedger {
       totalCost += entry.costUsd;
     }
 
-    const rows = Array.from(groupKeys.values()).sort((a, b) => b.costUsd - a.costUsd);
+    const rows = Array.from(groupKeys.values()).toSorted((a, b) => b.costUsd - a.costUsd);
     return {
       groupBy: params.groupBy,
       fromMs,

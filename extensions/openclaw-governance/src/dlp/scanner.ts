@@ -63,14 +63,18 @@ type PatternEntry = {
 };
 
 function luhnOk(digits: string): boolean {
-  if (!digits || !/^\d+$/.test(digits)) return false;
+  if (!digits || !/^\d+$/.test(digits)) {
+    return false;
+  }
   let total = 0;
   const parity = digits.length % 2;
   for (let i = 0; i < digits.length; i++) {
     let n = Number(digits[i]);
     if (i % 2 === parity) {
       n *= 2;
-      if (n > 9) n -= 9;
+      if (n > 9) {
+        n -= 9;
+      }
     }
     total += n;
   }
@@ -79,8 +83,12 @@ function luhnOk(digits: string): boolean {
 
 function ibanMod97Ok(value: string): boolean {
   const s = value.replace(/\s+/g, "").toUpperCase();
-  if (s.length < 15 || s.length > 34) return false;
-  if (!/^[A-Z]{2}\d{2}[A-Z0-9]+$/.test(s)) return false;
+  if (s.length < 15 || s.length > 34) {
+    return false;
+  }
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]+$/.test(s)) {
+    return false;
+  }
   const rotated = s.slice(4) + s.slice(0, 4);
   const expanded: string[] = [];
   for (const ch of rotated) {
@@ -102,11 +110,17 @@ function ibanMod97Ok(value: string): boolean {
 
 function ipv4Ok(value: string): boolean {
   const parts = value.split(".");
-  if (parts.length !== 4) return false;
+  if (parts.length !== 4) {
+    return false;
+  }
   for (const p of parts) {
-    if (!/^\d{1,3}$/.test(p)) return false;
+    if (!/^\d{1,3}$/.test(p)) {
+      return false;
+    }
     const n = Number(p);
-    if (n < 0 || n > 255) return false;
+    if (n < 0 || n > 255) {
+      return false;
+    }
   }
   return true;
 }
@@ -166,10 +180,14 @@ function spansOverlap(a: DlpFinding, b: DlpFinding): boolean {
 }
 
 function dedupeFindings(findings: DlpFinding[]): DlpFinding[] {
-  const sorted = [...findings].sort((x, y) => {
-    if (x.start !== y.start) return x.start - y.start;
+  const sorted = findings.toSorted((x, y) => {
+    if (x.start !== y.start) {
+      return x.start - y.start;
+    }
     const lenDiff = y.end - y.start - (x.end - x.start);
-    if (lenDiff !== 0) return lenDiff;
+    if (lenDiff !== 0) {
+      return lenDiff;
+    }
     return y.score - x.score;
   });
   const kept: DlpFinding[] = [];
@@ -190,12 +208,12 @@ export class DlpScanner {
   constructor(opts: DlpScannerOptions = {}) {
     this.entities = new Set(opts.entities ?? ALL_ENTITIES);
     this.defaultAction = opts.defaultAction ?? "log";
-    this.perChannel = { ...(opts.perChannel ?? {}) };
+    this.perChannel = { ...opts.perChannel };
   }
 
   resolveAction(channelId?: string | null): DlpAction {
     if (channelId && this.perChannel[channelId]) {
-      return this.perChannel[channelId] as DlpAction;
+      return this.perChannel[channelId];
     }
     return this.defaultAction;
   }
@@ -208,7 +226,9 @@ export class DlpScanner {
     }
 
     for (const entry of PATTERNS) {
-      if (!this.entities.has(entry.entityType)) continue;
+      if (!this.entities.has(entry.entityType)) {
+        continue;
+      }
       entry.pattern.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = entry.pattern.exec(text)) !== null) {
@@ -217,7 +237,9 @@ export class DlpScanner {
           entry.pattern.lastIndex++;
           continue;
         }
-        if (entry.validator && !entry.validator(matched)) continue;
+        if (entry.validator && !entry.validator(matched)) {
+          continue;
+        }
         findings.push({
           entityType: entry.entityType,
           start: match.index,
@@ -233,11 +255,12 @@ export class DlpScanner {
     const reversalMap: Record<string, string> = {};
     let redactedText = text;
     if (action === "redact") {
-      const sortedDesc = [...deduped].sort((a, b) => b.start - a.start);
+      const sortedDesc = deduped.toSorted((a, b) => b.start - a.start);
       for (const finding of sortedDesc) {
         const token = `[${finding.entityType}_REDACTED_${finding.start.toString(16)}]`;
         reversalMap[token] = finding.text;
-        redactedText = redactedText.slice(0, finding.start) + token + redactedText.slice(finding.end);
+        redactedText =
+          redactedText.slice(0, finding.start) + token + redactedText.slice(finding.end);
       }
     }
 

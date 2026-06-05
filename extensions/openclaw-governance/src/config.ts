@@ -43,7 +43,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function coerceBoolean(value: unknown, fallback: boolean): boolean {
-  if (typeof value === "boolean") return value;
+  if (typeof value === "boolean") {
+    return value;
+  }
   return fallback;
 }
 
@@ -59,7 +61,9 @@ function coerceAction(value: unknown, fallback: DlpAction): DlpAction {
 }
 
 function coerceEntities(value: unknown): DlpEntityType[] | undefined {
-  if (!Array.isArray(value)) return undefined;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
   const allowed: DlpEntityType[] = [
     "US_SSN",
     "CREDIT_CARD",
@@ -80,7 +84,9 @@ function coerceEntities(value: unknown): DlpEntityType[] | undefined {
 }
 
 function coercePerChannel(value: unknown): Record<string, DlpAction> {
-  if (!isPlainObject(value)) return {};
+  if (!isPlainObject(value)) {
+    return {};
+  }
   const out: Record<string, DlpAction> = {};
   for (const [key, raw] of Object.entries(value)) {
     if (raw === "log" || raw === "warn" || raw === "redact" || raw === "block") {
@@ -91,13 +97,20 @@ function coercePerChannel(value: unknown): Record<string, DlpAction> {
 }
 
 function coercePrices(value: unknown): Record<string, { inputUsd: number; outputUsd: number }> {
-  if (!isPlainObject(value)) return {};
+  if (!isPlainObject(value)) {
+    return {};
+  }
   const out: Record<string, { inputUsd: number; outputUsd: number }> = {};
   for (const [model, raw] of Object.entries(value)) {
-    if (!isPlainObject(raw)) continue;
+    if (!isPlainObject(raw)) {
+      continue;
+    }
     const inputUsd = typeof raw.inputUsd === "number" && raw.inputUsd >= 0 ? raw.inputUsd : null;
-    const outputUsd = typeof raw.outputUsd === "number" && raw.outputUsd >= 0 ? raw.outputUsd : null;
-    if (inputUsd === null || outputUsd === null) continue;
+    const outputUsd =
+      typeof raw.outputUsd === "number" && raw.outputUsd >= 0 ? raw.outputUsd : null;
+    if (inputUsd === null || outputUsd === null) {
+      continue;
+    }
     out[model] = { inputUsd, outputUsd };
   }
   return out;

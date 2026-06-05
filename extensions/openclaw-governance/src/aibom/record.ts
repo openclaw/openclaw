@@ -6,7 +6,9 @@
 
 import { createHash } from "node:crypto";
 
-export type AIBOMModality = "text" | "image" | "video" | "audio" | "embedding" | string;
+// Free-form string so callers can record provider-specific modalities; common
+// values are "text" | "image" | "video" | "audio" | "embedding".
+export type AIBOMModality = string;
 
 export type AIBOMRecord = {
   modelId: string;
@@ -55,21 +57,21 @@ export function hashText(value: string | null | undefined): string {
 }
 
 export function buildRecord(input: BuildRecordInput): AIBOMRecord {
-  const modality = input.modality ? String(input.modality).trim().toLowerCase() || "text" : "text";
+  const modality = input.modality ? input.modality.trim().toLowerCase() || "text" : "text";
   return {
-    modelId: String(input.modelId),
-    provider: String(input.provider),
+    modelId: input.modelId,
+    provider: input.provider,
     promptHash: input.promptHash ?? hashText(input.prompt ?? ""),
     completionHash: input.completionHash ?? hashText(input.completion ?? ""),
-    sessionKey: String(input.sessionKey),
-    runId: String(input.runId),
+    sessionKey: input.sessionKey,
+    runId: input.runId,
     toolsUsed: Array.from(input.toolsUsed ?? []),
     trainingDataTags: Array.from(input.trainingDataTags ?? []),
     generatedAt: input.generatedAt ?? utcIsoNow(),
     ...(input.channelId ? { channelId: input.channelId } : {}),
     ...(input.skillId ? { skillId: input.skillId } : {}),
     modality,
-    extra: { ...(input.extra ?? {}) },
+    extra: { ...input.extra },
   };
 }
 
@@ -87,32 +89,40 @@ export function toJson(record: AIBOMRecord): Record<string, unknown> {
     modality: record.modality,
     extra: { ...record.extra },
   };
-  if (record.channelId !== undefined) payload.channelId = record.channelId;
-  if (record.skillId !== undefined) payload.skillId = record.skillId;
+  if (record.channelId !== undefined) {
+    payload.channelId = record.channelId;
+  }
+  if (record.skillId !== undefined) {
+    payload.skillId = record.skillId;
+  }
   JSON.stringify(payload);
   return payload;
 }
 
+function readStringField(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
 export function fromJson(payload: Record<string, unknown>): AIBOMRecord {
+  const channelId = readStringField(payload.channelId);
+  const skillId = readStringField(payload.skillId);
   return {
-    modelId: String(payload.modelId ?? ""),
-    provider: String(payload.provider ?? ""),
-    promptHash: String(payload.promptHash ?? ""),
-    completionHash: String(payload.completionHash ?? ""),
-    sessionKey: String(payload.sessionKey ?? ""),
-    runId: String(payload.runId ?? ""),
-    toolsUsed: Array.isArray(payload.toolsUsed) ? (payload.toolsUsed as string[]).map(String) : [],
-    trainingDataTags: Array.isArray(payload.trainingDataTags)
-      ? (payload.trainingDataTags as string[]).map(String)
+    modelId: readStringField(payload.modelId),
+    provider: readStringField(payload.provider),
+    promptHash: readStringField(payload.promptHash),
+    completionHash: readStringField(payload.completionHash),
+    sessionKey: readStringField(payload.sessionKey),
+    runId: readStringField(payload.runId),
+    toolsUsed: Array.isArray(payload.toolsUsed)
+      ? payload.toolsUsed.filter((entry): entry is string => typeof entry === "string")
       : [],
-    generatedAt: String(payload.generatedAt ?? ""),
-    ...(payload.channelId !== undefined && payload.channelId !== null
-      ? { channelId: String(payload.channelId) }
-      : {}),
-    ...(payload.skillId !== undefined && payload.skillId !== null
-      ? { skillId: String(payload.skillId) }
-      : {}),
-    modality: String(payload.modality ?? "text"),
+    trainingDataTags: Array.isArray(payload.trainingDataTags)
+      ? payload.trainingDataTags.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    generatedAt: readStringField(payload.generatedAt),
+    ...(channelId ? { channelId } : {}),
+    ...(skillId ? { skillId } : {}),
+    modality: readStringField(payload.modality, "text"),
     extra: (payload.extra as Record<string, unknown>) ?? {},
   };
 }

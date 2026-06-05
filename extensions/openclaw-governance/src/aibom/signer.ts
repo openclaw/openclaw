@@ -36,7 +36,7 @@ function b64urlDecode(text: string): Buffer {
 }
 
 function canonicalJson(record: Record<string, unknown>): Buffer {
-  return Buffer.from(JSON.stringify(record, Object.keys(record).sort()), "utf8");
+  return Buffer.from(JSON.stringify(record, Object.keys(record).toSorted()), "utf8");
 }
 
 function canonicalize(value: unknown): unknown {
@@ -46,7 +46,7 @@ function canonicalize(value: unknown): unknown {
   if (value && typeof value === "object") {
     const obj = value as Record<string, unknown>;
     const sorted: Record<string, unknown> = {};
-    for (const key of Object.keys(obj).sort()) {
+    for (const key of Object.keys(obj).toSorted()) {
       sorted[key] = canonicalize(obj[key]);
     }
     return sorted;
@@ -61,8 +61,8 @@ function canonicalSerialize(record: Record<string, unknown>): Buffer {
 function generateNewKeyPair(): { privateKeyPem: string; publicKeyPem: string } {
   const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
   return {
-    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
-    publicKeyPem: publicKey.export({ format: "pem", type: "spki" }).toString(),
+    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
+    publicKeyPem: publicKey.export({ format: "pem", type: "spki" }),
   };
 }
 
@@ -98,13 +98,13 @@ export class AibomSigner {
     return new AibomSigner({ kid, privateKey, publicKey });
   }
 
-  static generateEphemeral(kid: string = "ephemeral"): AibomSigner {
+  static generateEphemeral(kid = "ephemeral"): AibomSigner {
     const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
     return new AibomSigner({ kid, privateKey, publicKey });
   }
 
   publicKeyPem(): string {
-    return this.keyPair.publicKey.export({ format: "pem", type: "spki" }).toString();
+    return this.keyPair.publicKey.export({ format: "pem", type: "spki" });
   }
 
   kid(): string {
@@ -136,7 +136,7 @@ export class AibomSigner {
     }
     let header: Record<string, unknown>;
     try {
-      header = JSON.parse(b64urlDecode(parts[0] as string).toString("utf8"));
+      header = JSON.parse(b64urlDecode(parts[0]).toString("utf8"));
     } catch (exc) {
       return { status: "invalid", error: `bad header: ${(exc as Error).message}` };
     }
@@ -168,7 +168,7 @@ export class AibomSigner {
 
     try {
       const signingInput = Buffer.from(`${parts[0]}.${parts[1]}`, "ascii");
-      const signature = b64urlDecode(parts[2] as string);
+      const signature = b64urlDecode(parts[2]);
       const ok = crypto.verify(null, signingInput, this.keyPair.publicKey, signature);
       if (!ok) {
         return {
@@ -198,8 +198,6 @@ export function resolveDefaultKeyDir(): string {
   const home =
     process.env.HOME ??
     process.env.USERPROFILE ??
-    (process.platform === "win32"
-      ? process.env.APPDATA ?? process.cwd()
-      : process.cwd());
+    (process.platform === "win32" ? (process.env.APPDATA ?? process.cwd()) : process.cwd());
   return resolve(home, ".openclaw", "governance");
 }
