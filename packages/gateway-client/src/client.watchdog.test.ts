@@ -1,7 +1,6 @@
 // Gateway Client tests cover client.watchdog behavior.
 import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
-import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import {
@@ -587,6 +586,69 @@ r1USnb+wUdA7Zoj/mQ==
     });
 
     expect(String(error)).toContain("tls fingerprint mismatch");
+  });
+  describe("shouldRetryWithoutSignedInstanceId", () => {
+    type PrivateRetryFn = (params: { error: unknown; signedInstanceId: boolean }) => boolean;
+
+    test("returns false when instance id was not signed", () => {
+      const client = new GatewayClient({ requestTimeoutMs: 5000 });
+      const fn = (client as unknown as { shouldRetryWithoutSignedInstanceId: PrivateRetryFn })
+        .shouldRetryWithoutSignedInstanceId;
+      expect(fn.call(client, { error: new Error("generic"), signedInstanceId: false })).toBe(false);
+    });
+
+    test("returns false when retry budget is exhausted", () => {
+      const client = new GatewayClient({ requestTimeoutMs: 5000 });
+      (
+        client as unknown as { instanceIdSignatureRetryBudgetUsed: boolean }
+      ).instanceIdSignatureRetryBudgetUsed = true;
+      const fn = (client as unknown as { shouldRetryWithoutSignedInstanceId: PrivateRetryFn })
+        .shouldRetryWithoutSignedInstanceId;
+      expect(fn.call(client, { error: new Error("generic"), signedInstanceId: true })).toBe(false);
+    });
+
+    test("returns false when error is not a GatewayClientRequestError", () => {
+      const client = new GatewayClient({ requestTimeoutMs: 5000 });
+      const fn = (client as unknown as { shouldRetryWithoutSignedInstanceId: PrivateRetryFn })
+        .shouldRetryWithoutSignedInstanceId;
+      expect(fn.call(client, { error: new Error("plain error"), signedInstanceId: true })).toBe(
+        false,
+      );
+    });
+
+    test("returns false when error code is not DEVICE_AUTH_SIGNATURE_INVALID", () => {
+      const client = new GatewayClient({ requestTimeoutMs: 5000 });
+      const fn = (client as unknown as { shouldRetryWithoutSignedInstanceId: PrivateRetryFn })
+        .shouldRetryWithoutSignedInstanceId;
+      const error = new GatewayClientRequestError({
+        details: { code: "AUTH_TOKEN_MISMATCH" },
+      });
+      expect(fn.call(client, { error, signedInstanceId: true })).toBe(false);
+    });
+
+    test("returns true when signed and DEVICE_AUTH_SIGNATURE_INVALID", () => {
+      const client = new GatewayClient({ requestTimeoutMs: 5000 });
+      const fn = (client as unknown as { shouldRetryWithoutSignedInstanceId: PrivateRetryFn })
+        .shouldRetryWithoutSignedInstanceId;
+      const error = new GatewayClientRequestError({
+        details: { code: "DEVICE_AUTH_SIGNATURE_INVALID" },
+      });
+      expect(fn.call(client, { error, signedInstanceId: true })).toBe(true);
+    });
+
+    test("signing is disabled after retry fires (budget exhausted)", () => {
+      const client = new GatewayClient({ requestTimeoutMs: 5000 });
+      const error = new GatewayClientRequestError({
+        details: { code: "DEVICE_AUTH_SIGNATURE_INVALID" },
+      });
+      // Simulate retry firing
+      (
+        client as unknown as { instanceIdSignatureRetryBudgetUsed: boolean }
+      ).instanceIdSignatureRetryBudgetUsed = true;
+      const fn = (client as unknown as { shouldRetryWithoutSignedInstanceId: PrivateRetryFn })
+        .shouldRetryWithoutSignedInstanceId;
+      expect(fn.call(client, { error, signedInstanceId: true })).toBe(false);
+    });
   });
   describe("shouldRetryWithoutSignedInstanceId", () => {
     type PrivateRetryFn = (params: { error: unknown; signedInstanceId: boolean }) => boolean;
