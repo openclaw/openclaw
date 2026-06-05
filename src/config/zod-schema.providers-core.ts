@@ -917,6 +917,12 @@ export const SlackDmSchema = z
     // to the user's base DM session instead of a thread-scoped session. Default
     // false preserves the documented behavior where Slack assistant threads
     // produce their own OpenClaw thread sessions.
+    //
+    // Inheritance exception: unlike the rest of the nested dm object (which is
+    // shallow-replaced per account), this single flag is resolved account-first
+    // then root in mergeSlackAccountConfig, so a global channels.slack.dm value
+    // still reaches an account that only overrides other dm keys. An explicit
+    // account-level value (including false) wins.
     collapseAssistantThreads: z.boolean().optional(),
   })
   .strict();

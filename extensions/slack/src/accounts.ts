@@ -137,18 +137,34 @@ export function mergeSlackAccountConfig(
     channelConfig: cfg.channels?.slack as SlackAccountConfig,
     accounts: cfg.channels?.slack?.accounts as Record<string, Partial<SlackAccountConfig>>,
     accountId,
-    // Deep-merge "dm" so a documented global channels.slack.dm setting (e.g.
-    // collapseAssistantThreads) survives an account-level dm override that only
-    // sets other dm keys. Without this, an account `dm: { policy: ... }` block
-    // shallow-replaces the whole root dm object and the global flag reads as
-    // undefined for that account.
-    nestedObjectKeys: ["botLoopProtection", "dm"],
+    // Keep "dm" shallow-replaced: an account-level dm override wins wholesale,
+    // preserving the existing per-account contract for every dm key (policy,
+    // enabled, replyToMode, ...). The single cross-cutting flag,
+    // collapseAssistantThreads, is resolved explicitly below so a documented
+    // global channels.slack.dm setting can still reach an account that only
+    // overrides other dm keys, without dragging unrelated root dm fields into
+    // account-scoped overrides.
+    nestedObjectKeys: ["botLoopProtection"],
   });
+  // collapseAssistantThreads inheritance: the account value (including an
+  // explicit false) wins; otherwise fall back to the root channels.slack.dm
+  // value. This gives the global flag account-level reach without deep-merging
+  // the rest of the dm object.
+  const accountCollapse = accountConfig?.dm?.collapseAssistantThreads;
+  const rootCollapse = (cfg.channels?.slack as SlackAccountConfig | undefined)?.dm
+    ?.collapseAssistantThreads;
+  const collapseAssistantThreads = accountCollapse !== undefined ? accountCollapse : rootCollapse;
+  const mergedWithFlag =
+    collapseAssistantThreads !== undefined
+      ? ({ ...merged, dm: { ...merged.dm, collapseAssistantThreads } } as SlackAccountConfig)
+      : merged;
   const streaming = mergeSlackStreamingConfig(
     (cfg.channels?.slack as Record<string, unknown> | undefined)?.streaming,
     (accountConfig as Record<string, unknown> | undefined)?.streaming,
   );
-  return streaming !== undefined ? ({ ...merged, streaming } as SlackAccountConfig) : merged;
+  return streaming !== undefined
+    ? ({ ...mergedWithFlag, streaming } as SlackAccountConfig)
+    : mergedWithFlag;
 }
 
 export function resolveSlackAccountAllowFrom(params: {
