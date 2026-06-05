@@ -2,7 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
-import { resetCronActiveJobsForTests } from "../cron/active-jobs.js";
+import {
+  cancelCronJobRun,
+  markCronJobActive,
+  resetCronActiveJobsForTests,
+} from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
   registerAgentRunContext,
@@ -462,6 +466,7 @@ describe("task-registry", () => {
         cancelSession: hoisted.cancelSessionMock,
       }),
       killSubagentRunAdmin: async (params) => hoisted.killSubagentRunAdminMock(params),
+      cancelCronJobRun,
     });
   });
 
@@ -3523,6 +3528,48 @@ describe("task-registry", () => {
       expectRecordFields(result.task, {
         taskId: task.taskId,
         status: "cancelled",
+      });
+    });
+  });
+
+  it("cancels active cron tasks through the cron runtime abort handle", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const abortController = new AbortController();
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: "nightly-gmail-sync",
+        ownerKey: "",
+        scopeKind: "system",
+        runId: "cron:nightly-gmail-sync:123",
+        task: "Nightly Gmail sync",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      if (!task) {
+        throw new Error("expected cron task");
+      }
+      markCronJobActive("nightly-gmail-sync", {
+        runId: "cron:nightly-gmail-sync:123",
+        abortController,
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(abortController.signal.aborted).toBe(true);
+      expect(abortController.signal.reason).toBe("Cancelled by operator.");
+      expectRecordFields(result, {
+        found: true,
+        cancelled: true,
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        runtime: "cron",
+        status: "cancelled",
+        error: "Cancelled by operator.",
       });
     });
   });

@@ -121,67 +121,76 @@ type StartupCatchupPlan = {
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
   job: CronJob,
+  opts?: { runId?: string },
 ): Promise<Awaited<ReturnType<typeof executeJobCore>>> {
-  const jobTimeoutMs = resolveCronJobTimeoutMs(job);
-  if (typeof jobTimeoutMs !== "number") {
-    return await executeJobCore(state, job);
-  }
-
   const runAbortController = new AbortController();
-  let timeoutReason: string | undefined;
-  const timeoutMarker = Symbol("cron-timeout");
-  let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
-  const timeoutPromise = new Promise<typeof timeoutMarker>((resolve) => {
-    resolveTimeout = resolve;
+  markCronJobActive(job.id, {
+    runId: opts?.runId,
+    abortController: runAbortController,
   });
-
-  // Detached agent runs report setup phases separately; defer the wall-clock
-  // timeout until the runner starts so cold setup gets a clearer failure reason.
-  const deferTimeoutUntilExecutionStart =
-    job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
-  const triggerTimeout = (reason: string) => {
-    if (runAbortController.signal.aborted) {
-      return;
-    }
-    timeoutReason = reason;
-    runAbortController.abort(reason);
-    resolveTimeout?.(timeoutMarker);
-  };
-  const watchdog = createCronAgentWatchdog({
-    deferUntilRunner: deferTimeoutUntilExecutionStart,
-    jobTimeoutMs,
-    triggerTimeout,
-  });
-  const corePromise = executeJobCore(state, job, runAbortController.signal, {
-    onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
-    onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
-  });
-  watchdog.start();
-  void corePromise.catch((err: unknown) => {
-    if (runAbortController.signal.aborted) {
-      state.deps.log.warn(
-        { jobId: job.id, err: String(err) },
-        "cron: job core rejected after timeout abort",
-      );
-    }
-  });
+  const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {
-    const first = await Promise.race([corePromise, timeoutPromise]);
-    if (first !== timeoutMarker) {
-      return first;
+    if (typeof jobTimeoutMs !== "number") {
+      return await executeJobCore(state, job, runAbortController.signal);
     }
-    const activeExecution = watchdog.activeExecution();
-    await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
-    const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
-    return {
-      status: "error",
-      error,
-      diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
-        nowMs: state.deps.nowMs,
-      }),
+
+    let timeoutReason: string | undefined;
+    const timeoutMarker = Symbol("cron-timeout");
+    let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
+    const timeoutPromise = new Promise<typeof timeoutMarker>((resolve) => {
+      resolveTimeout = resolve;
+    });
+
+    // Detached agent runs report setup phases separately; defer the wall-clock
+    // timeout until the runner starts so cold setup gets a clearer failure reason.
+    const deferTimeoutUntilExecutionStart =
+      job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
+    const triggerTimeout = (reason: string) => {
+      if (runAbortController.signal.aborted) {
+        return;
+      }
+      timeoutReason = reason;
+      runAbortController.abort(reason);
+      resolveTimeout?.(timeoutMarker);
     };
+    const watchdog = createCronAgentWatchdog({
+      deferUntilRunner: deferTimeoutUntilExecutionStart,
+      jobTimeoutMs,
+      triggerTimeout,
+    });
+    const corePromise = executeJobCore(state, job, runAbortController.signal, {
+      onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
+      onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
+    });
+    watchdog.start();
+    void corePromise.catch((err: unknown) => {
+      if (runAbortController.signal.aborted) {
+        state.deps.log.warn(
+          { jobId: job.id, err: String(err) },
+          "cron: job core rejected after timeout abort",
+        );
+      }
+    });
+    try {
+      const first = await Promise.race([corePromise, timeoutPromise]);
+      if (first !== timeoutMarker) {
+        return first;
+      }
+      const activeExecution = watchdog.activeExecution();
+      await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
+      const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
+      return {
+        status: "error",
+        error,
+        diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
+          nowMs: state.deps.nowMs,
+        }),
+      };
+    } finally {
+      watchdog.dispose();
+    }
   } finally {
-    watchdog.dispose();
+    clearCronJobActive(job.id, opts?.runId);
   }
 }
 
@@ -844,7 +853,7 @@ export async function onTimer(state: CronServiceState) {
       const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
 
       try {
-        const result = await executeJobCoreWithTimeout(state, job);
+        const result = await executeJobCoreWithTimeout(state, job, { runId: taskRunId });
         return {
           jobId: id,
           job,
@@ -1238,7 +1247,7 @@ async function runStartupCatchupCandidate(
     runAtMs: startedAt,
   });
   try {
-    const result = await executeJobCoreWithTimeout(state, candidate.job);
+    const result = await executeJobCoreWithTimeout(state, candidate.job, { runId: taskRunId });
     return {
       jobId: candidate.jobId,
       job: candidate.job,

@@ -2080,7 +2080,22 @@ export async function cancelTaskById(params: {
   const childSessionKey = task.childSessionKey?.trim();
   try {
     if (task.runtime !== "cli") {
-      if (!childSessionKey) {
+      if (task.runtime === "cron") {
+        const { cancelCronJobRun } = await loadTaskRegistryControlRuntime();
+        const result = cancelCronJobRun({
+          jobId: task.sourceId,
+          runId: task.runId,
+          reason: params.reason?.trim() || "Cancelled by operator.",
+        });
+        if (!result.found || !result.cancelled) {
+          return {
+            found: true,
+            cancelled: false,
+            reason: result.reason,
+            task: cloneTaskRecord(task),
+          };
+        }
+      } else if (!childSessionKey) {
         if (!isChildlessCodexNativeSubagentTask(task)) {
           return {
             found: true,
@@ -2090,7 +2105,10 @@ export async function cancelTaskById(params: {
           };
         }
       }
-      if (!childSessionKey) {
+      if (task.runtime === "cron") {
+        // The live cron service owns the abort signal; registry finalization below
+        // keeps CLI/Gateway callers aligned while the run unwinds.
+      } else if (!childSessionKey) {
         // Codex native subagents are mirrored from the Codex app server and do
         // not have OpenClaw child sessions to terminate. Cancellation clears
         // the stale task-registry record only.

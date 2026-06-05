@@ -22,9 +22,21 @@ export type KillSubagentRunAdmin = (params: {
   sessionKey: string;
 }) => Promise<KillSubagentRunAdminResult>;
 
+export type CancelCronJobRunResult =
+  | { found: false; cancelled: false; reason: string }
+  | { found: true; cancelled: false; reason: string }
+  | { found: true; cancelled: true };
+
+export type CancelCronJobRun = (params: {
+  jobId?: string;
+  runId?: string;
+  reason?: string;
+}) => CancelCronJobRunResult;
+
 export type TaskRegistryControlRuntime = {
   getAcpSessionManager: () => {
     cancelSession: CancelAcpSessionAdmin;
   };
   killSubagentRunAdmin: KillSubagentRunAdmin;
+  cancelCronJobRun: CancelCronJobRun;
 };
