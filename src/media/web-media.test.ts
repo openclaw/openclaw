@@ -677,6 +677,35 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/html");
   });
 
+  it("allows trusted generated host-read HTML reports staged under outbound media store", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer } = await import("./store.js");
+        const saved = await saveMediaBuffer(
+          Buffer.from("<!doctype html><title>Report</title><h1>Report</h1>\n", "utf8"),
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "report.html",
+        );
+        expect(path.resolve(saved.path)).not.toContain(
+          path.resolve(resolvePreferredOpenClawTmpDir()),
+        );
+        const result = await loadWebMedia(saved.path, {
+          maxBytes: 1024 * 1024,
+          localRoots: "any",
+          readFile: async (filePath) => await fs.readFile(filePath),
+          hostReadCapability: true,
+        });
+        expect(result.kind).toBe("document");
+        expect(result.contentType).toBe("text/html");
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects host-read HTML files outside the trusted OpenClaw temp root", async () => {
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-host-html-"));
     const htmlFile = path.join(outsideRoot, "report.html");

@@ -33,6 +33,7 @@ import {
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
 } from "./media-services.js";
+import { getMediaDir } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -297,12 +298,14 @@ async function isTrustedGeneratedHostReadHtmlPath(filePath: string | undefined):
   if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
     return false;
   }
-  const [resolvedFilePath, resolvedTmpRoot] = await Promise.all([
+  const [resolvedFilePath, ...trustedRoots] = await Promise.all([
     realpath(filePath).catch(() => undefined),
     realpath(resolvePreferredOpenClawTmpDir()).catch(() => undefined),
+    realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined),
   ]);
   return Boolean(
-    resolvedFilePath && resolvedTmpRoot && isPathInsideRoot(resolvedFilePath, resolvedTmpRoot),
+    resolvedFilePath &&
+    trustedRoots.some((root) => root && isPathInsideRoot(resolvedFilePath, root)),
   );
 }
 
