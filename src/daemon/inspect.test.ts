@@ -384,4 +384,31 @@ describe("findExtraGatewayServices (win32)", () => {
       },
     ]);
   });
+
+  it("ignores the canonical OpenClaw scheduled task when schtasks prefixes it with a backslash", async () => {
+    execSchtasksMock.mockResolvedValueOnce({
+      code: 0,
+      stdout: [
+        "TaskName: \\OpenClaw Gateway",
+        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        "",
+        "TaskName: \\Clawdbot Legacy",
+        "Task To Run: C:\\clawdbot\\clawdbot.exe run",
+        "",
+      ].join("\n"),
+      stderr: "",
+    });
+
+    const result = await findExtraGatewayServices({}, { deep: true });
+    expect(result).toEqual([
+      {
+        platform: "win32",
+        label: "\\Clawdbot Legacy",
+        detail: "task: \\Clawdbot Legacy, run: C:\\clawdbot\\clawdbot.exe run",
+        scope: "system",
+        marker: "clawdbot",
+        legacy: true,
+      },
+    ]);
+  });
 });
