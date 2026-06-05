@@ -106,7 +106,7 @@ describe("Google Chat approval card action registry", () => {
     expect(
       shouldSuppressGoogleChatManualExecApprovalFollowupPayload({
         text: `/approve ${approvalId.slice(0, 8)} allow-once`,
-        presentation: { kind: "card" },
+        presentation: { blocks: [] },
       }),
     ).toBe(false);
   });

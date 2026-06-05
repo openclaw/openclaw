@@ -1,4 +1,5 @@
 import type {
+  ExecApprovalPendingView,
   PendingApprovalView,
   ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
@@ -57,7 +58,7 @@ const cfg: OpenClawConfig = {
   },
 };
 
-function createPendingView(): PendingApprovalView {
+function createPendingView(): ExecApprovalPendingView {
   return {
     approvalId: "approval-1",
     approvalKind: "exec",
