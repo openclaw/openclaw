@@ -25,9 +25,9 @@ export const SPEAKEASY_VOICE_BUTTON_LABEL = "🔊 Voice note";
 const MIN_SPEAKEASY_TEXT_CHARS = 20;
 const SPEAKEASY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SPEAKEASY_DAILY_GENERATION_CAP = 50;
-const SPEAKEASY_CACHE_LOCK_TIMEOUT_MS = 1000;
 const SPEAKEASY_CACHE_LOCK_STALE_MS = 30_000;
 const SPEAKEASY_TTS_TIMEOUT_MS = 120_000;
+const SPEAKEASY_TTS_MAX_OUTPUT_CHARS = 1024 * 1024;
 const SPEAKEASY_VOICE_NOTE_EXTENSIONS = new Set([".oga", ".ogg", ".opus"]);
 const TELEGRAM_MAX_INLINE_BUTTON_ACTIONS = 100;
 const SPEAKEASY_STDIN_ARGV_WRAPPER = [
@@ -135,6 +135,12 @@ function pruneSpeakeasyCache(cache: SpeakeasyVoiceCache, now = Date.now()): void
       delete cache.entries[id];
     }
   }
+  const currentDay = todayKey(new Date(now));
+  for (const [id, generation] of Object.entries(cache.generations)) {
+    if (generation.date !== currentDay) {
+      delete cache.generations[id];
+    }
+  }
 }
 
 export function loadSpeakeasyCache(cfg: OpenClawConfig): SpeakeasyVoiceCache {
@@ -163,10 +169,6 @@ export function writeSpeakeasyCache(cfg: OpenClawConfig, cache: SpeakeasyVoiceCa
   chmodSync(cachePath, 0o600);
 }
 
-function waitForSpeakeasyCacheLock(): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-}
-
 function chmodExistingSpeakeasyCache(cachePath: string): void {
   try {
     chmodSync(cachePath, 0o600);
@@ -179,7 +181,6 @@ function chmodExistingSpeakeasyCache(cachePath: string): void {
 
 function acquireSpeakeasyCacheLock(cachePath: string): () => void {
   const lockPath = `${cachePath}.lock`;
-  const deadline = Date.now() + SPEAKEASY_CACHE_LOCK_TIMEOUT_MS;
   mkdirSync(path.dirname(cachePath), { recursive: true });
   while (true) {
     let fd: number | undefined;
@@ -203,10 +204,7 @@ function acquireSpeakeasyCacheLock(cachePath: string): () => void {
       if (isFileAlreadyExistsError(err) && recoverStaleSpeakeasyCacheLock(lockPath)) {
         continue;
       }
-      if (!isFileAlreadyExistsError(err) || Date.now() >= deadline) {
-        throw err;
-      }
-      waitForSpeakeasyCacheLock();
+      throw err;
     }
   }
 }
@@ -570,13 +568,17 @@ function runSpeakeasyTtsScript(params: {
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
-      if (stdout.length > 1024 * 1024) {
+      if (stdout.length > SPEAKEASY_TTS_MAX_OUTPUT_CHARS) {
         child.kill("SIGTERM");
       }
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
+      if (stderr.length > SPEAKEASY_TTS_MAX_OUTPUT_CHARS) {
+        stderr = stderr.slice(0, SPEAKEASY_TTS_MAX_OUTPUT_CHARS);
+        child.kill("SIGTERM");
+      }
     });
     child.on("error", (err) => {
       settle(() => reject(err));

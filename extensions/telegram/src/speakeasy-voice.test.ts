@@ -232,6 +232,34 @@ describe("speakeasy voice button", () => {
     });
   });
 
+  it("caps noisy TTS helper stderr before reporting failures", async () => {
+    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
+      await mkdir(path.join(workspaceDir, "scripts"), { recursive: true });
+      const scriptPath = path.join(workspaceDir, "scripts", "tts_elevenlabs_v2.py");
+      await writeFile(
+        scriptPath,
+        [
+          "#!/usr/bin/env python3",
+          "import sys",
+          "sys.stderr.write('x' * (1024 * 1024 + 4096))",
+          "raise SystemExit(1)",
+          "",
+        ].join("\n"),
+      );
+      await chmod(scriptPath, 0o755);
+
+      let failure: unknown;
+      try {
+        await generateSpeakeasyVoiceNote({ cfg, text: "Hello from Speakeasy" });
+      } catch (err) {
+        failure = err;
+      }
+      expect(failure).toBeInstanceOf(Error);
+      expect(String((failure as Error).message)).toMatch(/Speakeasy TTS failed/);
+      expect(String((failure as Error).message).length).toBeLessThan(1024 * 1024 + 1024);
+    });
+  });
+
   it("skips the optional voice button when the callback cache cannot be written", async () => {
     const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-cache-fail-"));
     await mkdir(path.join(workspaceDir, "config"), { recursive: true });
@@ -252,6 +280,17 @@ describe("speakeasy voice button", () => {
     } finally {
       await rm(workspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("skips the optional voice button when a fresh cache lock exists", async () => {
+    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
+      const cachePath = path.join(workspaceDir, "state", "speakeasy-cache.json");
+      const lockPath = `${cachePath}.lock`;
+      await writeFile(lockPath, "active lock");
+      const reply = { text: "This reply is long enough to qualify for on-demand voice playback." };
+
+      expect(withSpeakeasyVoiceButton({ reply, cfg, chatId: "123" })).toBe(reply);
+    });
   });
 
   it("does not alter disabled, group, short, media, voice, or already-Speakeasy replies", async () => {
@@ -375,6 +414,29 @@ describe("speakeasy voice button", () => {
       releaseSpeakeasyVoiceGenerationReservation({ cfg, chatId: "123" });
       cache = loadSpeakeasyCache(cfg);
       expect(cache.generations[`123:${today}`]).toBeUndefined();
+    });
+  });
+
+  it("prunes generation records from prior days", async () => {
+    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
+      await writeFile(
+        path.join(workspaceDir, "state", "speakeasy-cache.json"),
+        JSON.stringify({
+          version: 1,
+          entries: {},
+          generations: {
+            "123:2026-01-01": { date: "2026-01-01", count: 50 },
+            [`123:${new Date().toISOString().slice(0, 10)}`]: {
+              date: new Date().toISOString().slice(0, 10),
+              count: 1,
+            },
+          },
+        }),
+      );
+
+      const cache = loadSpeakeasyCache(cfg);
+      expect(cache.generations["123:2026-01-01"]).toBeUndefined();
+      expect(cache.generations[`123:${new Date().toISOString().slice(0, 10)}`]?.count).toBe(1);
     });
   });
 
