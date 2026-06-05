@@ -109,4 +109,48 @@ describe("goal tools", () => {
       loadSessionStore(researchStorePath, { skipCache: true })["agent:ops:main"]?.goal,
     ).toBeUndefined();
   });
+
+  it("attaches a plan snapshot when goal is created with a plan", async () => {
+    const { config, template } = await createStoreConfig();
+    const tool = createCreateGoalTool({
+      agentSessionKey: "global",
+      runSessionKey: "global",
+      sessionAgentId: "research",
+      config,
+    });
+
+    const storePath = resolveStorePath(template, { agentId: "research" });
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "global",
+      entry: { sessionId: "sess-global", updatedAt: 1 },
+    });
+
+    const plan = {
+      approach: "Plan to execute the objective.",
+      steps: [
+        { id: "s1", description: "First step details." },
+        { id: "s2", description: "Second step details.", depends_on: ["s1"], checkpoint: true, estimated_tokens: 1000 },
+      ],
+      risks: ["Failure risk."],
+      checkpoints: ["Validation point."],
+    };
+
+    await tool.execute("call-1", {
+      objective: "ship plan work",
+      plan,
+    });
+
+    const storedGoal = loadSessionStore(storePath, { skipCache: true }).global?.goal;
+    expect(storedGoal?.objective).toBe("ship plan work");
+    expect(storedGoal?.planSnapshot).toBeDefined();
+    expect(storedGoal?.planSnapshot?.approach).toBe("Plan to execute the objective.");
+    expect(storedGoal?.planSnapshot?.steps.length).toBe(2);
+    expect(storedGoal?.planSnapshot?.steps[0].id).toBe("s1");
+    expect(storedGoal?.planSnapshot?.steps[1].dependsOn).toEqual(["s1"]);
+    expect(storedGoal?.planSnapshot?.steps[1].checkpoint).toBe(true);
+    expect(storedGoal?.planSnapshot?.steps[1].estimatedTokens).toBe(1000);
+    expect(storedGoal?.planSnapshot?.risks).toEqual(["Failure risk."]);
+    expect(storedGoal?.planSnapshot?.checkpoints).toEqual(["Validation point."]);
+  });
 });

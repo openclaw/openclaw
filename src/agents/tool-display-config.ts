@@ -271,6 +271,16 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Update Goal",
       detailKeys: ["status"],
     },
+    update_goal_plan: {
+      emoji: "🗺️",
+      title: "Set Goal Plan",
+      detailKeys: ["approach", "steps"],
+    },
+    update_goal_plan_step: {
+      emoji: "📋",
+      title: "Update Plan Step",
+      detailKeys: ["step_id", "status"],
+    },
     update_plan: {
       emoji: "🗺️",
       title: "Update Plan",

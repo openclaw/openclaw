@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import { getSessionEntry, patchSessionEntry } from "./store.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
-import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
+import type { SessionEntry, SessionGoal, SessionGoalStatus, SessionGoalPlanSnapshot } from "./types.js";
 
 export type SessionGoalSnapshot = {
   status: "missing" | "found";
@@ -20,6 +20,7 @@ type SessionGoalStoreOptions = {
 type CreateSessionGoalOptions = SessionGoalStoreOptions & {
   objective: string;
   tokenBudget?: number;
+  planSnapshot?: SessionGoalPlanSnapshot;
 };
 
 type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
@@ -236,6 +237,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
         tokensUsed: 0,
         ...(tokenBudget ? { tokenBudget } : {}),
         continuationTurns: 0,
+        ...(options.planSnapshot ? { planSnapshot: options.planSnapshot } : {}),
       };
       return { goal: created };
     },

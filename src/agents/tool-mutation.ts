@@ -26,6 +26,8 @@ const MUTATING_TOOL_NAMES = new Set([
   "session_status",
   "create_goal",
   "update_goal",
+  "update_goal_plan",
+  "update_goal_plan_step",
 ]);
 
 // File-mutation tools that operate on the same `path` target identity.
@@ -358,6 +360,8 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "sessions_send":
     case "create_goal":
     case "update_goal":
+    case "update_goal_plan":
+    case "update_goal_plan_step":
       return true;
     case "exec":
     case "bash":

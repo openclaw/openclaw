@@ -174,6 +174,7 @@ export async function resolveCommandsSystemPromptBundle(
     }),
     runtimeInfo,
     sandboxInfo,
+    goal: targetSessionEntry?.goal,
   });
 
   return { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime };

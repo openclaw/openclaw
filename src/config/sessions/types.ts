@@ -181,6 +181,27 @@ export type SessionGoalStatus =
   | "budget_limited"
   | "complete";
 
+/** Individual step within a structured CoT pre-flight plan. */
+export type SessionGoalPlanStep = {
+  id: string;
+  description: string;
+  dependsOn?: string[];
+  checkpoint?: boolean;
+  estimatedTokens?: number;
+  status?: "pending" | "active" | "done" | "blocked" | "skipped";
+  note?: string;
+};
+
+/** Structured CoT pre-flight plan snapshot persisted on the session goal. */
+export type SessionGoalPlanSnapshot = {
+  schemaVersion: 1;
+  createdAt: number;
+  approach: string;
+  steps: SessionGoalPlanStep[];
+  risks?: string[];
+  checkpoints?: string[];
+};
+
 export type SessionGoal = {
   schemaVersion: 1;
   id: string;
@@ -194,6 +215,8 @@ export type SessionGoal = {
   tokenBudget?: number;
   continuationTurns: number;
   lastStatusNote?: string;
+  /** Structured CoT pre-flight plan snapshot persisted when goal planning completes. */
+  planSnapshot?: SessionGoalPlanSnapshot;
   pausedAt?: number;
   blockedAt?: number;
   completedAt?: number;

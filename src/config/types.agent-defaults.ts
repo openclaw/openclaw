@@ -350,6 +350,13 @@ export type AgentDefaultsConfig = {
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
+  /** Chain-of-Thought pre-flight planning mode for long-running goals. */
+  cotPlanning?: {
+    /** Planning activation mode: auto (budget-aware), always, or off. Default: auto. */
+    mode?: "auto" | "always" | "off";
+    /** Minimum token budget that triggers auto CoT planning. Default: 50000. */
+    minBudgetTokens?: number;
+  };
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /**

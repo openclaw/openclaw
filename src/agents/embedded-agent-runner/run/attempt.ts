@@ -11,6 +11,7 @@ import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { getSessionGoal } from "../../../config/sessions/goals.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   loadSessionStore,
@@ -1834,6 +1835,16 @@ export async function runEmbeddedAttempt(
     const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
       bootstrapPromptWarning.lines,
     );
+
+    const goalSnapshot = await getSessionGoal({
+      sessionKey: params.sessionKey,
+      storePath: resolveStorePath(params.config?.session?.store, {
+        agentId: sessionAgentId,
+      }),
+      persist: false,
+    });
+    const goal = goalSnapshot.status === "found" ? goalSnapshot.goal : undefined;
+
     const attemptSystemPrompt = buildAttemptSystemPrompt({
       isRawModelRun,
       transformProviderSystemPrompt: (transformParams) =>
@@ -1841,6 +1852,7 @@ export async function runEmbeddedAttempt(
           ...transformParams,
           runtimeHandle: getProviderRuntimeHandle(),
         }),
+      goal,
       embeddedSystemPrompt: {
         config: params.config,
         agentId: sessionAgentId,
