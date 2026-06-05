@@ -66,15 +66,18 @@ Markdown tables are not consistently supported across chat clients. Use
 
 - `code`: render tables as code blocks (default for most channels).
 - `bullets`: convert each row into bullet points (default for Matrix, Signal, and WhatsApp).
+- `adaptive`: render tables as Microsoft Teams Adaptive Card tables. This is
+  opt-in for Teams because Adaptive Card table support depends on the Teams
+  client and tenant.
 - `off`: disable table parsing and conversion; raw table text passes through.
 
 Config keys:
 
 ```yaml
 channels:
-  discord:
+  msteams:
     markdown:
-      tables: code
+      tables: adaptive
     accounts:
       work:
         markdown:

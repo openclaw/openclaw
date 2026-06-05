@@ -54,6 +54,10 @@ describe("msteamsPlugin", () => {
     expect(looksLikeId?.("a:1bfPersonalChat")).toBe(true);
     expect(looksLikeId?.("user:Jane Doe")).toBe(false);
   });
+
+  it("keeps adaptive markdown tables opt-in", () => {
+    expect(msteamsPlugin.messaging?.defaultMarkdownTableMode).toBeUndefined();
+  });
 });
 
 describe("msteams config schema", () => {

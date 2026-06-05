@@ -437,6 +437,7 @@ async function sendAdaptiveTableSegments(
 
   return createMSTeamsSendResult({
     messageId: platformMessageIds[0] ?? "unknown",
+    platformMessageIds,
     conversationId,
     kind: "text",
   });

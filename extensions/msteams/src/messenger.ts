@@ -482,7 +482,7 @@ export async function sendMSTeamsMessages(params: {
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
 }): Promise<string[]> {
   const messages = params.messages.filter(
-    (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl,
+    (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl || m.adaptiveCard,
   );
   if (messages.length === 0) {
     return [];

@@ -381,6 +381,34 @@ describe("sendMessageMSTeams", () => {
     expect(firstObjectArg(mockState.sendMSTeamsMessages).replyStyle).toBe("top-level");
   });
 
+  it("sends adaptive table segments and preserves every receipt id", async () => {
+    mockState.resolveMarkdownTableMode.mockReturnValue("adaptive");
+    mockState.sendMSTeamsMessages.mockResolvedValue(["text-1", "table-1", "text-2"]);
+
+    const result = await sendMessageMSTeams({
+      cfg: { channels: { msteams: { markdown: { tables: "adaptive" } } } } as OpenClawConfig,
+      to: "conversation:19:conversation@thread.tacv2",
+      text: "Before\n\n| Name | Age |\n|---|---|\n| Alice | 30 |\n\nAfter",
+    });
+
+    const sendPayload = firstObjectArg(mockState.sendMSTeamsMessages);
+    const messages = sendPayload.messages as Array<Record<string, unknown>>;
+    expect(messages).toHaveLength(3);
+    expect(messages[0]).toEqual({ text: "Before" });
+    expect(messages[1]?.adaptiveCard).toMatchObject({
+      type: "AdaptiveCard",
+      version: "1.5",
+    });
+    expect(messages[2]).toEqual({ text: "After" });
+    expect(result.messageId).toBe("text-1");
+    expect(result.receipt?.platformMessageIds).toEqual(["text-1", "table-1", "text-2"]);
+    expect(result.receipt?.parts.map((part) => part.platformMessageId)).toEqual([
+      "text-1",
+      "table-1",
+      "text-2",
+    ]);
+  });
+
   it("uses graphChatId instead of conversationId when uploading to SharePoint", async () => {
     // Simulates a group chat where Bot Framework conversationId is valid but we have
     // a resolved Graph chat ID cached from a prior send.

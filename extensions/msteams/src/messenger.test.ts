@@ -369,6 +369,33 @@ describe("msteams messenger", () => {
       expect(capturedConversationId).toBe("19:abc@thread.tacv2");
     });
 
+    it("keeps adaptive-card-only messages in proactive send batches", async () => {
+      const sent: Array<Record<string, unknown>> = [];
+      const card = { type: "AdaptiveCard", version: "1.5", body: [{ type: "Table" }] };
+
+      const ids = await sendMSTeamsMessages({
+        replyStyle: "top-level",
+        app: createMockApp({
+          createFn: async (activity: unknown) => {
+            sent.push(activity as Record<string, unknown>);
+            return { id: "id:card" };
+          },
+        }),
+        appId: "app123",
+        conversationRef: baseRef,
+        messages: [{ adaptiveCard: card }],
+      });
+
+      expect(ids).toEqual(["id:card"]);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.attachments).toEqual([
+        {
+          contentType: "application/vnd.microsoft.card.adaptive",
+          content: card,
+        },
+      ]);
+    });
+
     it("preserves parsed mentions when appending OneDrive fallback file links", async () => {
       const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-mention-"));
       const localFile = path.join(tmpDir, "note.txt");

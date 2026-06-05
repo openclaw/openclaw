@@ -122,7 +122,7 @@ export type ChannelPreviewStreamingConfig = Pick<
 export type MarkdownTableMode = "off" | "bullets" | "code" | "block" | "adaptive";
 
 export type MarkdownConfig = {
-  /** Table rendering mode (off|bullets|code|block). */
+  /** Table rendering mode (off|bullets|code|block|adaptive). */
   tables?: MarkdownTableMode;
 };
 

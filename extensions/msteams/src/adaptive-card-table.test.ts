@@ -108,10 +108,11 @@ describe("splitTextAndTables", () => {
     ];
     const result = splitTextAndTables(text, tables);
 
-    expect(result).toHaveLength(4);
+    expect(result).toHaveLength(5);
     expect(result[0]).toEqual({ kind: "text", text: "Intro" });
     expect(result[1]).toEqual({ kind: "table", table: tables[0] });
     expect(result[2]).toEqual({ kind: "text", text: "Middle" });
     expect(result[3]).toEqual({ kind: "table", table: tables[1] });
+    expect(result[4]).toEqual({ kind: "text", text: "End" });
   });
 });
