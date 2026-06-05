@@ -297,4 +297,42 @@ describe("auth rate limiter", () => {
     limiter.dispose();
     expect(limiter.size()).toBe(0);
   });
+
+  // ---------- entry-map bound ----------
+
+  it("caps tracked entries under a unique-IP flood", () => {
+    // pruneIntervalMs:0 disables the background timer so the bound is proven by
+    // the on-insert cap alone, not by periodic cleanup.
+    limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+      maxEntries: 100,
+    });
+    for (let i = 0; i < 5_000; i++) {
+      limiter.recordFailure(`10.${(i >> 16) & 255}.${(i >> 8) & 255}.${i & 255}`);
+    }
+    expect(limiter.size()).toBeLessThanOrEqual(100);
+  });
+
+  it("keeps an active lockout alive through a unique-IP flood", () => {
+    limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      pruneIntervalMs: 0,
+      maxEntries: 50,
+    });
+    // Lock out a legitimate IP first.
+    limiter.recordFailure("203.0.113.7");
+    limiter.recordFailure("203.0.113.7");
+    expect(limiter.check("203.0.113.7").allowed).toBe(false);
+    // Flood with far more unique IPs than the cap; the locked entry must survive.
+    for (let i = 0; i < 2_000; i++) {
+      limiter.recordFailure(`10.${(i >> 16) & 255}.${(i >> 8) & 255}.${i & 255}`);
+    }
+    expect(limiter.size()).toBeLessThanOrEqual(50);
+    expect(limiter.check("203.0.113.7").allowed).toBe(false);
+  });
 });

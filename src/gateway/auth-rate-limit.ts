@@ -34,6 +34,8 @@ export interface RateLimitConfig {
   exemptLoopback?: boolean;
   /** Background prune interval in milliseconds; set <= 0 to disable auto-prune.  @default 60_000 */
   pruneIntervalMs?: number;
+  /** Hard cap on tracked entries; oldest non-locked entries are evicted first.  @default 10_000 */
+  maxEntries?: number;
 }
 
 export const AUTH_RATE_LIMIT_SCOPE_DEFAULT = "default";
@@ -92,6 +94,7 @@ const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_WINDOW_MS = 60_000; // 1 minute
 const DEFAULT_LOCKOUT_MS = 300_000; // 5 minutes
 const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
+const DEFAULT_MAX_ENTRIES = 10_000;
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -124,6 +127,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   const lockoutMs = resolveTimerTimeoutMs(config?.lockoutMs, DEFAULT_LOCKOUT_MS, 0);
   const exemptLoopback = config?.exemptLoopback ?? true;
   const pruneIntervalMs = resolvePruneIntervalMs(config?.pruneIntervalMs);
+  const maxEntries = config?.maxEntries ?? DEFAULT_MAX_ENTRIES;
 
   const entries = new Map<string, RateLimitEntry>();
 
@@ -209,6 +213,11 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     if (!entry) {
       entry = { attempts: [] };
       entries.set(key, entry);
+      // Periodic prune only runs on its interval timer; a unique-IP flood can
+      // add far more entries between prunes than the window reclaims. Cap on
+      // insert, evicting oldest non-locked entries so an attacker cannot use
+      // the flood to drop a legitimate IP's active lockout.
+      enforceMaxEntries(now);
     }
 
     // If currently locked, do nothing (already blocked).
@@ -227,6 +236,27 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   function reset(rawIp: string | undefined, rawScope?: string): void {
     const { key } = resolveKey(rawIp, rawScope);
     entries.delete(key);
+  }
+
+  function enforceMaxEntries(now: number): void {
+    if (entries.size <= maxEntries) {
+      return;
+    }
+    const toRemove = entries.size - maxEntries;
+    let removed = 0;
+    for (const [key, entry] of entries) {
+      if (removed >= toRemove) {
+        break;
+      }
+      // Keep active lockouts; evicting them would let a flood reset an
+      // attacker's own block. Map iteration is insertion-ordered, so this
+      // drops the oldest evictable entries first.
+      if (entry.lockedUntil && now < entry.lockedUntil) {
+        continue;
+      }
+      entries.delete(key);
+      removed += 1;
+    }
   }
 
   function prune(): void {
