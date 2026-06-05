@@ -551,7 +551,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
     "Disables Control UI device identity checks and relies on token/password only. Use only for short-lived debugging on trusted networks, then turn it off immediately.",
   "gateway.controlUi.timezone":
-    "IANA timezone for Control UI timestamp rendering (e.g. America/New_York). Defaults to the server's local timezone. Useful when the browser reports UTC due to fingerprinting protection.",
+    'Timezone for Control UI timestamp rendering. Set to "host" to use the gateway server\'s local timezone, or an IANA string like America/New_York. Omit to keep browser-default behavior. Useful when the browser reports UTC due to fingerprinting protection.',
   "gateway.push":
     "Push-delivery settings used by the gateway when it needs to wake or notify paired devices. Configure relay-backed APNs here for official iOS builds; direct APNs auth remains env-based for local/manual builds.",
   "gateway.push.apns":

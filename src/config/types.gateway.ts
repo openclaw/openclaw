@@ -151,7 +151,7 @@ export type GatewayControlUiConfig = {
   allowInsecureAuth?: boolean;
   /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
   dangerouslyDisableDeviceAuth?: boolean;
-  /** IANA timezone for Control UI timestamp rendering (e.g. "America/New_York"). Defaults to the server's local timezone. */
+  /** Timezone for Control UI timestamp rendering. Accepts "host" (server local timezone) or an IANA timezone string (e.g. "America/New_York"). Omit for browser-default behavior. */
   timezone?: string;
 };
 

@@ -71,6 +71,16 @@ const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
 
+function resolveControlUiTimezone(raw: string | undefined): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  if (raw === "host") {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }
+  return raw;
+}
+
 export type ControlUiRequestOptions = {
   basePath?: string;
   config?: OpenClawConfig;
@@ -979,8 +989,7 @@ export async function handleControlUiHttpRequest(
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
-      timezone:
-        config?.gateway?.controlUi?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+      timezone: resolveControlUiTimezone(config?.gateway?.controlUi?.timezone),
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
