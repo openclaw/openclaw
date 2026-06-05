@@ -377,6 +377,10 @@ observability or capture state. The hook runner applies a 30 second timeout so a
 wedged plugin or embedding endpoint cannot leave the hook promise pending
 forever. A timeout is logged and OpenClaw continues; it does not cancel
 plugin-owned network work unless the plugin also uses its own abort signal.
+Embedded runner events may include optional `prepStages` diagnostic telemetry
+with total setup time and per-stage elapsed timings. Stage labels are diagnostic
+and can grow or change as the runner pipeline changes; use them for observability
+rather than durable control flow.
 
 Use `model_call_started` and `model_call_ended` for provider-call telemetry
 that should not receive raw prompts, history, responses, headers, request
