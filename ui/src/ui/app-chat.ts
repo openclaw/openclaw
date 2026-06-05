@@ -272,13 +272,13 @@ function chatRunWatchdogResultIsTerminal(
   if (status !== "timeout" && status !== "timed_out") {
     return true;
   }
-  return Boolean(
+  return (
     result?.endedAt != null ||
-      result?.error != null ||
-      result?.stopReason != null ||
-      result?.livenessState != null ||
-      result?.yielded === true ||
-      result?.pendingError === true,
+    result?.error != null ||
+    result?.stopReason != null ||
+    result?.livenessState != null ||
+    result?.yielded === true ||
+    result?.pendingError === true
   );
 }
 
