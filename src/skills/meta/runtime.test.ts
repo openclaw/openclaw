@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { resolveMetaInvokeRuntime } from "./runtime.js";
+import { describe, expect, it, vi } from "vitest";
+import type { MetaSkillCatalog } from "./catalog.js";
+import { resolveMetaInvokeRuntime, runTriggeredMetaPlan } from "./runtime.js";
 import type { MetaPlan } from "./types.js";
 
 const userInputPlan = {
@@ -58,6 +59,12 @@ const llmChatPlan = {
     },
   ],
   finalTextMode: { kind: "auto" },
+} satisfies MetaPlan;
+
+const triggeredPlan = {
+  ...userInputPlan,
+  name: "triggered",
+  triggers: [{ pattern: "/triggered" }, { pattern: "run triggered" }],
 } satisfies MetaPlan;
 
 const dependentUserInputPlan = {
@@ -218,6 +225,39 @@ describe("resolveMetaInvokeRuntime", () => {
     });
   });
 
+  it("keeps internal meta input context out of user_input schema validation", async () => {
+    const runtime = resolveMetaInvokeRuntime(
+      {
+        prompt: "",
+        skills: [],
+        resolvedSkills: [],
+        metaSkillCatalog: { plans: [constrainedUserInputPlan], diagnostics: [] },
+        version: 1,
+      },
+      undefined,
+    );
+
+    const result = await runtime?.runMetaPlan({
+      plan: constrainedUserInputPlan,
+      input: { topic: "SQLite", _meta: { sessionKey: "agent:main:main" } },
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      outputs: {
+        ask: {
+          topic: "SQLite",
+        },
+      },
+      steps: {
+        ask: {
+          status: "succeeded",
+        },
+      },
+    });
+    expect(result?.outputs.ask).not.toHaveProperty("_meta");
+  });
+
   it("keeps default user_input plans paused for schema-invalid input", async () => {
     const runtime = resolveMetaInvokeRuntime(
       {
@@ -289,5 +329,105 @@ describe("resolveMetaInvokeRuntime", () => {
       },
     });
     expect(result?.outputs.ask).not.toHaveProperty("prefill.__meta_pause__");
+  });
+
+  it("keeps internal meta input context out of user_input prefill", async () => {
+    const runtime = resolveMetaInvokeRuntime(
+      {
+        prompt: "",
+        skills: [],
+        resolvedSkills: [],
+        metaSkillCatalog: { plans: [userInputPlan], diagnostics: [] },
+        version: 1,
+      },
+      undefined,
+    );
+
+    const result = await runtime?.runMetaPlan({
+      plan: userInputPlan,
+      input: { _meta: { sessionKey: "agent:main:main" } },
+    });
+
+    expect(result).toMatchObject({
+      status: "paused",
+      outputs: {
+        ask: {
+          __meta_pause__: true,
+          schema: { required: ["topic"] },
+        },
+      },
+    });
+    expect(result?.outputs.ask).not.toHaveProperty("prefill._meta");
+  });
+});
+
+describe("runTriggeredMetaPlan", () => {
+  it("runs the matched meta plan for a unique deterministic trigger", async () => {
+    const catalog = {
+      plans: [triggeredPlan],
+      diagnostics: [],
+    } satisfies MetaSkillCatalog;
+    const runMetaPlan = vi.fn(async () => ({
+      status: "succeeded" as const,
+      finalText: "triggered ok",
+      outputs: {},
+      steps: {},
+    }));
+
+    const result = await runTriggeredMetaPlan({
+      catalog,
+      inputText: "/triggered with details",
+      input: { topic: "SQLite" },
+      runMetaPlan,
+      parentToolCallId: "turn-1",
+    });
+
+    expect(runMetaPlan).toHaveBeenCalledWith({
+      plan: triggeredPlan,
+      input: { topic: "SQLite" },
+      parentToolCallId: "turn-1",
+    });
+    expect(result).toMatchObject({
+      match: {
+        kind: "deterministic",
+        trigger: "/triggered",
+        plan: triggeredPlan,
+      },
+      result: {
+        status: "succeeded",
+        finalText: "triggered ok",
+      },
+    });
+  });
+
+  it("does not run soft or ambiguous trigger matches", async () => {
+    const duplicate = {
+      ...triggeredPlan,
+      name: "duplicate-triggered",
+    } satisfies MetaPlan;
+    const runMetaPlan = vi.fn(async () => ({
+      status: "succeeded" as const,
+      finalText: "should not run",
+      outputs: {},
+      steps: {},
+    }));
+
+    await expect(
+      runTriggeredMetaPlan({
+        catalog: { plans: [triggeredPlan], diagnostics: [] },
+        inputText: "please run triggered for this",
+        input: {},
+        runMetaPlan,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      runTriggeredMetaPlan({
+        catalog: { plans: [triggeredPlan, duplicate], diagnostics: [] },
+        inputText: "/triggered details",
+        input: {},
+        runMetaPlan,
+      }),
+    ).resolves.toBeUndefined();
+    expect(runMetaPlan).not.toHaveBeenCalled();
   });
 });

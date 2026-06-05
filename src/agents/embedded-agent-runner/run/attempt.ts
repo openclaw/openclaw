@@ -61,6 +61,7 @@ import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
+import { createMetaRunStore } from "../../../skills/meta/store.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
@@ -444,6 +445,10 @@ import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeo
 import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
+import {
+  buildSoftMetaTriggerHint,
+  dispatchDeterministicMetaTrigger,
+} from "./meta-trigger-dispatch.js";
 import {
   MID_TURN_PRECHECK_ERROR_MESSAGE,
   isMidTurnPrecheckSignal,
@@ -1167,6 +1172,7 @@ export async function runEmbeddedAttempt(
     let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
     const metaInvokeToolsRef: MetaInvokeToolRef = { current: [] };
     const metaInvokeToolExecutorRef: MetaInvokeToolExecutorRef = {};
+    const metaRunStore = createMetaRunStore();
     toolSearchCatalogRef =
       toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun
         ? createToolSearchCatalogRef()
@@ -1247,6 +1253,7 @@ export async function runEmbeddedAttempt(
             toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
             metaInvokeToolsRef,
             metaInvokeToolExecutorRef,
+            metaRunStore,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             modelHasVision: params.model.input?.includes("image") ?? false,
@@ -3848,9 +3855,18 @@ export async function runEmbeddedAttempt(
               setActiveSessionSystemPrompt(runtimeSystemPrompt);
             }
           }
+          const softMetaTriggerHint = isRawModelRun
+            ? undefined
+            : buildSoftMetaTriggerHint({
+                catalog: skillsSnapshotForRun?.metaSkillCatalog,
+                inputText: params.prompt,
+                tools: effectiveTools,
+              });
           const runtimeContextForHook = promptSubmission.runtimeOnly
             ? undefined
-            : promptSubmission.runtimeContext?.trim();
+            : [promptSubmission.runtimeContext?.trim(), softMetaTriggerHint]
+                .filter((value): value is string => Boolean(value?.trim()))
+                .join("\n\n") || undefined;
           const runtimeContextMessageForCurrentTurn =
             buildRuntimeContextCustomMessage(runtimeContextForHook);
           const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
@@ -3964,6 +3980,56 @@ export async function runEmbeddedAttempt(
               promptError = new Error(blockReplacementMsg);
               promptErrorSource = "hook:before_agent_run";
               skipPromptSubmission = true;
+            }
+          }
+
+          if (!skipPromptSubmission && !isRawModelRun) {
+            const metaTriggerDispatch = await dispatchDeterministicMetaTrigger({
+              catalog: skillsSnapshotForRun?.metaSkillCatalog,
+              inputText: params.prompt,
+              tools: effectiveTools,
+              toolCallId: `meta-trigger-${params.runId}`,
+              assistant: {
+                api: params.model.api,
+                provider: params.provider,
+                model: params.modelId,
+              },
+              executeMetaInvokeTool: async ({ tool, toolCallId, args }) =>
+                await runToolLifecycle({
+                  toolName: tool.name,
+                  toolCallId,
+                  args,
+                  execute: async () =>
+                    await tool.execute(toolCallId, args, runAbortController.signal, undefined),
+                }),
+              pendingPause: {
+                store: metaRunStore,
+                sessionKey: params.sessionKey,
+              },
+            });
+            if (metaTriggerDispatch) {
+              await sessionLockController.withSessionWriteLock(() => {
+                activeSessionManager.appendMessage({
+                  role: "user",
+                  content: promptForSession,
+                  timestamp: Date.now(),
+                });
+                activeSessionManager.appendMessage(metaTriggerDispatch.assistant);
+                flushSessionManagerFile(activeSessionManager);
+                activeSession.agent.state.messages =
+                  activeSessionManager.buildSessionContext().messages;
+              });
+              assistantTexts.push(metaTriggerDispatch.finalText);
+              finalPromptText = promptForSession;
+              skipPromptSubmission = true;
+              log.debug(
+                metaTriggerDispatch.match
+                  ? `deterministic meta trigger dispatched: skill=${metaTriggerDispatch.match.plan.name} ` +
+                      `trigger=${metaTriggerDispatch.match.trigger} runId=${params.runId} sessionId=${params.sessionId}`
+                  : `pending meta pause resumed: skill=${metaTriggerDispatch.resumedPause?.skillName} ` +
+                      `pauseId=${metaTriggerDispatch.resumedPause?.pauseId} ` +
+                      `runId=${params.runId} sessionId=${params.sessionId}`,
+              );
             }
           }
 

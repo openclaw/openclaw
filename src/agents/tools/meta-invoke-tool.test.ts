@@ -15,7 +15,7 @@ function readSchemaProperty(schema: unknown, key: string): Record<string, unknow
 const testPlan = {
   name: "draft_reply",
   description: "Draft a concise reply",
-  triggers: [],
+  triggers: [{ pattern: "draft reply" }, { pattern: "respond briefly" }],
   steps: [
     {
       id: "draft",
@@ -63,7 +63,13 @@ describe("createMetaInvokeTool", () => {
     const input = readSchemaProperty(tool.parameters, "input");
 
     expect(tool.name).toBe("meta_invoke");
+    expect(tool.description).toContain("draft_reply: Draft a concise reply");
+    expect(tool.description).toContain("Triggers: draft reply, respond briefly.");
+    expect(tool.description).toContain("paused for user_input");
     expect(skillName.type).toBe("string");
+    expect(String(skillName.description)).toContain("Available meta skills:");
+    expect(String(skillName.description)).toContain("draft_reply: Draft a concise reply");
+    expect(String(input.description)).toContain("pending user_input pause");
     expect(input.type).toBe("object");
 
     const result = await tool.execute("call-1", {

@@ -1,5 +1,10 @@
 import { validateJsonSchemaValue, type JsonSchemaValue } from "../../plugins/schema-validator.js";
 import type { SkillSnapshot } from "../types.js";
+import {
+  findDeterministicMetaTriggerMatch,
+  type MetaSkillCatalog,
+  type MetaTriggerMatch,
+} from "./catalog.js";
 import type { MetaExecutorRegistry, MetaPauseOutput, MetaStepContext } from "./executors.js";
 import { META_PAUSE_KEY } from "./executors.js";
 import { runMetaPlan as runMetaPlanWithExecutors } from "./runner.js";
@@ -15,12 +20,18 @@ export type RuntimeMetaInvokePlanRunner = (
   options: RuntimeMetaInvokePlanRunnerOptions,
 ) => Promise<MetaRunResult>;
 
+export type TriggeredMetaRunResult = {
+  match: MetaTriggerMatch;
+  result: MetaRunResult;
+};
+
 type RuntimeMetaSkillCatalog = NonNullable<SkillSnapshot["metaSkillCatalog"]>;
 type DefaultMetaInvokeRuntimeOptions = {
   runMetaPlan?: RuntimeMetaInvokePlanRunner;
   stepKinds?: readonly MetaStepKind[];
 };
 const DEFAULT_RUNTIME_STEP_KINDS: readonly MetaStepKind[] = ["user_input"];
+const META_RUN_INPUT_CONTEXT_KEY = "_meta";
 
 function buildUserInputPauseOutput(
   options: Pick<MetaStepContext, "step" | "renderedArgs">,
@@ -41,7 +52,11 @@ function buildUserInputPrefill(
   context: Pick<MetaStepContext, "renderedArgs" | "input">,
 ): Record<string, unknown> {
   const renderedArgs = isPlainRecord(context.renderedArgs) ? context.renderedArgs : {};
-  const { [META_PAUSE_KEY]: _reserved, ...input } = context.input;
+  const {
+    [META_PAUSE_KEY]: _reserved,
+    [META_RUN_INPUT_CONTEXT_KEY]: _meta,
+    ...input
+  } = context.input;
   return {
     ...renderedArgs,
     ...input,
@@ -52,16 +67,17 @@ function resolveUserInputOutput(context: MetaStepContext): Record<string, unknow
   if (Object.hasOwn(context.input, META_PAUSE_KEY)) {
     return undefined;
   }
+  const { [META_RUN_INPUT_CONTEXT_KEY]: _meta, ...userInput } = context.input;
 
   if (!context.step.schema) {
-    return Object.keys(context.input).length > 0 ? context.input : undefined;
+    return Object.keys(userInput).length > 0 ? userInput : undefined;
   }
 
   const validation = validateJsonSchemaValue({
     schema: context.step.schema as JsonSchemaValue,
     cacheKey: `meta-user-input:${context.step.id}`,
     cache: false,
-    value: context.input,
+    value: userInput,
   });
   return validation.ok && isPlainRecord(validation.value) ? validation.value : undefined;
 }
@@ -79,6 +95,15 @@ const DEFAULT_META_EXECUTORS = {
   },
 } satisfies MetaExecutorRegistry;
 
+export function createDefaultMetaExecutorRegistry(
+  executors: MetaExecutorRegistry = {},
+): MetaExecutorRegistry {
+  return {
+    ...DEFAULT_META_EXECUTORS,
+    ...executors,
+  };
+}
+
 export function createDefaultMetaInvokePlanRunner(
   executors: MetaExecutorRegistry = {},
 ): RuntimeMetaInvokePlanRunner {
@@ -86,14 +111,33 @@ export function createDefaultMetaInvokePlanRunner(
     await runMetaPlanWithExecutors({
       plan: options.plan,
       input: options.input,
-      executors: {
-        ...DEFAULT_META_EXECUTORS,
-        ...executors,
-      },
+      executors: createDefaultMetaExecutorRegistry(executors),
     });
 }
 
 export const defaultMetaInvokePlanRunner = createDefaultMetaInvokePlanRunner();
+
+export async function runTriggeredMetaPlan(options: {
+  catalog: MetaSkillCatalog;
+  inputText: string;
+  input: Record<string, unknown>;
+  runMetaPlan: RuntimeMetaInvokePlanRunner;
+  parentToolCallId?: string;
+}): Promise<TriggeredMetaRunResult | undefined> {
+  const match = findDeterministicMetaTriggerMatch(options.catalog, options.inputText);
+  if (!match) {
+    return undefined;
+  }
+  const result = await options.runMetaPlan({
+    plan: match.plan,
+    input: options.input,
+    ...(options.parentToolCallId ? { parentToolCallId: options.parentToolCallId } : {}),
+  });
+  return {
+    match,
+    result,
+  };
+}
 
 function isDefaultRunnableStep(step: MetaStep, stepKinds: ReadonlySet<MetaStepKind>): boolean {
   if (!stepKinds.has(step.kind)) {

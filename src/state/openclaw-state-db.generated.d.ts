@@ -591,6 +591,7 @@ export interface MediaBlobs {
 }
 
 export interface MetaSkillEvidence {
+  artifact_refs_json: string | null;
   created_at_ms: number;
   evidence_id: string;
   evidence_json: string;
@@ -603,6 +604,7 @@ export interface MetaSkillEvidence {
 }
 
 export interface MetaSkillPauses {
+  channel_binding_json: string | null;
   confirmed_fields_json: string | null;
   created_at_ms: number;
   expires_at_ms: number;
@@ -618,20 +620,27 @@ export interface MetaSkillPauses {
 
 export interface MetaSkillRuns {
   agent_id: string | null;
+  agent_run_id: string | null;
+  channel_target_json: string | null;
   completed_at_ms: number | null;
   created_at_ms: number;
+  final_mode: string | null;
   final_text: string | null;
   input_json: string;
+  original_input_summary: string | null;
   run_id: string;
   session_key: string | null;
+  skill_key: string | null;
   skill_name: string;
   status: string;
   trigger_json: string | null;
   updated_at_ms: number;
+  workspace_context_json: string | null;
 }
 
 export interface MetaSkillSteps {
   completed_at_ms: number | null;
+  dependency_state_json: string | null;
   error_json: string | null;
   input_json: string | null;
   kind: string;

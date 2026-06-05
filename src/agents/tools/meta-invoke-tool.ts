@@ -10,23 +10,43 @@ import {
   textResult,
 } from "./common.js";
 
-const MetaInvokeToolSchema = Type.Object(
-  {
-    skill_name: Type.String({
-      description: "Registered meta skill name.",
-    }),
-    input: Type.Optional(
-      Type.Object(
-        {},
-        {
-          additionalProperties: true,
-          description: "Optional plain-object input for the meta skill.",
-        },
+function formatMetaPlanCatalogForPrompt(catalog: MetaSkillCatalog): string {
+  return catalog.plans
+    .map((plan) => {
+      const triggers = plan.triggers.map((trigger) => trigger.pattern).filter(Boolean);
+      const triggerText =
+        triggers.length > 0 ? ` Triggers: ${triggers.join(", ")}.` : " No declared triggers.";
+      return `- ${plan.name}: ${plan.description}.${triggerText}`;
+    })
+    .join("\n");
+}
+
+function createMetaInvokeToolSchema(catalog: MetaSkillCatalog) {
+  const catalogDescription = formatMetaPlanCatalogForPrompt(catalog);
+  return Type.Object(
+    {
+      skill_name: Type.String({
+        description: [
+          "Registered meta skill name to invoke.",
+          catalogDescription ? `Available meta skills:\n${catalogDescription}` : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+      }),
+      input: Type.Optional(
+        Type.Object(
+          {},
+          {
+            additionalProperties: true,
+            description:
+              "Optional plain-object input for the selected meta skill. Include fields requested by the selected skill's trigger, clarification, workflow description, or pending user_input pause.",
+          },
+        ),
       ),
-    ),
-  },
-  { additionalProperties: false },
-);
+    },
+    { additionalProperties: false },
+  );
+}
 
 export type MetaInvokeRunPlan = (
   options: Pick<RunMetaPlanOptions, "plan" | "input"> & {
@@ -57,8 +77,15 @@ export function createMetaInvokeTool(options: {
     label: "Meta Invoke",
     name: "meta_invoke",
     displaySummary: "Invoke a registered meta skill.",
-    description: "Run a registered meta skill by name with optional structured input.",
-    parameters: MetaInvokeToolSchema,
+    description: [
+      "Run a registered meta skill workflow by name with optional structured input.",
+      "Use this when the user request matches a cataloged meta skill trigger or description.",
+      "If a previous meta skill invocation paused for user_input and the user now supplies the requested fields, call the same meta skill with those fields to resume the paused run.",
+      formatMetaPlanCatalogForPrompt(options.catalog),
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+    parameters: createMetaInvokeToolSchema(options.catalog),
     execute: async (toolCallId, args) => {
       const params = asToolParamsRecord(args);
       const skillName = readStringParam(params, "skill_name", { required: true });

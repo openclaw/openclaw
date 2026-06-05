@@ -1,9 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { Skill } from "../loading/skill-contract.js";
 import type { SkillEntry } from "../types.js";
-import { buildMetaSkillCatalog, findMetaPlanByName } from "./catalog.js";
+import {
+  buildMetaSkillCatalog,
+  findDeterministicMetaTriggerMatch,
+  findMetaPlanByName,
+  findMetaTriggerMatches,
+} from "./catalog.js";
 
-function makeSkill(name: string, filePath: string): Skill {
+function makeSkill(
+  name: string,
+  filePath: string,
+  options: { disableModelInvocation?: boolean } = {},
+): Skill {
   return {
     name,
     description: `${name} description`,
@@ -16,7 +25,7 @@ function makeSkill(name: string, filePath: string): Skill {
       origin: "top-level",
       baseDir: filePath.replace(/\/SKILL\.md$/, ""),
     },
-    disableModelInvocation: false,
+    disableModelInvocation: options.disableModelInvocation ?? false,
     source: `# ${name}`,
   };
 }
@@ -41,9 +50,13 @@ function makeMetaEntry(
   };
 }
 
-function makeOrdinaryEntry(name: string, filePath: string): SkillEntry {
+function makeOrdinaryEntry(
+  name: string,
+  filePath: string,
+  options: { disableModelInvocation?: boolean } = {},
+): SkillEntry {
   return {
-    skill: makeSkill(name, filePath),
+    skill: makeSkill(name, filePath, options),
     frontmatter: {
       name,
       description: `${name} description`,
@@ -70,6 +83,23 @@ describe("buildMetaSkillCatalog", () => {
     expect(catalog.plans[0].steps.map((step) => step.id)).toEqual(["draft", "final"]);
     expect(findMetaPlanByName(catalog, "meta-demo")).toBe(catalog.plans[0]);
     expect(findMetaPlanByName(catalog, "missing")).toBeUndefined();
+  });
+
+  it("preserves risk metadata in projected meta plans", () => {
+    const catalog = buildMetaSkillCatalog([
+      makeMetaEntry("risk-aware", "/repo/src/skills/risk-aware/SKILL.md", {
+        risk_metadata: '{"level":"medium","requiresApproval":true}',
+      }),
+    ]);
+
+    expect(catalog.diagnostics).toEqual([]);
+    expect(catalog.plans[0]).toMatchObject({
+      name: "risk-aware",
+      riskMetadata: {
+        level: "medium",
+        requiresApproval: true,
+      },
+    });
   });
 
   it("ignores ordinary skills", () => {
@@ -121,5 +151,143 @@ describe("buildMetaSkillCatalog", () => {
       "beta-broken",
       "gamma-broken",
     ]);
+  });
+
+  it("rejects tool_call steps outside the available tool allowlist", () => {
+    const entries = [
+      makeMetaEntry("tool-meta", "/repo/src/skills/tool-meta/SKILL.md", {
+        composition: '{"steps":[{"id":"publish","kind":"tool_call","tool":"notify"}]}',
+        final_text_mode: "auto",
+      }),
+    ];
+
+    expect(
+      buildMetaSkillCatalog(entries, {
+        availableToolNames: ["notify"],
+      }).diagnostics,
+    ).toEqual([]);
+
+    const unavailable = buildMetaSkillCatalog(entries, {
+      availableToolNames: ["read"],
+    });
+    expect(unavailable.plans).toEqual([]);
+    expect(unavailable.diagnostics[0]).toMatchObject({
+      skillName: "tool-meta",
+      message: "step publish tool_call references unavailable tool notify",
+    });
+  });
+
+  it("rejects blocked meta wrapper tool_call targets before runtime", () => {
+    const catalog = buildMetaSkillCatalog([
+      makeMetaEntry("recursive-meta", "/repo/src/skills/recursive-meta/SKILL.md", {
+        composition: '{"steps":[{"id":"recurse","kind":"tool_call","tool":"meta_invoke"}]}',
+        final_text_mode: "auto",
+      }),
+    ]);
+
+    expect(catalog.plans).toEqual([]);
+    expect(catalog.diagnostics[0]).toMatchObject({
+      skillName: "recursive-meta",
+      message: "step recurse tool_call target meta_invoke is not allowed",
+    });
+  });
+
+  it("validates skill_exec targets against loaded ordinary skills", () => {
+    const metaEntry = makeMetaEntry("delegate-meta", "/repo/src/skills/delegate-meta/SKILL.md", {
+      composition: '{"steps":[{"id":"delegate","kind":"skill_exec","skill":"helper"}]}',
+      final_text_mode: "auto",
+    });
+
+    const valid = buildMetaSkillCatalog([
+      metaEntry,
+      makeOrdinaryEntry("helper", "/repo/src/skills/helper/SKILL.md"),
+    ]);
+    expect(valid.diagnostics).toEqual([]);
+    expect(valid.plans).toHaveLength(1);
+
+    const missing = buildMetaSkillCatalog([metaEntry]);
+    expect(missing.plans).toEqual([]);
+    expect(missing.diagnostics[0]).toMatchObject({
+      skillName: "delegate-meta",
+      message: "step delegate skill_exec references unavailable skill helper",
+    });
+
+    const metaTarget = buildMetaSkillCatalog([
+      metaEntry,
+      makeMetaEntry("helper", "/repo/src/skills/helper/SKILL.md"),
+    ]);
+    expect(metaTarget.plans.map((plan) => plan.name)).toEqual(["helper"]);
+    expect(metaTarget.diagnostics).toEqual([
+      expect.objectContaining({
+        skillName: "delegate-meta",
+        message: "step delegate skill_exec target helper must be an ordinary skill",
+      }),
+    ]);
+
+    const disabled = buildMetaSkillCatalog([
+      metaEntry,
+      makeOrdinaryEntry("helper", "/repo/src/skills/helper/SKILL.md", {
+        disableModelInvocation: true,
+      }),
+    ]);
+    expect(disabled.plans).toEqual([]);
+    expect(disabled.diagnostics[0]).toMatchObject({
+      skillName: "delegate-meta",
+      message: "step delegate skill_exec target helper disables model invocation",
+    });
+  });
+});
+
+describe("meta trigger matching", () => {
+  it("finds exact natural-language and slash-prefix deterministic triggers", () => {
+    const catalog = buildMetaSkillCatalog([
+      makeMetaEntry("creator", "/repo/src/skills/creator/SKILL.md", {
+        triggers: '["create a skill", "/skill"]',
+      }),
+    ]);
+
+    expect(findDeterministicMetaTriggerMatch(catalog, "  Create   A Skill  ")).toMatchObject({
+      kind: "deterministic",
+      plan: expect.objectContaining({ name: "creator" }),
+      trigger: "create a skill",
+    });
+    expect(findDeterministicMetaTriggerMatch(catalog, "/skill summarize workflow")).toMatchObject({
+      kind: "deterministic",
+      plan: expect.objectContaining({ name: "creator" }),
+      trigger: "/skill",
+    });
+  });
+
+  it("keeps contained phrase matches soft unless they are exact", () => {
+    const catalog = buildMetaSkillCatalog([
+      makeMetaEntry("creator", "/repo/src/skills/creator/SKILL.md", {
+        triggers: '["create a skill"]',
+      }),
+    ]);
+
+    expect(
+      findDeterministicMetaTriggerMatch(catalog, "please create a skill for this"),
+    ).toBeUndefined();
+    expect(findMetaTriggerMatches(catalog, "please create a skill for this")).toEqual([
+      {
+        kind: "soft",
+        plan: catalog.plans[0],
+        trigger: "create a skill",
+      },
+    ]);
+  });
+
+  it("does not return a deterministic match when triggers are ambiguous", () => {
+    const catalog = buildMetaSkillCatalog([
+      makeMetaEntry("first", "/repo/src/skills/first/SKILL.md", {
+        triggers: '["/skill"]',
+      }),
+      makeMetaEntry("second", "/repo/src/skills/second/SKILL.md", {
+        triggers: '["/skill"]',
+      }),
+    ]);
+
+    expect(findDeterministicMetaTriggerMatch(catalog, "/skill draft")).toBeUndefined();
+    expect(findMetaTriggerMatches(catalog, "/skill draft")).toHaveLength(2);
   });
 });

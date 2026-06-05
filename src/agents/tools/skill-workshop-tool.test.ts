@@ -251,6 +251,46 @@ describe("skill_workshop tool", () => {
     );
   });
 
+  it("accepts support files from JSON-array strings", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+
+    const result = await tool.execute("call-1", {
+      action: "create",
+      name: "Release Captain",
+      description: "Coordinate release readiness",
+      proposal_content: "# Release Captain\n\nCollect release risks.\n",
+      support_files: JSON.stringify([
+        {
+          path: "examples/release.md",
+          content: "Example release checklist.\n",
+        },
+      ]),
+      goal: "Reuse release planning steps",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "pending",
+      kind: "create",
+      skillKey: "release-captain",
+      scanState: "clean",
+      supportFileCount: 1,
+    });
+    await expect(
+      fs.readFile(
+        path.join(
+          stateDir,
+          "skill-workshop",
+          "proposals",
+          (result.details as { id: string }).id,
+          "examples",
+          "release.md",
+        ),
+        "utf8",
+      ),
+    ).resolves.toContain("Example release checklist.");
+  });
+
   it("applies, rejects, and quarantines proposals through the workshop service", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });

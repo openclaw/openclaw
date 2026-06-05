@@ -103,19 +103,24 @@ const SkillWorkshopToolSchema = Type.Object(
       }),
     ),
     support_files: Type.Optional(
-      Type.Array(
-        Type.Object(
-          {
-            path: Type.String({
-              description:
-                "Relative support file path under assets/, examples/, references/, scripts/, or templates/.",
-            }),
-            content: Type.String({ description: "Support file text content." }),
-          },
-          { additionalProperties: false },
+      Type.Union([
+        Type.String({
+          description: "Optional JSON-array string of support files with path and content fields.",
+        }),
+        Type.Array(
+          Type.Object(
+            {
+              path: Type.String({
+                description:
+                  "Relative support file path under assets/, examples/, references/, scripts/, or templates/.",
+              }),
+              content: Type.String({ description: "Support file text content." }),
+            },
+            { additionalProperties: false },
+          ),
+          { description: "Optional support files to store with the proposal." },
         ),
-        { description: "Optional support files to store with the proposal." },
-      ),
+      ]),
     ),
     goal: Type.Optional(Type.String({ description: "Proposal or improvement goal." })),
     evidence: Type.Optional(Type.String({ description: "Short evidence or notes." })),
@@ -535,10 +540,8 @@ function readSupportFilesParam(
   if (raw === undefined) {
     return undefined;
   }
-  if (!Array.isArray(raw)) {
-    throw new ToolInputError("support_files must be an array");
-  }
-  return raw.map((item, index) => {
+  const parsed = parseSupportFilesArray(raw, "support_files");
+  return parsed.map((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new ToolInputError(`support_files[${index}] must be an object`);
     }
@@ -554,4 +557,26 @@ function readSupportFilesParam(
       content: file.content,
     };
   });
+}
+
+function parseSupportFilesArray(raw: unknown, label: string): unknown[] {
+  if (Array.isArray(raw)) {
+    return raw;
+  }
+  if (typeof raw !== "string") {
+    throw new ToolInputError(`${label} must be an array`);
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch {
+    // Fall through to the user-facing validation error below.
+  }
+  throw new ToolInputError(`${label} must be an array`);
 }

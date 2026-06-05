@@ -36,6 +36,7 @@ function recordStartedRunWithStep(
   store.recordRunStarted({
     runId: params.runId,
     skillName: "meta-demo",
+    skillKey: "meta-demo",
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     inputJson: { runId: params.runId },
     createdAtMs: params.createdAtMs,
@@ -68,10 +69,16 @@ describe("meta run store", () => {
     store.recordRunStarted({
       runId: "run-1",
       skillName: "meta-demo",
+      skillKey: "meta-demo",
       agentId: "agent-a",
       sessionKey: "session-1",
+      agentRunId: "agent-run-1",
+      channelTargetJson: { provider: "telegram", to: "chat-1" },
+      workspaceContextJson: { workspaceDir: "/workspace/openclaw", cwd: "/workspace/openclaw" },
       inputJson: { task: "draft summary" },
       triggerJson: { pattern: "/meta-demo" },
+      originalInputSummary: "draft summary",
+      finalMode: "step:ask-user",
       createdAtMs: 1_000,
     });
 
@@ -79,9 +86,11 @@ describe("meta run store", () => {
       runId: "run-1",
       stepId: "classify",
       kind: "llm_classify",
+      dependencyStateJson: { dependsOn: [], state: "succeeded" },
       status: "succeeded",
       inputJson: { task: "draft summary" },
       outputJson: { route: "ask-user" },
+      startedAtMs: 1_050,
       updatedAtMs: 1_100,
     });
 
@@ -89,6 +98,7 @@ describe("meta run store", () => {
       runId: "run-1",
       stepId: "classify",
       kind: "llm_classify",
+      dependencyStateJson: { dependsOn: [], state: "succeeded", satisfied: [] },
       status: "succeeded",
       inputJson: { task: "draft summary" },
       outputJson: { route: "ask-user", confidence: 0.9 },
@@ -99,6 +109,7 @@ describe("meta run store", () => {
       runId: "run-1",
       stepId: "ask-user",
       kind: "user_input",
+      dependencyStateJson: { dependsOn: ["classify"], state: "paused", satisfied: ["classify"] },
       status: "paused",
       inputJson: { question: "Which section matters most?" },
       outputJson: { fields: ["audience"] },
@@ -115,6 +126,7 @@ describe("meta run store", () => {
       createdAtMs: 1_300,
       prefillJson: { audience: "engineering" },
       confirmedFieldsJson: { audience: true },
+      channelBindingJson: { provider: "telegram", to: "chat-1" },
     });
 
     store.recordEvidence({
@@ -135,6 +147,7 @@ describe("meta run store", () => {
       result: "warn",
       riskLevel: "medium",
       evidenceJson: { reason: "needs clarification" },
+      artifactRefsJson: { proposalId: "proposal-1", stepId: "classify" },
       createdAtMs: 1_400,
     });
 
@@ -148,11 +161,17 @@ describe("meta run store", () => {
     expect(store.readRun("run-1")).toEqual({
       runId: "run-1",
       skillName: "meta-demo",
+      skillKey: "meta-demo",
       agentId: "agent-a",
       sessionKey: "session-1",
+      agentRunId: "agent-run-1",
+      channelTargetJson: { provider: "telegram", to: "chat-1" },
+      workspaceContextJson: { workspaceDir: "/workspace/openclaw", cwd: "/workspace/openclaw" },
       status: "paused",
       triggerJson: { pattern: "/meta-demo" },
       inputJson: { task: "draft summary" },
+      originalInputSummary: "draft summary",
+      finalMode: "step:ask-user",
       finalText: "Waiting for user input.",
       createdAtMs: 1_000,
       updatedAtMs: 1_500,
@@ -166,12 +185,49 @@ describe("meta run store", () => {
       schemaJson: { type: "object", required: ["audience"] },
       prefillJson: { audience: "engineering" },
       confirmedFieldsJson: { audience: true },
+      channelBindingJson: { provider: "telegram", to: "chat-1" },
       sessionKey: "session-1",
       status: "pending",
       expiresAtMs: 5_000,
       createdAtMs: 1_300,
       resumedAtMs: null,
     });
+
+    expect(store.listSteps("run-1")).toEqual([
+      {
+        runId: "run-1",
+        stepId: "classify",
+        kind: "llm_classify",
+        dependencyStateJson: { dependsOn: [], state: "succeeded", satisfied: [] },
+        status: "succeeded",
+        inputJson: { task: "draft summary" },
+        outputJson: { route: "ask-user", confidence: 0.9 },
+        errorJson: null,
+        startedAtMs: 1_050,
+        updatedAtMs: 1_200,
+        completedAtMs: 1_200,
+      },
+      {
+        runId: "run-1",
+        stepId: "ask-user",
+        kind: "user_input",
+        dependencyStateJson: { dependsOn: ["classify"], state: "paused", satisfied: ["classify"] },
+        status: "paused",
+        inputJson: { question: "Which section matters most?" },
+        outputJson: { fields: ["audience"] },
+        errorJson: null,
+        startedAtMs: null,
+        updatedAtMs: 1_250,
+        completedAtMs: 1_250,
+      },
+    ]);
+
+    store.markPauseResumed({
+      pauseId: "pause-1",
+      confirmedFieldsJson: { audience: "platform engineers" },
+      resumedAtMs: 1_600,
+    });
+    expect(store.readPendingPauseForSession("session-1", 1_650)).toBeNull();
 
     expect(store.listEvidence("run-1")).toEqual([
       {
@@ -183,6 +239,7 @@ describe("meta run store", () => {
         result: "warn",
         riskLevel: "medium",
         evidenceJson: { reason: "needs clarification" },
+        artifactRefsJson: { proposalId: "proposal-1", stepId: "classify" },
         createdAtMs: 1_400,
       },
       {
@@ -194,7 +251,22 @@ describe("meta run store", () => {
         result: "pass",
         riskLevel: null,
         evidenceJson: { score: 0.94 },
+        artifactRefsJson: null,
         createdAtMs: 1_401,
+      },
+    ]);
+    expect(store.listEvidenceByGate("router-check")).toEqual([
+      {
+        evidenceId: "evidence-1",
+        runId: "run-1",
+        stepId: "classify",
+        proposalId: "proposal-1",
+        gateName: "router-check",
+        result: "warn",
+        riskLevel: "medium",
+        evidenceJson: { reason: "needs clarification" },
+        artifactRefsJson: { proposalId: "proposal-1", stepId: "classify" },
+        createdAtMs: 1_400,
       },
     ]);
 

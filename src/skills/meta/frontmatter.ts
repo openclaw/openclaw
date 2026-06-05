@@ -7,6 +7,8 @@ export type RawMetaFrontmatter = {
   triggers?: unknown;
   composition?: unknown;
   final_text_mode?: unknown;
+  risk?: unknown;
+  risk_metadata?: unknown;
 };
 
 function parseMaybeJson(value: unknown): unknown {
@@ -25,6 +27,10 @@ function parseMaybeJson(value: unknown): unknown {
 }
 
 export function decodeMetaFrontmatter(frontmatter: ParsedSkillFrontmatter): RawMetaFrontmatter {
+  const metaFrontmatter = frontmatter as ParsedSkillFrontmatter & {
+    risk?: unknown;
+    risk_metadata?: unknown;
+  };
   return {
     name: frontmatter.name,
     description: frontmatter.description,
@@ -32,5 +38,7 @@ export function decodeMetaFrontmatter(frontmatter: ParsedSkillFrontmatter): RawM
     triggers: parseMaybeJson(frontmatter.triggers),
     composition: parseMaybeJson(frontmatter.composition),
     final_text_mode: parseMaybeJson(frontmatter.final_text_mode),
+    risk: parseMaybeJson(metaFrontmatter.risk),
+    risk_metadata: parseMaybeJson(metaFrontmatter.risk_metadata),
   };
 }
