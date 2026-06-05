@@ -48,6 +48,7 @@ import {
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
+import { persistSessionEntry } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { clearCliSessionInStore } from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";

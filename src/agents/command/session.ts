@@ -70,6 +70,8 @@ function clearRotatedTerminalMainSessionMetadata(
     endedAt: undefined,
     runtimeMs: undefined,
     abortedLastRun: undefined,
+    sessionStartedAt: undefined,
+    lastInteractionAt: undefined,
   };
 }
 
@@ -362,16 +364,18 @@ export function resolveSession(opts: {
     resetType,
     resetOverride: channelReset,
   });
-  const terminalMainTranscriptNewerThanRegistry = sessionEntry
-    ? hasTerminalMainSessionTranscriptNewerThanRegistrySync({
-        entry: sessionEntry,
-        sessionScope: sessionCfg?.scope,
-        sessionKey,
-        agentId: sessionAgentId,
-        mainKey: sessionCfg?.mainKey,
-        storePath,
-      })
-    : false;
+  const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const terminalMainTranscriptNewerThanRegistry =
+    sessionEntry && !requestedSessionId
+      ? hasTerminalMainSessionTranscriptNewerThanRegistrySync({
+          entry: sessionEntry,
+          sessionScope: sessionCfg?.scope,
+          sessionKey,
+          agentId: sessionAgentId,
+          mainKey: sessionCfg?.mainKey,
+          storePath,
+        })
+      : false;
   const fresh = sessionEntry
     ? !terminalMainTranscriptNewerThanRegistry &&
       evaluateSessionFreshness({
@@ -386,8 +390,8 @@ export function resolveSession(opts: {
       }).fresh
     : false;
   const sessionId =
-    opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
-  const isNewSession = !fresh && !opts.sessionId;
+    requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
+  const isNewSession = !fresh && !requestedSessionId;
   const resolvedSessionEntry = terminalMainTranscriptNewerThanRegistry
     ? clearRotatedTerminalMainSessionMetadata(sessionEntry)
     : sessionEntry;

@@ -1665,16 +1665,20 @@ export const agentHandlers: GatewayRequestHandlers = {
         const isSystemGatewayRun =
           request.bootstrapContextRunKind === "cron" ||
           request.bootstrapContextRunKind === "heartbeat";
-        const terminalMainTranscriptCheck = isSystemGatewayRun
-              ? undefined
-              : resolveTerminalMainSessionTranscriptRegistryCheck({
-                  entry,
-                  sessionScope: cfgLocal.session?.scope,
-                  sessionKey: canonicalKey,
-                  agentId: canonicalSessionAgentId,
-                  mainKey: cfgLocal.session?.mainKey,
-                  storePath,
-                });
+        const requestedSessionMatchesEntry = Boolean(
+          requestedSessionId && entry?.sessionId?.trim() === requestedSessionId,
+        );
+        const terminalMainTranscriptCheck =
+          isSystemGatewayRun || requestedSessionMatchesEntry
+            ? undefined
+            : resolveTerminalMainSessionTranscriptRegistryCheck({
+                entry,
+                sessionScope: cfgLocal.session?.scope,
+                sessionKey: canonicalKey,
+                agentId: canonicalSessionAgentId,
+                mainKey: cfgLocal.session?.mainKey,
+                storePath,
+              });
         const terminalMainTranscriptNewerThanRegistry = terminalMainTranscriptCheck
           ? await hasTerminalMainSessionTranscriptNewerThanRegistry({
               entry,

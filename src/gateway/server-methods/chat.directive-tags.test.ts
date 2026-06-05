@@ -2328,6 +2328,54 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(nodeSend?.[2].sessionKey).toBe("agent:main:canon");
   });
 
+  it("chat.inject advances the session registry marker after transcript append", async () => {
+    const fixtureDir = createTranscriptFixture("openclaw-chat-inject-registry-marker-");
+    const updatedAt = Date.parse("2026-05-18T11:00:00.000Z");
+    const appendedAt = Date.parse("2026-05-18T11:05:00.000Z");
+    const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        main: {
+          sessionId: mockState.sessionId,
+          sessionFile: mockState.transcriptPath,
+          updatedAt,
+          status: "done",
+        },
+      }),
+      "utf-8",
+    );
+    const respond = vi.fn();
+    const context = createChatContext();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(appendedAt);
+    try {
+      await chatHandlers["chat.inject"]({
+        params: {
+          sessionKey: "main",
+          message: "hello with registry marker",
+        },
+        respond,
+        req: {} as never,
+        client: null as never,
+        isWebchatConnect: () => false,
+        context: context as GatewayRequestContext,
+      });
+
+      const response = lastRespondCall(respond);
+      expect(response?.[0]).toBe(true);
+      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+        string,
+        { updatedAt?: number; status?: string }
+      >;
+      expect(store.main?.updatedAt).toBe(appendedAt);
+      expect(store.main?.status).toBe("done");
+    } finally {
+      vi.useRealTimers();
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
   it("chat.inject scopes selected-agent global sessions before appending", async () => {
     createTranscriptFixture("openclaw-chat-inject-selected-global-");
     mockState.config = {

@@ -186,6 +186,7 @@ async function writeTerminalTranscriptSessionStore(params: {
   sessionKey: string;
   sessionId: string;
   status?: SessionEntry["status"];
+  omitStatus?: boolean;
   updatedAt: number;
   endedAt: number;
   transcriptMtimeMs: number;
@@ -198,6 +199,7 @@ async function writeTerminalTranscriptSessionStore(params: {
     "utf-8",
   );
   await fs.utimes(transcriptPath, params.transcriptMtimeMs / 1000, params.transcriptMtimeMs / 1000);
+  const status = params.status ?? (params.omitStatus ? undefined : "done");
   await writeSessionStoreFast(params.storePath, {
     [params.sessionKey]: {
       sessionId: params.sessionId,
@@ -206,7 +208,7 @@ async function writeTerminalTranscriptSessionStore(params: {
       startedAt: params.endedAt - 10_000,
       endedAt: params.endedAt,
       runtimeMs: 9_000,
-      status: params.status ?? "done",
+      ...(status ? { status } : {}),
     },
   });
 }
@@ -1642,6 +1644,15 @@ describe("initSessionState reset policy", () => {
       expectNewSession: true,
     },
     {
+      name: "main endedAt-only rows rotate when transcript is newer than updatedAt",
+      sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMtimeOffsetMs: 0,
+      omitStatus: true,
+      expectNewSession: true,
+    },
+    {
       name: "failed main terminal rows reuse when the transcript exists",
       sessionKey: "agent:main:main",
       status: "failed" as const,
@@ -1687,6 +1698,7 @@ describe("initSessionState reset policy", () => {
       sessionKey: scenario.sessionKey,
       sessionId: existingSessionId,
       status: scenario.status,
+      omitStatus: scenario.omitStatus,
       updatedAt: terminalUpdatedAt,
       endedAt: terminalEndedAt,
       transcriptMtimeMs: now + scenario.transcriptMtimeOffsetMs,

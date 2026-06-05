@@ -48,7 +48,7 @@ import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/rep
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import { resolveSessionFilePath, updateSessionStoreEntry } from "../../config/sessions.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -1631,7 +1631,7 @@ async function appendAssistantTranscriptMessage(params: {
     }
   }
 
-  return await appendInjectedAssistantMessageToTranscript({
+  const appended = await appendInjectedAssistantMessageToTranscript({
     transcriptPath,
     sessionKey: params.sessionKey,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -1643,6 +1643,16 @@ async function appendAssistantTranscriptMessage(params: {
     ttsSupplement: params.ttsSupplement,
     config: params.cfg,
   });
+  if (appended.ok && params.storePath) {
+    const transcriptMarkerUpdatedAt = Date.now();
+    await updateSessionStoreEntry({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      update: (current) =>
+        current.sessionId === params.sessionId ? { updatedAt: transcriptMarkerUpdatedAt } : null,
+    });
+  }
+  return appended;
 }
 
 function collectSessionAbortPartials(params: {

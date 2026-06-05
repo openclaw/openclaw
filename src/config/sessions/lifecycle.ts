@@ -159,7 +159,10 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (candidateSessionKey !== configuredMainSessionKey) {
     return undefined;
   }
-  if (!isTerminalSessionStatus(params.entry.status)) {
+  const hasTerminalLifecycle =
+    isTerminalSessionStatus(params.entry.status) ||
+    resolvePositiveTimestamp(params.entry.endedAt) !== undefined;
+  if (!hasTerminalLifecycle) {
     return undefined;
   }
   if (params.entry.status === "failed") {
