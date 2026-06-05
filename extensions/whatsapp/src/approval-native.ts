@@ -13,6 +13,7 @@ import {
 import { buildApprovalReactionPromptPayloadForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type {
   ExecApprovalRequest,
+  PluginApprovalLanguage,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
@@ -180,6 +181,7 @@ function buildWhatsAppExecPendingPayload(params: { request: ExecApprovalRequest;
 function buildWhatsAppPluginPendingPayload(params: {
   request: PluginApprovalRequest;
   nowMs: number;
+  language?: PluginApprovalLanguage | null;
 }) {
   return buildApprovalReactionPromptPayloadForRequest(params);
 }
@@ -228,8 +230,12 @@ export const whatsappApprovalCapability: ChannelApprovalCapability =
           buildWhatsAppExecPendingPayload({ request, nowMs }),
       },
       plugin: {
-        buildPendingPayload: ({ request, nowMs }) =>
-          buildWhatsAppPluginPendingPayload({ request, nowMs }),
+        buildPendingPayload: ({ cfg, request, nowMs }) =>
+          buildWhatsAppPluginPendingPayload({
+            request,
+            nowMs,
+            language: cfg.approvals?.plugin?.language,
+          }),
       },
     },
     native: {

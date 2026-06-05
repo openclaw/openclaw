@@ -223,6 +223,47 @@ describe("plugin approval forwarding", () => {
       expect(payload?.interactive).toBeUndefined();
     });
 
+    it("uses simple plugin approval language when configured", async () => {
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({
+        cfg: {
+          approvals: {
+            plugin: {
+              enabled: true,
+              mode: "targets",
+              language: "simple",
+              targets: [{ channel: "slack", to: "U123" }],
+            },
+          },
+        } as OpenClawConfig,
+        deliver,
+      });
+      await forwarder.handlePluginApprovalRequested!(
+        makePluginRequest({
+          request: {
+            ...makePluginRequest().request,
+            title: "Codex app-server command approval",
+            description:
+              "Command: mkdir -p outputs/openmodelapi && pwd && ls -ld outputs outputs/openmodelapi",
+            toolName: "codex_command_approval",
+          },
+        }),
+      );
+      await flushPendingDelivery();
+      const simpleDeliveryArgs = deliver.mock.calls[0]?.[0] as
+        | { payloads?: Array<{ text?: string }> }
+        | undefined;
+      const text = simpleDeliveryArgs?.payloads?.[0]?.text ?? "";
+      expect(text).toContain("Approval needed");
+      expect(text).toContain("Action\nCreate/check workspace files or folders");
+      expect(text).toContain("- create folder(s): outputs/openmodelapi");
+      expect(text).toContain("Choose below.");
+      expect(text).toContain("If buttons are unavailable, reply: /approve plugin-req-1");
+      expect(text).not.toContain("Technical details:");
+      expect(text).not.toContain("Tool: codex_command_approval");
+      expect(text).not.toContain("ID: plugin-req-1");
+    });
+
     it("includes severity icon for critical", async () => {
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });

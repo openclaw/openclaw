@@ -21,6 +21,7 @@ import {
 import type {
   ExecApprovalRequest,
   ExecApprovalReplyDecision,
+  PluginApprovalLanguage,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type {
@@ -333,6 +334,7 @@ function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest;
 function buildIMessagePluginPendingPayload(params: {
   request: PluginApprovalRequest;
   nowMs: number;
+  language?: PluginApprovalLanguage | null;
 }) {
   const configuredDecisions = params.request.request.allowedDecisions;
   const allowedDecisions =
@@ -343,6 +345,7 @@ function buildIMessagePluginPendingPayload(params: {
     request: params.request,
     nowMs: params.nowMs,
     allowedDecisions,
+    language: params.language,
   });
   return {
     ...payload,
@@ -397,8 +400,12 @@ export const imessageApprovalCapability: ChannelApprovalCapability =
           buildIMessageExecPendingPayload({ request, nowMs }),
       },
       plugin: {
-        buildPendingPayload: ({ request, nowMs }) =>
-          buildIMessagePluginPendingPayload({ request, nowMs }),
+        buildPendingPayload: ({ cfg, request, nowMs }) =>
+          buildIMessagePluginPendingPayload({
+            request,
+            nowMs,
+            language: cfg.approvals?.plugin?.language,
+          }),
       },
     },
     native: {

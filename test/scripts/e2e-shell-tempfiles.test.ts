@@ -162,9 +162,9 @@ exit 42
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(42);
       const scratchEntries = await readdir(scratchRoot);
-      expect(scratchEntries.filter((entry) => entry.startsWith("openclaw-skill-install-home."))).toEqual(
-        [],
-      );
+      expect(
+        scratchEntries.filter((entry) => entry.startsWith("openclaw-skill-install-home.")),
+      ).toEqual([]);
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }

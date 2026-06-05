@@ -8,11 +8,11 @@ import {
   resolveLocalHeavyCheckEnv,
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "./lib/local-heavy-check-runtime.mjs";
+import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
 import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
 } from "./lib/tsgo-sparse-guard.mjs";
-import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
 
 const { args: finalArgs, env } = applyLocalTsgoPolicy(
   process.argv.slice(2),

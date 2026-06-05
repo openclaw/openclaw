@@ -75,9 +75,9 @@ describe("codex app-server protocol source resolver", () => {
   });
 
   it("checks an explicit Cargo target dir override", () => {
-    expect(resolveCodexProtocolCargoTargetDir("/codex", { CARGO_TARGET_DIR: "/cache/target" })).toBe(
-      path.resolve("/cache/target"),
-    );
+    expect(
+      resolveCodexProtocolCargoTargetDir("/codex", { CARGO_TARGET_DIR: "/cache/target" }),
+    ).toBe(path.resolve("/cache/target"));
   });
 
   it("resolves relative Cargo target dir overrides from the Codex checkout", () => {

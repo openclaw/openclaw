@@ -6,14 +6,8 @@ import type {
   VideoGenerationModelCapabilitiesContext,
   VideoGenerationProviderCapabilities,
 } from "openclaw/plugin-sdk/video-generation";
-import {
-  DEEPINFRA_VIDEO_ASPECT_RATIOS,
-  DEEPINFRA_VIDEO_DURATIONS,
-} from "./media-models.js";
-import {
-  discoverDeepInfraSurfaces,
-  type DeepInfraSurfaceModel,
-} from "./provider-models.js";
+import { DEEPINFRA_VIDEO_ASPECT_RATIOS, DEEPINFRA_VIDEO_DURATIONS } from "./media-models.js";
+import { discoverDeepInfraSurfaces, type DeepInfraSurfaceModel } from "./provider-models.js";
 
 const PROVIDER_ID = "deepinfra";
 
@@ -22,9 +16,7 @@ const PROVIDER_ID = "deepinfra";
 // null without a key so the static fallback wins), and reuses the cached
 // discoverDeepInfraSurfaces call so chat/image-gen/video-gen share one fetch.
 
-function surfaceModelToImageGenEntry(
-  model: DeepInfraSurfaceModel,
-): UnifiedModelCatalogEntry {
+function surfaceModelToImageGenEntry(model: DeepInfraSurfaceModel): UnifiedModelCatalogEntry {
   return {
     kind: "image_generation",
     provider: PROVIDER_ID,

@@ -3,10 +3,7 @@ import {
   listWhatsAppDirectoryPeersFromConfig,
 } from "./src/directory-config.js";
 
-export {
-  listWhatsAppDirectoryGroupsFromConfig,
-  listWhatsAppDirectoryPeersFromConfig,
-};
+export { listWhatsAppDirectoryGroupsFromConfig, listWhatsAppDirectoryPeersFromConfig };
 
 export const whatsappDirectoryContractPlugin = {
   id: "whatsapp",

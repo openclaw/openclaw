@@ -1650,7 +1650,10 @@ describe("run-node script", () => {
         runRuntimePostBuild: async () => {},
         execPath: process.execPath,
         platform: process.platform,
-      } as Parameters<typeof runNodeMain>[0]);
+      } as Parameters<typeof runNodeMain>[0] & {
+        runRuntimePostBuild: () => Promise<void>;
+        stderr: NodeJS.WriteStream;
+      });
 
       expect(exitCode).toBe(0);
       const stderrText = stderrChunks.join("");

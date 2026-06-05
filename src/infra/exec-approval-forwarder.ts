@@ -470,7 +470,9 @@ function buildPluginPendingPayload(params: {
       buildPluginApprovalPendingReplyPayload({
         request: params.request,
         nowMs: params.nowMs,
-        text: buildPluginApprovalRequestMessage(params.request, params.nowMs),
+        text: buildPluginApprovalRequestMessage(params.request, params.nowMs, {
+          language: params.cfg.approvals?.plugin?.language,
+        }),
         allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(params.request.request),
       }),
   });

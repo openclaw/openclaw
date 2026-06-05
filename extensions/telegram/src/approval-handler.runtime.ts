@@ -60,6 +60,7 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
 }
 
 function buildPendingPayload(params: {
+  cfg: ChannelApprovalCapabilityHandlerContext["cfg"];
   request: ApprovalRequest;
   approvalKind: "exec" | "plugin";
   nowMs: number;
@@ -70,6 +71,8 @@ function buildPendingPayload(params: {
       ? buildPluginApprovalPendingReplyPayload({
           request: params.request as PluginApprovalRequest,
           nowMs: params.nowMs,
+          allowedDecisions: params.view.actions.map((action) => action.decision),
+          language: params.cfg.approvals?.plugin?.language,
         })
       : buildExecApprovalPendingReplyPayload({
           approvalId: params.request.id,
@@ -126,8 +129,8 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     },
   },
   presentation: {
-    buildPendingPayload: ({ request, approvalKind, nowMs, view }) =>
-      buildPendingPayload({ request, approvalKind, nowMs, view }),
+    buildPendingPayload: ({ cfg, request, approvalKind, nowMs, view }) =>
+      buildPendingPayload({ cfg, request, approvalKind, nowMs, view }),
     buildResolvedResult: () => ({ kind: "clear-actions" }),
     buildExpiredResult: () => ({ kind: "clear-actions" }),
   },

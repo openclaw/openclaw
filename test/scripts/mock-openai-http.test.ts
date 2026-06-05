@@ -32,11 +32,9 @@ describe("mock OpenAI HTTP helpers", () => {
 
   it("truncates oversized request-log bodies", () => {
     expect(
-      boundedRequestLogBody(
-        { full: "x".repeat(16) },
-        JSON.stringify({ full: "x".repeat(16) }),
-        { requestLogBodyMaxBytes: 8 },
-      ),
+      boundedRequestLogBody({ full: "x".repeat(16) }, JSON.stringify({ full: "x".repeat(16) }), {
+        requestLogBodyMaxBytes: 8,
+      }),
     ).toEqual({
       truncated: true,
       byteLength: 27,
@@ -46,9 +44,9 @@ describe("mock OpenAI HTTP helpers", () => {
 
   it("keeps small request-log bodies intact", () => {
     const body = { ok: true };
-    expect(
-      boundedRequestLogBody(body, JSON.stringify(body), { requestLogBodyMaxBytes: 64 }),
-    ).toBe(body);
+    expect(boundedRequestLogBody(body, JSON.stringify(body), { requestLogBodyMaxBytes: 64 })).toBe(
+      body,
+    );
   });
 
   it("rejects loose numeric env limits instead of parsing prefixes", () => {

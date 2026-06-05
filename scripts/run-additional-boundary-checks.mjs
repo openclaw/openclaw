@@ -442,11 +442,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY === undefined
       ? "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY"
       : "OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY";
-  const concurrency = resolveConcurrency(
-    concurrencyRaw,
-    4,
-    concurrencyLabel,
-  );
+  const concurrency = resolveConcurrency(concurrencyRaw, 4, concurrencyLabel);
   const checkTimeoutMs = resolvePositiveInteger(
     process.env.OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS,
     DEFAULT_CHECK_TIMEOUT_MS,

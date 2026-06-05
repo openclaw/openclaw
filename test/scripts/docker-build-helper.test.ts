@@ -111,9 +111,7 @@ function shellQuote(value: string): string {
 
 function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string): string {
   const script = readFileSync(CLEANUP_DOCKER_SMOKE_PATH, "utf8");
-  const match = script.match(
-    /(resolve_default_cleanup_platform\(\) \{[\s\S]*?\n\})\n\nPLATFORM=/u,
-  );
+  const match = script.match(/(resolve_default_cleanup_platform\(\) \{[\s\S]*?\n\})\n\nPLATFORM=/u);
   if (!match) {
     throw new Error("resolve_default_cleanup_platform was not found");
   }

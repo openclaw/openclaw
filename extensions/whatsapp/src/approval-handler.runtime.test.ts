@@ -111,6 +111,58 @@ describe("whatsappApprovalNativeRuntime", () => {
     ]);
   });
 
+  it("honors simple plugin approval language in pending plugin approvals", async () => {
+    const payload = await whatsappApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: { approvals: { plugin: { language: "simple" } } } as never,
+      accountId: "default",
+      context: { accountId: "default" },
+      request: {
+        id: "plugin:abc",
+        request: {
+          title: "Format a status message",
+          description: "Only formats a short status message.",
+          severity: "info",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "plugin",
+      nowMs: 0,
+      view: {
+        approvalKind: "plugin",
+        approvalId: "plugin:abc",
+        title: "Format a status message",
+        severity: "info",
+        actions: [
+          {
+            decision: "allow-once",
+            label: "Allow Once",
+            command: "/approve plugin:abc allow-once",
+            style: "success",
+          },
+          {
+            decision: "deny",
+            label: "Deny",
+            command: "/approve plugin:abc deny",
+            style: "danger",
+          },
+        ],
+      } as never,
+    });
+
+    expect(payload.reactionPayload.text).toContain("Approval needed");
+    expect(payload.reactionPayload.text).toContain("Action");
+    expect(payload.reactionPayload.text).toContain("React with:");
+    expect(payload.reactionPayload.text).toContain(
+      "If buttons are unavailable, reply: /approve plugin:abc allow-once|deny",
+    );
+    expect(payload.reactionPayload.text).not.toContain("Title: Format a status message");
+    expect(payload.manualFallbackPayload.text).toContain("Approval needed");
+    expect(payload.manualFallbackPayload.text).not.toContain("Title: Format a status message");
+    expect(payload.reactionPayload.allowedDecisions).toEqual(["allow-once", "deny"]);
+  });
+
   it("normalizes WhatsApp targets and carries account ids into prepared delivery", async () => {
     await expect(
       whatsappApprovalNativeRuntime.transport.prepareTarget({

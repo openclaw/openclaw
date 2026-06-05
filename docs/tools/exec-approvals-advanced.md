@@ -225,6 +225,7 @@ For plugin-authoring behavior, request fields, and decision semantics, see
     plugin: {
       enabled: true,
       mode: "targets",
+      language: "simple",
       agentFilter: ["main"],
       targets: [
         { channel: "slack", to: "U12345678" },
@@ -235,8 +236,17 @@ For plugin-authoring behavior, request fields, and decision semantics, see
 }
 ```
 
-The config shape is identical to `approvals.exec`: `enabled`, `mode`, `agentFilter`,
-`sessionFilter`, and `targets` work the same way.
+Most forwarding fields match `approvals.exec`: `enabled`, `mode`, `agentFilter`, `sessionFilter`,
+and `targets` work the same way. Plugin approvals also support `language` for prompt wording:
+
+- `original` keeps the raw approval text with title, description, tool/plugin metadata, and the
+  manual `/approve` instruction.
+- `simple` shows a short plain-English prompt with a summary, action list, risk line, and choices.
+- `simple-technical` shows the same plain-English prompt and then appends the raw technical fields
+  for debugging.
+
+The default is `original`, so existing plugin approval prompts do not change unless
+`approvals.plugin.language` is set.
 
 Channels that support shared interactive replies render the same approval buttons for both exec and
 plugin approvals. Channels without shared interactive UI fall back to plain text with `/approve`

@@ -168,6 +168,62 @@ describe("slackApprovalNativeRuntime", () => {
     expect(JSON.stringify(payload.blocks)).toContain("plugin:req-1");
   });
 
+  it("honors simple plugin approval language for plugin pending approvals", async () => {
+    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: { approvals: { plugin: { language: "simple" } } } as never,
+      accountId: "default",
+      context: {
+        app: {} as never,
+        config: {} as never,
+      },
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Format a status message",
+          description: "Only formats a short status message.",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "plugin",
+      nowMs: 0,
+      view: {
+        approvalKind: "plugin",
+        phase: "pending",
+        approvalId: "plugin:req-1",
+        title: "Format a status message",
+        description: "Only formats a short status message.",
+        severity: "info",
+        metadata: [],
+        actions: [
+          {
+            decision: "allow-once",
+            label: "Allow Once",
+            command: "/approve plugin:req-1 allow-once",
+            style: "success",
+          },
+          {
+            decision: "deny",
+            label: "Deny",
+            command: "/approve plugin:req-1 deny",
+            style: "danger",
+          },
+        ],
+        expiresAtMs: 60_000,
+      },
+    })) as SlackPayload;
+
+    const blocksJson = JSON.stringify(payload.blocks);
+    expect(payload.text).toContain("Approval needed");
+    expect(payload.text).toContain("Action");
+    expect(payload.text).toContain("If buttons are unavailable, reply:");
+    expect(payload.text).not.toContain("*Plugin approval required*");
+    expect(blocksJson).toContain("Approval needed");
+    expect(blocksJson).not.toContain("*Request*");
+    expect(blocksJson).not.toContain("*Approval ID:*");
+  });
+
   it("renders resolved updates without interactive blocks", async () => {
     const result = await slackApprovalNativeRuntime.presentation.buildResolvedResult({
       cfg: {} as never,

@@ -274,12 +274,7 @@ describe("ensurePlaywrightChromium", () => {
         platform: "win32",
       }),
     ).toEqual({
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        "pnpm.cmd --dir ui exec playwright install chromium",
-      ],
+      args: ["/d", "/s", "/c", "pnpm.cmd --dir ui exec playwright install chromium"],
       command: "C:\\Windows\\System32\\cmd.exe",
       shell: false,
       windowsVerbatimArguments: true,
@@ -295,12 +290,7 @@ describe("ensurePlaywrightChromium", () => {
         withDeps: true,
       }),
     ).toEqual({
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        "pnpm.cmd --dir ui exec playwright install --with-deps chromium",
-      ],
+      args: ["/d", "/s", "/c", "pnpm.cmd --dir ui exec playwright install --with-deps chromium"],
       command: "C:\\Windows\\System32\\cmd.exe",
       shell: false,
       windowsVerbatimArguments: true,

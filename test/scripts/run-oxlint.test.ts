@@ -536,14 +536,13 @@ describe("run-oxlint", () => {
 
   it("rejects invalid Windows oxlint extension chunk size overrides", () => {
     expect(resolveWindowsExtensionChunkSize({})).toBe(8);
-    expect(
-      () => resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "0" }),
+    expect(() =>
+      resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "0" }),
     ).toThrow("OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE must be a positive integer; got: 0");
-    expect(
-      () =>
-        resolveWindowsExtensionChunkSize({
-          OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "8 chunks",
-        }),
+    expect(() =>
+      resolveWindowsExtensionChunkSize({
+        OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "8 chunks",
+      }),
     ).toThrow(
       "OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE must be a positive integer; got: 8 chunks",
     );

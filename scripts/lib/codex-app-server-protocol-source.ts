@@ -82,9 +82,7 @@ export function buildCodexProtocolExportArgs(manifestPath: string, outDir: strin
   ];
 }
 
-export function resolveCodexProtocolMinFreeBytes(
-  env: NodeJS.ProcessEnv = process.env,
-): number {
+export function resolveCodexProtocolMinFreeBytes(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env.OPENCLAW_CODEX_PROTOCOL_MIN_FREE_BYTES;
   if (raw === undefined || raw.trim() === "") {
     return DEFAULT_PROTOCOL_GENERATION_MIN_FREE_BYTES;
@@ -104,7 +102,9 @@ export function resolveCodexProtocolCargoTargetDir(
 ): string {
   const targetDir = env.CARGO_TARGET_DIR ?? env.CARGO_BUILD_TARGET_DIR;
   if (targetDir !== undefined && targetDir.trim() !== "") {
-    return path.isAbsolute(targetDir) ? path.resolve(targetDir) : path.resolve(codexRepo, targetDir);
+    return path.isAbsolute(targetDir)
+      ? path.resolve(targetDir)
+      : path.resolve(codexRepo, targetDir);
   }
   return path.join(codexRepo, "codex-rs", "target");
 }

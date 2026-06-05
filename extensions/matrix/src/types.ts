@@ -238,6 +238,7 @@ export type MatrixConfig = {
 };
 
 export type CoreConfig = {
+  approvals?: OpenClawConfig["approvals"];
   channels?: {
     matrix?: MatrixConfig;
     defaults?: {

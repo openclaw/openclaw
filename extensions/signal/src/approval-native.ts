@@ -14,6 +14,7 @@ import {
 import { buildApprovalReactionPendingContentForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type {
   ExecApprovalRequest,
+  PluginApprovalLanguage,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type {
@@ -225,6 +226,7 @@ function buildSignalExecPendingPayload(params: { request: ExecApprovalRequest; n
 function buildSignalPluginPendingPayload(params: {
   request: PluginApprovalRequest;
   nowMs: number;
+  language?: PluginApprovalLanguage | null;
 }) {
   return buildApprovalReactionPendingContentForRequest(params).manualFallbackPayload;
 }
@@ -275,10 +277,11 @@ export const signalApprovalCapability: ChannelApprovalCapability = createChannel
         }),
     },
     plugin: {
-      buildPendingPayload: ({ request, nowMs }) =>
+      buildPendingPayload: ({ cfg, request, nowMs }) =>
         buildSignalPluginPendingPayload({
           request,
           nowMs,
+          language: cfg.approvals?.plugin?.language,
         }),
     },
   },

@@ -8,6 +8,7 @@ import {
   buildPluginApprovalRequestMessage,
   buildPluginApprovalResolvedMessage,
   resolvePluginApprovalRequestAllowedDecisions,
+  type PluginApprovalLanguage,
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
@@ -93,17 +94,24 @@ export function buildPluginApprovalPendingReplyPayload(params: {
   approvalSlug?: string;
   /** Optional decision override; defaults to the request's allowed decisions. */
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  /** Optional plugin approval language override. */
+  language?: PluginApprovalLanguage | null;
   /** Channel-specific metadata merged with the shared approval metadata. */
   channelData?: Record<string, unknown>;
 }): ReplyPayload {
+  const allowedDecisions =
+    params.allowedDecisions ?? resolvePluginApprovalRequestAllowedDecisions(params.request.request);
   return buildApprovalPendingReplyPayload({
     approvalKind: "plugin",
     approvalId: params.request.id,
     approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
-    text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
-    allowedDecisions:
-      params.allowedDecisions ??
-      resolvePluginApprovalRequestAllowedDecisions(params.request.request),
+    text:
+      params.text ??
+      buildPluginApprovalRequestMessage(params.request, params.nowMs, {
+        allowedDecisions,
+        language: params.language,
+      }),
+    allowedDecisions,
     channelData: params.channelData,
   });
 }

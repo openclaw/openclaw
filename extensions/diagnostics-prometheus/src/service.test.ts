@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { describe, expect, it, vi } from "vitest";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter, testApi } from "./service.js";
 
@@ -328,9 +328,7 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).toContain(
       'openclaw_webhook_duration_seconds_sum{channel="telegram",webhook="message"} 0.25',
     );
-    expect(rendered).toContain(
-      'openclaw_liveness_warning_total{reason="event_loop_delay:cpu"} 1',
-    );
+    expect(rendered).toContain('openclaw_liveness_warning_total{reason="event_loop_delay:cpu"} 1');
     expect(rendered).toContain('openclaw_liveness_sessions{state="active"} 2');
     expect(rendered).toContain(
       'openclaw_liveness_event_loop_delay_p99_seconds_sum{reason="event_loop_delay:cpu"} 0.25',

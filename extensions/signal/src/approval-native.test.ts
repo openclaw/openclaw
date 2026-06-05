@@ -294,6 +294,40 @@ describe("signal approval capability", () => {
     expect(text).not.toContain("3️⃣ Deny");
   });
 
+  it("honors simple plugin approval language in target-mode plugin prompts", () => {
+    const cfg = buildConfig({
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets",
+          language: "simple",
+          targets: [{ channel: "signal", to: "+15551230000" }],
+        },
+      },
+    });
+    const request = buildPluginRequest("+15551230000", {
+      title: "Format a status message",
+      description: "Only formats a short status message.",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    const payload = signalApprovalCapability.render?.plugin?.buildPendingPayload?.({
+      cfg,
+      request,
+      target: { channel: "signal", to: "+15551230000", source: "target" },
+      nowMs: 0,
+    });
+    const text = payload?.text ?? "";
+
+    expect(text).toContain("Approval needed");
+    expect(text).toContain("Action");
+    expect(text).toContain(
+      "If buttons are unavailable, reply: /approve plugin:approval-1 allow-once|deny",
+    );
+    expect(text).not.toContain("Plugin approval required");
+    expect(text).not.toContain("Title: Format a status message");
+  });
+
   it("does not show reaction choices when Signal has no explicit approvers", () => {
     const cfg = buildConfig({
       approvals: {

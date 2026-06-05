@@ -52,13 +52,14 @@ export function buildDiscordUntrustedContext(params: {
     return undefined;
   }
   const entries: NonNullable<MsgContext["UntrustedStructuredContext"]> = [];
-  if (typeof params.channelTopic === "string" && params.channelTopic.trim().length > 0) {
+  const channelTopic = typeof params.channelTopic === "string" ? params.channelTopic.trim() : "";
+  if (channelTopic.length > 0) {
     entries.push({
       label: "Discord channel metadata",
       source: "discord",
       type: "channel_metadata",
       payload: {
-        topic: params.channelTopic.trim(),
+        topic: channelTopic,
       },
     });
   }

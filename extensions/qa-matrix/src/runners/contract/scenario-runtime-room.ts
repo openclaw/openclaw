@@ -950,7 +950,8 @@ async function runMatrixToolProgressScenario(
     });
   if (isFinalReply(preview.event)) {
     if (
-      (params.allowFinalBeforeProgress === true || params.allowTopLevelFinalWithProgress === true) &&
+      (params.allowFinalBeforeProgress === true ||
+        params.allowTopLevelFinalWithProgress === true) &&
       params.allowFinalOnly !== true
     ) {
       const progressAfterFinal = await client
