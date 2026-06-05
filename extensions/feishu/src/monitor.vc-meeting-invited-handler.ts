@@ -318,13 +318,6 @@ async function dispatchVcMeetingInvitedTurn(params: {
     CommandAuthorized: false,
     OriginatingChannel: "feishu",
     OriginatingTo: `vc-meeting:${params.turn.meetingNo}`,
-    SyntheticEventType: params.turn.eventType,
-    VcMeetingId: params.turn.meetingId,
-    VcMeetingNo: params.turn.meetingNo,
-    VcCallId: params.turn.callId,
-    VcMeetingTopic: params.turn.topic,
-    VcInviterOpenId: params.turn.inviter.openId,
-    VcInviteTime: params.turn.inviteTime,
   });
   const storePath = core.channel.session.resolveStorePath(effectiveCfg.session?.store, {
     agentId: route.agentId,
