@@ -267,7 +267,9 @@ internal fun modelProviderReady(status: String): Boolean {
     normalized == "ready" ||
     normalized == "healthy" ||
     normalized == "configured" ||
-    normalized == "static"
+    normalized == "static" ||
+    normalized == "unconfigured" ||
+    normalized == "unreachable"
 }
 
 /** Groups models by provider using the same display priority as provider rows. */

@@ -1,5 +1,7 @@
 package ai.openclaw.app.ui.chat
 
+import androidx.compose.ui.platform.LocalContext
+import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCaption1
@@ -104,7 +106,20 @@ fun ChatMarkdown(
   text: String,
   textColor: Color,
 ) {
-  val document = remember(text) { markdownParser.parse(text) as Document }
+  val context = LocalContext.current
+  val showThinkingText = remember { SecurePrefs(context).showThinkingText }
+
+  val cleanText = remember(text, showThinkingText) {
+    if (showThinkingText) {
+      text.replace(Regex("<think>([\\s\\S]*?)(</think>|\$)", RegexOption.IGNORE_CASE)) { matchResult ->
+        val thinkingContent = matchResult.groupValues[1].trim()
+        "\n\n> \uD83E\uDDE0 **Pensée :**\n> " + thinkingContent.replace("\n", "\n> ") + "\n\n"
+      }.trim()
+    } else {
+      text.replace(Regex("<think>[\\s\\S]*?(</think>|\$)", RegexOption.IGNORE_CASE), "").trim()
+    }
+  }
+  val document = remember(cleanText) { markdownParser.parse(cleanText) as Document }
   val inlineStyles =
     InlineStyles(inlineCodeBg = mobileCodeBg, inlineCodeColor = mobileCodeText, linkColor = mobileAccent, baseCallout = mobileCallout)
 
@@ -588,7 +603,8 @@ internal fun buildChatInlineMarkdown(
   text: String,
   linkColor: Color = Color.Blue,
 ): AnnotatedString {
-  val document = markdownParser.parse(text) as Document
+  val cleanText = text.replace(Regex("<think>[\\s\\S]*?(</think>|\$)", RegexOption.IGNORE_CASE), "").trim()
+  val document = markdownParser.parse(cleanText) as Document
   val paragraph = document.firstChild as? Paragraph ?: return AnnotatedString("")
   return buildInlineMarkdown(
     paragraph.firstChild,

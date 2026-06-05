@@ -41,6 +41,13 @@ class MainViewModel(
   val chatDraft: StateFlow<String?> = _chatDraft
   private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
   val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
+  private val _showThinkingText = MutableStateFlow(prefs.showThinkingText)
+  val showThinkingText: StateFlow<Boolean> = _showThinkingText
+
+  fun setShowThinkingText(show: Boolean) {
+    prefs.showThinkingText = show
+    _showThinkingText.value = show
+  }
 
   /**
    * Lazily starts NodeRuntime and preserves the current foreground bit across startup.

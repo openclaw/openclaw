@@ -55,6 +55,11 @@ class SshTunnelManager(private val scope: CoroutineScope) {
   fun start(config: SshTunnelConfig) {
     if (!config.enabled || config.host.isBlank() || config.username.isBlank()) {
       Log.d(TAG, "SSH tunnel skipped: not configured or disabled.")
+      stop()
+      return
+    }
+    if (config == currentConfig && keepAliveJob != null) {
+      Log.d(TAG, "SSH tunnel manager already running with same config.")
       return
     }
     stop()

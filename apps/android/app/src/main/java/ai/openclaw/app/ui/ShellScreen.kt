@@ -157,7 +157,7 @@ fun ShellScreen(
     Scaffold(
       modifier = modifier.fillMaxSize(),
       containerColor = ClawTheme.colors.canvas,
-      contentWindowInsets = WindowInsets.ime,
+      contentWindowInsets = WindowInsets(0, 0, 0, 0),
       bottomBar = {
         if (showBottomNav) {
           ClawBottomNav(
@@ -350,6 +350,7 @@ private fun OverviewScreen(
       channelsSummary = channelsSummary,
       nodesDevicesSummary = nodesDevicesSummary,
       readyProviderCount = readyProviderCount,
+        modelsCount = models.size,
     )
 
   LaunchedEffect(isConnected) {
@@ -541,6 +542,7 @@ internal fun homeAttentionRows(
   channelsSummary: GatewayChannelsSummary,
   nodesDevicesSummary: GatewayNodesDevicesSummary,
   readyProviderCount: Int,
+    modelsCount: Int,
 ): List<HomeAttentionRow> =
   listOfNotNull(
     if (!isConnected) {
@@ -563,7 +565,7 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (isConnected && readyProviderCount == 0) {
+    if (isConnected && readyProviderCount == 0 && modelsCount == 0) {
       HomeAttentionRow("Providers", "No ready providers", Icons.Outlined.Inventory2, Tab.ProvidersModels)
     } else {
       null

@@ -150,7 +150,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.PhoneCapabilities -> PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Gateway -> GatewaySettingsScreen(viewModel = viewModel, onBack = onBack, onNavigate = onNavigate)
-    SettingsRoute.Appearance -> AppearanceSettingsScreen(onBack = onBack)
+    SettingsRoute.Appearance -> AppearanceSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Health -> HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.About -> AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.SshTunnel -> SshTunnelSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -1100,7 +1100,12 @@ private fun SshTunnelSettingsScreen(
 }
 
 @Composable
-private fun AppearanceSettingsScreen(onBack: () -> Unit) {
+private fun AppearanceSettingsScreen(
+  viewModel: MainViewModel,
+  onBack: () -> Unit,
+) {
+  val showThinkingText by viewModel.showThinkingText.collectAsState()
+
   SettingsDetailFrame(title = "Appearance", subtitle = "A calm, high-contrast OpenClaw interface.", icon = Icons.Default.Palette, onBack = onBack) {
     SettingsMetricPanel(
       rows =
@@ -1108,6 +1113,18 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
           SettingsMetric("Theme", "Dark"),
           SettingsMetric("Contrast", "High"),
           SettingsMetric("Typography", "Readable"),
+        ),
+    )
+    SettingsTogglePanel(
+      rows =
+        listOf(
+          SettingsToggleRow(
+            title = "Show Thinking",
+            subtitle = "Display the AI's internal reasoning block elegantly formatted in the chat UI.",
+            icon = Icons.Default.Bolt,
+            checked = showThinkingText,
+            onCheckedChange = { viewModel.setShowThinkingText(it) },
+          )
         ),
     )
     ClawPanel {

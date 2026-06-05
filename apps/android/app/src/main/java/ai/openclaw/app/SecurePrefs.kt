@@ -281,6 +281,10 @@ class SecurePrefs(
     saveGatewayBootstrapToken(value)
   }
 
+  var showThinkingText: Boolean
+    get() = plainPrefs.getBoolean("show_thinking_text", false)
+    set(value) = plainPrefs.edit().putBoolean("show_thinking_text", value).apply()
+
   fun setOnboardingCompleted(value: Boolean) {
     plainPrefs.edit { putBoolean("onboarding.completed", value) }
     _onboardingCompleted.value = value

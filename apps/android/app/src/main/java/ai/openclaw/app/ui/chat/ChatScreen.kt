@@ -410,10 +410,12 @@ private fun ChatMessageList(
   val stream = streamingAssistantText?.trim()
 
   LaunchedEffect(messages.size, pendingRunCount, pendingToolCalls.size) {
-    listState.animateScrollToItem(index = 0)
+    if (listState.firstVisibleItemIndex <= 2) {
+      listState.animateScrollToItem(index = 0)
+    }
   }
   LaunchedEffect(stream) {
-    if (!stream.isNullOrEmpty()) {
+    if (!stream.isNullOrEmpty() && listState.firstVisibleItemIndex <= 2) {
       listState.scrollToItem(index = 0)
     }
   }
