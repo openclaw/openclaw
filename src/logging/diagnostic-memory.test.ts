@@ -216,7 +216,7 @@ describe("diagnostic memory", () => {
     emitDiagnosticMemorySample({ now: 2000, memoryUsage: memoryUsage({ rss: 2000 }), thresholds });
     stop();
 
-    const pressure = events.filter((event) => event.type === "diagnostic.memory.pressure").at(-1);
+    const pressure = events.findLast((event) => event.type === "diagnostic.memory.pressure");
     expect(pressure).toMatchObject({ level: "critical", reason: "rss_growth" });
   });
 
