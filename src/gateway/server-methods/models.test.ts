@@ -333,7 +333,7 @@ describe("models.list", () => {
     );
   });
 
-  it("does not mark catalog rows available from expired provider profiles", async () => {
+  it("does not mark catalog rows available from expired OAuth profiles", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -345,9 +345,10 @@ describe("models.list", () => {
           version: 1,
           profiles: {
             "demo-provider:expired": {
-              type: "token",
+              type: "oauth",
               provider: "demo-provider",
-              token: "expired-token",
+              access: "expired-access",
+              refresh: "refresh-token",
               expires: Date.now() - 60_000,
             },
           },

@@ -7,10 +7,15 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { ensureAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
+import {
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  resolveAuthProfileOrder,
+  type AuthProfileCredential,
+  type AuthProfileStore,
+} from "../../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
-import { hasAvailableAuthForProvider } from "../../agents/model-auth.js";
+import { hasRuntimeAvailableProviderAuth } from "../../agents/model-auth.js";
 import {
   loadModelCatalogForBrowse,
   type ModelCatalogBrowseView,
@@ -30,6 +35,7 @@ type ModelsListView = ModelCatalogBrowseView;
 type ModelsListEntry = ModelCatalogEntry & { available?: boolean };
 
 let loggedSlowModelsListCatalog = false;
+const OAUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 // Unknown views are rejected by protocol validation first; this helper keeps the
 // handler default explicit for older clients that omit the field.
@@ -74,6 +80,72 @@ function createInFlightProviderAuthChecker(
   };
 }
 
+function hasLiteralSecret(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function profileModeAllowedForModel(
+  provider: string,
+  modelApi: string | undefined,
+  mode: AuthProfileCredential["type"],
+): boolean {
+  return (
+    normalizeProviderId(provider) !== "openai" ||
+    modelApi === undefined ||
+    modelApi === "openai-chatgpt-responses" ||
+    mode === "api_key"
+  );
+}
+
+function profileHasReadOnlyAvailableAuth(params: {
+  credential: AuthProfileCredential;
+  provider: string;
+  modelApi?: string;
+  now: number;
+}): boolean {
+  if (!profileModeAllowedForModel(params.provider, params.modelApi, params.credential.type)) {
+    return false;
+  }
+  if (params.credential.type === "api_key") {
+    return hasLiteralSecret(params.credential.key);
+  }
+  if (params.credential.type === "token") {
+    return (
+      hasLiteralSecret(params.credential.token) &&
+      (params.credential.expires === undefined || params.credential.expires > params.now)
+    );
+  }
+  return (
+    hasLiteralSecret(params.credential.access) &&
+    params.credential.expires > params.now + OAUTH_REFRESH_MARGIN_MS
+  );
+}
+
+function hasReadOnlyAvailableProfileAuth(params: {
+  provider: string;
+  modelApi?: string;
+  cfg: OpenClawConfig;
+  store: AuthProfileStore;
+}): boolean {
+  const now = Date.now();
+  return resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store: params.store,
+    provider: params.provider,
+  }).some((profileId) => {
+    const credential = params.store.profiles[profileId];
+    return (
+      credential !== undefined &&
+      profileHasReadOnlyAvailableAuth({
+        credential,
+        provider: params.provider,
+        modelApi: params.modelApi,
+        now,
+      })
+    );
+  });
+}
+
 function createModelsListProviderAuthChecker(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -82,16 +154,24 @@ function createModelsListProviderAuthChecker(params: {
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
   const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: false,
+    readOnly: true,
+    syncExternalCli: false,
   });
-  return createInFlightProviderAuthChecker((provider, modelApi) =>
-    hasAvailableAuthForProvider({
-      provider,
-      modelApi,
-      cfg: params.cfg,
-      agentDir,
-      workspaceDir: params.workspaceDir,
-      store,
-    }),
+  return createInFlightProviderAuthChecker(
+    (provider, modelApi) =>
+      hasRuntimeAvailableProviderAuth({
+        provider,
+        modelApi,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        allowPluginSyntheticAuth: false,
+      }) ||
+      hasReadOnlyAvailableProfileAuth({
+        provider,
+        modelApi,
+        cfg: params.cfg,
+        store,
+      }),
   );
 }
 
