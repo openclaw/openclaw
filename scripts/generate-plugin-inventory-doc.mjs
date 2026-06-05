@@ -79,6 +79,7 @@ function humanizeId(value) {
     ["acpx", "ACPx"],
     ["ai", "AI"],
     ["api", "API"],
+    ["atomicchat", "Atomic Chat"],
     ["aws", "AWS"],
     ["azure", "Azure"],
     ["byteplus", "BytePlus"],

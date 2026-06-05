@@ -1,0 +1,50 @@
+{
+  "id": "atomicchat",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["atomicchat"],
+  "providerRequest": {
+    "providers": {
+      "atomicchat": {
+        "family": "atomicchat",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "atomicchat": {
+        "external": false
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "atomicchat",
+        "envVars": ["ATOMIC_CHAT_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "atomicchat",
+      "method": "custom",
+      "choiceId": "atomicchat",
+      "choiceLabel": "Atomic Chat",
+      "choiceHint": "Local Atomic Chat OpenAI-compatible server",
+      "groupId": "atomicchat",
+      "groupLabel": "Atomic Chat",
+      "groupHint": "Local AI provider"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

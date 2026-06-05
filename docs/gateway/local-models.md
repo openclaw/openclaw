@@ -20,6 +20,7 @@ Aim high: **≥2 maxed-out Mac Studios or an equivalent GPU rig (~$30k+)** for a
 
 | Backend                                              | Use when                                                                    |
 | ---------------------------------------------------- | --------------------------------------------------------------------------- |
+| [Atomic Chat](/providers/atomicchat)                 | Desktop/mobile app with a one-click OpenAI-compatible local server          |
 | [ds4](/providers/ds4)                                | Local DeepSeek V4 Flash on macOS Metal with OpenAI-compatible tool calls    |
 | [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                    |
 | LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI         |

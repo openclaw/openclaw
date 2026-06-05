@@ -1400,6 +1400,7 @@
                   "providers/bedrock-mantle",
                   "providers/anthropic",
                   "providers/arcee",
+                  "providers/atomicchat",
                   "providers/azure-speech",
                   "providers/cerebras",
                   "providers/chutes",
