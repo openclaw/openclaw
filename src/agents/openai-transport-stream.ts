@@ -4268,10 +4268,25 @@ export function buildOpenAICompletionsParams(
         fallbackMap: compat.reasoningEffortMap,
       })
     : undefined;
+  const rawCompat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as {
+          supportsReasoningEffort?: unknown;
+          supportedReasoningEfforts?: unknown;
+          reasoningEffortMap?: unknown;
+        })
+      : undefined;
+  const hasTools = Array.isArray(params.tools) && params.tools.length > 0;
+  const hasExplicitReasoningEffortCompat =
+    rawCompat?.supportsReasoningEffort === true ||
+    Array.isArray(rawCompat?.supportedReasoningEfforts) ||
+    Boolean(rawCompat?.reasoningEffortMap && typeof rawCompat.reasoningEffortMap === "object");
   const omitChatCompletionsToolReasoningEffort =
-    (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) &&
-    Array.isArray(params.tools) &&
-    params.tools.length > 0;
+    hasTools &&
+    (isOpenAIGpt54MiniModel(model) ||
+      (isOpenAIGpt55Model(model) &&
+        model.provider === "azure-openai" &&
+        !hasExplicitReasoningEffortCompat));
   const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
