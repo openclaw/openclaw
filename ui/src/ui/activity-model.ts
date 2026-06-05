@@ -13,6 +13,9 @@ export type ActivityEntry = {
   sessionKey?: string;
   toolName: string;
   status: ActivityStatus;
+  entryKind?: "tool" | "answer_candidate";
+  itemId?: string;
+  candidateStatus?: "candidate" | "superseded" | "selected";
   startedAt: number;
   updatedAt: number;
   durationMs: number;
@@ -32,12 +35,15 @@ type ActivityHost = {
   activityEntries?: ActivityEntry[];
 };
 
-type ToolEventPayload = {
+type ActivityEventPayload = {
   runId: string;
   ts: number;
   sessionKey?: string;
   data: Record<string, unknown>;
 };
+
+type ToolEventPayload = ActivityEventPayload;
+type ItemEventPayload = ActivityEventPayload;
 
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/\b(Authorization|Cookie|Set-Cookie)\s*:\s*[^\n\r]+/gi, "$1: [redacted]"],
@@ -174,6 +180,32 @@ function buildSummary(toolName: string, status: ActivityStatus, hiddenArgCount: 
   return `${toolName} ${statusLabel(status)}; ${argText}`;
 }
 
+function resolveAnswerCandidateStatus(
+  value: unknown,
+): "candidate" | "superseded" | "selected" | null {
+  const status = toTrimmedString(value);
+  if (status === "candidate" || status === "superseded" || status === "selected") {
+    return status;
+  }
+  return null;
+}
+
+function answerCandidateActivityStatus(
+  status: "candidate" | "superseded" | "selected",
+): ActivityStatus {
+  return status === "candidate" ? "running" : "done";
+}
+
+function buildAnswerCandidateSummary(status: "candidate" | "superseded" | "selected"): string {
+  if (status === "candidate") {
+    return "Answer candidate streaming";
+  }
+  if (status === "superseded") {
+    return "Answer candidate superseded";
+  }
+  return "Answer candidate selected";
+}
+
 export function updateActivityFromToolEvent(host: ActivityHost, payload: ToolEventPayload) {
   if (!Array.isArray(host.activityEntries)) {
     return;
@@ -202,6 +234,7 @@ export function updateActivityFromToolEvent(host: ActivityHost, payload: ToolEve
     ...(payload.sessionKey ? { sessionKey: payload.sessionKey } : {}),
     toolName,
     status,
+    entryKind: "tool",
     startedAt: existing?.startedAt ?? startedAt,
     updatedAt: now,
     durationMs: Math.max(0, now - (existing?.startedAt ?? startedAt)),
@@ -214,4 +247,56 @@ export function updateActivityFromToolEvent(host: ActivityHost, payload: ToolEve
     ? host.activityEntries.map((entry) => (entry.id === id ? nextEntry : entry))
     : [...host.activityEntries, nextEntry];
   host.activityEntries = next.slice(-ACTIVITY_ENTRY_LIMIT);
+}
+export function updateActivityFromItemEvent(host: ActivityHost, payload: ItemEventPayload) {
+  if (!Array.isArray(host.activityEntries)) {
+    return;
+  }
+  const data = payload.data ?? {};
+  if (toTrimmedString(data.kind) !== "answer_candidate") {
+    return;
+  }
+  const itemId = toTrimmedString(data.itemId);
+  if (!itemId) {
+    return;
+  }
+  const candidateStatus = resolveAnswerCandidateStatus(data.status);
+  if (!candidateStatus) {
+    return;
+  }
+  const id = `${payload.runId}:item:${itemId}`;
+  const now = Date.now();
+  const startedAt = typeof payload.ts === "number" ? payload.ts : now;
+  const preview = buildOutputPreview(data.progressText);
+  const existing = host.activityEntries.find((entry) => entry.id === id);
+  const outputPreview = preview.text ?? existing?.outputPreview;
+  const status = answerCandidateActivityStatus(candidateStatus);
+  const nextEntry: ActivityEntry = {
+    id,
+    toolCallId: itemId,
+    itemId,
+    runId: payload.runId,
+    ...(payload.sessionKey ? { sessionKey: payload.sessionKey } : {}),
+    toolName: "answer_candidate",
+    status,
+    entryKind: "answer_candidate",
+    candidateStatus,
+    startedAt: existing?.startedAt ?? startedAt,
+    updatedAt: now,
+    durationMs: Math.max(0, now - (existing?.startedAt ?? startedAt)),
+    outputTruncated: preview.truncated || existing?.outputTruncated === true,
+    summary: buildAnswerCandidateSummary(candidateStatus),
+    hiddenArgumentCount: 0,
+    ...(outputPreview ? { outputPreview } : {}),
+  };
+  const next = existing
+    ? host.activityEntries.map((entry) => (entry.id === id ? nextEntry : entry))
+    : [...host.activityEntries, nextEntry];
+  host.activityEntries = next.slice(-ACTIVITY_ENTRY_LIMIT);
+}
+
+export function resetActivityEntries(host: ActivityHost) {
+  if (Array.isArray(host.activityEntries)) {
+    host.activityEntries = [];
+  }
 }

@@ -1,5 +1,9 @@
 // Control UI module implements app tool stream behavior.
-import { updateActivityFromToolEvent, type ActivityEntry } from "./activity-model.ts";
+import {
+  updateActivityFromItemEvent,
+  updateActivityFromToolEvent,
+  type ActivityEntry,
+} from "./activity-model.ts";
 import { createChatModelOverride } from "./chat-model-ref.ts";
 import type { ChatModelOverride } from "./chat-model-ref.types.ts";
 import { formatUnknownText, truncateText } from "./format.ts";
@@ -755,6 +759,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
 
   if (payload.stream === "fallback") {
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
+    return;
+  }
+
+  if (payload.stream === "item") {
+    updateActivityFromItemEvent(host, payload);
     return;
   }
 
