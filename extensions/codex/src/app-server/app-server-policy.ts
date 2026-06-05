@@ -28,7 +28,6 @@ export function resolveCodexAppServerForOpenClawToolPolicy(params: {
     return params.appServer;
   }
   const explicitMode =
-    params.execPolicy?.mode === "full" ||
     params.pluginConfig.appServer?.mode !== undefined ||
     isCodexAppServerPolicyMode(params.env.OPENCLAW_CODEX_APP_SERVER_MODE);
   const explicitApprovalPolicy =

@@ -9,6 +9,11 @@ import {
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
@@ -191,9 +196,10 @@ function createStartedThreadHarness(
 
   return {
     requests,
-    async waitForMethod(method: string) {
+    async waitForMethod(method: string, timeoutMs = 120_000) {
       await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain(method), {
         interval: 1,
+        timeout: timeoutMs,
       });
     },
     async notify(notification: CodexServerNotification) {
@@ -311,6 +317,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
   afterEach(async () => {
     resetCodexAppServerClientFactoryForTest();
+    resetGlobalHookRunner();
     vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -1283,6 +1290,79 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(savedBinding?.threadId).toBe("thread-fresh");
     expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
     expect(savedBinding?.contextEngine?.projection).toBeUndefined();
+  });
+
+  it("requires the native hook relay startup canary after context-engine overflow retry", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("pre-compaction context", Date.now()) as never,
+    );
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint:
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-before",
+        },
+      },
+    });
+    const contextEngine = createContextEngine({
+      assemble: vi.fn(async ({ messages, prompt }) => ({
+        messages: [...messages, userMessage(prompt ?? "", 11)],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
+      })),
+    });
+    const harness = createStartedThreadHarness(async (method, requestParams) => {
+      const request = requireRecord(requestParams, `${method} params`);
+      if (method === "thread/resume") {
+        return threadStartResult("thread-old");
+      }
+      if (method === "turn/start" && request.threadId === "thread-old") {
+        throw new Error("Codex ran out of room in the model's context window");
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-fresh");
+      }
+      if (method === "turn/start" && request.threadId === "thread-fresh") {
+        return turnStartResult("turn-fresh");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 400_000;
+
+    await expect(
+      runCodexAppServerAttempt(params, {
+        nativeHookRelay: {
+          enabled: true,
+          events: ["pre_tool_use"],
+        },
+      }),
+    ).rejects.toThrow("Codex did not invoke the native hook relay startup canary");
+
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/resume",
+      "turn/start",
+      "thread/start",
+      "turn/start",
+      "thread/unsubscribe",
+    ]);
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding).toBeUndefined();
   });
 
   it("preserves a newer context-engine binding when a stale resumed thread overflows", async () => {

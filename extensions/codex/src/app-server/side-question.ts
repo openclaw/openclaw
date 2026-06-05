@@ -3,6 +3,7 @@ import {
   buildAgentHookContextChannelFields,
   embeddedAgentLog,
   formatErrorMessage,
+  getBeforeToolCallPolicyDiagnosticState,
   resolveAgentDir,
   resolveAttemptSpawnWorkspaceDir,
   resolveModelAuthMode,
@@ -38,9 +39,11 @@ import {
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import {
+  assertCodexNativeHookRelayStartupCanary,
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
+  withCodexNativeHookRelayStartupCanary,
 } from "./native-hook-relay.js";
 import {
   readCodexNotificationThreadId,
@@ -170,6 +173,7 @@ export async function runCodexAppServerSideQuestion(
   }
   let childThreadId: string | undefined;
   let turnId: string | undefined;
+  let cleanupTurnId: string | undefined;
   let removeRequestHandler: (() => void) | undefined;
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
 
@@ -190,6 +194,13 @@ export async function runCodexAppServerSideQuestion(
       sessionAgentId,
       signal: runAbortController.signal,
     });
+    const beforeToolCallPolicy = getBeforeToolCallPolicyDiagnosticState();
+    const nativeToolSurfaceEnabled =
+      binding.nativeCodeModeEnabled !== false || binding.userMcpServersEnabled !== false;
+    const nativeHookRelayStartupCanaryRequired =
+      nativeToolSurfaceEnabled &&
+      (beforeToolCallPolicy.hasBeforeToolCallHook ||
+        beforeToolCallPolicy.trustedToolPolicies.length > 0);
     removeRequestHandler = client.addRequestHandler(async (request) => {
       if (request.method === "account/chatgptAuthTokens/refresh") {
         return (await refreshCodexAppServerAuthTokens({
@@ -377,7 +388,18 @@ export async function runCodexAppServerSideQuestion(
         { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
       ),
     );
-    turnId = turnResponse.turn.id;
+    cleanupTurnId = turnResponse.turn.id;
+    try {
+      await assertCodexNativeHookRelayStartupCanary({
+        relay: nativeHookRelay,
+        required: nativeHookRelayStartupCanaryRequired,
+        signal: runAbortController.signal,
+      });
+    } catch (error) {
+      runAbortController.abort(error);
+      throw error;
+    }
+    turnId = cleanupTurnId;
     collector.setTurn(childThreadId, turnId);
 
     const text = await collector.wait({
@@ -402,7 +424,7 @@ export async function runCodexAppServerSideQuestion(
       removeRequestHandler?.();
       await cleanupCodexSideThread(client, {
         threadId: childThreadId,
-        turnId,
+        turnId: turnId ?? cleanupTurnId,
         interrupt: !collector.completed,
         timeoutMs: appServer.requestTimeoutMs,
       });
@@ -418,11 +440,13 @@ function resolveCodexSideNativeHookRelayEvents(params: {
   approvalPolicy: CodexAppServerRuntimeOptions["approvalPolicy"];
 }): readonly NativeHookRelayEvent[] {
   if (params.configuredEvents?.length) {
-    return params.configuredEvents;
+    return withCodexNativeHookRelayStartupCanary(params.configuredEvents);
   }
-  return params.approvalPolicy === "never"
-    ? CODEX_NATIVE_HOOK_RELAY_EVENTS
-    : CODEX_SIDE_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
+  return withCodexNativeHookRelayStartupCanary(
+    params.approvalPolicy === "never"
+      ? CODEX_NATIVE_HOOK_RELAY_EVENTS
+      : CODEX_SIDE_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS,
+  );
 }
 
 function registerCodexSideNativeHookRelay(params: {
@@ -445,6 +469,7 @@ function registerCodexSideNativeHookRelay(params: {
   if (params.options.enabled === false) {
     return undefined;
   }
+  const events = withCodexNativeHookRelayStartupCanary(params.events);
   return registerNativeHookRelay({
     provider: "codex",
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -453,7 +478,7 @@ function registerCodexSideNativeHookRelay(params: {
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
-    allowedEvents: params.events,
+    allowedEvents: events,
     ttlMs: resolveCodexSideNativeHookRelayTtlMs({
       explicitTtlMs: params.options.ttlMs,
       requestTimeoutMs: params.requestTimeoutMs,

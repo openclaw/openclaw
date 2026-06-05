@@ -17,6 +17,20 @@ describe("Codex native hook relay config", () => {
 
     expect(config).toEqual({
       "features.hooks": true,
+      "hooks.SessionStart": [
+        {
+          hooks: [
+            {
+              type: "command",
+              command:
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event session_start",
+              timeout: 7,
+              async: false,
+              statusMessage: "OpenClaw native hook relay",
+            },
+          ],
+        },
+      ],
       "hooks.PreToolUse": [
         {
           hooks: [
@@ -74,6 +88,14 @@ describe("Codex native hook relay config", () => {
         },
       ],
       "hooks.state": {
+        "/<session-flags>/config.toml:session_start:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:session_start:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
         "/<session-flags>/config.toml:pre_tool_use:0:0": {
           enabled: true,
           trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
@@ -110,7 +132,6 @@ describe("Codex native hook relay config", () => {
     });
     expect(JSON.stringify(config)).not.toContain("timeoutSec");
     expect(JSON.stringify(config)).not.toContain('"matcher":null');
-    expect(config).not.toHaveProperty("hooks.SessionStart");
     expect(config).not.toHaveProperty("hooks.UserPromptSubmit");
   });
 
@@ -157,6 +178,20 @@ describe("Codex native hook relay config", () => {
       }),
     ).toEqual({
       "features.hooks": true,
+      "hooks.SessionStart": [
+        {
+          hooks: [
+            {
+              type: "command",
+              command:
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event session_start",
+              timeout: 5,
+              async: false,
+              statusMessage: "OpenClaw native hook relay",
+            },
+          ],
+        },
+      ],
       "hooks.PreToolUse": [
         {
           hooks: [
@@ -174,6 +209,14 @@ describe("Codex native hook relay config", () => {
       "hooks.PostToolUse": [],
       "hooks.Stop": [],
       "hooks.state": {
+        "/<session-flags>/config.toml:session_start:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:session_start:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
         "/<session-flags>/config.toml:pre_tool_use:0:0": {
           enabled: true,
           trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
@@ -186,7 +229,7 @@ describe("Codex native hook relay config", () => {
     });
   });
 
-  it("keeps selected no-policy PreToolUse installed with an unavailable no-op marker", () => {
+  it("keeps selected no-policy PreToolUse installed without an unavailable no-op marker", () => {
     expect(
       buildCodexNativeHookRelayConfig({
         relay: createRelay({ inactiveEvents: ["pre_tool_use"] }),
@@ -194,13 +237,27 @@ describe("Codex native hook relay config", () => {
       }),
     ).toEqual({
       "features.hooks": true,
+      "hooks.SessionStart": [
+        {
+          hooks: [
+            {
+              type: "command",
+              command:
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event session_start",
+              timeout: 5,
+              async: false,
+              statusMessage: "OpenClaw native hook relay",
+            },
+          ],
+        },
+      ],
       "hooks.PreToolUse": [
         {
           hooks: [
             {
               type: "command",
               command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop",
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use",
               timeout: 5,
               async: false,
               statusMessage: "OpenClaw native hook relay",
@@ -209,6 +266,14 @@ describe("Codex native hook relay config", () => {
         },
       ],
       "hooks.state": {
+        "/<session-flags>/config.toml:session_start:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:session_start:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
         "/<session-flags>/config.toml:pre_tool_use:0:0": {
           enabled: true,
           trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
@@ -230,6 +295,7 @@ describe("Codex native hook relay config", () => {
       }),
     ).toEqual({
       "features.hooks": true,
+      "hooks.SessionStart": [],
       "hooks.PreToolUse": [],
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [
@@ -248,6 +314,8 @@ describe("Codex native hook relay config", () => {
       ],
       "hooks.Stop": [],
       "hooks.state": {
+        "/<session-flags>/config.toml:session_start:0:0": { enabled: false },
+        "<session-flags>/config.toml:session_start:0:0": { enabled: false },
         "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
         "<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
         "/<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
@@ -283,6 +351,7 @@ describe("Codex native hook relay config", () => {
   it("builds deterministic clearing config when the relay is disabled", () => {
     expect(buildCodexNativeHookRelayDisabledConfig()).toEqual({
       "features.hooks": false,
+      "hooks.SessionStart": [],
       "hooks.PreToolUse": [],
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [],
@@ -308,15 +377,17 @@ function createRelay(options?: {
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     runId: "run-1",
-    allowedEvents: ["pre_tool_use", "post_tool_use", "permission_request", "before_agent_finalize"],
+    allowedEvents: [
+      "session_start",
+      "pre_tool_use",
+      "post_tool_use",
+      "permission_request",
+      "before_agent_finalize",
+    ],
     expiresAtMs: Date.now() + 1000,
     shouldRelayEvent: (event) => !inactiveEvents.has(event),
     commandForEvent: (event) =>
-      `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}${
-        event === "pre_tool_use" && inactiveEvents.has(event)
-          ? " --pre-tool-use-unavailable noop"
-          : ""
-      }`,
+      `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}`,
     renew: () => undefined,
     unregister: () => undefined,
   };

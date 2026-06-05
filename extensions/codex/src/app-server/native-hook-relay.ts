@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import {
   registerNativeHookRelay,
+  waitForNativeHookRelayEventInvocation,
   type EmbeddedRunAttemptParams,
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
@@ -18,6 +19,7 @@ import type { JsonObject, JsonValue } from "./protocol.js";
 
 /** Codex hook events that can be registered through OpenClaw's native relay. */
 export const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
+  "session_start",
   "pre_tool_use",
   "post_tool_use",
   "permission_request",
@@ -29,10 +31,16 @@ const CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
 const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 /** Extra relay lifetime after the expected turn budget, preventing late hook drops. */
 export const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
+const CODEX_NATIVE_HOOK_RELAY_STARTUP_CANARY_TIMEOUT_MS = 1_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
 
-type CodexHookEventName = "PreToolUse" | "PostToolUse" | "PermissionRequest" | "Stop";
+type CodexHookEventName =
+  | "SessionStart"
+  | "PreToolUse"
+  | "PostToolUse"
+  | "PermissionRequest"
+  | "Stop";
 
 type PendingCodexNativeHookRelayUnregister = {
   timeout: ReturnType<typeof setTimeout>;
@@ -127,6 +135,7 @@ export function createCodexNativeHookRelay(params: {
   if (params.options?.enabled === false) {
     return undefined;
   }
+  const events = withCodexNativeHookRelayStartupCanary(params.events);
   return registerNativeHookRelay({
     provider: "codex",
     relayId: buildCodexNativeHookRelayId({
@@ -144,7 +153,7 @@ export function createCodexNativeHookRelay(params: {
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
-    allowedEvents: params.events,
+    allowedEvents: events,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,
       attemptTimeoutMs: params.attemptTimeoutMs,
@@ -161,21 +170,76 @@ export function createCodexNativeHookRelay(params: {
   });
 }
 
+/** Verifies Codex invoked the native hook relay startup canary before OpenClaw activates a turn. */
+export async function assertCodexNativeHookRelayStartupCanary(params: {
+  relay: NativeHookRelayRegistrationHandle | undefined;
+  required: boolean;
+  signal: AbortSignal;
+}): Promise<void> {
+  if (!params.required) {
+    return;
+  }
+  const relay = params.relay;
+  if (!relay) {
+    throw new Error(
+      "OpenClaw tool policy requires Codex native hook relay delivery, but no relay was registered.",
+    );
+  }
+  if (!relay.generation) {
+    throw new Error(
+      "OpenClaw tool policy requires Codex native hook relay delivery, but the relay generation is unavailable.",
+    );
+  }
+  if (!relay.allowedEvents.includes("pre_tool_use")) {
+    throw new Error(
+      "OpenClaw tool policy requires Codex native PreToolUse delivery, but the relay is not allowed to receive PreToolUse.",
+    );
+  }
+  if (!relay.allowedEvents.includes("session_start")) {
+    throw new Error(
+      "OpenClaw tool policy requires Codex native PreToolUse delivery, but the relay startup canary is not configured.",
+    );
+  }
+  const observed = await waitForNativeHookRelayEventInvocation({
+    relayId: relay.relayId,
+    generation: relay.generation,
+    event: "session_start",
+    timeoutMs: CODEX_NATIVE_HOOK_RELAY_STARTUP_CANARY_TIMEOUT_MS,
+    signal: params.signal,
+  });
+  if (!observed) {
+    throw new Error(
+      "OpenClaw tool policy requires Codex native PreToolUse delivery, but Codex did not invoke the native hook relay startup canary.",
+    );
+  }
+}
+
 /** Selects the native hook events Codex should install for the current approval mode. */
 export function resolveCodexNativeHookRelayEvents(params: {
   configuredEvents?: readonly NativeHookRelayEvent[];
   appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy">;
 }): readonly NativeHookRelayEvent[] {
   if (params.configuredEvents?.length) {
-    return params.configuredEvents;
+    return withCodexNativeHookRelayStartupCanary(params.configuredEvents);
   }
   // Codex emits PermissionRequest before the app-server approval reviewer has
   // resolved the command. In native approval modes, let Codex's app-server
   // approval bridge own the real escalation instead of surfacing a stale
   // pre-guardian OpenClaw plugin approval prompt.
-  return params.appServer.approvalPolicy === "never"
-    ? CODEX_NATIVE_HOOK_RELAY_EVENTS
-    : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
+  return withCodexNativeHookRelayStartupCanary(
+    params.appServer.approvalPolicy === "never"
+      ? CODEX_NATIVE_HOOK_RELAY_EVENTS
+      : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS,
+  );
+}
+
+export function withCodexNativeHookRelayStartupCanary(
+  events: readonly NativeHookRelayEvent[],
+): readonly NativeHookRelayEvent[] {
+  if (!events.includes("pre_tool_use") || events.includes("session_start")) {
+    return events;
+  }
+  return ["session_start", ...events];
 }
 
 /** Derives the native hook relay TTL from the turn budget unless explicitly configured. */
@@ -212,6 +276,7 @@ export function buildCodexNativeHookRelayId(params: {
 }
 
 const CODEX_HOOK_EVENT_BY_NATIVE_EVENT: Record<NativeHookRelayEvent, CodexHookEventName> = {
+  session_start: "SessionStart",
   pre_tool_use: "PreToolUse",
   post_tool_use: "PostToolUse",
   permission_request: "PermissionRequest",
@@ -219,6 +284,7 @@ const CODEX_HOOK_EVENT_BY_NATIVE_EVENT: Record<NativeHookRelayEvent, CodexHookEv
 };
 
 const CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT: Record<NativeHookRelayEvent, string> = {
+  session_start: "session_start",
   pre_tool_use: "pre_tool_use",
   post_tool_use: "post_tool_use",
   permission_request: "permission_request",
@@ -237,7 +303,9 @@ export function buildCodexNativeHookRelayConfig(params: {
   hookTimeoutSec?: number;
   clearOmittedEvents?: boolean;
 }): JsonObject {
-  const events = params.events?.length ? params.events : CODEX_NATIVE_HOOK_RELAY_EVENTS;
+  const events = withCodexNativeHookRelayStartupCanary(
+    params.events?.length ? params.events : CODEX_NATIVE_HOOK_RELAY_EVENTS,
+  );
   const selectedEvents = new Set<NativeHookRelayEvent>(events);
   const config: JsonObject = {
     "features.hooks": true,
@@ -247,10 +315,10 @@ export function buildCodexNativeHookRelayConfig(params: {
     const codexEvent = CODEX_HOOK_EVENT_BY_NATIVE_EVENT[event];
     const selected = selectedEvents.has(event);
     const shouldRelay = params.relay.shouldRelayEvent(event);
-    // Keep no-policy PreToolUse commands installed with an explicit no-op marker;
-    // otherwise a stale relay fallback cannot distinguish no policy from unknown policy.
-    const selectedNoopPreToolUse = selected && event === "pre_tool_use" && !shouldRelay;
-    if (!selected || (!shouldRelay && !selectedNoopPreToolUse)) {
+    // Keep selected PreToolUse commands installed even before hook-only plugins
+    // have loaded; unavailable PreToolUse must still fail closed.
+    const selectedPreToolUse = selected && event === "pre_tool_use";
+    if (!selected || (!shouldRelay && !selectedPreToolUse)) {
       if (selected || params.clearOmittedEvents) {
         config[`hooks.${codexEvent}`] = [] satisfies JsonValue;
       }
@@ -300,6 +368,7 @@ export function buildCodexNativeHookRelayConfig(params: {
 export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
   return {
     "features.hooks": false,
+    "hooks.SessionStart": [],
     "hooks.PreToolUse": [],
     "hooks.PostToolUse": [],
     "hooks.PermissionRequest": [],

@@ -1,5 +1,8 @@
 // Codex tests cover side question plugin behavior.
-import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  invokeNativeHookRelay,
+  nativeHookRelayTesting,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -555,7 +558,12 @@ describe("runCodexAppServerSideQuestion", () => {
           sessionKey: "agent:main:session-1",
           runId: "run-side-1",
           channelId: "voice-room",
-          allowedEvents: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
+          allowedEvents: [
+            "session_start",
+            "pre_tool_use",
+            "post_tool_use",
+            "before_agent_finalize",
+          ],
         });
         return threadResult("side-thread");
       }
@@ -616,6 +624,170 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
     ).toBeUndefined();
+  });
+
+  it("does not require the side-thread startup canary when no tool policy is active", async () => {
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+          client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+        });
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          sessionKey: "agent:main:session-1",
+          opts: { runId: "run-side-no-policy-canary-skip" },
+        }),
+        { nativeHookRelay: { enabled: true, events: ["pre_tool_use"] } },
+      ),
+    ).resolves.toEqual({ text: "Side answer." });
+  });
+
+  it("fails closed for opted-in side threads when tool policy is active but the startup canary is missing", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const client = createFakeClient();
+    let relayIdDuringFork: string | undefined;
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
+      if (method === "thread/fork") {
+        const config = (requestParams as { config?: Record<string, unknown> }).config;
+        relayIdDuringFork = extractRelayIdFromThreadConfig(config);
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          sessionKey: "agent:main:session-1",
+          opts: { runId: "run-side-missing-canary" },
+        }),
+        { nativeHookRelay: { enabled: true, events: ["pre_tool_use"] } },
+      ),
+    ).rejects.toThrow("Codex did not invoke the native hook relay startup canary");
+
+    expect(client.request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/fork",
+      "thread/inject_items",
+      "turn/start",
+      "turn/interrupt",
+      "thread/unsubscribe",
+    ]);
+    expect(relayIdDuringFork).toBeDefined();
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
+    ).toBeUndefined();
+  });
+
+  it("fails closed for side threads when policy is active but native hook relay is disabled", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          sessionKey: "agent:main:session-1",
+          opts: { runId: "run-side-relay-disabled" },
+        }),
+        { nativeHookRelay: { enabled: false } },
+      ),
+    ).rejects.toThrow("no relay was registered");
+
+    expect(client.request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/fork",
+      "thread/inject_items",
+      "turn/start",
+      "turn/interrupt",
+      "thread/unsubscribe",
+    ]);
+  });
+
+  it("fails closed for side threads when policy is active but PreToolUse relay is omitted", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          sessionKey: "agent:main:session-1",
+          opts: { runId: "run-side-pretooluse-omitted" },
+        }),
+        { nativeHookRelay: { enabled: true, events: ["permission_request"] } },
+      ),
+    ).rejects.toThrow("not allowed to receive PreToolUse");
+
+    expect(client.request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/fork",
+      "thread/inject_items",
+      "turn/start",
+      "turn/interrupt",
+      "thread/unsubscribe",
+    ]);
   });
 
   it("forwards side-thread command approvals through the active native hook relay", async () => {
@@ -1051,14 +1223,30 @@ describe("runCodexAppServerSideQuestion", () => {
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
     );
     const client = createFakeClient();
-    client.request.mockImplementation(async (method: string) => {
+    let relayIdDuringFork: string | undefined;
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
       if (method === "thread/fork") {
+        const config = (requestParams as { config?: Record<string, unknown> }).config;
+        relayIdDuringFork = extractRelayIdFromThreadConfig(config);
         return threadResult("side-thread");
       }
       if (method === "thread/inject_items") {
         return {};
       }
       if (method === "turn/start") {
+        const registration =
+          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork);
+        if (!registration) {
+          throw new Error("Expected native hook relay registration");
+        }
+        await invokeNativeHookRelay({
+          provider: "codex",
+          relayId: registration.relayId,
+          generation: registration.generation,
+          event: "session_start",
+          rawPayload: { hook_event_name: "SessionStart" },
+          requireGeneration: true,
+        });
         setTimeout(() => {
           void (async () => {
             await client.handleRequest({
@@ -1092,6 +1280,7 @@ describe("runCodexAppServerSideQuestion", () => {
           messageProvider: "discord-voice",
           currentChannelId: "discord:voice-room",
         }),
+        { nativeHookRelay: { enabled: true } },
       ),
     ).resolves.toEqual({ text: "Tool answer." });
 

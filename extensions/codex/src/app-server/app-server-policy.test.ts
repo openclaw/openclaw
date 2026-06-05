@@ -32,6 +32,26 @@ describe("Codex app-server policy", () => {
     expect(resolved.approvalPolicy).toBe("untrusted");
   });
 
+  it("promotes implicit yolo approval policy when OpenClaw full exec policy still has tool policy", () => {
+    const appServer = resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null });
+
+    const resolved = resolveCodexAppServerForOpenClawToolPolicy({
+      appServer,
+      pluginConfig: readCodexPluginConfig({}),
+      env: {},
+      shouldPromote: true,
+      canUseUntrustedApprovalPolicy: true,
+      execPolicy: {
+        mode: "full",
+        security: "full",
+        ask: "off",
+        touched: true,
+      },
+    });
+
+    expect(resolved.approvalPolicy).toBe("untrusted");
+  });
+
   it("preserves explicit operator app-server policy", () => {
     const appServer = resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null });
     const requirementsAppServer = resolveCodexAppServerRuntimeOptions({
