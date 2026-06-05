@@ -356,6 +356,8 @@ function isBlockedHostnameNormalized(normalized: string): boolean {
 }
 
 function normalizeIdnaHostnameForBlockedComparison(normalized: string): string | undefined {
+  // UTS46 maps compatibility codepoints (full-width Latin, script letters)
+  // to ASCII, so re-run the reserved host/IP checks on that decoded form.
   const decoded = domainToUnicode(normalized);
   if (!decoded || decoded === normalized) {
     return undefined;
