@@ -194,10 +194,6 @@ export class ChatLog extends Container {
     return component;
   }
 
-  commitPendingUser(runId: string) {
-    return this.pendingUsers.delete(runId);
-  }
-
   dropPendingUser(runId: string) {
     const existing = this.pendingUsers.get(runId);
     if (!existing) {
@@ -206,10 +202,6 @@ export class ChatLog extends Container {
     this.removeChild(existing.component);
     this.pendingUsers.delete(runId);
     return true;
-  }
-
-  hasPendingUser(runId: string) {
-    return this.pendingUsers.has(runId);
   }
 
   reconcilePendingUsers(

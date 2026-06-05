@@ -173,17 +173,6 @@ describe("ChatLog", () => {
     expect(chatLog.render(120).join("\n")).toContain("queued hello");
   });
 
-  it("stops counting a pending user message once the run is committed", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "hello");
-    expect(chatLog.countPendingUsers()).toBe(1);
-
-    expect(chatLog.commitPendingUser("run-1")).toBe(true);
-    expect(chatLog.countPendingUsers()).toBe(0);
-    expect(chatLog.render(120).join("\n")).toContain("hello");
-  });
-
   it("reconciles pending users against rebuilt history using timestamps", () => {
     const chatLog = new ChatLog(40);
 
