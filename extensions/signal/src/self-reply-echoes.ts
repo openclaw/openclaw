@@ -115,8 +115,8 @@ function resolveEchoIds(params: {
   return [...ids];
 }
 
-function persistableEchoIds(ids: string[]): string[] {
-  return ids.filter((id) => !isTextEchoId(id));
+function persistableEchoIds(ids: string[], includeText: boolean): string[] {
+  return includeText ? ids : ids.filter((id) => !isTextEchoId(id));
 }
 
 function resolveEchoStorePath(): string {
@@ -202,6 +202,7 @@ export async function rememberSignalSelfReplyEcho(params: {
   text?: string | null;
   includeTextWithPrimary?: boolean;
   persist?: boolean;
+  persistText?: boolean;
 }): Promise<void> {
   const ids = resolveEchoIds(params);
   if (ids.length === 0) {
@@ -215,7 +216,7 @@ export async function rememberSignalSelfReplyEcho(params: {
   if (params.persist === false) {
     return;
   }
-  const persistentIds = persistableEchoIds(ids);
+  const persistentIds = persistableEchoIds(ids, params.persistText === true);
   if (persistentIds.length === 0) {
     return;
   }

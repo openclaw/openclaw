@@ -371,6 +371,7 @@ export async function sendMessageSignal(
     timestamp?: number;
     text?: string;
     persist?: boolean;
+    persistText?: boolean;
   }) => {
     for (const accountIdentity of selfEchoAccountIdentities) {
       await rememberSignalSelfReplyEcho({
@@ -443,7 +444,7 @@ export async function sendMessageSignal(
       await rememberSelfEcho({
         messageId: "unknown",
         text: fallbackEchoText,
-        persist: false,
+        persistText: true,
       });
     }
   }

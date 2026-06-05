@@ -239,11 +239,8 @@ describe("sendMessageSignal receipts", () => {
       messageId: "unknown",
       timestamp: undefined,
       text: "actual sent body",
-      persist: false,
+      persistText: true,
     });
-    expect(
-      rememberSignalSelfReplyEchoMock.mock.calls.every(([entry]) => entry?.persist === false),
-    ).toBe(true);
   });
 
   it("keeps memory-only pre-send self-echo markers when Signal send is ambiguous", async () => {
@@ -441,7 +438,7 @@ describe("sendMessageSignal receipts", () => {
       messageId: "unknown",
       timestamp: undefined,
       text: "<media:image:image/png:4321>",
-      persist: false,
+      persistText: true,
     });
     expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith({
       accountId: "default",
@@ -449,7 +446,7 @@ describe("sendMessageSignal receipts", () => {
       messageId: "unknown",
       timestamp: undefined,
       text: "<media:image>",
-      persist: false,
+      persistText: true,
     });
   });
 
@@ -481,7 +478,7 @@ describe("sendMessageSignal receipts", () => {
       messageId: "unknown",
       timestamp: undefined,
       text: "<media:attachment>",
-      persist: false,
+      persistText: true,
     });
   });
 

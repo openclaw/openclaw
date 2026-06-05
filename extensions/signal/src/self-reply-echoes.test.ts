@@ -61,6 +61,7 @@ describe("signal self-reply echoes", () => {
         accountId: "default",
         messageId: "unknown",
         text: "timestamp-less reply",
+        persistText: true,
       });
 
       const sentAt = Date.now();
@@ -81,6 +82,18 @@ describe("signal self-reply echoes", () => {
       ).toBe(true);
       expect(
         await hasSignalSelfReplyEcho({
+          accountId: "default",
+          messageId: String(sentAt + 1_000),
+          timestamp: sentAt + 1_000,
+          text: "timestamp-less reply",
+          includeTextWithPrimary: true,
+        }),
+      ).toBe(true);
+
+      vi.resetModules();
+      const freshTextEchoes = await import("./self-reply-echoes.js");
+      expect(
+        await freshTextEchoes.hasSignalSelfReplyEcho({
           accountId: "default",
           messageId: String(sentAt + 1_000),
           timestamp: sentAt + 1_000,
