@@ -187,6 +187,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
             sessionId: params.sessionIdUsed,
             sessionKey: params.sessionKey,
             messages: newMessages,
+            isHeartbeat: params.isHeartbeat,
           });
         } catch (ingestErr) {
           postTurnFinalizationSucceeded = false;
@@ -199,6 +200,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
               sessionId: params.sessionIdUsed,
               sessionKey: params.sessionKey,
               message: msg,
+              isHeartbeat: params.isHeartbeat,
             });
           } catch (ingestErr) {
             postTurnFinalizationSucceeded = false;

@@ -410,6 +410,7 @@ export function installContextEngineLoopHook(params: {
               sessionId,
               sessionKey,
               messages: newMessages,
+              isHeartbeat: params.isHeartbeat,
             });
           } else {
             for (const message of newMessages) {
@@ -417,6 +418,7 @@ export function installContextEngineLoopHook(params: {
                 sessionId,
                 sessionKey,
                 message,
+                isHeartbeat: params.isHeartbeat,
               });
             }
           }
