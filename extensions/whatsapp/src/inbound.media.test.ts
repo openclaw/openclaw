@@ -1,3 +1,4 @@
+// Whatsapp tests cover inbound.media plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

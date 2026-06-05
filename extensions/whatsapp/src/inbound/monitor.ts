@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor behavior.
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,

@@ -125,9 +125,12 @@ function readBody(req) {
 }
 
 function requestBodyTooLargeError() {
-  return Object.assign(new Error(`ClickClack fixture request body exceeded ${requestMaxBytes} bytes`), {
-    code: "ETOOBIG",
-  });
+  return Object.assign(
+    new Error(`ClickClack fixture request body exceeded ${requestMaxBytes} bytes`),
+    {
+      code: "ETOOBIG",
+    },
+  );
 }
 
 function isRequestBodyTooLargeError(error) {

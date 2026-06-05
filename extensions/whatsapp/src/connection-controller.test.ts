@@ -1,3 +1,4 @@
+// Whatsapp tests cover connection controller plugin behavior.
 import { EventEmitter } from "node:events";
 import { DisconnectReason } from "baileys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

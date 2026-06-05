@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements qa driver behavior.
 import type { WAMessage } from "baileys";
 import { extractText } from "./inbound/extract.js";
 import { createWebSendApi } from "./inbound/send-api.js";

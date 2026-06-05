@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor behavior.
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements connection controller behavior.
 import type { WASocket } from "baileys";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
