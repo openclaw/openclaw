@@ -2,8 +2,9 @@
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { type GroupPolicy, resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import type { GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
 import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime-doctor";
+import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   legacyConfigRules as SLACK_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeSlackCompatibilityConfig,
