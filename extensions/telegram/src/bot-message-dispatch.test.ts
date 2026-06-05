@@ -1576,6 +1576,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     appendSessionTranscriptMessage.mockImplementationOnce(async ({ message }) => ({
       messageId: "m1",
+      appended: true,
       message: {
         ...(message as Record<string, unknown>),
         content: [{ type: "text", text: "Final sk-abc…0xyz" }],
