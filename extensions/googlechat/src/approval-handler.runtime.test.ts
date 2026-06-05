@@ -1,6 +1,5 @@
 import type {
   ExecApprovalPendingView,
-  PendingApprovalView,
   ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
