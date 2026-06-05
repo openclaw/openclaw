@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayCronJobSummary
@@ -146,7 +147,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.PhoneCapabilities -> PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Gateway -> GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Appearance -> AppearanceSettingsScreen(onBack = onBack)
+    SettingsRoute.Appearance -> AppearanceSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Health -> HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.About -> AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
   }
@@ -914,18 +915,85 @@ private fun GatewaySettingsScreen(
 }
 
 @Composable
-private fun AppearanceSettingsScreen(onBack: () -> Unit) {
+private fun AppearanceSettingsScreen(
+  viewModel: MainViewModel,
+  onBack: () -> Unit,
+) {
+  val themeMode by viewModel.appearanceThemeMode.collectAsState()
+
   SettingsDetailFrame(title = "Appearance", subtitle = "A calm, high-contrast OpenClaw interface.", icon = Icons.Default.Palette, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Theme", "Dark"),
+          SettingsMetric("Theme", appearanceThemeSummary(themeMode)),
           SettingsMetric("Contrast", "High"),
           SettingsMetric("Typography", "Readable"),
         ),
     )
     ClawPanel {
-      Text(text = "OpenClaw uses a fixed premium dark theme so it stays consistent across devices.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(text = "Theme", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        ClawSegmentedControl(
+          options = appearanceThemeOptions(),
+          selected = appearanceThemeSummary(themeMode),
+          onSelect = { selected -> viewModel.setAppearanceThemeMode(appearanceThemeModeForLabel(selected)) },
+        )
+      }
+    }
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(text = "Palette", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          AppearancePaletteSwatch("Canvas", ClawTheme.colors.canvas, modifier = Modifier.weight(1f))
+          AppearancePaletteSwatch("Surface", ClawTheme.colors.surfaceRaised, modifier = Modifier.weight(1f))
+          AppearancePaletteSwatch(
+            "Accent",
+            ClawTheme.colors.primary,
+            contentColor = ClawTheme.colors.canvas,
+            modifier = Modifier.weight(1f),
+          )
+        }
+      }
+    }
+  }
+}
+
+internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String =
+  when (mode) {
+    AppearanceThemeMode.System -> "System"
+    AppearanceThemeMode.Dark -> "Dark"
+    AppearanceThemeMode.Light -> "Light"
+  }
+
+internal fun appearanceThemeOptions(): List<String> =
+  listOf(
+    appearanceThemeSummary(AppearanceThemeMode.System),
+    appearanceThemeSummary(AppearanceThemeMode.Dark),
+    appearanceThemeSummary(AppearanceThemeMode.Light),
+  )
+
+internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode =
+  when (label.trim().lowercase()) {
+    "system" -> AppearanceThemeMode.System
+    "light" -> AppearanceThemeMode.Light
+    else -> AppearanceThemeMode.Dark
+  }
+
+@Composable
+private fun AppearancePaletteSwatch(
+  label: String,
+  color: Color,
+  contentColor: Color = ClawTheme.colors.text,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    modifier = modifier.height(58.dp),
+    shape = RoundedCornerShape(ClawTheme.radii.control),
+    color = color,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+  ) {
+    Box(modifier = Modifier.fillMaxSize().padding(8.dp), contentAlignment = Alignment.BottomStart) {
+      Text(text = label, style = ClawTheme.type.caption, color = contentColor, maxLines = 1)
     }
   }
 }
