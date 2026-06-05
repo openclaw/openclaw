@@ -790,6 +790,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           } else {
             state.pendingChatRunId = acceptedRunId;
             setActivityStatus("waiting");
+            // In non-steer queue modes, clear the optimistic send guard
+            // after the gateway accepts so the next queued message can
+            // flow through without waiting for the first streaming event.
+            if (queueMode !== "steer") {
+              state.pendingOptimisticUserMessage = false;
+            }
           }
           tui.requestRender();
         }

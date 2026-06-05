@@ -1020,6 +1020,48 @@ describe("tui command handlers", () => {
     );
   });
 
+  it("allows a second queued send after the first is accepted in followup mode", async () => {
+    const sendChat = vi.fn().mockResolvedValue({ runId: "r1" });
+    const { handleCommand, addSystem, state } = createHarness({
+      sendChat,
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+    state.sessionInfo = { queueMode: "followup" };
+
+    await handleCommand("first followup");
+    expect(sendChat).toHaveBeenCalledTimes(1);
+
+    // After sendChat accepts, the optimistic guard should be cleared
+    // so a second queued message can flow through immediately.
+    sendChat.mockResolvedValue({ runId: "r2" });
+    await handleCommand("second followup");
+    expect(sendChat).toHaveBeenCalledTimes(2);
+    expect(addSystem).not.toHaveBeenCalledWith(
+      "agent is busy — message could not be sent, please try again",
+    );
+  });
+
+  it("allows a second queued send after the first is accepted in collect mode", async () => {
+    const sendChat = vi.fn().mockResolvedValue({ runId: "r1" });
+    const { handleCommand, addSystem, state } = createHarness({
+      sendChat,
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+    state.sessionInfo = { queueMode: "collect" };
+
+    await handleCommand("first collect");
+    expect(sendChat).toHaveBeenCalledTimes(1);
+
+    sendChat.mockResolvedValue({ runId: "r2" });
+    await handleCommand("second collect");
+    expect(sendChat).toHaveBeenCalledTimes(2);
+    expect(addSystem).not.toHaveBeenCalledWith(
+      "agent is busy — message could not be sent, please try again",
+    );
+  });
+
   it("still blocks on pendingOptimisticUserMessage even in followup mode", async () => {
     const { handleCommand, sendChat, addSystem, state } = createHarness({
       activeChatRunId: "run-active",
