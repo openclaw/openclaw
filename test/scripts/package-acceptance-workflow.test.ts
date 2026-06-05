@@ -790,9 +790,14 @@ describe("package artifact reuse", () => {
       'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh',
     );
     expect(scenarios).toContain("function liveDockerScriptCommand");
+    expect(scenarios).toContain("const LIVE_DOCKER_DEFAULT_HARNESS_DIR");
+    expect(scenarios).toContain("fileURLToPath(import.meta.url)");
+    expect(scenarios).toContain('? ".release-harness"');
+    expect(scenarios).toContain("process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT");
     expect(scenarios).toContain(
-      "if [ -d .release-harness/scripts ]; then harness=.release-harness",
+      'harness="\\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-${LIVE_DOCKER_DEFAULT_HARNESS_DIR}}"',
     );
+    expect(scenarios).not.toContain("harness=.release-harness");
     expect(scenarios).toMatch(/liveDockerScriptCommand\(\s*"test-live-models-docker\.sh"/u);
     expect(scenarios).toMatch(/liveDockerScriptCommand\(\s*"test-live-gateway-models-docker\.sh"/u);
     expect(scenarios).toMatch(/liveDockerScriptCommand\(\s*"test-live-cli-backend-docker\.sh"/u);
@@ -805,9 +810,21 @@ describe("package artifact reuse", () => {
       /liveDockerScriptCommand\(\s*"test-live-subagent-announce-docker\.sh"/u,
     );
     expect(scheduler).toContain("function liveDockerHarnessScriptCommand");
+    expect(scheduler).toContain("const LIVE_DOCKER_DEFAULT_HARNESS_DIR");
+    expect(scheduler).toContain('path.basename(SCRIPT_ROOT_DIR) === ".release-harness"');
+    expect(scheduler).toContain("ROOT_DIR !== SCRIPT_ROOT_DIR");
+    expect(scheduler).toContain(
+      'harness="\\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-${LIVE_DOCKER_DEFAULT_HARNESS_DIR}}"',
+    );
+    expect(scheduler).not.toContain("harness=.release-harness");
     expect(scheduler).toContain('liveDockerHarnessScriptCommand("test-live-build-docker.sh")');
     expect(liveDockerAuth).toContain("codex-cli | openai)");
     expect(liveDockerAuth).toContain("openclaw_live_init_docker_run_args()");
+    expect(liveDockerAuth).toContain("openclaw_live_stage_profile_into_home()");
+    expect(liveDockerAuth).toContain("openclaw_live_chown_bind_dirs_for_container_user()");
+    expect(liveDockerAuth).toContain("openclaw_live_uses_managed_bind_dirs()");
+    expect(liveDockerAuth).toContain('openclaw_live_truthy "${OPENCLAW_TESTBOX:-}"');
+    expect(liveDockerAuth).toContain('[[ -n "${OPENCLAW_DOCKER_CACHE_HOME_DIR:-}" ]]');
     expect(liveDockerAuth).toContain(
       'timeout_value="${2:-${OPENCLAW_LIVE_DOCKER_RUN_TIMEOUT:-2700s}}"',
     );
@@ -825,10 +842,12 @@ describe("package artifact reuse", () => {
       expect(script).toContain('source "$TRUSTED_HARNESS_DIR/scripts/lib/live-docker-auth.sh"');
       expect(script).not.toContain('source "$ROOT_DIR/scripts/lib/live-docker-auth.sh"');
       expect(script).toContain("openclaw_live_init_docker_run_args DOCKER_RUN_ARGS");
+      expect(script).toContain("openclaw_live_prepare_bind_dir_for_container_user");
       expect(script).toContain("DOCKER_RUN_ARGS+=(--rm -t \\");
       expect(script).not.toContain("DOCKER_RUN_ARGS=(docker run --rm -t \\");
     }
     for (const script of sharedLiveScripts) {
+      expect(script).toContain("openclaw_live_uses_managed_bind_dirs");
       expect(script).toContain(
         'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"',
       );

@@ -2198,6 +2198,14 @@ export class QmdMemoryManager implements MemorySearchManager {
         callArgs.collection = params.collection;
       }
     }
+    if (
+      useUnifiedQueryTool &&
+      params.searchCommand === "query" &&
+      this.qmd.searchMode === "query" &&
+      this.qmd.rerank === false
+    ) {
+      callArgs.rerank = false;
+    }
 
     let result: { stdout: string };
     try {
@@ -3266,7 +3274,11 @@ export class QmdMemoryManager implements MemorySearchManager {
   ): string[] {
     const normalizedQuery = command === "search" ? normalizeHanBm25Query(query) : query;
     if (command === "query") {
-      return ["query", normalizedQuery, "--json", "-n", String(limit)];
+      const args = ["query", normalizedQuery, "--json", "-n", String(limit)];
+      if (this.qmd.searchMode === "query" && this.qmd.rerank === false) {
+        args.push("--no-rerank");
+      }
+      return args;
     }
     return [command, normalizedQuery, "--json", "-n", String(limit)];
   }
