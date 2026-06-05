@@ -339,7 +339,7 @@
         "type": "array",
         "items": {
           "type": "string",
-          "pattern": "^\\+[1-9]\\d{1,14}$"
+          "pattern": "^(\\+[1-9]\\d{1,14}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
         }
       },
       "inboundGreeting": {
