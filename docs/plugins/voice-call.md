@@ -669,10 +669,11 @@ calls).
 ```json5
 {
   provider: "msteams",
-  // Inbound default is a safe "allowlist" (never "open"): with an empty
-  // allowFrom no caller is accepted until you opt callers in, or set
-  // inboundPolicy: "open" explicitly to accept any authenticated Teams caller.
-  inboundPolicy: "open",
+  // Inbound default is a safe "allowlist" (never "open"). List the caller's AAD
+  // object id in allowFrom; an empty allowFrom accepts no one. Set
+  // inboundPolicy: "open" only to accept any authenticated Teams caller.
+  inboundPolicy: "allowlist",
+  allowFrom: ["00000000-0000-0000-0000-000000000000"], // caller AAD object ids
   responseModel: "openai/gpt-5.4", // agent model for the streaming path
 
   msteams: {
