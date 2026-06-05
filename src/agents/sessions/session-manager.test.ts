@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-manager-init.js";
 import {
   CURRENT_SESSION_VERSION,
   loadEntriesFromFile,
@@ -317,6 +318,72 @@ describe("SessionManager.open", () => {
         "message 3",
       ]);
       expect(parseCount).toBeGreaterThanOrEqual(4);
+    } finally {
+      JSON.parse = originalParse;
+    }
+  });
+
+  it("lets prepareSessionManagerForRun normalize a warm-cached header without re-parsing", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: { role: "assistant", content: "carried context" },
+    };
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir, "original-session"))}\n${JSON.stringify(
+        assistantEntry,
+      )}\n`,
+      "utf8",
+    );
+
+    // Warm the process-level entry cache.
+    expect(SessionManager.open(sessionFile, dir, dir).getSessionId()).toBe("original-session");
+
+    const originalParse = JSON.parse;
+    let parseCount = 0;
+    JSON.parse = function countedParse(...args: Parameters<typeof JSON.parse>) {
+      parseCount += 1;
+      return originalParse.apply(originalParse, args);
+    } as typeof JSON.parse;
+
+    try {
+      // Two warm hits off the same cache entry: must not re-parse the transcript.
+      const sessionManager = SessionManager.open(sessionFile, dir, dir);
+      const sibling = SessionManager.open(sessionFile, dir, dir);
+      expect(parseCount).toBe(0);
+
+      // The embedded runner normalizes the loaded header in place. With a shared
+      // frozen cache entry this threw "Cannot assign to read only property".
+      await expect(
+        prepareSessionManagerForRun({
+          sessionManager,
+          sessionFile,
+          hadSessionFile: true,
+          sessionId: "run-session",
+          cwd: "/tmp/task-repo",
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(sessionManager.getSessionId()).toBe("run-session");
+      expect(sessionManager.getHeader()).toEqual(
+        expect.objectContaining({ type: "session", id: "run-session", cwd: "/tmp/task-repo" }),
+      );
+      expect(sessionManager.getCwd()).toBe("/tmp/task-repo");
+
+      // Each warm hit gets an independent mutable header clone, so normalizing
+      // one manager's header must not bleed into the cached snapshot shared with
+      // the sibling manager.
+      expect(sibling.getHeader()).toEqual(
+        expect.objectContaining({ type: "session", id: "original-session", cwd: dir }),
+      );
+
+      // Header normalization stayed in memory; the warm hits never re-parsed.
+      expect(parseCount).toBe(0);
     } finally {
       JSON.parse = originalParse;
     }

@@ -550,8 +550,19 @@ function readSessionFileSnapshotIfExists(filePath: string): SessionFileSnapshot 
   }
 }
 
+// Cached entries are deep-frozen so warm hits cannot drift from the file bytes
+// that validated the cache key. The session header (entries[0]) is the one entry
+// callers legitimately mutate in place — `prepareSessionManagerForRun` rewrites
+// its id/cwd before an embedded run. Return a mutable clone of just the header so
+// that mutation does not throw on a frozen object, while the append-only message
+// entries stay shared frozen (preserving cache performance and preventing caller
+// mutations from leaking back into the cache).
 function copyFileEntries(entries: readonly FileEntry[]): FileEntry[] {
-  return entries.slice();
+  const copy = entries.slice();
+  if (copy.length > 0 && copy[0].type === "session" && Object.isFrozen(copy[0])) {
+    copy[0] = cloneFileEntry(copy[0]);
+  }
+  return copy;
 }
 
 function cloneFileEntry(entry: FileEntry): FileEntry {
