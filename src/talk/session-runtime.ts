@@ -1,3 +1,4 @@
+// Talk session runtime manages realtime voice session lifecycle and provider wiring.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
@@ -13,6 +14,9 @@ import type {
   RealtimeVoiceToolResultOptions,
 } from "./provider-types.js";
 
+/**
+ * Transport-facing audio target used by realtime voice bridge sessions.
+ */
 export type RealtimeVoiceAudioSink = {
   isOpen?: () => boolean;
   sendAudio: (audio: Buffer) => void;
@@ -20,8 +24,14 @@ export type RealtimeVoiceAudioSink = {
   sendMark?: (markName: string) => void;
 };
 
+/**
+ * Controls how provider playback marks are bridged to transports that may or may not ack marks.
+ */
 export type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignore";
 
+/**
+ * Stable session facade handed to gateway code and provider tool callbacks.
+ */
 export type RealtimeVoiceBridgeSession = {
   bridge: RealtimeVoiceBridge;
   acknowledgeMark(): void;
@@ -35,6 +45,9 @@ export type RealtimeVoiceBridgeSession = {
   triggerGreeting(instructions?: string): void;
 };
 
+/**
+ * Provider bridge inputs plus transport callbacks for one realtime voice session.
+ */
 export type RealtimeVoiceBridgeSessionParams = {
   provider: RealtimeVoiceProviderPlugin;
   cfg?: OpenClawConfig;
@@ -56,6 +69,9 @@ export type RealtimeVoiceBridgeSessionParams = {
   onClose?: (reason: RealtimeVoiceCloseReason) => void;
 };
 
+/**
+ * Creates a realtime voice bridge session and wires provider events to the configured audio sink.
+ */
 export function createRealtimeVoiceBridgeSession(
   params: RealtimeVoiceBridgeSessionParams,
 ): RealtimeVoiceBridgeSession {
@@ -66,6 +82,8 @@ export function createRealtimeVoiceBridgeSession(
     }
     return bridgeRef.current;
   };
+  // The provider may call callbacks during createBridge(); keep the public session facade
+  // stable while blocking use until the bridge object has actually been returned.
   const session: RealtimeVoiceBridgeSession = {
     get bridge() {
       return requireBridge();
@@ -101,6 +119,8 @@ export function createRealtimeVoiceBridgeSession(
       }
     },
     onMark: (markName) => {
+      // Some transports send mark acks, some need immediate provider acks, and some ignore
+      // playback marks entirely. Keep that policy centralized at the bridge boundary.
       if (!canSendAudio() || params.markStrategy === "ignore") {
         return;
       }

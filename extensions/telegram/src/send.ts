@@ -1,3 +1,4 @@
+// Telegram plugin module implements send behavior.
 import * as grammy from "grammy";
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import type { ReactionType, ReactionTypeEmoji } from "grammy/types";
@@ -399,6 +400,7 @@ async function resolveAndPersistChatId(params: {
     resolvedChatId: chatId,
     verbose: params.verbose,
     gatewayClientScopes: params.gatewayClientScopes,
+    ...(params.gatewayClientScopes === undefined ? { trustedInternalWriteback: true } : {}),
   });
   return chatId;
 }

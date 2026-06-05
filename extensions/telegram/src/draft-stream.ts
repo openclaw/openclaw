@@ -1,3 +1,4 @@
+// Telegram plugin module implements draft stream behavior.
 import type { Bot } from "grammy";
 import {
   createFinalizableDraftStreamControlsForState,
@@ -177,6 +178,7 @@ export function createTelegramDraftStream(params: {
         textSnapshot: renderedText,
         parseMode: renderedParseMode,
         visibleSinceMs,
+        retain: true,
       });
       return true;
     }

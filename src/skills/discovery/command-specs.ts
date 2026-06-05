@@ -1,3 +1,4 @@
+// Skill command spec helpers expose skill-provided commands to model/tool surfaces.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -20,6 +21,7 @@ const SKILL_COMMAND_MAX_LENGTH = 32;
 const SKILL_COMMAND_FALLBACK = "skill";
 const SKILL_COMMAND_DESCRIPTION_MAX_LENGTH = 100;
 
+// De-duplicate noisy skill command diagnostics across large workspace scans.
 function debugSkillCommandOnce(
   messageKey: string,
   message: string,
@@ -71,6 +73,7 @@ function resolveUniqueSkillCommandName(base: string, used: Set<string>): string 
   return `${base.slice(0, Math.max(1, SKILL_COMMAND_MAX_LENGTH - 2))}_x`;
 }
 
+/** Builds user-invocable slash command specs for visible workspace skills. */
 export function buildWorkspaceSkillCommandSpecs(
   workspaceDir: string,
   opts?: {

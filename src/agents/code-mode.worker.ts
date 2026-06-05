@@ -1,3 +1,6 @@
+/**
+ * QuickJS worker for Code Mode guest execution and suspended VM snapshots.
+ */
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -399,6 +402,8 @@ function createHostRequestHandler(params: {
       args = [];
     }
     const id = `bridge:${params.pendingRequests.length + 1}:${randomUUID()}`;
+    // The guest receives only an opaque id. Host-side tool execution and policy
+    // happen after the worker returns a waiting snapshot.
     params.pendingRequests.push({
       id,
       method,
@@ -622,6 +627,8 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
     const resultHandle = getResultHandle(vm);
     try {
       if (pendingRequests.length > 0) {
+        // Pending host work suspends the VM instead of blocking in-worker; the
+        // host resumes with settled bridge results via runResume.
         return waitingResult({ vm, pendingRequests, output, config: input.config });
       }
       if (resultHandle.isPromise && resultHandle.promiseState === 0) {
