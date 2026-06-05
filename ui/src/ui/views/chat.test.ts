@@ -907,6 +907,51 @@ describe("chat composer workbench", () => {
     expect(onOpenFile).toHaveBeenCalledWith("AGENTS.md");
   });
 
+  it("hides the workspace files rail when there are no files, no error, and not loading", () => {
+    const container = renderChatView({
+      workspaceFiles: {
+        agentId: "main",
+        list: null,
+        loading: false,
+        error: null,
+        activeName: null,
+        onRefresh: vi.fn(),
+        onOpenFile: vi.fn(),
+      },
+    });
+    expect(container.querySelector(".chat-workspace-rail")).toBeNull();
+  });
+
+  it("shows the workspace files rail during loading even when no files yet", () => {
+    const container = renderChatView({
+      workspaceFiles: {
+        agentId: "main",
+        list: null,
+        loading: true,
+        error: null,
+        activeName: null,
+        onRefresh: vi.fn(),
+        onOpenFile: vi.fn(),
+      },
+    });
+    expect(container.querySelector(".chat-workspace-rail")).not.toBeNull();
+  });
+
+  it("shows the workspace files rail when there is an error with no files", () => {
+    const container = renderChatView({
+      workspaceFiles: {
+        agentId: "main",
+        list: null,
+        loading: false,
+        error: "Failed to load",
+        activeName: null,
+        onRefresh: vi.fn(),
+        onOpenFile: vi.fn(),
+      },
+    });
+    expect(container.querySelector(".chat-workspace-rail")).not.toBeNull();
+  });
+
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {
     const container = renderChatView({
       messages: [{ role: "assistant", content: "ready" }],

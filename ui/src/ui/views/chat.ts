@@ -1013,6 +1013,9 @@ function renderWorkspaceFileRail(
     return nothing;
   }
   const files = workspaceFiles.list?.files ?? [];
+  if (files.length === 0 && !workspaceFiles.loading && !workspaceFiles.error) {
+    return nothing;
+  }
   return html`
     <aside class="chat-workspace-rail" aria-label="Workspace files">
       <div class="chat-workspace-rail__header">
