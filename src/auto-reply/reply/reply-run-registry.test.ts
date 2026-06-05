@@ -1,7 +1,10 @@
 // Tests active reply run registry add, lookup, and cleanup behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
+import { onInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import {
   getDiagnosticSessionActivitySnapshot,
+  markDiagnosticToolStartedForTest,
   resetDiagnosticRunActivityForTest,
 } from "../../logging/diagnostic-run-activity.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
@@ -89,6 +92,49 @@ describe("reply run registry", () => {
         sessionKey: "agent:main:telegram:direct:chat-1",
       }).activeWorkKind,
     ).toBeUndefined();
+  });
+
+  it("evicts an orphaned native tool when a reply run completes without its completion", () => {
+    const sessionKey = "agent:main:slack:channel:chat-1";
+    const evicted: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "session.activity.evicted") {
+        evicted.push(event);
+      }
+    });
+    try {
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId: "session-1",
+        resetTriggered: false,
+      });
+      // A native tool starts but never emits completion (e.g. Codex app-server
+      // tool whose owner is torn down before the completion event arrives).
+      markDiagnosticToolStartedForTest({
+        sessionId: "session-1",
+        sessionKey,
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "t1",
+      });
+
+      operation.complete();
+
+      // The orphaned tool marker must not survive to re-block later turns on the
+      // same session key as blocked_tool_call.
+      expect(getDiagnosticSessionActivitySnapshot({ sessionKey }).activeWorkKind).toBeUndefined();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(evicted).toHaveLength(1);
+    expect(evicted[0]).toMatchObject({
+      type: "session.activity.evicted",
+      sessionKey,
+      reason: "orphaned_no_owner",
+      evictedTools: 1,
+      evictedModelCalls: 0,
+    });
   });
 
   it("clears queued operations immediately on user abort", () => {

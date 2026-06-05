@@ -1,8 +1,10 @@
 // Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
+  emitInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticSessionActiveWorkKind,
+  type DiagnosticSessionActivityEvictedReason,
 } from "../infra/diagnostic-events.js";
 
 type SessionActivity = {
@@ -321,11 +323,41 @@ export function markDiagnosticEmbeddedRunEnded(params: {
     return;
   }
   activity.activeEmbeddedRuns.delete(resolveEmbeddedRunWorkKey(params));
-  if (params.clearRunActivity !== false) {
-    activity.activeTools.clear();
-    activity.activeModelCalls.clear();
+  // clearRunActivity defaults to true: the caller owns the canonical run
+  // teardown and clears tool/model markers outright. A caller opts out only
+  // when an inner embedded run may still be draining under the same session
+  // (the reply-run wrapper). Even then, once NO embedded owner remains we must
+  // evict leftover tool/model markers: a native tool/model record that never
+  // emitted completion would otherwise survive and re-block later turns on the
+  // same sessionKey as blocked_tool_call. A still-active inner run keeps them.
+  const clearAllActivity = params.clearRunActivity !== false;
+  if (clearAllActivity || activity.activeEmbeddedRuns.size === 0) {
+    clearActiveRunMarkers(activity, clearAllActivity ? undefined : "orphaned_no_owner");
   }
   touchSessionActivity(activity, "embedded_run:ended");
+}
+
+// Clears all tool/model markers for a session. When an evictReason is given the
+// markers are orphaned (no embedded owner can complete them); emit a structured
+// event so operators can tell recovered stale state from a real active tool.
+function clearActiveRunMarkers(
+  activity: SessionActivity,
+  evictReason: DiagnosticSessionActivityEvictedReason | undefined,
+): void {
+  const evictedTools = activity.activeTools.size;
+  const evictedModelCalls = activity.activeModelCalls.size;
+  activity.activeTools.clear();
+  activity.activeModelCalls.clear();
+  if (evictReason && evictedTools + evictedModelCalls > 0) {
+    emitInternalDiagnosticEvent({
+      type: "session.activity.evicted",
+      sessionId: activity.sessionId,
+      sessionKey: activity.sessionKey,
+      reason: evictReason,
+      evictedTools,
+      evictedModelCalls,
+    });
+  }
 }
 
 function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string }): string {

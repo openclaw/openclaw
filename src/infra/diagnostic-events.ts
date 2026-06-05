@@ -257,6 +257,24 @@ export type DiagnosticSessionRecoveryCompletedEvent = DiagnosticSessionRecoveryB
   stale?: boolean;
 };
 
+/** Reasons orphaned diagnostic run activity is evicted without its own completion. */
+export type DiagnosticSessionActivityEvictedReason = "orphaned_no_owner";
+
+/**
+ * Emitted when stale native tool/model activity is evicted for a session because
+ * no embedded-run owner remains to complete it. Distinguishes recovered orphaned
+ * state (which previously survived to re-block later turns as `blocked_tool_call`)
+ * from a real active tool that is still owned.
+ */
+export type DiagnosticSessionActivityEvictedEvent = DiagnosticBaseEvent & {
+  type: "session.activity.evicted";
+  sessionKey?: string;
+  sessionId?: string;
+  reason: DiagnosticSessionActivityEvictedReason;
+  evictedTools: number;
+  evictedModelCalls: number;
+};
+
 export type DiagnosticSessionTurnCreatedEvent = DiagnosticBaseEvent & {
   type: "session.turn.created";
   runId: string;
@@ -664,6 +682,7 @@ export type DiagnosticEventPayload =
   | DiagnosticSessionStuckEvent
   | DiagnosticSessionRecoveryRequestedEvent
   | DiagnosticSessionRecoveryCompletedEvent
+  | DiagnosticSessionActivityEvictedEvent
   | DiagnosticSessionTurnCreatedEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
