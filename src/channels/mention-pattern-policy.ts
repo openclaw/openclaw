@@ -72,13 +72,19 @@ export function resolveMentionPatternPolicy(
     providerPolicy?.mode === "allow" || providerPolicy?.mode === "deny"
       ? providerPolicy.mode
       : "allow";
+  const hasExplicitAllowMode = providerPolicy?.mode === "allow";
   const allowMatched =
     conversationId != null && normalizeIdList(providerPolicy?.allowIn).has(conversationId);
   const denyMatched =
     conversationId != null && normalizeIdList(providerPolicy?.denyIn).has(conversationId);
-  // Deny always wins. In allow mode everything is enabled except explicit denies; in deny mode
-  // only explicitly allowed conversations are enabled.
-  const enabled = effectiveMode === "allow" ? !denyMatched : allowMatched && !denyMatched;
+  // Deny always wins. Preserve legacy permissive behavior when no provider policy is configured,
+  // but treat an explicit provider allow mode as an allowlist scoped by allowIn.
+  const enabled =
+    effectiveMode === "allow"
+      ? hasExplicitAllowMode
+        ? allowMatched && !denyMatched
+        : !denyMatched
+      : allowMatched && !denyMatched;
 
   return { effectiveMode, allowMatched, denyMatched, enabled };
 }

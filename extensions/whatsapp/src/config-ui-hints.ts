@@ -28,11 +28,11 @@ export const whatsAppChannelConfigUiHints = {
   },
   "mentionPatterns.mode": {
     label: "WhatsApp Mention Pattern Mode",
-    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+    help: '"allow" enables configured regex mention patterns only when allowIn matches; "deny" also requires allowIn. denyIn always wins.',
   },
   "mentionPatterns.allowIn": {
     label: "WhatsApp Mention Pattern Allowlist",
-    help: "WhatsApp conversation IDs where configured regex mention patterns are enabled when mode is deny.",
+    help: "WhatsApp conversation IDs where configured regex mention patterns are enabled for scoped provider policies.",
   },
   "mentionPatterns.denyIn": {
     label: "WhatsApp Mention Pattern Denylist",

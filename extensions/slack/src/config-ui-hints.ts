@@ -24,11 +24,11 @@ export const slackChannelConfigUiHints = {
   },
   "mentionPatterns.mode": {
     label: "Slack Mention Pattern Mode",
-    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+    help: '"allow" enables configured regex mention patterns only when allowIn matches; "deny" also requires allowIn. denyIn always wins.',
   },
   "mentionPatterns.allowIn": {
     label: "Slack Mention Pattern Allowlist",
-    help: "Slack channel IDs where configured regex mention patterns are enabled when mode is deny.",
+    help: "Slack channel IDs where configured regex mention patterns are enabled for scoped provider policies.",
   },
   "mentionPatterns.denyIn": {
     label: "Slack Mention Pattern Denylist",
