@@ -1,0 +1,29 @@
+diff --git a/build/cjs/lib/Database.js b/build/cjs/lib/Database.js
+index 55f95ce0d2d8e6a668f2a86929bfa97974785f35..53b9a39bb4acc3291ff5e5da83638a5f57ce427e 100644
+--- a/build/cjs/lib/Database.js
++++ b/build/cjs/lib/Database.js
+@@ -17,6 +17,8 @@ class Database {
+     this.processTransactions = this.processTransactions.bind(this);
+   }
+   processTransactions() {
++    // Prune finished transactions to prevent unbounded heap growth
++    this.transactions = this.transactions.filter((t) => t._state !== "finished");
+     (0, _scheduling.queueTask)(() => {
+       const running = this.transactions.filter(transaction => transaction._started && transaction._state !== "finished");
+       const waiting = this.transactions.filter(transaction => !transaction._started && transaction._state !== "finished");
+diff --git a/build/esm/lib/Database.js b/build/esm/lib/Database.js
+index fb9c97e0326b7efb4bbff3dee5c2d484dae7745c..4ca5e48eede6471c27f2f88c887c33894c90da3d 100644
+--- a/build/esm/lib/Database.js
++++ b/build/esm/lib/Database.js
+@@ -11,6 +11,11 @@ class Database {
+     this.processTransactions = this.processTransactions.bind(this);
+   }
+   processTransactions() {
++    // Prune finished transactions to prevent unbounded heap growth
++    // (finished transactions are never used again by processTransactions or the IndexedDB spec)
++    this.transactions = this.transactions.filter(
++      (t) => t._state !== "finished",
++    );
+     queueTask(() => {
+       const running = this.transactions.filter(transaction => transaction._started && transaction._state !== "finished");
+       const waiting = this.transactions.filter(transaction => !transaction._started && transaction._state !== "finished");

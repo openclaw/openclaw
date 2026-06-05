@@ -36,6 +36,7 @@ packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
 
 patchedDependencies:
   '@agentclientprotocol/claude-agent-acp@0.39.0': 8ce79a079ca223290aeaa8d61063853d8e021ce5d35690f28ac998dbca9bcb4b
+  fake-indexeddb@6.2.5: e4ff73bd82bffa012023ad773b1c21d125bfe770a6c878dc1bb8c61b2987e5e9
 
 importers:
 
@@ -958,7 +959,7 @@ importers:
         version: 18.3.0
       fake-indexeddb:
         specifier: 6.2.5
-        version: 6.2.5
+        version: 6.2.5(patch_hash=e4ff73bd82bffa012023ad773b1c21d125bfe770a6c878dc1bb8c61b2987e5e9)
       markdown-it:
         specifier: 14.2.0
         version: 14.2.0
@@ -10509,7 +10510,7 @@ snapshots:
 
   extend@3.0.2: {}
 
-  fake-indexeddb@6.2.5: {}
+  fake-indexeddb@6.2.5(patch_hash=e4ff73bd82bffa012023ad773b1c21d125bfe770a6c878dc1bb8c61b2987e5e9): {}
 
   fast-deep-equal@3.1.3: {}
 

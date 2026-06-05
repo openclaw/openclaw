@@ -121,3 +121,4 @@ packageExtensions:
 
 patchedDependencies:
   "@agentclientprotocol/claude-agent-acp@0.39.0": patches/@agentclientprotocol__claude-agent-acp@0.39.0.patch
+  fake-indexeddb@6.2.5: patches/fake-indexeddb@6.2.5.patch
