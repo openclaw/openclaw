@@ -19,6 +19,8 @@ vi.mock("./accounts.js", () => ({
 vi.mock("./api.js", () => ({
   createGoogleChatReaction,
   deleteGoogleChatReaction,
+  isUploadAuthScopeFailure: (err: unknown) =>
+    (err instanceof Error ? err.message : String(err)).includes("Google Chat upload 403:"),
   listGoogleChatReactions,
   sendGoogleChatMessage,
   uploadGoogleChatAttachment,
@@ -174,6 +176,85 @@ describe("googlechat message actions", () => {
       attachments: [{ attachmentUploadToken: "token-1", contentName: "remote.png" }],
     });
     expectJsonResult(result, { ok: true, to: "spaces/AAA" });
+  });
+
+  it("falls back to text link when send action media upload fails with 403 (app-auth scope)", async () => {
+    const account = buildAccount({ config: { mediaMaxMb: 5 } });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    getGoogleChatRuntime.mockReturnValue({
+      channel: {
+        media: {
+          readRemoteMediaBuffer: vi.fn(async () => ({
+            buffer: Buffer.from("img"),
+            fileName: "img.png",
+            contentType: "image/png",
+          })),
+        },
+      },
+    });
+    uploadGoogleChatAttachment.mockRejectedValue(
+      new Error("Google Chat upload 403: PERMISSION_DENIED"),
+    );
+    sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/link" });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    const result = await googlechatMessageActions.handleAction({
+      action: "send",
+      params: {
+        to: "spaces/AAA",
+        message: "here is the file",
+        media: "https://example.com/img.png",
+      },
+      cfg: {},
+      accountId: "default",
+    } as never);
+
+    expect(sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "here is the file\nhttps://example.com/img.png",
+      thread: undefined,
+    });
+    expectJsonResult(result, { ok: true, to: "spaces/AAA" });
+  });
+
+  it("re-throws non-403 upload failures from the send action path", async () => {
+    const account = buildAccount({ config: { mediaMaxMb: 5 } });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    getGoogleChatRuntime.mockReturnValue({
+      channel: {
+        media: {
+          readRemoteMediaBuffer: vi.fn(async () => ({
+            buffer: Buffer.from("img"),
+            fileName: "img.png",
+            contentType: "image/png",
+          })),
+        },
+      },
+    });
+    uploadGoogleChatAttachment.mockRejectedValue(new Error("Google Chat upload 500: server error"));
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "send",
+        params: {
+          to: "spaces/AAA",
+          message: "caption",
+          media: "https://example.com/img.png",
+        },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("Google Chat upload 500: server error");
+
+    expect(sendGoogleChatMessage).not.toHaveBeenCalled();
   });
 
   it("routes upload-file through the same attachment upload path with filename override", async () => {

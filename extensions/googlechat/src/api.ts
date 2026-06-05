@@ -236,6 +236,13 @@ export async function uploadGoogleChatAttachment(params: {
   };
 }
 
+// withGoogleChatResponse throws "Google Chat upload 403: ..." for HTTP 403 on the upload endpoint.
+// Matching the exact prefix avoids false positives from sendGoogleChatMessage 403s
+// (which use the default "Google Chat API" error prefix).
+export function isUploadAuthScopeFailure(err: unknown): boolean {
+  return (err instanceof Error ? err.message : String(err)).includes("Google Chat upload 403:");
+}
+
 export async function downloadGoogleChatMedia(params: {
   account: ResolvedGoogleChatAccount;
   resourceName: string;

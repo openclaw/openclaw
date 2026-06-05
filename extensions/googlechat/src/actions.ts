@@ -16,6 +16,7 @@ import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accou
 import {
   createGoogleChatReaction,
   deleteGoogleChatReaction,
+  isUploadAuthScopeFailure,
   listGoogleChatReactions,
   sendGoogleChatMessage,
   uploadGoogleChatAttachment,
@@ -140,13 +141,30 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
           readStringParam(params, "title") ??
           loaded.fileName ??
           "attachment";
-        const upload = await uploadGoogleChatAttachment({
-          account,
-          space,
-          filename: uploadFileName,
-          buffer: loaded.buffer,
-          contentType: loaded.contentType,
-        });
+        let upload: { attachmentUploadToken?: string };
+        try {
+          upload = await uploadGoogleChatAttachment({
+            account,
+            space,
+            filename: uploadFileName,
+            buffer: loaded.buffer,
+            contentType: loaded.contentType,
+          });
+        } catch (uploadErr) {
+          // app-auth (chat.bot scope) cannot call media.upload; Google returns 403.
+          // Fall back to a text link so the reply is not silently dropped. (#89430)
+          if (/^https?:\/\//i.test(mediaUrl) && isUploadAuthScopeFailure(uploadErr)) {
+            const fallbackText = [content, mediaUrl].filter(Boolean).join("\n") || mediaUrl;
+            await sendGoogleChatMessage({
+              account,
+              space,
+              text: fallbackText,
+              thread: threadId ?? undefined,
+            });
+            return jsonResult({ ok: true, to: space });
+          }
+          throw uploadErr;
+        }
         await sendGoogleChatMessage({
           account,
           space,

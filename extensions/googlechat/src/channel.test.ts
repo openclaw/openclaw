@@ -408,6 +408,49 @@ describe("googlechatPlugin outbound sendMedia", () => {
   });
 });
 
+it("falls back to text link when remote media upload fails with 403 (app-auth scope limit)", async () => {
+  setupRuntimeMediaMocks({ loadFileName: "img.png", loadBytes: "image-data" });
+  uploadGoogleChatAttachmentMock.mockRejectedValue(
+    new Error("Google Chat upload 403: PERMISSION_DENIED"),
+  );
+  sendGoogleChatMessageMock.mockResolvedValue({
+    messageName: "spaces/AAA/messages/link-fallback",
+  });
+
+  const cfg = createGoogleChatCfg();
+  const result = await googlechatOutboundAdapter.attachedResults.sendMedia({
+    cfg,
+    to: "spaces/AAA",
+    text: "here is the image",
+    mediaUrl: "https://example.com/image.png",
+    accountId: "default",
+  });
+
+  const sendRequest = requireMockArg(sendGoogleChatMessageMock) as {
+    text?: string;
+    attachments?: unknown;
+  };
+  expect(sendRequest.text).toBe("here is the image\nhttps://example.com/image.png");
+  expect(sendRequest.attachments).toBeUndefined();
+  expect(result.messageId).toBe("spaces/AAA/messages/link-fallback");
+  expect(result.receipt.primaryPlatformMessageId).toBe("spaces/AAA/messages/link-fallback");
+});
+
+it("re-throws non-403 upload failures from the adapter sendMedia path", async () => {
+  setupRuntimeMediaMocks({ loadFileName: "img.png", loadBytes: "image-data" });
+  uploadGoogleChatAttachmentMock.mockRejectedValue(new Error("Google Chat upload 500: internal"));
+
+  const cfg = createGoogleChatCfg();
+  await expect(
+    googlechatOutboundAdapter.attachedResults.sendMedia({
+      cfg,
+      to: "spaces/AAA",
+      mediaUrl: "https://example.com/image.png",
+      accountId: "default",
+    }),
+  ).rejects.toThrow("Google Chat upload 500: internal");
+});
+
 describe("googlechatPlugin threading", () => {
   it("honors per-account replyToMode overrides", () => {
     const cfg = {
