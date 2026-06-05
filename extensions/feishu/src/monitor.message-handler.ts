@@ -44,7 +44,6 @@ type FeishuMessageReceiveHandlerContext = {
     namespace: string,
     log?: (...args: unknown[]) => void,
   ) => Promise<boolean>;
-  getAppId?: (accountId: string) => string | undefined;
   getBotOpenId?: (accountId: string) => string | undefined;
   getBotName?: (accountId: string) => string | undefined;
   resolveSequentialKey?: (params: {
@@ -166,7 +165,6 @@ export function createFeishuMessageReceiveHandler({
   resolveDebounceText: resolveText,
   hasProcessedMessage,
   recordProcessedMessage,
-  getAppId = () => undefined,
   getBotOpenId = () => undefined,
   getBotName = () => undefined,
   resolveSequentialKey = ({ accountId: accountIdLocal, event }) =>
@@ -323,17 +321,13 @@ export function createFeishuMessageReceiveHandler({
       return;
     }
     const messageId = event.message?.message_id?.trim();
-    const appId = getAppId(accountId)?.trim();
     const botOpenId = getBotOpenId(accountId)?.trim();
-    const senderAppId = event.sender.sender_id.app_id?.trim();
     const senderOpenId = event.sender.sender_id.open_id?.trim();
-    const senderType = event.sender.sender_type?.trim().toLowerCase();
-    const isAppAuthored = Boolean(appId && senderType === "app" && senderAppId === appId);
-    const isSelfAuthored = isAppAuthored || Boolean(botOpenId && senderOpenId === botOpenId);
+    const isSelfAuthored = Boolean(botOpenId && senderOpenId === botOpenId);
     if (isSelfAuthored) {
-      // Feishu can surface app/bot-authored sends; drop before claim/debounce
+      // Feishu can echo bot sends through receive; drop before claim/debounce
       // so a bot reply cannot consume queue capacity or start another agent turn.
-      log(`feishu[${accountId}]: dropping self/app-authored message ${messageId ?? "unknown"}`);
+      log(`feishu[${accountId}]: dropping self-authored message ${messageId ?? "unknown"}`);
       return;
     }
     const messageDedupeKey = resolveFeishuMessageDedupeKey(event);

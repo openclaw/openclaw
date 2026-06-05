@@ -2,7 +2,6 @@
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {
-      app_id?: string;
       open_id?: string;
       user_id?: string;
       union_id?: string;
