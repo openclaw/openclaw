@@ -470,8 +470,8 @@ export async function runServiceRestart(params: {
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult | null>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
-  const { stdout, emit, fail } = createDaemonActionContext({ action: "restart", json });
-  const warnings: string[] = [];
+  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "restart", json });
+  const warn = json ? (message: string) => warnings.push(message) : undefined;
   const restartIntent = params.opts?.restartIntent;
   let handledRecovery: ServiceRecoveryResult | null = null;
   let recoveredLoadedState: boolean | null = null;
@@ -590,7 +590,7 @@ export async function runServiceRestart(params: {
         });
       }
       try {
-        restartResult = await params.service.restart({ env: process.env, stdout });
+        restartResult = await params.service.restart({ env: process.env, stdout, warn });
       } catch (err) {
         if (wroteRestartIntent) {
           clearGatewayRestartIntentSync();
