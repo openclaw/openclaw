@@ -244,7 +244,12 @@ export async function processChatMessage(
       try {
         const resolution = await topicResolver.getTopicIdsByUser(userId);
         if (resolution.topicId && resolution.topicId > 0) {
-          topicContext = ` [topicId:${resolution.topicId} useSlaveTopic:${resolution.useSlaveTopic}]`;
+          // JSON.stringify keeps the quoting deterministic even when the
+          // title itself contains quotes or brackets (prompt-cache friendly).
+          const namePart = resolution.topicName
+            ? ` topicName:${JSON.stringify(resolution.topicName)}`
+            : "";
+          topicContext = ` [topicId:${resolution.topicId}${namePart} useSlaveTopic:${resolution.useSlaveTopic}]`;
           logger.info(
             `[CHAT_PIPELINE] Injecting topic context for userId=${userId}:${topicContext}`,
           );

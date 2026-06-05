@@ -253,8 +253,78 @@ describe("processChatMessage", () => {
     const topicResolver = {
       getTopicIdsByUser: async (uid: string) => {
         expect(uid).toBe(USER_ID);
-        return { topicId: 585, useSlaveTopic: true, masterId: 270 };
+        return { topicId: 585, useSlaveTopic: true, masterId: 270, topicName: "广本监测专项" };
       },
+    } as unknown as TopicResolver;
+
+    await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      topicResolver,
+    );
+
+    expect(capturedMessage).toBe(
+      `[userId:${USER_ID}] [topicId:585 topicName:"广本监测专项" useSlaveTopic:true] hi there`,
+    );
+  });
+
+  it("escapes quotes and brackets in topicName via JSON.stringify", async () => {
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const topicResolver = {
+      getTopicIdsByUser: async () => ({
+        topicId: 585,
+        useSlaveTopic: true,
+        masterId: 270,
+        topicName: '专项[A] "测试"',
+      }),
+    } as unknown as TopicResolver;
+
+    await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      undefined,
+      topicResolver,
+    );
+
+    expect(capturedMessage).toBe(
+      `[userId:${USER_ID}] [topicId:585 topicName:"专项[A] \\"测试\\"" useSlaveTopic:true] hi there`,
+    );
+  });
+
+  it("omits topicName from the prefix when the title lookup returned null", async () => {
+    let capturedMessage = "";
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      onRunArgs: (args) => {
+        capturedMessage = args.message;
+      },
+      sessionMessages: [{ role: "assistant", content: "ok" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const topicResolver = {
+      getTopicIdsByUser: async () => ({
+        topicId: 585,
+        useSlaveTopic: true,
+        masterId: 270,
+        topicName: null,
+      }),
     } as unknown as TopicResolver;
 
     await processChatMessage(
@@ -313,7 +383,12 @@ describe("processChatMessage", () => {
     });
     const { historyManager } = createHistoryManagerMock();
     const topicResolver = {
-      getTopicIdsByUser: async () => ({ topicId: null, useSlaveTopic: false, masterId: 0 }),
+      getTopicIdsByUser: async () => ({
+        topicId: null,
+        useSlaveTopic: false,
+        masterId: 0,
+        topicName: null,
+      }),
     } as unknown as TopicResolver;
 
     await processChatMessage(
