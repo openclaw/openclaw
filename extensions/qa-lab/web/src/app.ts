@@ -17,6 +17,7 @@ import {
   type UiState,
   renderQaLabUi,
 } from "./ui-render.js";
+
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path);
   if (!response.ok) {
