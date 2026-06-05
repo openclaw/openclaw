@@ -1,7 +1,6 @@
 // Discord tests cover runtime plugin behavior.
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
@@ -26,6 +25,7 @@ type DiscordChannelInfoTest = {
   guild_id?: string;
   name?: string;
   parent_id?: string;
+  recipients?: Array<{ id?: string }>;
 };
 
 const discordSendMocks = {
@@ -614,6 +614,373 @@ describe("handleDiscordMessagingAction", () => {
       handleMessagingAction("readMessages", { channelId: "333" }, enableAllActions, cfg),
     ).rejects.toThrow("Discord read target channel is not allowed.");
     expect(readMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "123456789012345678",
+    "user:123456789012345678",
+    "discord:123456789012345678",
+    "<@123456789012345678>",
+    "<@!123456789012345678>",
+  ])("allows Discord DM reads when allowFrom includes the DM recipient (%s)", async (allowFrom) => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+      recipients: [{ id: "123456789012345678" }],
+    });
+    readMessagesDiscord.mockResolvedValueOnce([{ id: "M1" }]);
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          dmPolicy: "allowlist",
+          allowFrom: [allowFrom],
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "DM1" }, enableAllActions, cfg),
+    ).resolves.toMatchObject({
+      details: { messages: [{ id: "M1" }] },
+    });
+    expect(readMessagesDiscord).toHaveBeenCalled();
+  });
+
+  it("rejects Discord DM reads when allowFrom contains the DM channel id instead of the recipient", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+      recipients: [{ id: "123456789012345678" }],
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          dmPolicy: "allowlist",
+          allowFrom: ["DM1"],
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "DM1" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it("rejects group DM reads even when a participant is allowlisted", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "GDM1",
+      type: ChannelType.GroupDM,
+      recipients: [{ id: "123456789012345678" }, { id: "999999999999999999" }],
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          dmPolicy: "allowlist",
+          allowFrom: ["123456789012345678"],
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "GDM1" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it("rejects DM reads when recipient metadata is missing", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          dmPolicy: "allowlist",
+          allowFrom: ["123456789012345678"],
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "DM1" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it("rejects DM reads when there are multiple recipients", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+      recipients: [{ id: "123456789012345678" }, { id: "999999999999999999" }],
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          dmPolicy: "allowlist",
+          allowFrom: ["123456789012345678"],
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "DM1" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-DM channels without guild id even when recipients are present", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "C1",
+      type: ChannelType.GuildText,
+      recipients: [{ id: "123456789012345678" }],
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          dmPolicy: "allowlist",
+          allowFrom: ["123456789012345678"],
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it("reads one-to-one DMs with account-scoped allowFrom", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+      recipients: [{ id: "123456789012345678" }],
+    });
+    readMessagesDiscord.mockResolvedValueOnce([{ id: "M1" }]);
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          allowFrom: ["987654321098765432"],
+          guilds: {
+            "111": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+          accounts: {
+            work: {
+              token: "token-work",
+              allowFrom: ["123456789012345678"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction(
+        "readMessages",
+        { channelId: "DM1", accountId: "work" },
+        enableAllActions,
+        cfg,
+      ),
+    ).resolves.toMatchObject({
+      details: { messages: [{ id: "M1" }] },
+    });
+    expect(readMessagesDiscord).toHaveBeenCalled();
+  });
+
+  it("reads one-to-one DMs when dmPolicy is open with wildcard allowlist", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+      recipients: [{ id: "123456789012345678" }],
+    });
+    readMessagesDiscord.mockResolvedValueOnce([{ id: "M1" }]);
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "open",
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "DM1" }, enableAllActions, cfg),
+    ).resolves.toMatchObject({
+      details: { messages: [{ id: "M1" }] },
+    });
+    expect(readMessagesDiscord).toHaveBeenCalled();
+  });
+
+  it("reads one-to-one DMs authorized by an access group", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+      recipients: [{ id: "123456789012345678" }],
+    });
+    readMessagesDiscord.mockResolvedValueOnce([{ id: "M1" }]);
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          dmPolicy: "allowlist",
+          allowFrom: ["accessGroup:owners"],
+          guilds: {
+            "111": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+      accessGroups: {
+        owners: {
+          type: "message.senders",
+          members: {
+            discord: ["discord:123456789012345678"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "DM1" }, enableAllActions, cfg),
+    ).resolves.toMatchObject({
+      details: { messages: [{ id: "M1" }] },
+    });
+    expect(readMessagesDiscord).toHaveBeenCalled();
+  });
+
+  it("rejects DM reads when dmPolicy is disabled", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+      recipients: [{ id: "123456789012345678" }],
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "open",
+          dmPolicy: "disabled",
+          allowFrom: ["123456789012345678"],
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "DM1" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it("rejects DM reads when DMs are disabled by account config", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+      recipients: [{ id: "123456789012345678" }],
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "open",
+          dmPolicy: "allowlist",
+          allowFrom: ["123456789012345678"],
+          dm: { enabled: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "DM1" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it("rejects known DM channel ids even when configured under guild channels", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+      recipients: [{ id: "987654321098765432" }],
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          allowFrom: ["123456789012345678"],
+          guilds: {
+            "111": {
+              channels: {
+                DM1: { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "DM1" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it("fetches one-to-one DM messages when the recipient is allowlisted", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+      recipients: [{ id: "123456789012345678" }],
+    });
+    fetchMessageDiscord.mockResolvedValueOnce({ id: "M1" });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          dmPolicy: "allowlist",
+          allowFrom: ["123456789012345678"],
+          guilds: {
+            "111": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleMessagingAction(
+      "fetchMessage",
+      { guildId: "111", channelId: "DM1", messageId: "M1" },
+      enableAllActions,
+      cfg,
+    );
+
+    expect(fetchMessageDiscord).toHaveBeenCalledWith("DM1", "M1", { cfg });
   });
 
   it("fails closed for Discord message reads when provider config is missing", async () => {
