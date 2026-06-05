@@ -7,8 +7,9 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import {
-  loadModelCatalogForBrowseWithState,
+  loadModelCatalogForBrowse,
   type ModelCatalogBrowseView,
 } from "../../agents/model-catalog-browse.js";
 import {
@@ -16,12 +17,11 @@ import {
   type ProviderAuthChecker,
   resolveVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
-import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
-import { isSecretRef } from "../../config/types.secrets.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isSecretRef } from "../../config/types.secrets.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListView = ModelCatalogBrowseView;
@@ -125,7 +125,7 @@ export async function buildModelsListResult(params: {
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const view = resolveModelsListView(params.params);
-  const { catalog } = await loadModelCatalogForBrowseWithState({
+  const catalog = await loadModelCatalogForBrowse({
     cfg,
     view,
     loadCatalog: params.context.loadGatewayModelCatalog,

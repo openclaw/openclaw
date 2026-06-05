@@ -103,10 +103,7 @@ private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Setting
 private val shellContentInsets: WindowInsets
   @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
 
-internal fun shellBottomNavVisible(
-  keyboardVisible: Boolean,
-  commandOpen: Boolean,
-): Boolean = !keyboardVisible && !commandOpen
+internal fun shellBottomNavVisible(keyboardVisible: Boolean, commandOpen: Boolean): Boolean = !keyboardVisible && !commandOpen
 
 /** Main post-onboarding shell that owns top-level Android navigation state. */
 @Composable

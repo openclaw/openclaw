@@ -283,7 +283,7 @@ private fun providerSetupSubtitle(
   row: ProviderRow?,
 ): String =
   when {
-    row?.status == "Expiring" -> "Credential expires soon"
+    row?.warning == true -> "Credential expires soon"
     row?.ready == true -> if (row.modelCount > 0) "${row.modelCount} models available" else "Ready"
     row?.available == true -> if (row.modelCount > 0) "${row.modelCount} models available" else "Available"
     row?.setupRequired == true -> "Finish setup to use ${row.name}"
@@ -295,7 +295,7 @@ private fun providerSetupSubtitle(
 private fun providerSetupStatusLabel(row: ProviderRow?): String =
   when {
     row?.ready == true -> "Ready"
-    row?.status == "Expiring" -> "Expiring"
+    row?.warning == true -> "Expiring"
     row?.available == true -> "Available"
     row?.setupRequired == false -> "Catalog"
     else -> "Setup"
@@ -313,7 +313,6 @@ internal fun modelProviderReady(status: String): Boolean {
 
 private fun modelProviderExpiring(status: String): Boolean = status.trim().lowercase() == "expiring"
 
-/** Counts providers with either ready auth status or currently available configured models. */
 internal fun readyModelProviderCount(
   providers: List<GatewayModelProviderSummary>,
   models: List<GatewayModelSummary>,
@@ -327,7 +326,6 @@ internal fun readyModelProviderCount(
 // readiness path while still honoring explicit false from upgraded gateways.
 private fun modelAvailabilityUsable(model: GatewayModelSummary): Boolean = model.available != false
 
-/** Counts auth-backed providers that can serve now but need renewal soon. */
 internal fun expiringModelProviderCount(providers: List<GatewayModelProviderSummary>): Int =
   providers
     .filter { modelProviderExpiring(it.status) }
