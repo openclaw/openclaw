@@ -1,3 +1,4 @@
+// Control UI config module wires vitest behavior.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";

@@ -1,3 +1,5 @@
+// Message tool tests cover channel action discovery, secret scoping, and
+// outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
@@ -144,6 +146,8 @@ function latestSecretResolveCall(): {
   if (!call) {
     throw new Error("expected secret resolution call");
   }
+  // Secret resolution is scoped to the active channel/account; tests inspect
+  // the exact target set to avoid broad credential reads.
   return call[0] as {
     allowedPaths?: Set<string>;
     config?: unknown;
