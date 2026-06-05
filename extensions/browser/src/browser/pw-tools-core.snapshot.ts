@@ -1,11 +1,15 @@
+/**
+ * Snapshot, navigation, viewport, close, and PDF helpers for Playwright-backed
+ * browser tools.
+ */
 import { parseFiniteNumber, resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Page } from "playwright-core";
-import { ACT_MAX_VIEWPORT_DIMENSION } from "./act-policy.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { ACT_MAX_VIEWPORT_DIMENSION } from "./act-policy.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
   assertBrowserNavigationAllowed,
@@ -30,11 +34,7 @@ import {
   storeRoleRefsForTarget,
 } from "./pw-session.js";
 import { markBackendDomRefsOnPage, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
-
-type SnapshotUrlEntry = {
-  text: string;
-  url: string;
-};
+import { appendSnapshotUrls, type SnapshotUrlEntry } from "./snapshot-urls.js";
 
 function resolveBoundedTimeoutMs(
   timeoutMs: number | undefined,
@@ -89,14 +89,6 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
   return Array.isArray(urls) ? urls : [];
 }
 
-function appendSnapshotUrls(snapshot: string, urls: SnapshotUrlEntry[]): string {
-  if (urls.length === 0) {
-    return snapshot;
-  }
-  const lines = urls.map((entry, index) => `${index + 1}. ${entry.text} -> ${entry.url}`);
-  return `${snapshot}\n\nLinks:\n${lines.join("\n")}`;
-}
-
 function buildStoredAriaRefs(
   nodes: AriaSnapshotNode[],
   markedRefs: Set<string>,
@@ -134,6 +126,7 @@ function buildStoredAriaRefs(
   return refs;
 }
 
+/** Stores aria snapshot refs so later tool calls can resolve stable element refs. */
 export async function storeAriaSnapshotRefsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -164,14 +157,11 @@ export async function storeAriaSnapshotRefsViaPlaywright(opts: {
   });
 }
 
-export async function snapshotAriaViaPlaywright(opts: {
+async function prepareSnapshotPageViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  limit?: number;
-  timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
-}): Promise<{ nodes: AriaSnapshotNode[] }> {
-  const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
+}): Promise<Page> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
@@ -186,6 +176,23 @@ export async function snapshotAriaViaPlaywright(opts: {
       targetId: opts.targetId,
     });
   }
+  return page;
+}
+
+/** Captures a raw accessibility tree snapshot and stores matching role refs. */
+export async function snapshotAriaViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  limit?: number;
+  timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<{ nodes: AriaSnapshotNode[] }> {
+  const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
+  const page = await prepareSnapshotPageViaPlaywright({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    ssrfPolicy: opts.ssrfPolicy,
+  });
   const ariaTimeoutMs =
     typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
       ? Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs)))
@@ -230,6 +237,7 @@ export async function snapshotAriaViaPlaywright(opts: {
   return { nodes: formatted };
 }
 
+/** Captures Playwright's AI aria snapshot with optional URL appendix and truncation. */
 export async function snapshotAiViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -238,20 +246,11 @@ export async function snapshotAiViaPlaywright(opts: {
   urls?: boolean;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<{ snapshot: string; truncated?: boolean; refs: RoleRefMap }> {
-  const page = await getPageForTargetId({
+  const page = await prepareSnapshotPageViaPlaywright({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
+    ssrfPolicy: opts.ssrfPolicy,
   });
-  ensurePageState(page);
-  if (opts.ssrfPolicy) {
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page,
-      response: null,
-      ssrfPolicy: opts.ssrfPolicy,
-      targetId: opts.targetId,
-    });
-  }
 
   let snapshot = await page.ariaSnapshot({
     mode: "ai",
@@ -282,6 +281,38 @@ export async function snapshotAiViaPlaywright(opts: {
   return truncated ? { snapshot, truncated, refs: built.refs } : { snapshot, refs: built.refs };
 }
 
+async function finalizeRoleSnapshotViaPlaywright(params: {
+  page: Page;
+  cdpUrl: string;
+  targetId?: string;
+  frameSelector?: string;
+  mode: "aria" | "role";
+  built: { snapshot: string; refs: RoleRefMap };
+  urls?: boolean;
+}): Promise<{
+  snapshot: string;
+  refs: RoleRefMap;
+  stats: { lines: number; chars: number; refs: number; interactive: number };
+}> {
+  const snapshot = params.urls
+    ? appendSnapshotUrls(params.built.snapshot, await collectSnapshotUrls(params.page))
+    : params.built.snapshot;
+  storeRoleRefsForTarget({
+    page: params.page,
+    cdpUrl: params.cdpUrl,
+    targetId: params.targetId,
+    refs: params.built.refs,
+    ...(params.frameSelector ? { frameSelector: params.frameSelector } : {}),
+    mode: params.mode,
+  });
+  return {
+    snapshot,
+    refs: params.built.refs,
+    stats: getRoleSnapshotStats(snapshot, params.built.refs),
+  };
+}
+
+/** Captures a role-ref snapshot used by model-facing browser interaction tools. */
 export async function snapshotRoleViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -297,20 +328,11 @@ export async function snapshotRoleViaPlaywright(opts: {
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
 }> {
-  const page = await getPageForTargetId({
+  const page = await prepareSnapshotPageViaPlaywright({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
+    ssrfPolicy: opts.ssrfPolicy,
   });
-  ensurePageState(page);
-  if (opts.ssrfPolicy) {
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page,
-      response: null,
-      ssrfPolicy: opts.ssrfPolicy,
-      targetId: opts.targetId,
-    });
-  }
 
   const ariaSnapshotTimeout = resolveSnapshotTimeoutMs(opts.timeoutMs);
 
@@ -323,21 +345,14 @@ export async function snapshotRoleViaPlaywright(opts: {
       timeout: ariaSnapshotTimeout,
     });
     const built = buildRoleSnapshotFromAiSnapshot(snapshot, opts.options);
-    const snapshotWithUrls = opts.urls
-      ? appendSnapshotUrls(built.snapshot, await collectSnapshotUrls(page))
-      : built.snapshot;
-    storeRoleRefsForTarget({
+    return await finalizeRoleSnapshotViaPlaywright({
       page,
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
-      refs: built.refs,
+      built,
       mode: "aria",
+      urls: opts.urls,
     });
-    return {
-      snapshot: snapshotWithUrls,
-      refs: built.refs,
-      stats: getRoleSnapshotStats(snapshotWithUrls, built.refs),
-    };
   }
 
   const frameSelector = normalizeOptionalString(opts.frameSelector) ?? "";
@@ -352,24 +367,18 @@ export async function snapshotRoleViaPlaywright(opts: {
 
   const ariaSnapshot = await locator.ariaSnapshot({ timeout: ariaSnapshotTimeout });
   const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
-  const snapshotWithUrls = opts.urls
-    ? appendSnapshotUrls(built.snapshot, await collectSnapshotUrls(page))
-    : built.snapshot;
-  storeRoleRefsForTarget({
+  return await finalizeRoleSnapshotViaPlaywright({
     page,
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
-    refs: built.refs,
     frameSelector: frameSelector || undefined,
+    built,
     mode: "role",
+    urls: opts.urls,
   });
-  return {
-    snapshot: snapshotWithUrls,
-    refs: built.refs,
-    stats: getRoleSnapshotStats(snapshotWithUrls, built.refs),
-  };
 }
 
+/** Navigates the target page while enforcing browser SSRF policy before and after load. */
 export async function navigateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -455,6 +464,7 @@ export async function navigateViaPlaywright(opts: {
   return { url: finalUrl };
 }
 
+/** Resizes the target page viewport within the browser action policy bounds. */
 export async function resizeViewportViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -469,6 +479,7 @@ export async function resizeViewportViaPlaywright(opts: {
   });
 }
 
+/** Closes the target Playwright page. */
 export async function closePageViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -478,6 +489,7 @@ export async function closePageViaPlaywright(opts: {
   await page.close();
 }
 
+/** Renders the target page to a PDF buffer. */
 export async function pdfViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

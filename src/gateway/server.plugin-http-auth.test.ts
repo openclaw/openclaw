@@ -1,3 +1,5 @@
+// Plugin HTTP auth tests cover protected route canonicalization, operator scope
+// checks, hook/plugin route precedence, and unauthorized variant handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -156,6 +158,16 @@ function createRuntimeScopeRecorderHandler(params: {
       typeof createGatewayPluginRequestHandler
     >[0]["log"],
   });
+}
+
+async function expectPluginRequestOk(
+  server: Parameters<typeof dispatchRequest>[0],
+  request: Parameters<typeof createRequest>[0],
+): Promise<void> {
+  const response = createResponse();
+  await dispatchRequest(server, createRequest(request), response.res);
+  expect(response.res.statusCode).toBe(200);
+  expect(response.getBody()).toBe("ok");
 }
 
 describe("gateway plugin HTTP auth boundary", () => {
@@ -319,23 +331,15 @@ describe("gateway plugin HTTP auth boundary", () => {
           },
         });
 
-        const response = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({
-            path: "/secure-hook",
-            remoteAddress: "203.0.113.10",
-            headers: {
-              "x-forwarded-user": "operator",
-              "x-forwarded-for": "198.51.100.20",
-              "x-openclaw-scopes": "operator.read",
-            },
-          }),
-          response.res,
-        );
-
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("ok");
+        await expectPluginRequestOk(server, {
+          path: "/secure-hook",
+          remoteAddress: "203.0.113.10",
+          headers: {
+            "x-forwarded-user": "operator",
+            "x-forwarded-for": "198.51.100.20",
+            "x-openclaw-scopes": "operator.read",
+          },
+        });
       },
     });
 
@@ -362,21 +366,13 @@ describe("gateway plugin HTTP auth boundary", () => {
         shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/secure-hook",
       },
       run: async (server) => {
-        const response = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({
-            path: "/secure-hook",
-            authorization: "Bearer test-token",
-            headers: {
-              "x-openclaw-scopes": "operator.read",
-            },
-          }),
-          response.res,
-        );
-
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("ok");
+        await expectPluginRequestOk(server, {
+          path: "/secure-hook",
+          authorization: "Bearer test-token",
+          headers: {
+            "x-openclaw-scopes": "operator.read",
+          },
+        });
       },
     });
 
@@ -405,18 +401,10 @@ describe("gateway plugin HTTP auth boundary", () => {
           pathContext.pathname === "/secure-admin-hook",
       },
       run: async (server) => {
-        const response = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({
-            path: "/secure-admin-hook",
-            authorization: "Bearer test-token",
-          }),
-          response.res,
-        );
-
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("ok");
+        await expectPluginRequestOk(server, {
+          path: "/secure-admin-hook",
+          authorization: "Bearer test-token",
+        });
       },
     });
 

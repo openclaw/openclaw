@@ -1,10 +1,11 @@
-import type { Command } from "commander";
-import { randomIdempotencyKey } from "../../gateway/call.js";
-import { defaultRuntime } from "../../runtime.js";
+// Generic node.invoke command with shell-exec commands intentionally blocked.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { Command } from "commander";
+import { randomIdempotencyKey } from "../../gateway/call.js";
+import { defaultRuntime } from "../../runtime.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
   callGatewayCli,
@@ -16,6 +17,7 @@ import type { NodesRpcOpts } from "./types.js";
 
 const BLOCKED_NODE_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
 
+/** Register direct node command invocation. */
 export function registerNodesInvokeCommands(nodes: Command) {
   nodesCallOpts(
     nodes

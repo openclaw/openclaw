@@ -1,3 +1,4 @@
+// Covers trust-plan unwrapping for exec command wrappers.
 import { describe, expect, test } from "vitest";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 
@@ -30,16 +31,17 @@ describe("resolveExecWrapperTrustPlan", () => {
       },
     },
     {
-      name: "unwraps script wrappers before evaluating nested shell payloads",
+      name: "blocks script wrappers before evaluating nested shell payloads",
       enabled: process.platform === "darwin" || process.platform === "freebsd",
       argv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
       expected: {
-        argv: ["sh", "-c", "echo hi"],
-        policyArgv: ["sh", "-c", "echo hi"],
-        wrapperChain: ["script"],
-        policyBlocked: false,
-        shellWrapperExecutable: true,
-        shellInlineCommand: "echo hi",
+        argv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
+        policyArgv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
+        wrapperChain: [],
+        policyBlocked: true,
+        blockedWrapper: "script",
+        shellWrapperExecutable: false,
+        shellInlineCommand: null,
       },
     },
     {

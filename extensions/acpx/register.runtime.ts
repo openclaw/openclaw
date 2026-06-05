@@ -1,3 +1,7 @@
+/**
+ * Lazy ACPX runtime service registration. The plugin exposes an ACP backend
+ * immediately, then imports the heavier service only when a session needs it.
+ */
 import {
   getAcpRuntimeBackend,
   registerAcpRuntimeBackend,
@@ -37,8 +41,8 @@ async function startRealService(state: DeferredServiceState): Promise<AcpRuntime
     throw new Error("ACPX runtime service is not started");
   }
   state.startPromise ??= (async () => {
-    const { createAcpxRuntimeService } = await loadServiceModule();
-    const service = createAcpxRuntimeService(state.params);
+    const { createAcpxRuntimeService: createAcpxRuntimeServiceLocal } = await loadServiceModule();
+    const service = createAcpxRuntimeServiceLocal(state.params);
     state.realService = service;
     await service.start(state.ctx as OpenClawPluginServiceContext);
     const backend = getAcpRuntimeBackend(ACPX_BACKEND_ID);
@@ -62,6 +66,7 @@ function createDeferredRuntime(state: DeferredServiceState): AcpRuntime {
   return createLazyAcpRuntimeProxy(resolveRuntime);
 }
 
+/** Creates the plugin service that registers ACPX as an ACP runtime backend. */
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {

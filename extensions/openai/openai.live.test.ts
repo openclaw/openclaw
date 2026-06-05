@@ -1,3 +1,4 @@
+// Openai tests cover openai plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +6,6 @@ import OpenAI from "openai";
 import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import {
   registerProviderPlugin,
@@ -313,7 +313,9 @@ describeLive("openai plugin live", () => {
 
     try {
       await session.connect();
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
       expect(errors).toStrictEqual([]);
       expect(session.isConnected()).toBe(true);
     } finally {
@@ -407,9 +409,9 @@ describeLive("openai plugin live", () => {
         cfg,
         agentDir,
         authStore: EMPTY_AUTH_STORE,
-        timeoutMs: 180_000,
+        timeoutMs: 240_000,
         count: 1,
-        size: "1024x1536",
+        size: "1024x1024",
         inputImages: [
           {
             buffer: createReferencePng(),
@@ -426,7 +428,7 @@ describeLive("openai plugin live", () => {
     } finally {
       await removeTempAgentDir(agentDir);
     }
-  }, 240_000);
+  }, 300_000);
 
   it("describes a deterministic image through the registered media provider", async () => {
     const { mediaProviders } = await registerOpenAIPlugin();

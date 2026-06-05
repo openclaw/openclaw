@@ -1,3 +1,4 @@
+// Line tests cover rich menu plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,11 +15,14 @@ import {
 } from "./rich-menu.js";
 
 const { setRichMenuImageMock, MessagingApiBlobClientMock } = vi.hoisted(() => {
-  const setRichMenuImageMock = vi.fn();
-  const MessagingApiBlobClientMock = vi.fn(function () {
-    return { setRichMenuImage: setRichMenuImageMock };
+  const setRichMenuImageMockLocal = vi.fn();
+  const MessagingApiBlobClientMockLocal = vi.fn(function () {
+    return { setRichMenuImage: setRichMenuImageMockLocal };
   });
-  return { setRichMenuImageMock, MessagingApiBlobClientMock };
+  return {
+    setRichMenuImageMock: setRichMenuImageMockLocal,
+    MessagingApiBlobClientMock: MessagingApiBlobClientMockLocal,
+  };
 });
 
 vi.mock("@line/bot-sdk", () => ({

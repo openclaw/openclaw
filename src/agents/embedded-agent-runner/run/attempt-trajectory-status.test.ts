@@ -1,3 +1,4 @@
+// Coverage for terminal attempt trajectory status classification.
 import { describe, expect, it } from "vitest";
 import {
   NON_DELIVERABLE_TERMINAL_TURN_REASON,
@@ -9,8 +10,11 @@ import {
 function baseParams(
   overrides: Partial<ResolveAttemptTrajectoryTerminalParams> = {},
 ): ResolveAttemptTrajectoryTerminalParams {
+  // Default to a completed but non-deliverable attempt; tests opt in to each
+  // kind of terminal progress.
   return {
     aborted: false,
+    externalAbort: false,
     timedOut: false,
     assistantTexts: [],
     toolMetas: [],
@@ -153,6 +157,8 @@ describe("attempt trajectory status", () => {
   });
 
   it("marks terminal tool-use attempts as non-deliverable without explicit delivery", () => {
+    // Visible planning text before tool_use is not final delivery; the attempt
+    // only succeeds if a committed delivery or async handoff occurred.
     expect(
       resolveAttemptTrajectoryTerminal(
         baseParams({
@@ -177,6 +183,21 @@ describe("attempt trajectory status", () => {
     ).toEqual({ status: "success" });
   });
 
+  it("marks internally aborted tool-use attempts without delivery as non-deliverable", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          aborted: true,
+          toolMetas: [{ toolName: "web_search" }],
+          lastAssistantStopReason: "toolUse",
+        }),
+      ),
+    ).toEqual({
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+  });
+
   it("keeps async-started media tool-use attempts as terminal progress", () => {
     expect(
       resolveAttemptTrajectoryTerminal(
@@ -193,6 +214,11 @@ describe("attempt trajectory status", () => {
       resolveAttemptTrajectoryTerminal(baseParams({ promptError: new Error("boom") })),
     ).toEqual({ status: "error" });
     expect(resolveAttemptTrajectoryTerminal(baseParams({ timedOut: true }))).toEqual({
+      status: "interrupted",
+    });
+    expect(
+      resolveAttemptTrajectoryTerminal(baseParams({ aborted: true, externalAbort: true })),
+    ).toEqual({
       status: "interrupted",
     });
   });

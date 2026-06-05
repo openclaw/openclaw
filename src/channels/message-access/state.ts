@@ -1,4 +1,12 @@
-import { normalizeStringEntries, uniqueStrings } from "../../shared/string-normalization.js";
+/**
+ * Channel ingress state resolver.
+ *
+ * Normalizes and matches route, sender, command, and access-group allowlists.
+ */
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { parseAccessGroupAllowFromEntry } from "../allow-from.js";
 import type {
   AccessGroupMembershipFact,

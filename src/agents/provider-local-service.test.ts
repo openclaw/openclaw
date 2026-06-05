@@ -1,9 +1,11 @@
+// Verifies managed local provider services start, lease, probe, and stop safely.
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   attachModelProviderLocalService,
   ensureModelProviderLocalService,
@@ -13,6 +15,7 @@ import {
 } from "./provider-local-service.js";
 
 async function freePort(): Promise<number> {
+  // Allocate a real loopback port to exercise child process health probes.
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once("error", reject);
@@ -30,6 +33,7 @@ async function freePort(): Promise<number> {
 }
 
 async function waitForProbeFailure(url: string): Promise<void> {
+  // Idle-stop assertions wait until the local service no longer responds.
   try {
     await expect
       .poll(
@@ -102,6 +106,43 @@ describe("provider local service", () => {
     expect((await fetch(healthUrl)).ok).toBe(true);
     lease.release();
     await waitForProbeFailure(healthUrl);
+  });
+
+  it("caps oversized local service idle stop timers", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const port = await freePort();
+    const healthUrl = `http://127.0.0.1:${port}/v1/models`;
+    const model = attachModelProviderLocalService(
+      {
+        id: "demo",
+        provider: "local-huge-idle",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+      } as unknown as Model<"openai-completions">,
+      {
+        command: process.execPath,
+        args: [
+          "-e",
+          `const http=require("http");const server=http.createServer((req,res)=>{res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');});server.listen(${port},"127.0.0.1");process.on("SIGTERM",()=>server.close(()=>process.exit(0)));`,
+        ],
+        healthUrl,
+        readyTimeoutMs: 5_000,
+        idleStopMs: Number.MAX_SAFE_INTEGER,
+      },
+    );
+
+    try {
+      const lease = await ensureModelProviderLocalService(model);
+
+      if (!lease) {
+        throw new Error("Expected provider local service lease");
+      }
+      lease.release();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("sends provider request headers on local service health probes", async () => {

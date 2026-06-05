@@ -1,3 +1,4 @@
+// Msteams plugin module implements session route behavior.
 import {
   buildChannelOutboundSessionRoute,
   stripChannelTargetPrefix,
@@ -7,7 +8,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function resolveMSTeamsOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
-  let trimmed = stripChannelTargetPrefix(params.target, "msteams", "teams");
+  const trimmed = stripChannelTargetPrefix(params.target, "msteams", "teams");
   if (!trimmed) {
     return null;
   }

@@ -1,3 +1,8 @@
+/**
+ * Tests provider-compatible tool schema normalization.
+ * Protects caching, ref inlining, OpenAPI keyword cleanup, and no-parameter
+ * tool behavior used by model providers.
+ */
 import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
@@ -1015,12 +1020,10 @@ describe("normalizeToolParameters", () => {
         ["literalEnum", { type: "string", enum: [{ type: "array", items: {} }] }],
       ]),
     });
-    expect(
-      Object.prototype.hasOwnProperty.call(
-        (normalized.parameters as { properties?: Record<string, unknown> }).properties,
-        "__proto__",
-      ),
-    ).toBe(true);
+    const properties = (normalized.parameters as { properties?: Record<string, unknown> })
+      .properties;
+    expect(properties).toBeDefined();
+    expect(Object.hasOwn(properties ?? {}, "__proto__")).toBe(true);
   });
 
   it("filters required to match properties when flattening anyOf for Gemini", () => {

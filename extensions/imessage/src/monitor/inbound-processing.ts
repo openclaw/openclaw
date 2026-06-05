@@ -1,3 +1,4 @@
+// Imessage plugin module implements inbound processing behavior.
 import {
   buildMentionRegexes,
   buildChannelInboundEventContext,
@@ -29,6 +30,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveIMessageAccount } from "../accounts.js";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
 import {
   isKnownFromMeIMessageMessageId,
@@ -433,7 +435,7 @@ export async function resolveIMessageInboundDecision(params: {
       params.selfChatCache?.remember(selfChatLookup);
     }
     if (isSelfChat) {
-      params.selfChatCache?.remember(selfChatLookup);
+      params.selfChatCache?.remember({ ...selfChatLookup, allowCreatedAtSkew: true });
       const echoScope = buildIMessageEchoScope({
         accountId: params.accountId,
         isGroup,
@@ -902,7 +904,17 @@ export async function buildIMessageInboundContext(params: {
     });
   }
 
-  const imessageTo = (decision.isGroup ? chatTarget : undefined) || `imessage:${decision.sender}`;
+  const imessageTo = decision.isGroup
+    ? chatTarget || `imessage:${decision.sender}`
+    : buildDirectIMessageReplyTarget({
+        cfg: params.cfg,
+        accountId: decision.route.accountId,
+        sender: decision.sender,
+      });
+  // Async follow-ups can resume from the stored origin instead of the immediate
+  // reply target. Keep direct SMS origins service-qualified the same way as To,
+  // or the final resumed message can fall back to imessage:<phone>.
+  const imessageFrom = decision.isGroup ? `imessage:group:${chatId ?? "unknown"}` : imessageTo;
   const inboundHistory =
     !decision.isGroup && params.dmHistory?.inboundHistory
       ? params.dmHistory.inboundHistory
@@ -940,9 +952,7 @@ export async function buildIMessageInboundContext(params: {
     messageId: messageSid,
     messageIdFull: messageGuid,
     timestamp: decision.createdAt,
-    from: decision.isGroup
-      ? `imessage:group:${chatId ?? "unknown"}`
-      : `imessage:${decision.sender}`,
+    from: imessageFrom,
     sender: {
       id: decision.sender,
       name: decision.senderNormalized,
@@ -1021,6 +1031,19 @@ function buildIMessageEchoScope(params: {
     scopes.push(`${params.accountId}:chat_identifier:${params.chatIdentifier}`);
   }
   return scopes;
+}
+
+function buildDirectIMessageReplyTarget(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  sender: string;
+}): string {
+  const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
+  const configuredService = account.config.service;
+  if (configuredService === "sms") {
+    return `sms:${params.sender}`;
+  }
+  return `imessage:${params.sender}`;
 }
 
 export function describeIMessageEchoDropLog(params: {

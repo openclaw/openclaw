@@ -1,3 +1,4 @@
+// Onboard skills tests cover skill setup prompts, package manager config, and skip behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -17,10 +18,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // Module under test imports these at module scope.
-vi.mock("../agents/skills-status.js", () => ({
+vi.mock("../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: mocks.buildWorkspaceSkillStatus,
 }));
-vi.mock("../agents/skills-install.js", () => ({
+vi.mock("../skills/lifecycle/install.js", () => ({
   installSkill: mocks.installSkill,
 }));
 vi.mock("../infra/container-environment.js", () => ({

@@ -1,3 +1,4 @@
+// Sessions ACP runtime metadata tests cover agent runtime metadata derived from model and session keys.
 import { describe, expect, it } from "vitest";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -5,10 +6,10 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 
 /**
  * Catalog #18 — `openclaw sessions --json` reports `agentRuntime.id: "openclaw"` for
- * ACP sessions because `resolveAgentRuntimeMetadata` only consults agent-config
+ * ACP sessions because the old metadata resolver only consulted agent-config
  * policies (env / agent / defaults / implicit fallback to "openclaw"). The session
  * key clearly carries the ACP runtime indicator (the `:acp:` segment), but
- * `sessions.ts:294` ignores it and just calls `resolveAgentRuntimeMetadata(cfg, agentId)`.
+ * `sessions.ts:294` used to ignore it.
  *
  * Empirical observation from a deployed openclaw container against a copilot
  * agent that has no explicit `agentRuntime.id` policy:
@@ -38,9 +39,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
  * The fix likely belongs at the caller (sessions.ts:294 and the other
  * call sites in `src/gateway/server-methods/sessions.ts`,
  * `src/gateway/session-utils.ts`) so it can pass session-key context to
- * `resolveAgentRuntimeMetadata`, OR `resolveAgentRuntimeMetadata` itself
- * gains an optional `sessionKey` parameter and applies a session-key-aware
- * override.
+ * `resolveModelAgentRuntimeMetadata`.
  */
 
 const ACP_SESSION_KEY = "agent:copilot:acp:86b7b5af-3773-4a56-b244-069d6c5d3db9";
@@ -52,8 +51,8 @@ const NON_ACP_SESSION_KEY = "agent:main:main";
  * - it has NO explicit `agentRuntime.id` policy
  * - no top-level `agents.defaults.agentRuntime` either
  *
- * Result: `resolveAgentRuntimeMetadata(cfg, "copilot")` falls through to the
- * implicit "openclaw" branch — which is the bug under test.
+ * Result: the old metadata resolver fell through to the implicit "openclaw"
+ * branch — which is the bug under test.
  */
 function buildConfigWithoutAgentRuntimePolicy(): OpenClawConfig {
   return {
@@ -79,8 +78,7 @@ function buildConfigWithoutAgentRuntimePolicy(): OpenClawConfig {
  *   const agentRuntime = resolveModelAgentRuntimeMetadata({ cfg, agentId, sessionKey: row.key });
  *
  * Returns the same shape that ends up serialized to `--json` output.
- * After commit 02fe0d8978, the production path goes through resolveModelAgentRuntimeMetadata
- * (not resolveAgentRuntimeMetadata which is now a stub returning { id: "auto", source: "implicit" }).
+ * After commit 02fe0d8978, the production path goes through resolveModelAgentRuntimeMetadata.
  */
 function computeSessionAgentRuntime(params: {
   cfg: OpenClawConfig;
@@ -170,7 +168,7 @@ describe("sessions --json agentRuntime classifier (catalog #18)", () => {
       `ACP session ${ACP_SESSION_KEY} should resolve to runtime id "acpx" (or the canonical ACP runtime label). ` +
         `Got "${agentRuntime.id}". Fix candidates: ` +
         `(a) override at the call site in src/commands/sessions.ts:294 once isAcpSessionKey(row.key) is true, or ` +
-        `(b) extend resolveAgentRuntimeMetadata to accept an optional sessionKey and apply the override centrally.`,
+        `make resolveModelAgentRuntimeMetadata apply the session-key-aware override centrally.`,
     ).toBe("acpx");
   });
 

@@ -1,3 +1,4 @@
+// Google tests cover provider models plugin behavior.
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import { createProviderDynamicModelContext as createContext } from "../test-support/provider-model-test-helpers.js";
@@ -490,6 +491,24 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     expectModelFields(model, {
       provider: "google",
       id: "gemma-4-26b-a4b-it",
+      reasoning: true,
+    });
+  });
+
+  it("canonicalizes Gemma 4 26B shorthand before cloning templates", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId: "gemma-4-26b",
+        models: [createTemplateModel("google", "gemini-3-flash-preview", { reasoning: false })],
+      }),
+    });
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "gemma-4-26b-a4b-it",
+      api: "google-generative-ai",
       reasoning: true,
     });
   });

@@ -1,6 +1,12 @@
+/**
+ * JSONL-backed session tree manager.
+ *
+ * Reads, writes, forks, labels, and exports persisted session entries while preserving branch structure.
+ */
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -8,11 +14,11 @@ import {
   readFileSync,
   readSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
-  appendJsonlEntriesSync,
   appendJsonlEntrySync,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
@@ -25,7 +31,7 @@ import {
   type SessionTreeEntry as CoreSessionTreeEntry,
   uuidv7,
 } from "../runtime/index.js";
-import { type BashExecutionMessage, type CustomMessage } from "./messages.js";
+import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 
 export { CURRENT_SESSION_VERSION };
 
@@ -327,8 +333,9 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
 export function buildSessionContext(
   entries: SessionEntry[],
   leafId?: string | null,
-  byId?: Map<string, SessionEntry>,
+  byIdInput?: Map<string, SessionEntry>,
 ): SessionContext {
+  let byId = byIdInput;
   // Build uuid index if not available
   if (!byId) {
     byId = new Map<string, SessionEntry>();
@@ -386,6 +393,21 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
   }
 
   const content = readFileSync(filePath, "utf8");
+  const entries = parseJsonlEntries(content);
+
+  // Validate session header
+  if (entries.length === 0) {
+    return entries;
+  }
+  const header = entries[0];
+  if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
+    return [];
+  }
+
+  return entries;
+}
+
+function parseJsonlEntries(content: string): FileEntry[] {
   const entries: FileEntry[] = [];
   const lines = content.trim().split("\n");
 
@@ -401,16 +423,46 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
     }
   }
 
-  // Validate session header
-  if (entries.length === 0) {
-    return entries;
-  }
+  return entries;
+}
+
+function hasReadableSessionHeader(entries: FileEntry[]): boolean {
   const header = entries[0];
-  if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
-    return [];
+  return header?.type === "session" && typeof (header as { id?: unknown }).id === "string";
+}
+
+function buildCorruptSessionBackupPath(filePath: string): string {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${filePath}.corrupt-${timestamp}-${randomUUID().slice(0, 8)}.jsonl`;
+}
+
+function recoverCorruptSessionEntries(filePath: string, cwd: string): FileEntry[] | null {
+  const content = readFileSync(filePath, "utf8");
+  if (content.trim().length === 0) {
+    return null;
   }
 
-  return entries;
+  const parsedEntries = parseJsonlEntries(content);
+  const recoveredHeader = parsedEntries.find(
+    (entry): entry is SessionHeader =>
+      entry.type === "session" && typeof (entry as { id?: unknown }).id === "string",
+  );
+  const header: SessionHeader =
+    recoveredHeader ??
+    ({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: createSessionId(),
+      timestamp: new Date().toISOString(),
+      cwd,
+    } satisfies SessionHeader);
+  const recoveredEntries = parsedEntries.filter((entry) => entry.type !== "session");
+
+  const backupPath = buildCorruptSessionBackupPath(filePath);
+  const backupMode = statSync(filePath).mode & 0o777;
+  writeFileSync(backupPath, content, { encoding: "utf8", mode: backupMode || 0o600 });
+  chmodSync(backupPath, backupMode || 0o600);
+  return [header, ...recoveredEntries];
 }
 
 function isValidSessionFile(filePath: string): boolean {
@@ -612,9 +664,7 @@ async function buildSessionInfosWithConcurrency(
     if (!file) {
       return;
     }
-
-    let task: Promise<void>;
-    task = buildSessionInfo(file)
+    const task: Promise<void> = buildSessionInfo(file)
       .then((info) => {
         results[index] = info;
       })
@@ -685,17 +735,18 @@ async function listSessionsFromDir(
  * handles compaction summaries and follows the path from root to current leaf.
  */
 export class SessionManager {
-  private sessionId: string = "";
+  private sessionId = "";
   private sessionFile: string | undefined;
   private sessionDir: string;
   private cwd: string;
   private shouldPersist: boolean;
-  private flushed: boolean = false;
+  private flushed = false;
   private fileEntries: FileEntry[] = [];
   private byId: Map<string, SessionEntry> = new Map();
   private labelsById: Map<string, string> = new Map();
   private labelTimestampsById: Map<string, string> = new Map();
   private leafId: string | null = null;
+  private recoveredCorruptHeader = false;
 
   private constructor(
     cwd: string,
@@ -720,12 +771,25 @@ export class SessionManager {
   /** Switch to a different session file (used for resume and branching) */
   setSessionFile(sessionFile: string): void {
     this.sessionFile = resolve(sessionFile);
+    this.recoveredCorruptHeader = false;
     if (existsSync(this.sessionFile)) {
       this.fileEntries = loadEntriesFromFile(this.sessionFile);
 
       // If file was empty or corrupted (no valid header), truncate and start fresh
       // to avoid appending messages without a session header (which breaks the session)
       if (this.fileEntries.length === 0) {
+        const recoveredEntries = recoverCorruptSessionEntries(this.sessionFile, this.cwd);
+        if (recoveredEntries && hasReadableSessionHeader(recoveredEntries)) {
+          this.fileEntries = recoveredEntries;
+          const header = this.fileEntries.find((e) => e.type === "session");
+          this.sessionId = header?.id ?? createSessionId();
+          this.buildIndex();
+          this.rewriteFile();
+          this.recoveredCorruptHeader = true;
+          this.flushed = true;
+          return;
+        }
+
         const explicitPath = this.sessionFile;
         this.newSession();
         this.sessionFile = explicitPath;
@@ -751,6 +815,7 @@ export class SessionManager {
   }
 
   newSession(options?: NewSessionOptions): string | undefined {
+    this.recoveredCorruptHeader = false;
     this.sessionId = options?.id ?? createSessionId();
     const timestamp = new Date().toISOString();
     const header: SessionHeader = {
@@ -820,6 +885,10 @@ export class SessionManager {
     return this.sessionId;
   }
 
+  wasRecoveredFromCorruptHeader(): boolean {
+    return this.recoveredCorruptHeader;
+  }
+
   getSessionFile(): string | undefined {
     return this.sessionFile;
   }
@@ -839,7 +908,7 @@ export class SessionManager {
     }
 
     if (!this.flushed) {
-      appendJsonlEntriesSync(this.sessionFile, this.fileEntries);
+      writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
       this.flushed = true;
     } else {
       appendJsonlEntrySync(this.sessionFile, entry);

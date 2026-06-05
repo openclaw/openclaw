@@ -1,3 +1,4 @@
+// Child process adapter wraps spawned child processes for the supervisor.
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { signalProcessTree } from "../../kill-tree.js";
@@ -325,7 +326,7 @@ export async function createChildAdapter(params: {
       return waitResult;
     }
     if (waitError !== undefined) {
-      throw waitError;
+      throw toLintErrorObject(waitError, "Non-Error thrown");
     }
     if (!waitPromise) {
       waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
@@ -343,7 +344,7 @@ export async function createChildAdapter(params: {
             const error = waitError;
             resolveWait = null;
             rejectWait = null;
-            reject(error);
+            reject(toLintErrorObject(error, "Non-Error rejection"));
           }
         },
       );
@@ -403,4 +404,18 @@ export async function createChildAdapter(params: {
     kill,
     dispose,
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

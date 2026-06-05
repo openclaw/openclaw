@@ -1,4 +1,9 @@
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+/**
+ * Direct-message allowlist audit state.
+ *
+ * Merges configured and persisted allowFrom entries for setup/status prompts.
+ */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ChannelId } from "../plugins/types.public.js";
 import { readChannelIngressStoreAllowFromForDmPolicy } from "./runtime.js";
 

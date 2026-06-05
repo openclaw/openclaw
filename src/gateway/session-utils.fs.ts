@@ -1,15 +1,17 @@
+// Filesystem session history readers.
+// Parses transcript JSONL files for messages, previews, counts, and usage metadata.
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
+import {
+  resolveIntegerOption,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
-import {
-  resolveIntegerOption,
-  resolveNonNegativeIntegerOption,
-} from "../shared/number-coercion.js";
 import { escapeRegExp } from "../shared/regexp.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
@@ -116,9 +118,12 @@ function setCachedTranscriptMessageCount(filePath: string, stat: fs.Stats, count
 }
 
 async function yieldTranscriptScan(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
+/** Attach OpenClaw metadata to a transcript message without dropping existing metadata. */
 export function attachOpenClawTranscriptMeta(
   message: unknown,
   meta: Record<string, unknown>,
@@ -142,6 +147,7 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
+/** Read all visible transcript messages for a session from the first existing candidate file. */
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -577,7 +583,7 @@ export async function readSessionMessagesAsync(
   opts: ReadSessionMessagesAsyncOptions,
 ): Promise<unknown[]> {
   if (opts.mode === "recent") {
-    const { mode: modeValue, ...recentOpts } = opts;
+    const { mode: _modeValue, ...recentOpts } = opts;
     return await readRecentSessionMessagesAsync(sessionId, storePath, sessionFile, recentOpts);
   }
   const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
@@ -586,6 +592,31 @@ export async function readSessionMessagesAsync(
   }
   const index = await readSessionTranscriptIndex(filePath);
   return index?.entries.flatMap((entry) => indexedTranscriptEntryToMessages(entry)) ?? [];
+}
+
+export async function readSessionMessageByIdAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  messageId: string,
+): Promise<{ message?: unknown; seq?: number; oversized: boolean; found: boolean }> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return { oversized: false, found: false };
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return { oversized: false, found: false };
+  }
+  const entry = index.entries.find((candidate) => candidate.id === messageId);
+  if (!entry) {
+    return { oversized: false, found: false };
+  }
+  if (entry.byteLength > MAX_TRANSCRIPT_PARSE_LINE_BYTES) {
+    return { oversized: true, found: true, seq: entry.seq };
+  }
+  const message = indexedTranscriptEntryToMessage(entry);
+  return { message, seq: entry.seq, oversized: false, found: true };
 }
 
 export async function visitSessionMessagesAsync(

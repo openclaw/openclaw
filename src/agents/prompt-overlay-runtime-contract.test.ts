@@ -1,10 +1,13 @@
+/**
+ * Runtime contract coverage for deprecated GPT-5 prompt overlays.
+ * Keeps provider-owned overlay compatibility aligned with SDK fixture inputs.
+ */
 import {
   GPT5_CONTRACT_MODEL_ID,
   GPT5_PREFIXED_CONTRACT_MODEL_ID,
   NON_GPT5_CONTRACT_MODEL_ID,
   NON_OPENAI_CONTRACT_PROVIDER_ID,
   CODEX_CONTRACT_PROVIDER_ID,
-  OPENAI_CODEX_CONTRACT_PROVIDER_ID,
   OPENAI_CONTRACT_PROVIDER_ID,
   openAiPluginPersonalityConfig,
   sharedGpt5PersonalityConfig,
@@ -53,7 +56,7 @@ describe("GPT-5 prompt overlay runtime contract", () => {
 
   it("scopes OpenAI plugin personality fallback to OpenAI-family GPT-5 providers", () => {
     const openAiContribution = resolveGpt5SystemPromptContribution({
-      providerId: OPENAI_CODEX_CONTRACT_PROVIDER_ID,
+      providerId: OPENAI_CONTRACT_PROVIDER_ID,
       modelId: GPT5_CONTRACT_MODEL_ID,
       config: openAiPluginPersonalityConfig("off"),
     });

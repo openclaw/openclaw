@@ -1,3 +1,6 @@
+/**
+ * Codex app-server agent harness registration and lazy runtime boundaries.
+ */
 import type {
   AgentHarness,
   ContextEngineHostCapability,
@@ -8,7 +11,7 @@ import type {
   CodexAppServerModelListResult,
 } from "./src/app-server/models.js";
 
-const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai-codex", "openai"]);
+const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "assemble-before-prompt",
@@ -19,8 +22,13 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "thread-bootstrap-projection",
 ] as const satisfies readonly ContextEngineHostCapability[];
 
+/** Public model-listing types exposed for Codex app-server catalog callers. */
 export type { CodexAppServerListModelsOptions, CodexAppServerModel, CodexAppServerModelListResult };
 
+/**
+ * Creates the Codex app-server harness used for attempts, side questions,
+ * compaction, reset, and disposal.
+ */
 export function createCodexAppServerAgentHarness(options?: {
   id?: string;
   label?: string;
@@ -51,6 +59,8 @@ export function createCodexAppServerAgentHarness(options?: {
       };
     },
     runAttempt: async (params) => {
+      // Keep app-server runtime code behind lazy imports so plugin discovery and
+      // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,

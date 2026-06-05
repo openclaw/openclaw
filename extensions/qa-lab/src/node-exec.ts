@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements node exec behavior.
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -40,7 +41,7 @@ export async function resolveQaNodeExecPath(params?: {
 
   const locator = platform === "win32" ? "where" : "which";
   const execFileImpl = params?.execFileImpl ?? execFileAsync;
-  let stdout = "";
+  let stdout;
   try {
     ({ stdout } = await execFileImpl(locator, ["node"], {
       encoding: "utf8",

@@ -1,3 +1,4 @@
+// Tests mixed inline directives in user text and command bodies.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -194,6 +195,53 @@ describe("mixed inline directives", () => {
     });
 
     expect(sessionEntry.reasoningLevel).toBe("off");
+  });
+
+  it("emits a channel-neutral ack for reasoning stream", async () => {
+    const directives = parseInlineDirectives("please reply\n/reasoning stream");
+    const cfg = createConfig();
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { "agent:main:discord:user": sessionEntry };
+
+    const fastLane = await applyInlineDirectivesFastLane({
+      directives,
+      commandAuthorized: true,
+      senderIsOwner: false,
+      ctx: { Surface: "discord" } as never,
+      cfg,
+      agentId: "main",
+      isGroup: false,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:discord:user",
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      elevatedFailures: [],
+      messageProviderKey: "discord",
+      defaultProvider: "openrouter",
+      defaultModel: "x-ai/grok-4.1-fast",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      allowedModelKeys: new Set(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+      provider: "openrouter",
+      model: "x-ai/grok-4.1-fast",
+      initialModelLabel: "openrouter/x-ai/grok-4.1-fast",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: cfg.agents?.defaults,
+      modelState: {
+        resolveDefaultThinkingLevel: async () => "off",
+        resolveThinkingCatalog: async () => [],
+        allowedModelKeys: new Set(),
+        allowedModelCatalog: [],
+        resetModelOverride: false,
+      },
+    });
+
+    expect(fastLane.directiveAck).toEqual({
+      text: "⚙️ Reasoning stream enabled.",
+    });
   });
 
   it("persists mixed exec defaults for authorized external senders with empty gateway scopes", async () => {

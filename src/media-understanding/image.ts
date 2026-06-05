@@ -1,3 +1,5 @@
+// Model-backed image understanding runtime for providers without a native media
+// provider hook.
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
@@ -48,7 +50,7 @@ function isNativeResponsesReasoningPayload(model: Model): boolean {
   if (
     model.api !== "openai-responses" &&
     model.api !== "azure-openai-responses" &&
-    model.api !== "openai-codex-responses"
+    model.api !== "openai-chatgpt-responses"
   ) {
     return false;
   }
@@ -74,6 +76,8 @@ function removeReasoningInclude(value: unknown): unknown {
 }
 
 function disableReasoningForImageRetryPayload(payload: unknown, model: Model): unknown {
+  // Empty-text image responses can be caused by reasoning-only payloads; retry
+  // with reasoning stripped while preserving provider-specific Responses shape.
   if (!isRecord(payload)) {
     return undefined;
   }
@@ -140,6 +144,8 @@ async function resolveImageRuntime(params: {
   authStore?: ImageDescriptionRequest["authStore"];
   workspaceDir?: string;
 }): Promise<{ apiKey: string; model: Model }> {
+  // Fast static resolution avoids provider runtime hooks during tool discovery;
+  // execution falls back to full model discovery when the static path lacks image metadata.
   const resolvedRef = normalizeModelRef(params.provider, params.model);
   const fastResolved = await resolveModelAsync(
     resolvedRef.provider,
@@ -187,7 +193,7 @@ async function resolveImageRuntime(params: {
     },
   );
   const { authStorage } = resolved;
-  let { model } = resolved;
+  const { model } = resolved;
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }

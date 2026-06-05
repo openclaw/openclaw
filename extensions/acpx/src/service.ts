@@ -1,8 +1,13 @@
+/**
+ * ACPX plugin service lifecycle. It resolves config, prepares isolated adapter
+ * wrappers, registers the ACP backend, and manages startup/cleanup probes.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -60,6 +65,14 @@ function loadRuntimeModule(): Promise<AcpxRuntimeModule> {
   return runtimeModulePromise;
 }
 
+/** Convert ACPX timeout seconds into timer-safe milliseconds. */
+export function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
+  if (timeoutSeconds === undefined) {
+    return undefined;
+  }
+  return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 1;
+}
+
 function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
   let runtime: AcpxRuntimeLike | null = null;
   let runtimePromise: Promise<AcpxRuntimeLike> | null = null;
@@ -84,10 +97,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
         mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
         permissionMode: params.pluginConfig.permissionMode,
         nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
-        timeoutMs:
-          params.pluginConfig.timeoutSeconds != null
-            ? params.pluginConfig.timeoutSeconds * 1_000
-            : undefined,
+        timeoutMs: resolveAcpxTimerTimeoutMs(params.pluginConfig.timeoutSeconds),
       }) as AcpxRuntimeLike;
       return runtime;
     });
@@ -201,7 +211,7 @@ async function withStartupProbeTimeout<T>(params: {
   timeoutSeconds: number;
 }): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutMs = Math.max(1, params.timeoutSeconds * 1_000);
+  const timeoutMs = resolveAcpxTimerTimeoutMs(params.timeoutSeconds) ?? 1;
   try {
     return await Promise.race([
       params.promise,
@@ -290,6 +300,7 @@ async function reapOpenAcpxProcessLeases(params: {
   return { inspectedPids, terminatedPids };
 }
 
+/** Create the ACPX plugin service that owns runtime registration and cleanup. */
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {

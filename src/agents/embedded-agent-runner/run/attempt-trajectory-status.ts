@@ -1,3 +1,6 @@
+/**
+ * Resolves terminal attempt trajectory status and assistant-visible text.
+ */
 import {
   hasAcceptedSessionSpawn,
   type AcceptedSessionSpawn,
@@ -5,19 +8,29 @@ import {
 
 export type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
 
+/** Terminal error marker for runs that produced no user-visible delivery or durable progress. */
 export const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
 
+/** Normalized terminal status recorded for an embedded run attempt trajectory. */
 export type AttemptTrajectoryTerminal = {
   status: AttemptTrajectoryTerminalStatus;
   terminalError?: typeof NON_DELIVERABLE_TERMINAL_TURN_REASON;
 };
 
+/** Signals that decide whether a completed run attempt has deliverable output. */
 export type ResolveAttemptTrajectoryTerminalParams = {
   promptError?: unknown;
   aborted: boolean;
+  externalAbort: boolean;
   timedOut: boolean;
   assistantTexts: string[];
-  toolMetas: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
+  toolMetas: Array<{
+    toolName: string;
+    meta?: string;
+    asyncStarted?: boolean;
+    asyncTaskRunId?: string;
+    asyncTaskId?: string;
+  }>;
   didSendViaMessagingTool: boolean;
   didSendDeterministicApprovalPrompt: boolean;
   messagingToolSentTexts: string[];
@@ -35,6 +48,11 @@ export type ResolveAttemptTrajectoryTerminalParams = {
   lastAssistantStopReason?: string;
 };
 
+/**
+ * Chooses assistant text that can safely count as terminal output. Provider error
+ * and abort stop reasons cannot fall back to the raw last visible text because
+ * that text may describe an interrupted generation rather than a completed reply.
+ */
 export function resolveTerminalAssistantTexts(params: {
   assistantTexts: string[];
   lastAssistantStopReason?: string;
@@ -75,16 +93,25 @@ function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boole
   return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
 
+/**
+ * Classifies the final attempt trajectory from visible output, durable side
+ * effects, and interruption state. Empty terminal turns are errors unless a
+ * caller proves a silent success, message delivery, spawned session, async task,
+ * or other durable progress.
+ */
 export function resolveAttemptTrajectoryTerminal(
   params: ResolveAttemptTrajectoryTerminalParams,
 ): AttemptTrajectoryTerminal {
   if (params.promptError) {
     return { status: "error" };
   }
-  if (params.aborted || params.timedOut) {
+  if ((params.aborted && params.externalAbort) || params.timedOut) {
     return { status: "interrupted" };
   }
 
+  // Messaging/tool-use attempts may not have assistant text; only committed
+  // delivery evidence or durable side effects can make those terminal turns
+  // successful.
   const hasExplicitTerminalDelivery =
     params.silentExpected === true ||
     params.emptyAssistantReplyIsSilent === true ||

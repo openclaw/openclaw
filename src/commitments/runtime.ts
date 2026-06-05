@@ -1,10 +1,12 @@
+// Runs commitment extraction, scheduling, and follow-up lifecycle work.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCommitmentTimezone, resolveCommitmentsConfig } from "./config.js";
 import {
   buildCommitmentExtractionPrompt,
@@ -18,6 +20,8 @@ import type {
   CommitmentScope,
 } from "./types.js";
 
+// Background runtime for extracting inferred follow-up commitments from
+// completed turns. It batches hidden extraction requests and persists results.
 type TimerHandle = ReturnType<typeof setTimeout>;
 type ModelRef = { provider: string; model: string };
 type EmbeddedAgentPayloadResult = { payloads?: Array<{ text?: string }> };
@@ -73,10 +77,12 @@ function clearTimer(handle: TimerHandle): void {
   (runtime.clearTimer ?? clearTimeout)(handle);
 }
 
+/** Installs runtime hooks for extraction tests or alternate batch extraction. */
 export function configureCommitmentExtractionRuntime(next: CommitmentExtractionRuntime): void {
   runtime = next;
 }
 
+/** Clears queued work, timers, and injected hooks for isolated tests. */
 export function resetCommitmentExtractionRuntimeForTests(): void {
   if (timer) {
     clearTimer(timer);
@@ -98,6 +104,7 @@ function isUsefulText(value: string | undefined): boolean {
   return Boolean(value?.trim());
 }
 
+/** Enqueues one completed turn for delayed commitment extraction. */
 export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueInput): boolean {
   const resolved = resolveCommitmentsConfig(input.cfg);
   const nowMs = input.nowMs ?? Date.now();
@@ -146,7 +153,7 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
   if (!timer) {
     timer = setTimer(() => {
       timer = null;
-      void drainCommitmentExtractionQueue().catch((err) => {
+      void drainCommitmentExtractionQueue().catch((err: unknown) => {
         log.warn("commitment extraction failed", { error: String(err) });
       });
     }, resolved.extraction.debounceMs);
@@ -168,11 +175,22 @@ function isTerminalExtractionError(error: unknown): boolean {
   );
 }
 
-function openTerminalFailureCooldown(agentId: string, error: unknown): void {
-  terminalFailureCooldownUntilByAgent.set(
-    agentId,
-    Date.now() + TERMINAL_EXTRACTION_FAILURE_COOLDOWN_MS,
-  );
+function openTerminalFailureCooldown(
+  agentId: string,
+  error: unknown,
+  nowMs: number,
+  fallbackNowMs: number,
+): void {
+  const cooldownUntil =
+    resolveExpiresAtMsFromDurationMs(TERMINAL_EXTRACTION_FAILURE_COOLDOWN_MS, { nowMs }) ??
+    resolveExpiresAtMsFromDurationMs(TERMINAL_EXTRACTION_FAILURE_COOLDOWN_MS, {
+      nowMs: fallbackNowMs,
+    });
+  if (cooldownUntil !== undefined) {
+    terminalFailureCooldownUntilByAgent.set(agentId, cooldownUntil);
+  }
+  // Terminal auth/model failures will keep failing for queued turns from the
+  // same agent. Drop them and cool down to avoid noisy background retries.
   queue = queue.filter((item) => item.agentId !== agentId);
   log.warn("commitment extraction disabled temporarily after terminal model/auth failure", {
     agentId,
@@ -263,6 +281,7 @@ async function hydrateBatch(
   );
 }
 
+/** Drains queued extraction work in batches and returns processed item count. */
 export async function drainCommitmentExtractionQueue(): Promise<number> {
   if (draining) {
     return 0;
@@ -281,7 +300,12 @@ export async function drainCommitmentExtractionQueue(): Promise<number> {
         result = await extractor({ cfg: firstCfg, items });
       } catch (error) {
         if (isTerminalExtractionError(error)) {
-          openTerminalFailureCooldown(items[0]?.agentId ?? "", error);
+          openTerminalFailureCooldown(
+            items[0]?.agentId ?? "",
+            error,
+            Date.now(),
+            items[0]?.nowMs ?? Date.now(),
+          );
         }
         throw error;
       }

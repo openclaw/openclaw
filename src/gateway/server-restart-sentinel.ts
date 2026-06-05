@@ -1,3 +1,5 @@
+// Gateway restart sentinel recovery.
+// Resumes pending restart continuations and outbound delivery after process restart.
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
@@ -68,7 +70,7 @@ function cloneRestartSentinelPayload(
   if (!payload) {
     return null;
   }
-  return JSON.parse(JSON.stringify(payload)) as RestartSentinelPayload;
+  return structuredClone(payload);
 }
 
 function hasRoutableDeliveryContext(context?: {
@@ -201,19 +203,6 @@ function resolveRestartContinuationRoute(params: {
   };
 }
 
-function resolveRestartContinuationOutboundPayload(params: {
-  payload: OutboundReplyPayload;
-  messageId: string;
-  replyToId?: string;
-}): OutboundReplyPayload {
-  if (params.payload.replyToId !== params.messageId) {
-    return params.payload;
-  }
-  const payload: OutboundReplyPayload = { ...params.payload };
-  delete payload.replyToId;
-  return params.replyToId ? { ...payload, replyToId: params.replyToId } : payload;
-}
-
 function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
   return (
     typeof payload.text === "string" && payload.text.trim() === REPLY_RUN_STILL_SHUTTING_DOWN_TEXT
@@ -313,7 +302,7 @@ async function deliverQueuedSessionDelivery(params: {
       ReplyToId: route.replyToId,
       OriginatingChannel: route.channel,
       OriginatingTo: route.to,
-      ExplicitDeliverRoute: true,
+      ExplicitDeliverRoute: false,
       MessageThreadId: route.threadId,
     },
     {
@@ -331,50 +320,20 @@ async function deliverQueuedSessionDelivery(params: {
     ctxPayload,
     recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher,
+    replyOptions: {
+      sourceReplyDeliveryMode: "message_tool_only",
+    },
     delivery: {
       preparePayload: (payload) => {
         if (isRestartContinuationBusyPayload(payload)) {
           throw new Error(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
         }
-        return resolveRestartContinuationOutboundPayload({
-          payload,
-          messageId,
-          replyToId: route.replyToId,
-        });
+        return payload;
       },
-      durable: (_payload, info) =>
-        info.kind === "final"
-          ? {
-              to: route.to,
-              replyToId: route.replyToId,
-              threadId: route.threadId,
-              deps: params.deps,
-            }
-          : false,
-      deliver: async (payload) => {
-        const send = await sendDurableMessageBatch({
-          cfg,
-          channel: route.channel,
-          to: route.to,
-          accountId: route.accountId,
-          replyToId: route.replyToId,
-          threadId: route.threadId,
-          payloads: [payload],
-          session: buildOutboundSessionContext({
-            cfg,
-            sessionKey: canonicalKey,
-          }),
-          deps: params.deps,
-          bestEffort: false,
-        });
-        if (send.status === "failed" || send.status === "partial_failed") {
-          throw send.error;
-        }
-        const results = send.status === "sent" ? send.results : [];
-        if (results.length === 0) {
-          throw new Error("restart continuation delivery returned no results");
-        }
-      },
+      durable: false,
+      // Restart continuations are internal lifecycle turns. Visible follow-up
+      // must go through the message tool; automatic final delivery stays off.
+      deliver: async () => ({ visibleReplySent: false }),
       onError: (err, info) => {
         dispatchError ??= err;
         log.warn(`restart continuation dispatch failed during ${info.kind}: ${String(err)}`, {
@@ -391,7 +350,7 @@ async function deliverQueuedSessionDelivery(params: {
     },
   });
   if (dispatchError) {
-    throw dispatchError;
+    throw toLintErrorObject(dispatchError, "Non-Error thrown");
   }
 }
 
@@ -700,4 +659,18 @@ export function getLatestUpdateRestartSentinel(): RestartSentinelPayload | null 
 
 export function recordLatestUpdateRestartSentinel(payload: RestartSentinelPayload): void {
   latestUpdateRestartSentinel = cloneRestartSentinelPayload(payload);
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

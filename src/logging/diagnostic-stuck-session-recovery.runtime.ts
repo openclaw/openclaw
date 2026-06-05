@@ -1,3 +1,4 @@
+// Stuck session recovery runtime helpers inspect embedded sessions for recovery.
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
   abortAndDrainEmbeddedAgentRun,
@@ -17,15 +18,18 @@ import {
 } from "./diagnostic-session-context.js";
 import {
   formatRecoveryOutcome,
+  resolveStuckSessionRecoveryRef,
   type StuckSessionRecoveryOutcome,
   type StuckSessionRecoveryRequest,
 } from "./diagnostic-session-recovery.js";
 import { isDiagnosticSessionStateCurrent } from "./diagnostic-session-state.js";
 
+// Runtime repair path for diagnostic sessions that appear stuck in processing/waiting states.
 const STUCK_SESSION_ABORT_SETTLE_MS = 15_000;
 const STUCK_SESSION_PROGRESS_STALE_MS = 5 * 60_000;
 const recoveriesInFlight = new Set<string>();
 
+/** Request parameters accepted by the stuck-session recovery runtime. */
 export type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
 
 function resolveStaleActiveProgressAbortMs(params: StuckSessionRecoveryParams): number {
@@ -50,10 +54,6 @@ function isActiveRunProgressStale(params: {
   });
   const lastProgressAgeMs = activity.lastProgressAgeMs;
   return typeof lastProgressAgeMs === "number" && lastProgressAgeMs >= params.staleAbortMs;
-}
-
-function recoveryKey(params: StuckSessionRecoveryParams): string | undefined {
-  return params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
 }
 
 function formatRecoveryContext(
@@ -84,7 +84,7 @@ function formatRecoveryContext(
 export async function recoverStuckDiagnosticSession(
   params: StuckSessionRecoveryParams,
 ): Promise<StuckSessionRecoveryOutcome> {
-  const key = recoveryKey(params);
+  const key = resolveStuckSessionRecoveryRef(params);
   if (!key || recoveriesInFlight.has(key)) {
     return {
       status: "skipped",
@@ -97,6 +97,7 @@ export async function recoverStuckDiagnosticSession(
 
   recoveriesInFlight.add(key);
   try {
+    // Abort only the generation/state that triggered recovery; stale warnings become observe-only.
     if (
       !isDiagnosticSessionStateCurrent({
         sessionId: params.sessionId,
@@ -133,8 +134,7 @@ export async function recoverStuckDiagnosticSession(
         fileActiveWorkSessionId ??
         params.sessionId)
       : (fileActiveWorkSessionId ?? params.sessionId);
-    const laneKey = params.sessionKey?.trim() || params.sessionId?.trim();
-    const sessionLane = laneKey ? resolveEmbeddedSessionLane(laneKey) : null;
+    const sessionLane = key ? resolveEmbeddedSessionLane(key) : null;
     let aborted = false;
     let drained = true;
     let forceCleared = false;
@@ -170,6 +170,7 @@ export async function recoverStuckDiagnosticSession(
           `stuck session recovery reclaiming stale active run: ${formatRecoveryContext(params, { activeSessionId })}`,
         );
       }
+      // Active embedded runs own their cleanup; recovery asks them to abort and drain first.
       const result = await abortAndDrainEmbeddedAgentRun({
         sessionId: activeSessionId,
         sessionKey: params.sessionKey,
@@ -246,7 +247,9 @@ export async function recoverStuckDiagnosticSession(
 
     const queuedCount = sessionLane ? getCommandLaneSnapshot(sessionLane).queuedCount : 0;
     const released =
-      sessionLane && (!activeSessionId || !aborted || !drained) ? resetCommandLane(sessionLane) : 0;
+      sessionLane && (queuedCount > 0 || !activeSessionId || !aborted || !drained)
+        ? resetCommandLane(sessionLane)
+        : 0;
 
     const clearStaleQueuedSession = !aborted && released === 0 && (params.queueDepth ?? 0) > 0;
 
@@ -319,6 +322,7 @@ export async function recoverStuckDiagnosticSession(
   }
 }
 
+/** Test hooks for clearing in-flight recovery guards. */
 export const testing = {
   resetRecoveriesInFlight(): void {
     recoveriesInFlight.clear();

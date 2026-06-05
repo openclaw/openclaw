@@ -1,3 +1,4 @@
+// Plugin npm runtime build tests validate plugin runtime package builds.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -84,5 +85,21 @@ describe("plugin npm runtime build planning", () => {
       "README.md",
       "skills/**",
     ]);
+  });
+
+  it("builds doctor contract surfaces for publishable channel plugins", () => {
+    for (const pluginDir of ["msteams", "nostr"]) {
+      const plan = expectPluginNpmRuntimeBuildPlan(
+        resolvePluginNpmRuntimeBuildPlan({
+          repoRoot,
+          packageDir: path.join(repoRoot, "extensions", pluginDir),
+        }),
+      );
+      expect(plan.entry["doctor-contract-api"]).toBe(
+        path.join(repoRoot, "extensions", pluginDir, "doctor-contract-api.ts"),
+      );
+      expect(plan.runtimeBuildOutputs).toContain("./dist/doctor-contract-api.js");
+      expect(plan.packageFiles).toContain("dist/**");
+    }
   });
 });

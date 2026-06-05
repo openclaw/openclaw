@@ -1,3 +1,5 @@
+// Agent step tests cover nested session handoff, transcript bookkeeping, and
+// MCP runtime retirement after completed nested turns.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { runAgentStep, testing } from "./agent-step.js";
@@ -26,6 +28,8 @@ describe("runAgentStep", () => {
   });
 
   it("retires bundle MCP runtime after successful nested agent steps", async () => {
+    // Nested steps disable automatic delivery and carry provenance so the reply
+    // returns through the message tool path instead of the channel.
     const gatewayCalls: CallGatewayOptions[] = [];
     testing.setDepsForTest({
       callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
@@ -52,6 +56,7 @@ describe("runAgentStep", () => {
           message?: string;
           sessionKey?: string;
           deliver?: boolean;
+          sourceReplyDeliveryMode?: string;
           lane?: string;
           inputProvenance?: { kind?: string; sourceTool?: string };
         }
@@ -59,6 +64,7 @@ describe("runAgentStep", () => {
     expect(params?.message).toContain("[Inter-session message");
     expect(params?.sessionKey).toBe("agent:main:subagent:child");
     expect(params?.deliver).toBe(false);
+    expect(params?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(params?.lane).toBe("nested:agent:main:subagent:child");
     expect(params?.inputProvenance?.kind).toBe("inter_session");
     expect(params?.inputProvenance?.sourceTool).toBe("sessions_send");
@@ -119,10 +125,11 @@ describe("runAgentStep", () => {
     expect(gatewayCalls).toStrictEqual([]);
     expect(agentCommandFromIngress).toHaveBeenCalledTimes(1);
     const ingressCalls = agentCommandFromIngress.mock.calls as unknown as Array<
-      [{ message?: string; transcriptMessage?: string }]
+      [{ message?: string; sourceReplyDeliveryMode?: string; transcriptMessage?: string }]
     >;
     const ingress = ingressCalls[0]?.[0];
     expect(ingress?.message).toContain("internal announce step");
+    expect(ingress?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(ingress?.transcriptMessage).toBe("");
   });
 });

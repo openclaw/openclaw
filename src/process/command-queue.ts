@@ -1,3 +1,4 @@
+// Command queue serializes and limits process execution for shared command lanes.
 import {
   diagnosticLogger as diag,
   logLaneDequeue,
@@ -309,7 +310,7 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
     return await Promise.race([taskPromise, timeoutPromise]);
   } catch (err) {
     if (timedOut) {
-      void taskPromise.catch((lateErr) => {
+      void taskPromise.catch((lateErr: unknown) => {
         diag.warn(
           `lane task rejected after timeout: lane=${lane} timeoutMs=${taskTimeoutMs} error="${String(lateErr)}"`,
         );

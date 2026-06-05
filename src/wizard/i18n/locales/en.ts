@@ -1,3 +1,4 @@
+// English wizard translations provide default onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
 export const en = {
@@ -29,14 +30,18 @@ export const en = {
       compatibilityAnthropicHint: "Uses /messages",
       compatibilityOpenAi: "OpenAI-compatible",
       compatibilityOpenAiHint: "Uses /chat/completions",
+      compatibilityOpenAiResponses: "OpenAI Responses-compatible",
+      compatibilityOpenAiResponsesHint: "Uses /responses",
       compatibilityUnknown: "Unknown (detect automatically)",
-      compatibilityUnknownHint: "Probes OpenAI then Anthropic endpoints",
+      compatibilityUnknownHint: "Probes OpenAI Chat, OpenAI Responses, then Anthropic endpoints",
       detectionFailed: "Could not detect endpoint type.",
-      detectionFailedNote: "This endpoint did not respond to OpenAI or Anthropic style requests.",
+      detectionFailedNote:
+        "This endpoint did not respond to OpenAI Chat, OpenAI Responses, or Anthropic style requests.",
       detectionNoteTitle: "Endpoint detection",
       detectionProgress: "Detecting endpoint type...",
       detectedAnthropic: "Detected Anthropic-compatible endpoint.",
       detectedOpenAi: "Detected OpenAI-compatible endpoint.",
+      detectedOpenAiResponses: "Detected OpenAI Responses-compatible endpoint.",
       endpointId: "Endpoint ID",
       endpointIdRequired: "Endpoint ID is required.",
       endpointIdRenamed:

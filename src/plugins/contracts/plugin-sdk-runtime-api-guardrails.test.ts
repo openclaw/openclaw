@@ -1,3 +1,4 @@
+// Plugin SDK runtime API guardrail tests cover runtime API export safety and boundaries.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +36,7 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "tlon",
   "tokenjuice",
   "webhooks",
+  "workboard",
   "zai",
   "zalo",
   "zalouser",
@@ -378,6 +380,17 @@ describe("runtime api guardrails", () => {
     });
     expect(readExportStatements(setterFile)).toEqual([
       'export { setMatrixRuntime } from "./src/runtime.js";',
+    ]);
+  });
+
+  it("keeps Feishu's narrow runtime-setter entrypoint pinned to a single export", () => {
+    const setterFile = bundledPluginFile({
+      rootDir: ROOT_DIR,
+      pluginId: "feishu",
+      relativePath: "runtime-setter-api.ts",
+    });
+    expect(readExportStatements(setterFile)).toEqual([
+      'export { setFeishuRuntime } from "./src/runtime.js";',
     ]);
   });
 });

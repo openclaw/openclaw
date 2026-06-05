@@ -1,4 +1,5 @@
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+// Feishu plugin module implements monitor behavior.
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import {
@@ -11,6 +12,7 @@ import {
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
   runtime?: RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
   abortSignal?: AbortSignal;
   accountId?: string;
 };
@@ -48,6 +50,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     return monitorSingleAccount({
       cfg,
       account,
+      channelRuntime: opts.channelRuntime,
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
     });
@@ -85,6 +88,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       monitorSingleAccount({
         cfg,
         account,
+        channelRuntime: opts.channelRuntime,
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
         botOpenIdSource: { kind: "prefetched", botOpenId, botName },

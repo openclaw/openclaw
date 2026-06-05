@@ -58,6 +58,20 @@ explicitly to use Gemini, Voyage, Mistral, DeepInfra, Bedrock, GitHub Copilot,
 Ollama, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
 Legacy configs that still say `provider: "auto"` resolve to `openai`.
 
+<Warning>
+Changing the embedding provider, model, provider settings, sources, scope,
+chunking, or tokenizer can make the existing SQLite vector index incompatible.
+OpenClaw pauses vector search and reports an index identity warning instead of
+automatically re-embedding everything. Rebuild when you are ready with
+`openclaw memory status --index --agent <id>` or
+`openclaw memory index --force --agent <id>`.
+</Warning>
+
+If OpenAI embeddings are unreachable from your network, memory recall fails open
+instead of blocking the turn. Set the existing `memorySearch.provider` field to a
+reachable local, Ollama, regional, or OpenAI-compatible provider to restore
+semantic ranking.
+
 ### Custom provider ids
 
 `memorySearch.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
@@ -150,7 +164,8 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     | `outputDimensionality` | `number` | `3072`                 | For Embedding 2: 768, 1536, or 3072        |
 
     <Warning>
-    Changing model or `outputDimensionality` triggers an automatic full reindex.
+    Changing model or `outputDimensionality` changes the index identity. OpenClaw
+    pauses vector search until you explicitly rebuild the memory index.
     </Warning>
 
   </Accordion>
@@ -452,6 +467,7 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`
 | ------------------------ | --------- | -------- | ------------------------------------------------------------------------------------- |
 | `command`                | `string`  | `qmd`    | QMD executable path; set an absolute path when service `PATH` differs from your shell |
 | `searchMode`             | `string`  | `search` | Search command: `search`, `vsearch`, `query`                                          |
+| `rerank`                 | `boolean` | --       | Set to `false` with `searchMode: "query"` and QMD 2.1+ to skip QMD reranking          |
 | `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`                                             |
 | `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`                                               |
 | `sessions.enabled`       | `boolean` | `false`  | Index session transcripts                                                             |
@@ -459,6 +475,8 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`
 | `sessions.exportDir`     | `string`  | --       | Export directory                                                                      |
 
 `searchMode: "search"` is lexical/BM25-only. OpenClaw does not run semantic vector readiness probes or QMD embedding maintenance for that mode, including during `memory status --deep`; `vsearch` and `query` continue to require QMD vector readiness and embeddings.
+
+`rerank: false` only changes QMD `query` mode and requires QMD 2.1 or newer. In direct CLI mode OpenClaw passes `--no-rerank`; in mcporter-backed MCP mode it passes `rerank: false` to QMD's unified query tool. Leave it unset to use QMD's default query reranking behavior.
 
 OpenClaw prefers current QMD collection and MCP query shapes, but keeps older QMD releases working by trying compatible collection pattern flags and older MCP tool names when needed. When QMD advertises support for multiple collection filters, same-source collections are searched with one QMD process; older QMD builds keep the per-collection compatibility path. Same-source means durable memory collections are grouped together, while session transcript collections remain a separate group so source diversification still has both inputs.
 

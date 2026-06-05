@@ -1,3 +1,4 @@
+// Msteams tests cover monitor handler.adaptive card plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
@@ -77,11 +78,9 @@ function createActivityHandler() {
       await handler(context, async () => {});
     }
   });
-
-  let handler: MSTeamsActivityHandler & {
+  const handler: MSTeamsActivityHandler & {
     run: NonNullable<MSTeamsActivityHandler["run"]>;
-  };
-  handler = {
+  } = {
     onMessage: (nextHandler) => {
       messageHandlers.push(nextHandler);
       return handler;

@@ -1,3 +1,4 @@
+// Native hook relay CLI tests cover relay command registration and runtime delegation.
 import { describe, expect, it, vi } from "vitest";
 import {
   createReadableTextStream,
@@ -302,6 +303,34 @@ describe("native hook relay CLI", () => {
         permissionDecisionReason: "Native hook relay unavailable",
       },
     });
+    expect(stderr.text()).toContain("native hook relay unavailable");
+  });
+
+  it("keeps PreToolUse unavailable handling observational only with an explicit no-policy marker", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("gateway closed");
+    });
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        preToolUseUnavailable: "noop",
+      },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout.text()).toBe("");
     expect(stderr.text()).toContain("native hook relay unavailable");
   });
 

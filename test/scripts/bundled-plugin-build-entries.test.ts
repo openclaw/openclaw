@@ -1,3 +1,4 @@
+// Bundled Plugin Build Entries tests cover bundled plugin build entries script behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -184,7 +185,7 @@ describe("bundled plugin build entries", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
-    for (const pluginId of ["openshell", "slack"]) {
+    for (const pluginId of ["copilot", "openshell", "slack", "tokenjuice"]) {
       expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }

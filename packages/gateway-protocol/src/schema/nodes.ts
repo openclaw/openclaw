@@ -1,14 +1,18 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+/** Pending node work classes that the gateway may queue for paired devices. */
 const NodePendingWorkTypeSchema = Type.String({
   enum: ["status.request", "location.request"],
 });
 
+/** Queue priority accepted when operators enqueue node work. */
 const NodePendingWorkPrioritySchema = Type.String({
   enum: ["normal", "high"],
 });
 
+/** Reasons a node can report itself alive without implying an operator action. */
 export const NodePresenceAliveReasonSchema = Type.String({
   enum: [
     "background",
@@ -20,6 +24,7 @@ export const NodePresenceAliveReasonSchema = Type.String({
   ],
 });
 
+/** Presence heartbeat payload sent by remote nodes to refresh gateway state. */
 export const NodePresenceAlivePayloadSchema = Type.Object(
   {
     trigger: NodePresenceAliveReasonSchema,
@@ -34,6 +39,7 @@ export const NodePresenceAlivePayloadSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Normalized result for node-originated events after gateway dispatch. */
 export const NodeEventResultSchema = Type.Object(
   {
     ok: Type.Boolean(),
@@ -44,6 +50,7 @@ export const NodeEventResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Pairing request metadata advertised by a node before trust is granted. */
 export const NodePairRequestParamsSchema = Type.Object(
   {
     nodeId: NonEmptyString,
@@ -63,35 +70,43 @@ export const NodePairRequestParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Lists pending node-pairing requests. */
 export const NodePairListParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Approves a pending node-pairing request by request id. */
 export const NodePairApproveParamsSchema = Type.Object(
   { requestId: NonEmptyString },
   { additionalProperties: false },
 );
 
+/** Rejects a pending node-pairing request by request id. */
 export const NodePairRejectParamsSchema = Type.Object(
   { requestId: NonEmptyString },
   { additionalProperties: false },
 );
 
+/** Removes an already paired node from the gateway trust set. */
 export const NodePairRemoveParamsSchema = Type.Object(
   { nodeId: NonEmptyString },
   { additionalProperties: false },
 );
 
+/** Verifies node ownership with a short-lived pairing token. */
 export const NodePairVerifyParamsSchema = Type.Object(
   { nodeId: NonEmptyString, token: NonEmptyString },
   { additionalProperties: false },
 );
 
+/** Renames a paired node while preserving its stable node id. */
 export const NodeRenameParamsSchema = Type.Object(
   { nodeId: NonEmptyString, displayName: NonEmptyString },
   { additionalProperties: false },
 );
 
+/** Lists paired nodes known to the gateway. */
 export const NodeListParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Acknowledges queued node work that the node has consumed. */
 export const NodePendingAckParamsSchema = Type.Object(
   {
     ids: Type.Array(NonEmptyString, { minItems: 1 }),
@@ -99,11 +114,13 @@ export const NodePendingAckParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Requests detailed metadata for one paired node. */
 export const NodeDescribeParamsSchema = Type.Object(
   { nodeId: NonEmptyString },
   { additionalProperties: false },
 );
 
+/** Invokes a command on a paired node; idempotency allows safe retries. */
 export const NodeInvokeParamsSchema = Type.Object(
   {
     nodeId: NonEmptyString,
@@ -115,6 +132,7 @@ export const NodeInvokeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Result callback payload for a node command invocation. */
 export const NodeInvokeResultParamsSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -135,6 +153,7 @@ export const NodeInvokeResultParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Generic node event envelope accepted by the gateway. */
 export const NodeEventParamsSchema = Type.Object(
   {
     event: NonEmptyString,
@@ -144,6 +163,7 @@ export const NodeEventParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Request for a bounded batch of queued work assigned to the calling node. */
 export const NodePendingDrainParamsSchema = Type.Object(
   {
     maxItems: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
@@ -151,6 +171,7 @@ export const NodePendingDrainParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** One queued node-work item returned by pending-work drain calls. */
 export const NodePendingDrainItemSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -163,6 +184,7 @@ export const NodePendingDrainItemSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Drain response with a revision marker for node queue state. */
 export const NodePendingDrainResultSchema = Type.Object(
   {
     nodeId: NonEmptyString,
@@ -173,6 +195,7 @@ export const NodePendingDrainResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Enqueues gateway-initiated work for a paired node. */
 export const NodePendingEnqueueParamsSchema = Type.Object(
   {
     nodeId: NonEmptyString,
@@ -184,6 +207,7 @@ export const NodePendingEnqueueParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Enqueue result echoes queue revision and whether wake delivery was attempted. */
 export const NodePendingEnqueueResultSchema = Type.Object(
   {
     nodeId: NonEmptyString,
@@ -194,6 +218,7 @@ export const NodePendingEnqueueResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Event payload used by the gateway to ask a node to run a command. */
 export const NodeInvokeRequestEventSchema = Type.Object(
   {
     id: NonEmptyString,

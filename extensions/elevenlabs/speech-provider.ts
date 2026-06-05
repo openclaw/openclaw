@@ -1,3 +1,4 @@
+// Elevenlabs provider module implements model/runtime integration.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
@@ -32,9 +33,9 @@ const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
   similarityBoost: 0.75,
-  style: 0.0,
+  style: 0,
   useSpeakerBoost: true,
-  speed: 1.0,
+  speed: 1,
 };
 
 const ELEVENLABS_TTS_MODELS = [

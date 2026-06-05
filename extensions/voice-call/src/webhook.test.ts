@@ -1,3 +1,4 @@
+// Voice Call tests cover webhook plugin behavior.
 import { request, type IncomingMessage } from "node:http";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -160,8 +161,8 @@ function expectWebhookUrl(url: string, expectedPath: string) {
   expect(parsed.port).not.toBe("0");
 }
 
-function expectNoTwilioStreamState(provider: TwilioProvider) {
-  const state = provider as unknown as {
+function expectNoTwilioStreamState(providerLocal: TwilioProvider) {
+  const state = providerLocal as unknown as {
     streamAuthTokens: Map<string, string>;
     activeStreamCalls: Set<string>;
   };
@@ -247,9 +248,9 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       if (!mediaStreamHandler) {
         throw new Error("expected media stream handler");
       }
-      expect(mediaStreamHandler.handleUpgrade).toBeTypeOf("function");
-      expect(mediaStreamHandler.sendAudio).toBeTypeOf("function");
-      expect(mediaStreamHandler.closeAll).toBeTypeOf("function");
+      expect(mediaStreamHandler["handleUpgrade"]).toBeTypeOf("function");
+      expect(mediaStreamHandler["sendAudio"]).toBeTypeOf("function");
+      expect(mediaStreamHandler["closeAll"]).toBeTypeOf("function");
     } finally {
       await server.stop();
     }
@@ -332,7 +333,7 @@ describe("VoiceCallWebhookServer media stream client IP resolution", () => {
       manager,
       createTwilioStreamingProvider(),
     );
-    const request = {
+    const requestLocal = {
       headers: {},
       socket: { remoteAddress: "127.0.0.1" },
       ...requestOverrides,
@@ -342,7 +343,7 @@ describe("VoiceCallWebhookServer media stream client IP resolution", () => {
       server as unknown as {
         resolveMediaStreamClientIp: (request: MediaStreamRequestDouble) => string | undefined;
       }
-    ).resolveMediaStreamClientIp(request as never);
+    ).resolveMediaStreamClientIp(requestLocal as never);
   };
 
   it("uses forwarded IPs only when forwarding trust is explicitly enabled", () => {
@@ -735,6 +736,40 @@ describe("VoiceCallWebhookServer replay handling", () => {
       expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
       expect(processEvent).not.toHaveBeenCalled();
     } finally {
+      await server.stop();
+    }
+  });
+
+  it("does not cache replay responses when the TTL would exceed the Date range", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    let parseCount = 0;
+    const parseWebhookEvent = vi.fn(() => ({
+      events: [],
+      statusCode: 200,
+      providerResponseBody: `OK-${++parseCount}`,
+    }));
+    const replayProvider: VoiceCallProvider = {
+      ...provider,
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "mock:req:overflow-cache" }),
+      parseWebhookEvent,
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, replayProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const first = await postWebhookForm(server, baseUrl, "CallSid=CA123&SpeechResult=hello");
+      expect(first.status).toBe(200);
+      expect(await first.text()).toBe("OK-1");
+
+      dateNow.mockReturnValue(Date.parse("2026-05-29T12:00:00.000Z"));
+      const second = await postWebhookForm(server, baseUrl, "CallSid=CA123&SpeechResult=hello");
+      expect(second.status).toBe(200);
+      expect(await second.text()).toBe("OK-2");
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(2);
+    } finally {
+      dateNow.mockRestore();
       await server.stop();
     }
   });

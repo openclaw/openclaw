@@ -1,3 +1,4 @@
+// Signal tests cover message actions plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -179,6 +180,16 @@ describe("signalMessageActions", () => {
         cfg,
       }),
     ).rejects.toThrow(/messageId.*required/);
+
+    await expect(
+      signalMessageActions.handleAction?.({
+        channel: "signal",
+        action: "react",
+        params: { to: "+15559999999", messageId: "123abc", emoji: "✅" },
+        cfg,
+      }),
+    ).rejects.toThrow(/Invalid messageId/);
+    expect(sendReactionSignalMock).not.toHaveBeenCalled();
 
     await expect(
       signalMessageActions.handleAction?.({

@@ -1,3 +1,4 @@
+// Dispatches final reply payloads through visible senders and message tools.
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -19,7 +20,10 @@ import type { TypingController } from "./typing.js";
 
 export type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
-type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
+type ReplyDispatchErrorHandler = (
+  err: unknown,
+  info: { kind: ReplyDispatchKind },
+) => Promise<void> | void;
 
 type ReplyDispatchSkipHandler = (
   payload: ReplyPayload,
@@ -69,7 +73,7 @@ export type ReplyDispatcherOptions = {
    * Called at normalization time, after model selection is complete. */
   responsePrefixContextProvider?: () => ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
-  onIdle?: () => void;
+  onIdle?: () => Promise<void> | void;
   onError?: ReplyDispatchErrorHandler;
   // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
   onSkip?: ReplyDispatchSkipHandler;
@@ -81,7 +85,7 @@ export type ReplyDispatcherOptions = {
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
   typingCallbacks?: TypingCallbacks;
   onReplyStart?: () => Promise<void> | void;
-  onIdle?: () => void;
+  onIdle?: () => Promise<void> | void;
   onSettled?: () => unknown;
   onFreshSettledDelivery?: () => unknown;
   /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
@@ -204,9 +208,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
         await options.deliver(deliverPayload, { kind });
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         failedCounts[kind] += 1;
-        options.onError?.(err, { kind });
+        void options.onError?.(err, { kind });
       })
       .finally(() => {
         pending -= 1;
@@ -220,7 +224,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         if (pending === 0) {
           // Unregister from global tracking when idle.
           unregister();
-          options.onIdle?.();
+          void options.onIdle?.();
         }
       });
     return true;
@@ -240,7 +244,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         pending -= 1;
         if (pending === 0) {
           unregister();
-          options.onIdle?.();
+          void options.onIdle?.();
         }
       }
     });
@@ -311,7 +315,7 @@ export function createReplyDispatcherWithTyping(
     ...dispatcherOptions,
     onIdle: () => {
       typingController?.markDispatchIdle();
-      resolvedOnIdle?.();
+      return resolvedOnIdle?.();
     },
   });
 

@@ -1,3 +1,4 @@
+// Signal plugin module implements send behavior.
 import fs from "node:fs/promises";
 import {
   createMessageReceiptFromOutboundResults,

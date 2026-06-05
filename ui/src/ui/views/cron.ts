@@ -1,3 +1,4 @@
+// Control UI view renders cron screen content.
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -1841,7 +1842,7 @@ function renderRun(
         ? `${usage.input_tokens} in / ${usage.output_tokens} out`
         : null;
   const bodySource = entry.summary || entry.error || t("cron.runEntry.noSummary");
-  const showErrorInMeta = !!entry.error && !!entry.summary;
+  const showErrorInMeta = Boolean(entry.error) && Boolean(entry.summary);
   return html`
     <div class="list-item cron-run-entry">
       <div class="cron-run-entry__header">

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements model selection behavior.
 import {
   listProfilesForProvider,
   loadAuthProfileStoreForRuntime,
@@ -14,12 +15,14 @@ export function resolveQaLiveFrontierPreferredModel() {
     const store = loadAuthProfileStoreForRuntime(undefined, {
       readOnly: true,
       allowKeychainPrompt: false,
-      externalCliProviderIds: ["openai-codex"],
+      externalCliProviderIds: ["openai"],
     });
-    if (listProfilesForProvider(store, "openai").length > 0) {
+    const openAiProfileIds = listProfilesForProvider(store, "openai");
+    const openAiProfileTypes = openAiProfileIds.map((profileId) => store.profiles[profileId]?.type);
+    if (openAiProfileTypes.some((type) => type === "api_key")) {
       return undefined;
     }
-    return listProfilesForProvider(store, "openai-codex").length > 0
+    return openAiProfileTypes.some((type) => type === "oauth" || type === "token")
       ? QA_CODEX_OAUTH_LIVE_MODEL
       : undefined;
   } catch {

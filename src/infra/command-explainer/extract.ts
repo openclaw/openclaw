@@ -1,3 +1,5 @@
+// Rich shell command explainer walks tree-sitter-bash nodes into command steps,
+// nested wrapper payloads, source spans, and risk annotations.
 import type { Node as TreeSitterNode } from "web-tree-sitter";
 import type { InterpreterInlineEvalHit } from "../command-analysis/inline-eval.js";
 import {
@@ -63,6 +65,7 @@ const MAX_WRAPPER_PAYLOAD_DEPTH = 2;
 
 const PARSEABLE_SHELL_WRAPPERS = new Set<string>(POSIX_SHELL_WRAPPERS);
 
+// Span bases map nested wrapper payload offsets back to source command offsets.
 type SpanBase = {
   startIndex: number;
   startPosition: SourceSpan["startPosition"];
@@ -74,6 +77,7 @@ const ROOT_SPAN_BASE: SpanBase = {
   startPosition: { row: 0, column: 0 },
 };
 
+// Tree-sitter exposes nullable children; normalize once for the walkers below.
 function children(node: TreeSitterNode): TreeSitterNode[] {
   return Array.from({ length: node.childCount }, (_, index) => node.child(index)).filter(
     (child): child is TreeSitterNode => child !== null,
@@ -262,9 +266,7 @@ function appendDecodedText(
   sourceEndOffset: number,
 ): void {
   decoded.value += value;
-  for (let index = 0; index < value.length; index += 1) {
-    decoded.sourceOffsets.push(sourceEndOffset);
-  }
+  decoded.sourceOffsets.push(...Array.from({ length: value.length }, () => sourceEndOffset));
 }
 
 function identityDecodedShellText(text: string, sourceOffset = 0): DecodedShellText {
@@ -1123,6 +1125,7 @@ async function walk(
   }
 }
 
+/** Parses a shell command into command steps, shapes, risks, and source spans. */
 export async function explainShellCommand(source: string): Promise<CommandExplanation> {
   const tree = await parseBashForCommandExplanation(source);
   try {

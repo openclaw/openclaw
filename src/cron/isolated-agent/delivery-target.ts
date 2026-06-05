@@ -1,3 +1,6 @@
+/** Resolves isolated cron delivery requests into concrete outbound targets. */
+import { normalizeOptionalThreadValue } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveExplicitDeliveryTargetCompat } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
@@ -14,11 +17,10 @@ import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-sessi
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalThreadValue } from "../../shared/string-coerce.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 import { resolveCronStoredDeliveryContext } from "../delivery-context.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
+/** Result of resolving a cron job delivery request into a sendable outbound channel target. */
 export type DeliveryTargetResolution =
   | {
       ok: true;
@@ -108,6 +110,8 @@ function shouldCarrySessionThread(params: {
       params.resolved.to === params.resolved.lastTo
     );
   }
+  // Explicit targets may reuse a stored thread only when both targets resolve
+  // to the same channel peer; otherwise cron could reply into a stale thread.
   return routesSharePeer(params.route, params.lastRoute);
 }
 
@@ -122,6 +126,12 @@ function stripSelectedProviderPrefix(params: {
   const stripped = stripTargetProviderPrefix(trimmed, params.channel).trim();
   return stripped || undefined;
 }
+
+function shouldStripResolvedTargetProviderPrefix(target: ResolvedMessagingTarget): boolean {
+  return target.resolutionSource === "normalized";
+}
+
+/** Resolves cron delivery config into a concrete channel target and optional thread/account. */
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
@@ -270,6 +280,8 @@ export async function resolveDeliveryTarget(
     effectiveAllowFrom = allowFromOverride;
 
     if (toCandidate && allowFromOverride.length > 0) {
+      // Implicit delivery must stay within channel allow-from policy; if the
+      // remembered target is outside that set, fall back to the first allowed peer.
       const currentTargetResolution = await resolveOutboundTargetWithRuntime({
         channel,
         to: toCandidate,
@@ -305,8 +317,6 @@ export async function resolveDeliveryTarget(
     };
   }
   toCandidate = docked.to;
-
-  let resolvedTarget: ResolvedMessagingTarget | undefined;
   const targetResolution = await deliveryTargetRuntime.resolveChannelTargetForDelivery({
     cfg,
     channel,
@@ -324,15 +334,17 @@ export async function resolveDeliveryTarget(
       error: targetResolution.error,
     };
   }
-  resolvedTarget = targetResolution.target;
+  const resolvedTarget: ResolvedMessagingTarget | undefined = targetResolution.target;
   const routeTargetCandidate =
     resolvedTarget.source === "directory"
       ? resolvedTarget.to
       : (preResolvedRouteTargetCandidate ?? toCandidate);
-  const selectedTarget = stripSelectedProviderPrefix({
-    channel,
-    to: resolvedTarget.to,
-  });
+  const selectedTarget = shouldStripResolvedTargetProviderPrefix(resolvedTarget)
+    ? stripSelectedProviderPrefix({
+        channel,
+        to: resolvedTarget.to,
+      })
+    : resolvedTarget.to.trim();
   if (!selectedTarget) {
     return {
       ok: false,
@@ -369,6 +381,8 @@ export async function resolveDeliveryTarget(
   const routeShouldCanonicalizeTarget =
     route && (route.threadId !== undefined || route.to !== routeTargetCandidate);
   if (route && routeCanCanonicalizeTarget && routeShouldCanonicalizeTarget) {
+    // Prefer channel-canonical targets when the plugin can prove the route; this
+    // keeps stored session keys and delivery targets aligned for threaded sends.
     const routeTo = stripSelectedProviderPrefix({
       channel,
       to: route.to,
@@ -415,6 +429,8 @@ export async function resolveDeliveryTarget(
           })?.threadId,
         )
       : undefined;
+  // Thread precedence is explicit config, route canonicalization, parser-derived
+  // explicit target, then same-peer session history.
   const threadId =
     explicitThreadId ??
     route?.threadId ??

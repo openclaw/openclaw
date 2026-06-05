@@ -1,11 +1,13 @@
+// Image tool tests cover model routing, provider auth, path safety, inbound
+// media refs, data URLs, response validation, and compression policy.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
   ImageDescriptionRequest,
@@ -21,6 +23,13 @@ import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandb
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
+
+function jsonRoundTrip<T>(value: T): T {
+  // Anthropic rejects union-heavy schemas, so schema snapshots must survive the
+  // same JSON serialization path used for model-facing tool definitions.
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
 
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSync: vi.fn(
@@ -210,10 +219,10 @@ vi.mock("../model-auth.js", () => ({
 }));
 
 vi.mock("../openclaw-tools.js", async () => {
-  const { createImageTool } = await import("./image-tool.js");
+  const { createImageTool: createImageToolLocal } = await import("./image-tool.js");
   return {
     createOpenClawTools: vi.fn((options?: MockOpenClawToolsOptions) => {
-      const imageTool = createImageTool({
+      const imageTool = createImageToolLocal({
         config: options?.config,
         agentDir: options?.agentDir,
         workspaceDir: options?.workspaceDir,
@@ -300,6 +309,8 @@ function createLargeColorBlockPng(size: number): Buffer {
 }
 
 function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
+  // The tests inspect JPEG SOF markers directly so resize assertions do not
+  // depend on an external decoder.
   let offset = 2;
   while (offset + 9 < buffer.length) {
     if (buffer[offset] !== 0xff) {
@@ -795,17 +806,17 @@ async function withMinimaxImageToolFromTempAgentDir(
   });
 }
 
-function findSchemaUnionKeywords(schema: unknown, path = "root"): string[] {
+function findSchemaUnionKeywords(schema: unknown, pathLocal = "root"): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
   if (Array.isArray(schema)) {
-    return schema.flatMap((item, index) => findSchemaUnionKeywords(item, `${path}[${index}]`));
+    return schema.flatMap((item, index) => findSchemaUnionKeywords(item, `${pathLocal}[${index}]`));
   }
   const record = schema as Record<string, unknown>;
   const out: string[] = [];
   for (const [key, value] of Object.entries(record)) {
-    const nextPath = `${path}.${key}`;
+    const nextPath = `${pathLocal}.${key}`;
     if (key === "anyOf" || key === "oneOf" || key === "allOf") {
       out.push(nextPath);
     }
@@ -1685,7 +1696,7 @@ describe("image tool implicit imageModel config", () => {
 
   it("keeps an Anthropic-safe image schema snapshot", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
-      expect(JSON.parse(JSON.stringify(tool.parameters))).toEqual({
+      expect(jsonRoundTrip(tool.parameters)).toEqual({
         type: "object",
         properties: {
           prompt: { type: "string" },
@@ -1976,6 +1987,46 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("passes the shared remote read idle timeout when loading remote image references", async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ content: "ok", base_resp: { status_code: 0, status_msg: "" } }),
+        ),
+    );
+    global.fetch = withFetchPreconnect(fetch);
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const loadWebMedia = vi.fn(async () => ({
+      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      contentType: "image/png",
+      kind: "image" as const,
+    }));
+    installImageUnderstandingProviderDeps([minimaxProvider, moonshotProvider], {
+      loadImageWebMediaRuntime: async () => ({
+        loadWebMedia,
+        optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
+          buffer,
+          contentType: contentType ?? "image/png",
+          kind: "image",
+          fileName,
+        }),
+      }),
+    });
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({
+        config: createMinimaxImageConfig(),
+        agentDir,
+      });
+
+      await expectImageToolExecOk(tool, "https://example.test/reference.png");
+
+      expect(loadWebMedia).toHaveBeenCalledTimes(1);
+      const [, options] = fetchCallAt(loadWebMedia, 0);
+      expect((options as { readIdleTimeoutMs?: number }).readIdleTimeoutMs).toBe(120_000);
+    });
+  });
+
   it("sandboxes image paths like the read tool", async () => {
     await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
       await fs.writeFile(path.join(sandboxRoot, "img.png"), "fake", "utf8");
@@ -2100,11 +2151,16 @@ describe("image tool data URL support", () => {
 
   it("applies model image maxBytes to data URLs", async () => {
     await withTempAgentDir(async (agentDir) => {
-      installImageUnderstandingProviderStubs();
       const model = {
         ...makeModelDefinition("tiny-vision", ["text", "image"]),
         mediaInput: { image: { maxBytes: 1 } },
       } satisfies ModelDefinitionConfig;
+      installImageUnderstandingProviderDeps([], {
+        resolveImageCompressionPolicy: async () => ({
+          imageCount: 1,
+          models: [model.mediaInput.image],
+        }),
+      });
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -2135,21 +2191,31 @@ describe("image tool data URL support", () => {
   it("downscales data URL images to the resolved model side limit", async () => {
     await withTempAgentDir(async (agentDir) => {
       let observedDimensions: { width: number; height: number } | undefined;
-      installImageUnderstandingProviderStubs({
-        id: "openai",
-        capabilities: ["image"],
-        describeImage: async (params) => {
-          observedDimensions =
-            params.mime === "image/png"
-              ? readPngDimensions(params.buffer)
-              : readJpegDimensions(params.buffer);
-          return { text: "ok", model: params.model };
-        },
-      });
       const model = {
         ...makeModelDefinition("tiny-vision", ["text", "image"]),
         mediaInput: { image: { maxSidePx: 512, preferredSidePx: 512 } },
       } satisfies ModelDefinitionConfig;
+      installImageUnderstandingProviderDeps(
+        [
+          {
+            id: "openai",
+            capabilities: ["image"],
+            describeImage: async (params) => {
+              observedDimensions =
+                params.mime === "image/png"
+                  ? readPngDimensions(params.buffer)
+                  : readJpegDimensions(params.buffer);
+              return { text: "ok", model: params.model };
+            },
+          },
+        ],
+        {
+          resolveImageCompressionPolicy: async () => ({
+            imageCount: 1,
+            models: [model.mediaInput.image],
+          }),
+        },
+      );
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {

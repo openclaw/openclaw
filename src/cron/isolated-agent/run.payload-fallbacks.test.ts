@@ -1,3 +1,4 @@
+// Payload fallback tests cover fallback prompt payloads for isolated cron runs.
 import { describe, expect, it } from "vitest";
 import {
   makeIsolatedAgentTurnJob,
@@ -35,21 +36,6 @@ function requireModelFallbackRequest(): {
   }
   return request;
 }
-
-function requireEmbeddedRunRequest(): {
-  modelFallbacksOverride?: string[];
-} {
-  const request = runEmbeddedAgentMock.mock.calls[0]?.[0] as
-    | {
-        modelFallbacksOverride?: string[];
-      }
-    | undefined;
-  if (!request) {
-    throw new Error("Expected embedded run request");
-  }
-  return request;
-}
-
 describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
@@ -160,7 +146,7 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.2", "zai/glm-5"],
+                  fallbacks: ["openai/gpt-5.2", "zai/glm-5"],
                 },
               },
             },
@@ -171,12 +157,12 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
 
     expect(result.status).toBe("ok");
     expect(requireModelFallbackRequest().fallbacksOverride).toEqual([
-      "openai-codex/gpt-5.2",
+      "openai/gpt-5.2",
       "zai/glm-5",
     ]);
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      modelFallbacksOverride: ["openai-codex/gpt-5.2", "zai/glm-5"],
+      modelFallbacksOverride: ["openai/gpt-5.2", "zai/glm-5"],
     });
   });
 });

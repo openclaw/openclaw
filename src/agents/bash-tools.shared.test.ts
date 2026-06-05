@@ -1,3 +1,8 @@
+/**
+ * Shared bash-tool helper tests.
+ * Covers strict env parsing and sandbox workdir mapping between container and
+ * host workspace paths.
+ */
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +37,17 @@ describe("resolveSandboxWorkdir", () => {
     vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "250ms");
     vi.stubEnv("PI_BASH_YIELD_MS", "500");
 
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
+  });
+
+  it("reads only strict signed decimal environment integers", () => {
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "+250");
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBe(250);
+
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "0x10");
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
+
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "1e2");
     expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
   });
 

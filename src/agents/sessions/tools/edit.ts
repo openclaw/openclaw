@@ -1,3 +1,8 @@
+/**
+ * Built-in edit session tool.
+ *
+ * Applies exact targeted replacements with queued file mutation, diff previews, and TUI renderers.
+ */
 import { constants } from "node:fs";
 import {
   access as fsAccess,
@@ -114,7 +119,7 @@ function prepareEditArguments(input: unknown): EditToolInput {
 
   const edits = Array.isArray(legacy.edits) ? [...legacy.edits] : [];
   edits.push({ oldText: legacy.oldText, newText: legacy.newText });
-  const { oldText, newText, ...rest } = legacy;
+  const { oldText: _oldText, newText: _newText, ...rest } = legacy;
   return { ...rest, edits } as EditToolInput;
 }
 
@@ -483,8 +488,8 @@ export function createEditToolDefinition(
 
       return buildEditCallComponent(component, args, theme);
     },
-    renderResult(result, options, theme, context) {
-      void options;
+    renderResult(result, optionsLocal, theme, context) {
+      void optionsLocal;
       const callComponent = context.state.callComponent;
       const previewInput = getRenderablePreviewInput(
         context.args as RenderableEditArgs | undefined,

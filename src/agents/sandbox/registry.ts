@@ -1,3 +1,8 @@
+/**
+ * Persistent sandbox registry storage.
+ *
+ * Tracks runtime and browser containers with sharded JSON files plus migration support for legacy registries.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -122,6 +127,7 @@ async function readLegacyRegistryFile(registryPath: string): Promise<RegistryFil
   }
 }
 
+/** Reads all registered sandbox runtime containers from the sharded registry. */
 export async function readRegistry(): Promise<SandboxRegistry> {
   const entries = await readShardedEntries<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR);
   return {
@@ -139,6 +145,8 @@ async function withEntryLock<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const entryPath = shardedEntryFilePath(dir, containerName);
+  // Entry-level locks keep independent container updates concurrent while serializing writes for
+  // the same container hash path.
   const lock = await acquireSessionWriteLock({
     sessionFile: entryPath,
     allowReentrant: false,
@@ -218,7 +226,7 @@ async function readShardedEntries<T extends RegistryEntry>(dir: string): Promise
 
 async function quarantineLegacyRegistry(registryPath: string): Promise<string> {
   const quarantinePath = `${registryPath}.invalid-${Date.now()}`;
-  await fs.rename(registryPath, quarantinePath).catch(async (error) => {
+  await fs.rename(registryPath, quarantinePath).catch(async (error: unknown) => {
     const code = (error as { code?: string } | null)?.code;
     if (code !== "ENOENT") {
       await fs.rm(registryPath, { force: true });
@@ -280,6 +288,7 @@ function legacyRegistryTargets(): LegacyRegistryTarget[] {
   ];
 }
 
+/** Inspects old monolithic registry files without mutating them. */
 export async function inspectLegacySandboxRegistryFiles(): Promise<
   LegacySandboxRegistryInspection[]
 > {
@@ -307,6 +316,7 @@ export async function inspectLegacySandboxRegistryFiles(): Promise<
   return inspections;
 }
 
+/** Migrates old monolithic registry files into sharded entry files when present. */
 export async function migrateLegacySandboxRegistryFiles(): Promise<
   LegacySandboxRegistryMigrationResult[]
 > {
@@ -317,6 +327,7 @@ export async function migrateLegacySandboxRegistryFiles(): Promise<
   return results;
 }
 
+/** Reads one registered sandbox runtime container by container name. */
 export async function readRegistryEntry(
   containerName: string,
 ): Promise<SandboxRegistryEntry | null> {
@@ -324,6 +335,7 @@ export async function readRegistryEntry(
   return entry ? normalizeSandboxRegistryEntry(entry) : null;
 }
 
+/** Creates or updates one sandbox runtime registry entry, preserving immutable creation fields. */
 export async function updateRegistry(entry: SandboxRegistryEntry) {
   await withEntryLock(SANDBOX_CONTAINERS_DIR, entry.containerName, async () => {
     const existing = await readShardedEntry<SandboxRegistryEntry>(
@@ -342,16 +354,19 @@ export async function updateRegistry(entry: SandboxRegistryEntry) {
   });
 }
 
+/** Removes one sandbox runtime registry entry by container name. */
 export async function removeRegistryEntry(containerName: string) {
   await withEntryLock(SANDBOX_CONTAINERS_DIR, containerName, async () => {
     await removeShardedEntry(SANDBOX_CONTAINERS_DIR, containerName);
   });
 }
 
+/** Reads all registered browser sandbox containers from the sharded registry. */
 export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
   return { entries: await readShardedEntries<SandboxBrowserRegistryEntry>(SANDBOX_BROWSERS_DIR) };
 }
 
+/** Creates or updates one browser sandbox registry entry, preserving immutable creation fields. */
 export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {
   await withEntryLock(SANDBOX_BROWSERS_DIR, entry.containerName, async () => {
     const existing = await readShardedEntry<SandboxBrowserRegistryEntry>(
@@ -367,6 +382,7 @@ export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) 
   });
 }
 
+/** Removes one browser sandbox registry entry by container name. */
 export async function removeBrowserRegistryEntry(containerName: string) {
   await withEntryLock(SANDBOX_BROWSERS_DIR, containerName, async () => {
     await removeShardedEntry(SANDBOX_BROWSERS_DIR, containerName);

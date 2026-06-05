@@ -1,3 +1,4 @@
+// Memory Core plugin module implements rem harness behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -82,7 +83,7 @@ function createSkippedRemPreview(): RemDreamingPreview {
 
 async function listWorkspaceDailyFiles(workspaceDir: string, limit?: number): Promise<string[]> {
   const memoryDir = path.join(workspaceDir, "memory");
-  let entries: string[] = [];
+  let entries: string[];
   try {
     const dirEntries = await fs.readdir(memoryDir, { withFileTypes: true });
     entries = dirEntries

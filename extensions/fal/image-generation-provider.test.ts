@@ -1,3 +1,4 @@
+// Fal tests cover image generation provider plugin behavior.
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -114,6 +115,45 @@ describe("fal image-generation provider", () => {
       model: "fal-ai/flux/dev",
       metadata: { prompt: "draw a cat" },
     });
+  });
+
+  it("rejects generated image downloads that exceed the configured media cap", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/generated.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("too-large"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "fal-ai/flux/dev",
+        prompt: "draw a cat",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("fal generated image download exceeds 1 bytes");
   });
 
   it("wraps wrong-shape successful fal image responses", async () => {

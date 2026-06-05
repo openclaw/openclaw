@@ -1,3 +1,4 @@
+// Codex tests cover native subagent task mirror plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   codexNativeSubagentRunId,
@@ -7,7 +8,7 @@ import {
 
 function createRuntime() {
   return {
-    createRunningTaskRun: vi.fn(),
+    tryCreateRunningTaskRun: vi.fn((params) => ({ taskId: "task-native-subagent", ...params })),
     recordTaskRunProgressByRunId: vi.fn(() => []),
     finalizeTaskRunByRunId: vi.fn(() => []),
   } as unknown as TaskLifecycleRuntime;
@@ -49,7 +50,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
     });
 
-    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith({
+    expect(runtime.tryCreateRunningTaskRun).toHaveBeenCalledWith({
       sourceId: "codex-thread:child-thread",
       agentId: "main",
       runId: "codex-thread:child-thread",
@@ -62,7 +63,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
       lastEventAt: 20_000,
       progressSummary: "Codex native subagent started.",
     });
-    expect(vi.mocked(runtime.createRunningTaskRun).mock.calls[0]?.[0]).not.toHaveProperty(
+    expect(vi.mocked(runtime.tryCreateRunningTaskRun).mock.calls[0]?.[0]).not.toHaveProperty(
       "childSessionKey",
     );
     expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
@@ -99,7 +100,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
     });
 
-    expect(runtime.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(runtime.tryCreateRunningTaskRun).not.toHaveBeenCalled();
     expect(runtime.recordTaskRunProgressByRunId).not.toHaveBeenCalled();
     expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
   });
@@ -133,7 +134,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
     mirror.handleNotification(notification);
     mirror.handleNotification(notification);
 
-    expect(runtime.createRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect(runtime.tryCreateRunningTaskRun).toHaveBeenCalledTimes(1);
   });
 
   it("maps Codex thread status changes onto the mirrored task run", () => {
@@ -228,7 +229,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
     });
 
-    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith({
+    expect(runtime.tryCreateRunningTaskRun).toHaveBeenCalledWith({
       sourceId: "codex-thread:child-thread",
       runId: "codex-thread:child-thread",
       label: "Codex subagent",
@@ -240,7 +241,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
       lastEventAt: 40_000,
       progressSummary: "Codex native subagent spawned.",
     });
-    expect(vi.mocked(runtime.createRunningTaskRun).mock.calls[0]?.[0]).not.toHaveProperty(
+    expect(vi.mocked(runtime.tryCreateRunningTaskRun).mock.calls[0]?.[0]).not.toHaveProperty(
       "childSessionKey",
     );
     expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
@@ -282,7 +283,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
     });
 
-    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith(
+    expect(runtime.tryCreateRunningTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "codex-thread:child-thread",
         task: "inspect one thing",
@@ -319,7 +320,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
     });
 
-    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith(
+    expect(runtime.tryCreateRunningTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "codex-thread:child-thread",
         task: "inspect one thing",

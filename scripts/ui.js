@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Routes UI package commands through the repo's Node/pnpm wrappers.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -18,6 +19,9 @@ function usage() {
   process.stderr.write("Usage: node scripts/ui.js <install|dev|build|test> [...args]\n");
 }
 
+/**
+ * Returns whether Windows needs cmd.exe for a command shim.
+ */
 export function shouldUseCmdExeForCommand(cmd, platform = process.platform) {
   if (platform !== "win32") {
     return false;
@@ -26,6 +30,9 @@ export function shouldUseCmdExeForCommand(cmd, platform = process.platform) {
   return WINDOWS_CMD_EXE_EXTENSIONS.has(extension);
 }
 
+/**
+ * Builds the spawn call for a UI command, including Windows cmd.exe wrapping.
+ */
 export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   const platform = params.platform ?? process.platform;
   const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
@@ -54,6 +61,9 @@ export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   };
 }
 
+/**
+ * Builds the pnpm-backed spawn call for UI package scripts.
+ */
 export function resolvePnpmSpawnCall(pnpmArgs, envOverride, params = {}) {
   const env = envOverride ?? process.env;
   const platform = params.platform ?? process.platform;
@@ -88,11 +98,48 @@ function runSpawnCall(spawnCall, label) {
     return;
   }
 
+  let forwardedSignal = null;
+  let forceKillTimer = null;
+  // Keep UI dev children in the foreground process group for native TTY
+  // resize/job-control behavior. Forward direct wrapper shutdown signals.
+  const forwardedSignals = ["SIGTERM", "SIGHUP"];
+  const signalHandlers = new Map(
+    forwardedSignals.map((signal) => [
+      signal,
+      () => {
+        forwardedSignal ??= signal;
+        child.kill(signal);
+        forceKillTimer ??= setTimeout(() => child.kill("SIGKILL"), 5_000);
+      },
+    ]),
+  );
+  const cleanupSignalHandlers = () => {
+    for (const [signal, handler] of signalHandlers) {
+      process.off(signal, handler);
+    }
+    if (forceKillTimer) {
+      clearTimeout(forceKillTimer);
+    }
+  };
+  for (const [signal, handler] of signalHandlers) {
+    process.on(signal, handler);
+  }
+
   child.on("error", (err) => {
+    cleanupSignalHandlers();
     console.error(`Failed to launch ${label}:`, err);
     process.exit(1);
   });
-  child.on("exit", (code) => {
+  child.on("exit", (code, signal) => {
+    cleanupSignalHandlers();
+    if (forwardedSignal) {
+      process.kill(process.pid, forwardedSignal);
+      return;
+    }
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
     if (code !== 0) {
       process.exit(code ?? 1);
     }
@@ -118,7 +165,8 @@ function runSpawnCallSync(spawnCall, label) {
     return;
   }
   if (result.signal) {
-    process.exit(1);
+    process.kill(process.pid, result.signal);
+    return;
   }
   if ((result.status ?? 1) !== 0) {
     process.exit(result.status ?? 1);

@@ -1,3 +1,4 @@
+// Deepgram provider module implements model/runtime integration.
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionProviderConfig,
@@ -186,9 +187,8 @@ function createDeepgramRealtimeTranscriptionSession(
       case "Error":
       case "error":
         config.onError?.(new Error(readErrorDetail(event.error ?? event.message)));
-        return;
+
       default:
-        return;
     }
   };
 

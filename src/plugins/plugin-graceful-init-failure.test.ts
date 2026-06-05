@@ -1,3 +1,4 @@
+// Verifies graceful plugin init failure handling and reporting.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -166,6 +167,7 @@ describe("graceful plugin initialization failure", () => {
     const summary = requireWarning(warnings, "failed to initialize");
     expect(summary).toContain("register: warn-register");
     expect(summary).toContain("validation: warn-validation");
+    expect(summary).toContain("openclaw plugins inspect <id> --runtime --json");
     expect(summary).toContain("openclaw plugins list");
   });
 });

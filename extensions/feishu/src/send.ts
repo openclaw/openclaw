@@ -1,4 +1,6 @@
+// Feishu plugin module implements send behavior.
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -378,7 +380,7 @@ function parseFeishuMessageItem(
     senderType: item.sender?.sender_type,
     content: parseFeishuMessageContent(rawContent, msgType),
     contentType: msgType,
-    createTime: item.create_time ? Number.parseInt(item.create_time, 10) : undefined,
+    createTime: parseStrictNonNegativeInteger(item.create_time),
     threadId: item.thread_id || undefined,
   };
 }

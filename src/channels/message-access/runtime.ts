@@ -1,6 +1,14 @@
+/**
+ * Channel ingress runtime resolver.
+ *
+ * Merges route, sender, command, access-group, and pairing-store facts before decision evaluation.
+ */
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import type { PairingChannel } from "../../pairing/pairing-store.types.js";
-import { normalizeStringEntries, uniqueStrings } from "../../shared/string-normalization.js";
 import { mergeDmAllowFromSources, resolveGroupAllowFromSources } from "../allow-from.js";
 import { decideChannelIngress } from "./decision.js";
 import {

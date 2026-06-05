@@ -1,6 +1,8 @@
+// Release Beta Verifier script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { readBoundedResponseText } from "./bounded-response.ts";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
 import {
   collectPublishablePluginPackages,
@@ -223,7 +225,9 @@ async function fetchWithRetry(
       lastError = error;
     }
     if (attempt < attempts) {
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, attempt * 1000));
+      await new Promise((resolveDelay) => {
+        setTimeout(resolveDelay, attempt * 1000);
+      });
     }
   }
   const message = lastError instanceof Error ? lastError.message : String(lastError);
@@ -236,54 +240,6 @@ async function fetchJsonWithRetry(url: string): Promise<unknown> {
     throw new Error(`${url} returned HTTP ${response.status}.`);
   }
   return await readBoundedJsonResponse(response, url);
-}
-
-async function readBoundedResponseText(
-  response: Response,
-  label: string,
-  maxBytes = CLAWHUB_RESPONSE_BODY_MAX_BYTES,
-): Promise<string> {
-  const contentLength = Number.parseInt(response.headers.get("content-length") ?? "", 10);
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    throw new Error(`${label} response body exceeded ${maxBytes} bytes.`);
-  }
-
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  let totalBytes = 0;
-  let canceled = false;
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        const tail = decoder.decode();
-        if (tail) {
-          chunks.push(tail);
-        }
-        break;
-      }
-
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        canceled = true;
-        await reader.cancel().catch(() => undefined);
-        throw new Error(`${label} response body exceeded ${maxBytes} bytes.`);
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-  } finally {
-    if (!canceled) {
-      reader.releaseLock();
-    }
-  }
-
-  return chunks.join("");
 }
 
 export async function readBoundedJsonResponse(

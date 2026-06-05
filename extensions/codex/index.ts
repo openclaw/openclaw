@@ -1,3 +1,7 @@
+/**
+ * Bundled Codex plugin entry: app-server harness, model provider, media
+ * understanding, migration provider, CLI-session commands, and binding hooks.
+ */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -25,11 +29,13 @@ export default definePluginEntry({
   name: "Codex",
   description: "Codex app-server harness and Codex-managed GPT model catalog.",
   register(api) {
+    const resolveCurrentConfig = () =>
+      api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
     const resolveCurrentPluginConfig = () =>
+      // Codex plugin config can change at runtime; resolve from live config for
+      // harness attempts and binding claims instead of keeping startup values.
       resolveLivePluginConfigObject(
-        api.runtime.config?.current
-          ? () => api.runtime.config.current() as OpenClawConfig
-          : undefined,
+        resolveCurrentConfig,
         "codex",
         api.pluginConfig as Record<string, unknown>,
       ) ?? api.pluginConfig;
@@ -92,6 +98,8 @@ export default definePluginEntry({
             mutate: async (update) => {
               await mutateConfigFile({
                 mutate: (draft) => {
+                  // Create the nested plugin config path on demand so codex
+                  // plugin commands can enable/update Codex-managed plugins.
                   const root = draft as Record<string, unknown>;
                   root.plugins = (root.plugins ?? {}) as Record<string, unknown>;
                   const pluginsBlock = root.plugins as Record<string, unknown>;
@@ -114,8 +122,8 @@ export default definePluginEntry({
     );
     api.on("inbound_claim", (event, ctx) =>
       handleCodexConversationInboundClaim(event, ctx, {
-        config: api.runtime.config?.current?.() as OpenClawConfig | undefined,
         pluginConfig: resolveCurrentPluginConfig(),
+        config: resolveCurrentConfig(),
         resumeCodexCliSessionOnNode: (params) =>
           resumeCodexCliSessionOnNode({ runtime: api.runtime, ...params }),
       }),

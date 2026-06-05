@@ -1,3 +1,4 @@
+// Built-in provider registration installs the bundled provider factories.
 import { registerApiProvider, unregisterApiProviders } from "../api-registry.js";
 import type {
   Api,
@@ -15,10 +16,11 @@ import type { AzureOpenAIResponsesOptions } from "./azure-openai-responses.js";
 import type { GoogleVertexOptions } from "./google-vertex.js";
 import type { GoogleOptions } from "./google.js";
 import type { MistralOptions } from "./mistral.js";
-import type { OpenAICodexResponsesOptions } from "./openai-codex-responses.js";
+import type { OpenAICodexResponsesOptions } from "./openai-chatgpt-responses.js";
 import type { OpenAICompletionsOptions } from "./openai-completions.js";
 import type { OpenAIResponsesOptions } from "./openai-responses.js";
 
+// Lazy built-in provider registration keeps the main LLM stream facade cheap to import.
 interface LazyProviderModule<
   TApi extends Api,
   TOptions extends StreamOptions,
@@ -62,8 +64,11 @@ interface MistralProviderModule {
 }
 
 interface OpenAICodexResponsesProviderModule {
-  streamOpenAICodexResponses: StreamFunction<"openai-codex-responses", OpenAICodexResponsesOptions>;
-  streamSimpleOpenAICodexResponses: StreamFunction<"openai-codex-responses", SimpleStreamOptions>;
+  streamOpenAICodexResponses: StreamFunction<
+    "openai-chatgpt-responses",
+    OpenAICodexResponsesOptions
+  >;
+  streamSimpleOpenAICodexResponses: StreamFunction<"openai-chatgpt-responses", SimpleStreamOptions>;
 }
 
 interface OpenAICompletionsProviderModule {
@@ -76,6 +81,7 @@ interface OpenAIResponsesProviderModule {
   streamSimpleOpenAIResponses: StreamFunction<"openai-responses", SimpleStreamOptions>;
 }
 
+/** Source id used for built-in API provider registrations. */
 export const BUILT_IN_API_PROVIDER_SOURCE_ID = "core:built-in";
 
 let anthropicProviderModulePromise:
@@ -97,7 +103,11 @@ let mistralProviderModulePromise:
   | undefined;
 let openAICodexResponsesProviderModulePromise:
   | Promise<
-      LazyProviderModule<"openai-codex-responses", OpenAICodexResponsesOptions, SimpleStreamOptions>
+      LazyProviderModule<
+        "openai-chatgpt-responses",
+        OpenAICodexResponsesOptions,
+        SimpleStreamOptions
+      >
     >
   | undefined;
 let openAICompletionsProviderModulePromise:
@@ -143,6 +153,7 @@ function createLazyLoadErrorMessage<TApi extends Api>(
   };
 }
 
+// Provider modules load on first use, but callers still receive a stream synchronously.
 function createLazyStream<
   TApi extends Api,
   TOptions extends StreamOptions,
@@ -158,7 +169,8 @@ function createLazyStream<
         const inner = module.stream(model, context, options);
         forwardStream(outer, inner);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
+        // Surface lazy-load failures as normal assistant error messages for stream consumers.
         const message = createLazyLoadErrorMessage(model, error);
         outer.push({ type: "error", reason: "error", error: message });
         outer.end(message);
@@ -183,7 +195,7 @@ function createLazySimpleStream<
         const inner = module.streamSimple(model, context, options);
         forwardStream(outer, inner);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         const message = createLazyLoadErrorMessage(model, error);
         outer.push({ type: "error", reason: "error", error: message });
         outer.end(message);
@@ -261,9 +273,9 @@ function loadMistralProviderModule(): Promise<
 }
 
 function loadOpenAICodexResponsesProviderModule(): Promise<
-  LazyProviderModule<"openai-codex-responses", OpenAICodexResponsesOptions, SimpleStreamOptions>
+  LazyProviderModule<"openai-chatgpt-responses", OpenAICodexResponsesOptions, SimpleStreamOptions>
 > {
-  openAICodexResponsesProviderModulePromise ||= import("./openai-codex-responses.js").then(
+  openAICodexResponsesProviderModulePromise ||= import("./openai-chatgpt-responses.js").then(
     (module) => {
       const provider = module as OpenAICodexResponsesProviderModule;
       return {
@@ -326,6 +338,7 @@ export const streamSimpleOpenAIResponses = createLazySimpleStream(
   loadOpenAIResponsesProviderModule,
 );
 
+/** Registers all built-in API providers into the shared runtime registry. */
 export function registerBuiltInApiProviders(): void {
   registerApiProvider(
     {
@@ -374,7 +387,7 @@ export function registerBuiltInApiProviders(): void {
 
   registerApiProvider(
     {
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
       stream: streamOpenAICodexResponses,
       streamSimple: streamSimpleOpenAICodexResponses,
     },
@@ -400,9 +413,8 @@ export function registerBuiltInApiProviders(): void {
   );
 }
 
+/** Restores the built-in provider registry state for tests. */
 export function resetApiProviders(): void {
   unregisterApiProviders(BUILT_IN_API_PROVIDER_SOURCE_ID);
   registerBuiltInApiProviders();
 }
-
-registerBuiltInApiProviders();

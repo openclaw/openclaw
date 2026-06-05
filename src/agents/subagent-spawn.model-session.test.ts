@@ -1,3 +1,5 @@
+// Subagent spawn model-session tests verify runtime model metadata is persisted
+// before a child agent run starts.
 import os from "node:os";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -46,6 +48,8 @@ describe("spawnSubagentDirect runtime model persistence", () => {
   });
 
   it("persists runtime model fields on the child session before starting the run", async () => {
+    // The child run reads model/provider from session state, so persistence must
+    // happen before the gateway accepts the agent request.
     const operations: string[] = [];
     callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
       operations.push(`gateway:${opts.method ?? "unknown"}`);
@@ -71,7 +75,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     const result = await spawnSubagentDirect(
       {
         task: "test",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -81,11 +85,13 @@ describe("spawnSubagentDirect runtime model persistence", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.modelApplied).toBe(true);
+    expect(result.resolvedModel).toBe("openai/gpt-5.4");
+    expect(result.resolvedProvider).toBe("openai");
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(3);
     expectPersistedRuntimeModel({
       persistedStore,
       sessionKey: /^agent:main:subagent:/,
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       overrideSource: "user",
     });

@@ -1,3 +1,5 @@
+// Gateway discovery runtime.
+// Starts local mDNS plugin discovery and optional wide-area DNS-SD publishing.
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
@@ -24,6 +26,7 @@ function resolveDiscoveryAdvertiseTimeoutMs(env: NodeJS.ProcessEnv): number {
   return parsed;
 }
 
+/** Start configured Gateway discovery publishers and return their shutdown hook. */
 export async function startGatewayDiscovery(params: {
   machineDisplayName: string;
   port: number;
@@ -101,7 +104,7 @@ export async function startGatewayDiscovery(params: {
               }
               return started;
             },
-            (err) => {
+            (err: unknown) => {
               params.logDiscovery.warn(
                 `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.service.id}, plugin=${entry.pluginId}): ${String(err)}`,
               );

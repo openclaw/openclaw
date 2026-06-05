@@ -1,3 +1,4 @@
+// Zalouser plugin module implements monitor behavior.
 import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
 import {
   implicitMentionKindWhen,
@@ -294,7 +295,7 @@ async function processMessage(
   const configuredGroupName = message.groupName?.trim() || "";
   const groupContext =
     isGroup && !configuredGroupName
-      ? await resolveZaloGroupContext(account.profile, chatId).catch((err) => {
+      ? await resolveZaloGroupContext(account.profile, chatId).catch((err: unknown) => {
           logVerbose(
             core,
             runtime,
@@ -661,6 +662,9 @@ async function processMessage(
       GroupMembers: isGroup ? groupMembers : undefined,
       WasMentioned: isGroup ? mentionDecision.effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
+      ReplyToId: message.quotedGlobalMsgId || undefined,
+      ReplyToBody: message.quotedBody || undefined,
+      ReplyToIsQuote: message.quotedGlobalMsgId ? true : undefined,
     },
   });
 
@@ -813,7 +817,8 @@ async function deliverZalouserReply(params: {
 export async function monitorZalouserProvider(
   options: ZalouserMonitorOptions,
 ): Promise<ZalouserMonitorResult> {
-  let { account, config } = options;
+  const { config } = options;
+  let { account } = options;
   const { abortSignal, statusSink, runtime } = options;
 
   const core = getZalouserRuntime();
@@ -982,7 +987,7 @@ export async function monitorZalouserProvider(
               statusSink,
             );
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             runtime.error(`[${account.accountId}] Failed to process message: ${String(err)}`);
           });
       },

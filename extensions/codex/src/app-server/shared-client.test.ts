@@ -1,3 +1,4 @@
+// Codex tests cover shared client plugin behavior.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient, MIN_CODEX_APP_SERVER_VERSION } from "./client.js";
@@ -133,8 +134,8 @@ describe("shared Codex app-server client", () => {
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     mocks.bridgeCodexAppServerStartOptions.mockClear();
     mocks.applyCodexAppServerAuthProfile.mockClear();
     mocks.resolveCodexAppServerAuthProfileIdForAgent.mockClear();
@@ -189,6 +190,28 @@ describe("shared Codex app-server client", () => {
     expect(startSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a pending shared app-server alive when another acquire still owns startup", async () => {
+    const harness = createClientHarness();
+    const abandonController = new AbortController();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+
+    const abandonedAcquire = getSharedCodexAppServerClient({
+      timeoutMs: 1000,
+      abandonSignal: abandonController.signal,
+    });
+    const activeAcquire = getSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
+
+    abandonController.abort();
+    expect(harness.process.stdin.destroyed).toBe(false);
+
+    await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
+
+    await expect(abandonedAcquire).resolves.toBe(harness.client);
+    await expect(activeAcquire).resolves.toBe(harness.client);
+    expect(harness.process.stdin.destroyed).toBe(false);
+  });
+
   it("does not wait for isolated initialize after a timeout closes the client", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
@@ -205,22 +228,22 @@ describe("shared Codex app-server client", () => {
 
     const listPromise = listCodexAppServerModels({
       timeoutMs: 1000,
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
     });
     await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
     await sendEmptyModelList(harness);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
     const bridgeCall = bridgeStartOptionsCall();
-    expect(bridgeCall?.authProfileId).toBe("openai-codex:work");
+    expect(bridgeCall?.authProfileId).toBe("openai:work");
     const applyCall = applyAuthProfileCall();
-    expect(applyCall?.authProfileId).toBe("openai-codex:work");
+    expect(applyCall?.authProfileId).toBe("openai:work");
   });
 
   it("skips target auth resolution when native source auth is requested", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
-    const config = { auth: { order: { "openai-codex": ["openai-codex:target"] } } };
+    const config = { auth: { order: { openai: ["openai:target"] } } };
 
     const clientPromise = getSharedCodexAppServerClient({
       timeoutMs: 1000,
@@ -245,8 +268,8 @@ describe("shared Codex app-server client", () => {
   it("resolves the configured implicit auth profile before sharing a client", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
-    const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
-    mocks.resolveCodexAppServerAuthProfileIdForAgent.mockReturnValue("openai-codex:work");
+    const config = { auth: { order: { openai: ["openai:work"] } } };
+    mocks.resolveCodexAppServerAuthProfileIdForAgent.mockReturnValue("openai:work");
 
     const listPromise = listCodexAppServerModels({
       timeoutMs: 1000,
@@ -263,10 +286,10 @@ describe("shared Codex app-server client", () => {
       config,
     });
     const bridgeCall = bridgeStartOptionsCall();
-    expect(bridgeCall?.authProfileId).toBe("openai-codex:work");
+    expect(bridgeCall?.authProfileId).toBe("openai:work");
     expect(bridgeCall?.config).toBe(config);
     const applyCall = applyAuthProfileCall();
-    expect(applyCall?.authProfileId).toBe("openai-codex:work");
+    expect(applyCall?.authProfileId).toBe("openai:work");
     expect(applyCall?.config).toBe(config);
   });
 
@@ -276,7 +299,7 @@ describe("shared Codex app-server client", () => {
 
     const listPromise = listCodexAppServerModels({
       timeoutMs: 1000,
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       agentDir: "/tmp/openclaw-agent-nova",
     });
     await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
@@ -285,10 +308,10 @@ describe("shared Codex app-server client", () => {
     await expect(listPromise).resolves.toEqual({ models: [] });
     const bridgeCall = bridgeStartOptionsCall();
     expect(bridgeCall?.agentDir).toBe("/tmp/openclaw-agent-nova");
-    expect(bridgeCall?.authProfileId).toBe("openai-codex:work");
+    expect(bridgeCall?.authProfileId).toBe("openai:work");
     const applyCall = applyAuthProfileCall();
     expect(applyCall?.agentDir).toBe("/tmp/openclaw-agent-nova");
-    expect(applyCall?.authProfileId).toBe("openai-codex:work");
+    expect(applyCall?.authProfileId).toBe("openai:work");
   });
 
   it("migrates legacy singleton global state into the keyed registry", async () => {
@@ -704,7 +727,9 @@ describe("shared Codex app-server client", () => {
     });
 
     try {
-      await new Promise<void>((resolve) => server.once("listening", resolve));
+      await new Promise<void>((resolve) => {
+        server.once("listening", resolve);
+      });
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("expected websocket test server port");
@@ -741,9 +766,9 @@ describe("shared Codex app-server client", () => {
       expect(authHeaders).toEqual(["Bearer tok-first", "Bearer tok-second"]);
     } finally {
       clearSharedCodexAppServerClient();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   });
 });

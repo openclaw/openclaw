@@ -1,3 +1,4 @@
+// Control UI controller manages cron gateway state.
 import { t } from "../../i18n/index.ts";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import { getCronJobPayload, hasCronJobPayload } from "../cron-payload.ts";
@@ -389,9 +390,13 @@ export function getVisibleCronJobs(
   state: Pick<CronState, "cronJobs" | "cronJobsScheduleKindFilter" | "cronJobsLastStatusFilter">,
 ): CronJob[] {
   return state.cronJobs.filter((job) => {
+    const scheduleKind = resolveCronJobScheduleKind(job);
+    if (!scheduleKind) {
+      return false;
+    }
     if (
       state.cronJobsScheduleKindFilter !== "all" &&
-      job.schedule.kind !== state.cronJobsScheduleKindFilter
+      scheduleKind !== state.cronJobsScheduleKindFilter
     ) {
       return false;
     }
@@ -403,6 +408,14 @@ export function getVisibleCronJobs(
     }
     return true;
   });
+}
+
+function resolveCronJobScheduleKind(job: CronJob): CronJob["schedule"]["kind"] | null {
+  const scheduleKind = (job.schedule as { kind?: unknown } | null | undefined)?.kind;
+  if (scheduleKind === "at" || scheduleKind === "every" || scheduleKind === "cron") {
+    return scheduleKind;
+  }
+  return null;
 }
 
 function clearCronEditState(state: CronState) {

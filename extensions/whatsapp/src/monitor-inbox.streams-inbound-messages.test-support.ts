@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox.streams inbound messages support behavior.
 import fsSync from "node:fs";
 import path from "node:path";
 import "./monitor-inbox.test-harness.js";
@@ -345,9 +346,7 @@ describe("web monitor inbox", () => {
 
   it("keeps group inbound alive with cached metadata after reconnect-time metadata fetch failures", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
-    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {
-      return;
-    });
+    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {});
 
     const firstSock = getSock();
     firstSock.groupFetchAllParticipating.mockResolvedValueOnce({
@@ -427,6 +426,35 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("does not keep reconnect group metadata when the expiry would exceed a valid Date", async () => {
+    const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    try {
+      const sock = getSock();
+      sock.groupFetchAllParticipating.mockResolvedValueOnce({
+        "123@g.us": {
+          id: "123@g.us",
+          subject: "Boundary Group",
+          owner: undefined,
+          participants: [],
+        },
+      });
+
+      const { listener } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
+        groupMetadataCache,
+      });
+
+      await vi.waitFor(() => {
+        expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
+      });
+      expect(groupMetadataCache.has("123@g.us")).toBe(false);
+
+      await listener.close();
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("does not block inbound listeners while group hydration is pending", async () => {
     let resolveHydration!: () => void;
     const sock = getSock();
@@ -434,9 +462,7 @@ describe("web monitor inbox", () => {
       resolveHydration = () => resolve({});
     });
     sock.groupFetchAllParticipating.mockImplementationOnce(() => pendingHydration);
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
 
     const { listener } = await startInboxMonitor(onMessage as InboxOnMessage);
     sock.ev.emit(
@@ -784,9 +810,7 @@ describe("web monitor inbox", () => {
   });
 
   it("deduplicates redelivered messages by id", async () => {
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const upsert = buildNotifyMessageUpsert({
@@ -838,9 +862,7 @@ describe("web monitor inbox", () => {
   });
 
   it("resolves LID JIDs using Baileys LID mapping store", async () => {
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
@@ -866,9 +888,7 @@ describe("web monitor inbox", () => {
   });
 
   it("resolves LID JIDs via authDir mapping files", async () => {
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
     fsSync.writeFileSync(
       path.join(getAuthDir(), "lid-mapping-555_reverse.json"),
       JSON.stringify("1555"),
@@ -897,9 +917,7 @@ describe("web monitor inbox", () => {
   });
 
   it("resolves group participant LID JIDs via Baileys mapping", async () => {
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");

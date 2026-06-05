@@ -1,10 +1,15 @@
-import { formatDurationCompact } from "../infra/format-time/format-duration.js";
+/**
+ * Compact references for active background bash sessions.
+ * These references are surfaced in agent context so follow-up turns can
+ * reconnect to prior long-running work.
+ */
 import { listRunningSessions } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 
 const DEFAULT_ACTIVE_PROCESS_LIMIT = 8;
 const MAX_COMMAND_LABEL_CHARS = 140;
 
+/** Agent-facing summary of a reconnectable background process session. */
 export type ActiveProcessSessionReference = {
   sessionId: string;
   status: "running";
@@ -28,6 +33,7 @@ function truncate(value: string, maxChars: number): string {
   return `${value.slice(0, Math.max(0, maxChars - 3))}...`;
 }
 
+/** List active background process sessions for one scope key, newest first. */
 export function listActiveProcessSessionReferences(params: {
   scopeKey?: string;
   now?: number;
@@ -62,13 +68,4 @@ export function listActiveProcessSessionReferences(params: {
       tail: session.tail,
       truncated: session.truncated,
     }));
-}
-
-export function formatActiveProcessSessionReference(
-  session: ActiveProcessSessionReference,
-): string {
-  const runtime = formatDurationCompact(session.runtimeMs) ?? "unknown";
-  const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
-  const cwd = session.cwd ? ` cwd=${session.cwd}` : "";
-  return `${session.sessionId} ${session.status} ${runtime}${pid}${cwd} :: ${session.name}`;
 }

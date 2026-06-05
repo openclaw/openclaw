@@ -1,3 +1,7 @@
+/**
+ * Browser screenshot normalization helpers that bound screenshots for media
+ * transport and model input.
+ */
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
@@ -9,6 +13,7 @@ import {
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE = 2000;
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
 
+/** Downscales/re-encodes screenshots to fit Browser plugin byte and dimension caps. */
 export async function normalizeBrowserScreenshot(
   buffer: Buffer,
   opts?: {
@@ -66,11 +71,25 @@ export async function normalizeBrowserScreenshot(
   }
 
   if (processorUnavailableError) {
-    throw processorUnavailableError;
+    throw toLintErrorObject(processorUnavailableError, "Non-Error thrown");
   }
 
   const best = smallest?.buffer ?? buffer;
   throw new Error(
     `Browser screenshot could not be reduced below ${(maxBytes / (1024 * 1024)).toFixed(0)}MB (got ${(best.byteLength / (1024 * 1024)).toFixed(2)}MB)`,
   );
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

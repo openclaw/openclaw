@@ -1,3 +1,4 @@
+// Whatsapp tests cover auto reply.web auto reply.connection and logging plugin behavior.
 import "./test-helpers.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -26,6 +27,7 @@ import {
   setRuntimeConfigSourceSnapshotMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
+import { waitForWaConnection } from "./session.js";
 
 type DrainSelectionEntry = {
   channel: string;
@@ -205,7 +207,7 @@ describe("web auto-reply connection", () => {
       },
     };
     const listenerFactory = vi.fn(async () => {
-      throw boom428;
+      throw toLintErrorObject(boom428, "Non-Error thrown");
     });
 
     const sleep = vi.fn(async () => {});
@@ -223,6 +225,33 @@ describe("web auto-reply connection", () => {
     expectErrorContaining(runtime.error, "status 428");
     expectErrorContaining(runtime.error, "Retry 1/2");
     expectErrorContaining(runtime.error, "2/2 attempts");
+  });
+
+  it("retries opening-phase connection wait timeouts through the reconnect policy", async () => {
+    vi.mocked(waitForWaConnection).mockRejectedValueOnce({ output: { statusCode: 408 } });
+    const listenerFactory = vi.fn(async () => createMockWebListener());
+    const sleep = vi.fn(async () => {});
+    const { runtime, controller, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 2, factor: 1.1 },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(listenerFactory).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 250, interval: 2 },
+    );
+    controller.abort();
+    await run;
+
+    expect(waitForWaConnection).toHaveBeenCalledTimes(2);
+    expect(listenerFactory).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalled();
+    expectErrorContaining(runtime.error, "status 408");
+    expectErrorContaining(runtime.error, "Retry 1/2");
   });
 
   it("keeps post-open Baileys 428 on the reconnect path", async () => {
@@ -362,7 +391,9 @@ describe("web auto-reply connection", () => {
 
     const completedQuickly = await Promise.race([
       run.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 60)),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 60);
+      }),
     ]);
 
     if (!completedQuickly) {
@@ -996,11 +1027,15 @@ describe("web auto-reply connection", () => {
         const firstPattern = escapeRegExp(firstTimestamp);
         const secondPattern = escapeRegExp(secondTimestamp);
         expect(firstArgs.Body).toMatch(
-          new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${firstPattern}\\] \\[openclaw\\] first`),
+          new RegExp(
+            `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${firstPattern}\\] \\+1: \\[openclaw\\] first`,
+          ),
         );
         expect(firstArgs.Body).not.toContain("second");
         expect(secondArgs.Body).toMatch(
-          new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${secondPattern}\\] \\[openclaw\\] second`),
+          new RegExp(
+            `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${secondPattern}\\] \\+1: \\[openclaw\\] second`,
+          ),
         );
         expect(secondArgs.Body).not.toContain("first");
         expect(process.getMaxListeners?.()).toBeGreaterThanOrEqual(50);
@@ -1140,3 +1175,17 @@ describe("web auto-reply connection", () => {
     expect(markDispatchIdle).toHaveBeenCalled();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

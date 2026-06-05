@@ -1,3 +1,8 @@
+/**
+ * Shared transport-stream normalization helpers.
+ *
+ * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
+ */
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { truncateErrorDetail } from "./provider-http-errors.js";
@@ -26,6 +31,9 @@ type TransportOutputShape = {
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 export function sanitizeTransportPayloadText(text: string): string {
+  if (typeof text !== "string") {
+    return "";
+  }
   return text.replace(
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
     "",

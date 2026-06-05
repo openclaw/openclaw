@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox.allows messages from senders allowfrom list support behavior.
 import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -209,6 +210,33 @@ describe("web monitor inbox", () => {
         to: "+123",
       }),
     );
+
+    await listener.close();
+  });
+
+  it("still sends pairing replies when live DMs have null timestamps", async () => {
+    mockLoadConfig.mockReturnValue({});
+    upsertPairingRequestMock.mockResolvedValueOnce({ code: "PAIRCODE", created: true });
+
+    const { onMessage, listener, sock } = await openInboxMonitor();
+
+    const upsertBlocked = buildNotifyMessageUpsert({
+      id: "no-config-null-ts",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: null as never,
+    });
+
+    sock.ev.emit("messages.upsert", upsertBlocked);
+    await vi.waitFor(
+      () => {
+        expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 5_000, interval: 5 },
+    );
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     await listener.close();
   });

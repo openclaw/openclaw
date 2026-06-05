@@ -1,3 +1,4 @@
+// Opencode Go plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
@@ -81,11 +82,11 @@ export default definePluginEntry({
         }
         return baseUrlNormalized !== model ? baseUrlNormalized : undefined;
       },
-      normalizeTransport: ({ api, baseUrl }) => {
-        const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({ api, baseUrl });
+      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
+        const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({ api: apiLocal, baseUrl });
         return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
           ? {
-              api,
+              api: apiLocal,
               baseUrl: normalizedBaseUrl,
             }
           : undefined;

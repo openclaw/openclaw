@@ -1,3 +1,4 @@
+// Discord tests cover model picker plugin behavior.
 import { ComponentType } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import { serializePayload } from "../internal/discord.js";
@@ -157,6 +158,34 @@ describe("Discord model picker custom_id", () => {
       provider: "openai",
       page: 3,
       modelIndex: 2,
+    });
+  });
+
+  it("parses plus-signed compact numeric fields", () => {
+    const parsed = parseDiscordModelPickerData({
+      c: "models",
+      a: "submit",
+      v: "recents",
+      u: "42",
+      p: "openai",
+      g: "+03",
+      pp: "+02",
+      mi: "+07",
+      ri: "+04",
+      rs: "+01",
+    });
+
+    expect(parsed).toEqual({
+      command: "models",
+      action: "submit",
+      view: "recents",
+      userId: "42",
+      provider: "openai",
+      page: 3,
+      providerPage: 2,
+      modelIndex: 7,
+      runtimeIndex: 4,
+      recentSlot: 1,
     });
   });
 

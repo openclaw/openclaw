@@ -1,3 +1,4 @@
+// Music Generation Providers.Live.Test.Ts tests cover music generation providers plugin behavior.
 import {
   resolveApiKeyForProvider,
   resolveDefaultAgentDir,
@@ -195,7 +196,7 @@ describeLive("music generation provider live", () => {
           requireProfileKeys: REQUIRE_PROFILE_KEYS,
           hasLiveKeys,
         });
-        let authLabel = "unresolved";
+        let authLabel;
         try {
           const auth = await resolveApiKeyForProvider({
             provider: testCase.providerId,

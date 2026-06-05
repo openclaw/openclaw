@@ -1,6 +1,10 @@
+// Tool schema runtime tests cover provider plugin schema normalization and
+// compact diagnostics for invalid provider-facing tool schemas.
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  // Hoisted mocks let the module under test import logger/provider runtime once
+  // while each case controls plugin diagnostics.
   inspectProviderToolSchemasWithPlugin: vi.fn(),
   normalizeProviderToolSchemasWithPlugin: vi.fn(),
   log: {
@@ -18,9 +22,8 @@ vi.mock("./logger.js", () => ({
   log: mocks.log,
 }));
 
-const { logProviderToolSchemaDiagnostics, normalizeProviderToolSchemas } = await import(
-  "./tool-schema-runtime.js"
-);
+const { logProviderToolSchemaDiagnostics, normalizeProviderToolSchemas } =
+  await import("./tool-schema-runtime.js");
 
 describe("tool schema runtime diagnostics", () => {
   it("stays quiet when a provider reports no diagnostics", () => {
@@ -37,12 +40,14 @@ describe("tool schema runtime diagnostics", () => {
 
   it("passes through provider runtime loading policy for normalization", () => {
     const tools = [{ name: "alpha" }] as never;
+    const runtimeHandle = { provider: "example", plugin: { id: "example-plugin" } } as never;
     mocks.normalizeProviderToolSchemasWithPlugin.mockReturnValueOnce(tools);
 
     expect(
       normalizeProviderToolSchemas({
         provider: "example",
         tools,
+        runtimeHandle,
         allowRuntimePluginLoad: false,
       }),
     ).toBe(tools);
@@ -50,6 +55,7 @@ describe("tool schema runtime diagnostics", () => {
     expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "example",
+        runtimeHandle,
         allowRuntimePluginLoad: false,
       }),
     );

@@ -1,3 +1,4 @@
+// Covers provider usage auth profile key normalization.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -164,6 +165,18 @@ const providerRuntimeMocks = vi.hoisted(() => ({
         return token ? { token } : null;
       }
 
+      if (params.provider === "anthropic") {
+        const oauth = await params.context.resolveOAuthToken();
+        if (oauth) {
+          return oauth;
+        }
+        const token = resolveToken({
+          providerIds: ["anthropic"],
+          envDirect: [params.context.env?.ANTHROPIC_API_KEY],
+        });
+        return token?.startsWith("sk-ant-oat01-") ? { token } : { handled: true };
+      }
+
       if (params.provider === "minimax") {
         const token = resolveToken({
           providerIds: ["minimax"],
@@ -180,6 +193,14 @@ const providerRuntimeMocks = vi.hoisted(() => ({
         const token = resolveToken({
           providerIds: ["xiaomi"],
           envDirect: [params.context.env?.XIAOMI_API_KEY],
+        });
+        return token ? { token } : null;
+      }
+
+      if (params.provider === "xiaomi-token-plan") {
+        const token = resolveToken({
+          providerIds: ["xiaomi-token-plan"],
+          envDirect: [params.context.env?.XIAOMI_TOKEN_PLAN_API_KEY],
         });
         return token ? { token } : null;
       }
@@ -252,6 +273,7 @@ describe("resolveProviderAuths key normalization", () => {
     MINIMAX_API_KEY: undefined,
     MINIMAX_CODE_PLAN_KEY: undefined,
     MINIMAX_CODING_API_KEY: undefined,
+    OPENAI_API_KEY: undefined,
     XIAOMI_API_KEY: undefined,
   } satisfies Record<string, string | undefined>;
 
@@ -413,16 +435,18 @@ describe("resolveProviderAuths key normalization", () => {
 
   it("strips embedded CR/LF from env keys", async () => {
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai", "minimax", "xiaomi"],
+      providers: ["zai", "minimax", "xiaomi", "xiaomi-token-plan"],
       env: {
         ZAI_API_KEY: "zai-\r\nkey",
         MINIMAX_API_KEY: "minimax-\r\nkey",
         XIAOMI_API_KEY: "xiaomi-\r\nkey",
+        XIAOMI_TOKEN_PLAN_API_KEY: "xiaomi-token-\r\nplan",
       },
       expected: [
         { provider: "zai", token: "zai-key" },
         { provider: "minimax", token: "minimax-key" },
         { provider: "xiaomi", token: "xiaomi-key" },
+        { provider: "xiaomi-token-plan", token: "xiaomi-token-plan" },
       ],
     });
   }, 300_000);
@@ -471,16 +495,22 @@ describe("resolveProviderAuths key normalization", () => {
 
   it("strips embedded CR/LF from stored auth profiles (token + api_key)", async () => {
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["minimax", "xiaomi"],
+      providers: ["minimax", "xiaomi", "xiaomi-token-plan"],
       setup: async (home) => {
         await writeAuthProfiles(home, {
           "minimax:default": { type: "token", provider: "minimax", token: "mini-\r\nmax" },
           "xiaomi:default": { type: "api_key", provider: "xiaomi", key: "xiao-\r\nmi" },
+          "xiaomi-token-plan:default": {
+            type: "api_key",
+            provider: "xiaomi-token-plan",
+            key: "token-\r\nplan",
+          },
         });
       },
       expected: [
         { provider: "minimax", token: "mini-max" },
         { provider: "xiaomi", token: "xiao-mi" },
+        { provider: "xiaomi-token-plan", token: "token-plan" },
       ],
     });
   });
@@ -542,11 +572,16 @@ describe("resolveProviderAuths key normalization", () => {
             models: [createTestModelDefinition()],
             apiKey: "cfg-xiaomi-key", // pragma: allowlist secret
           },
+          "xiaomi-token-plan": {
+            baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+            models: [createTestModelDefinition()],
+            apiKey: "cfg-xiaomi-token-plan-key", // pragma: allowlist secret
+          },
         },
       },
     } satisfies OpenClawConfig;
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai", "minimax", "xiaomi"],
+      providers: ["zai", "minimax", "xiaomi", "xiaomi-token-plan"],
       setup: async (home) => {
         await writeConfig(home, config);
       },
@@ -555,13 +590,14 @@ describe("resolveProviderAuths key normalization", () => {
         { provider: "zai", token: "cfg-zai-key" },
         { provider: "minimax", token: "cfg-minimax-key" },
         { provider: "xiaomi", token: "cfg-xiaomi-key" },
+        { provider: "xiaomi-token-plan", token: "cfg-xiaomi-token-plan-key" },
       ],
     });
   });
 
   it("returns no auth when providers have no configured credentials", async () => {
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai", "minimax", "xiaomi"],
+      providers: ["zai", "minimax", "xiaomi", "xiaomi-token-plan"],
       expected: [],
     });
   });
@@ -575,6 +611,50 @@ describe("resolveProviderAuths key normalization", () => {
         });
       },
       expected: [{ provider: "zai", token: "profile-zai-key" }],
+    });
+  });
+
+  it("does not use OpenAI api keys for ChatGPT usage auth", async () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [createTestModelDefinition()],
+            apiKey: "cfg-openai-key", // pragma: allowlist secret
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["openai"],
+      env: {
+        OPENAI_API_KEY: "env-openai-key",
+      },
+      setup: async (home) => {
+        await writeConfig(home, config);
+        await writeAuthProfiles(home, {
+          "openai:default": { type: "api_key", provider: "openai", key: "profile-openai-key" },
+        });
+      },
+      config,
+      expected: [],
+    });
+  });
+
+  it("uses OpenAI oauth-compatible profiles for ChatGPT usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["openai"],
+      setup: async (home) => {
+        await writeAuthProfiles(home, {
+          "openai:default": {
+            type: "token",
+            provider: "openai",
+            token: "chatgpt-token",
+          },
+        });
+      },
+      expected: [{ provider: "openai", token: "chatgpt-token" }],
     });
   });
 
@@ -656,6 +736,26 @@ describe("resolveProviderAuths key normalization", () => {
         env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([{ provider: "anthropic", token: "token-1" }]);
+    });
+  });
+
+  it("does not use standard Anthropic API keys for provider usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_API_KEY: "sk-ant-api03-status-key", // pragma: allowlist secret
+      },
+      expected: [],
+    });
+  });
+
+  it("allows Anthropic setup tokens from API-key sources for provider usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_API_KEY: `sk-ant-oat01-${"a".repeat(80)}`,
+      },
+      expected: [{ provider: "anthropic", token: `sk-ant-oat01-${"a".repeat(80)}` }],
     });
   });
 

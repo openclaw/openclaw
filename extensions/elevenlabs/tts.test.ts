@@ -1,3 +1,4 @@
+// Elevenlabs tests cover tts plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
@@ -18,7 +19,7 @@ describe("elevenlabs tts diagnostics", () => {
         similarityBoost: 0.75,
         style: 0,
         useSpeakerBoost: true,
-        speed: 1.0,
+        speed: 1,
       },
       timeoutMs: 5_000,
     };

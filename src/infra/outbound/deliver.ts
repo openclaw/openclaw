@@ -1,3 +1,5 @@
+// Outbound delivery core runs plugin hooks, queue durability, channel adapter
+// sends, commit hooks, diagnostics, transcript mirroring, and payload outcomes.
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { runReplyPayloadSendingHook } from "../../auto-reply/reply/reply-payload-sending-hook.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -85,7 +87,7 @@ import {
 } from "./payloads.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 import { stripInternalRuntimeScaffolding } from "./sanitize-text.js";
-import { type OutboundSendDeps } from "./send-deps.js";
+import type { OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
@@ -126,6 +128,8 @@ let transcriptRuntimePromise:
   | undefined;
 
 async function loadTranscriptRuntime() {
+  // Transcript writes are optional side effects; keep this lazy for import-only
+  // delivery policy checks and tests.
   transcriptRuntimePromise ??= import("../../config/sessions/transcript.runtime.js");
   return await transcriptRuntimePromise;
 }
@@ -1967,14 +1971,30 @@ async function deliverOutboundPayloadsCore(
       mediaUrls: deliveredMirror.mediaUrls,
     });
     if (mirrorText) {
-      const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
-      await appendAssistantMessageToSessionTranscript({
-        agentId: params.mirror.agentId,
-        sessionKey: params.mirror.sessionKey,
-        text: mirrorText,
-        idempotencyKey: params.mirror.idempotencyKey,
-        config: params.cfg,
-      });
+      // Transcript mirroring is best-effort bookkeeping after platform send.
+      // Keep mirror failures non-fatal so callers do not retry an already-sent
+      // channel payload and create duplicate delivery.
+      try {
+        const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
+        const mirrorResult = await appendAssistantMessageToSessionTranscript({
+          agentId: params.mirror.agentId,
+          sessionKey: params.mirror.sessionKey,
+          text: mirrorText,
+          idempotencyKey: params.mirror.idempotencyKey,
+          config: params.cfg,
+        });
+        if (!mirrorResult.ok) {
+          log.warn(
+            `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${mirrorResult.reason}`,
+            { channel, to, sessionKey: params.mirror.sessionKey },
+          );
+        }
+      } catch (err) {
+        log.warn(
+          `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${formatErrorMessage(err)}`,
+          { channel, to, sessionKey: params.mirror.sessionKey },
+        );
+      }
     }
   }
 

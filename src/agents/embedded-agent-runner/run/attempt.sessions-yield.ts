@@ -1,3 +1,6 @@
+/**
+ * Handles sessions-yield interruption, persistence, and artifact cleanup.
+ */
 import type { AgentMessage } from "../../runtime/index.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
@@ -25,7 +28,7 @@ export async function waitForSessionsYieldAbortSettle(params: {
   const outcome = await Promise.race([
     params.settlePromise
       .then(() => "settled" as const)
-      .catch((err) => {
+      .catch((err: unknown) => {
         log.warn(
           `sessions_yield abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
         );

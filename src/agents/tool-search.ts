@@ -1,14 +1,19 @@
+/**
+ * Tool Search catalog compaction.
+ *
+ * Presents large OpenClaw/MCP/client tool inventories through search, describe, call, and optional code-mode tools.
+ */
 import { spawn } from "node:child_process";
 import os from "node:os";
-import { Type } from "typebox";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
-import { isRecord } from "../shared/record-coerce.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeStringEntries,
   uniqueStrings,
   uniqueValues,
-} from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-normalization";
+import { Type } from "typebox";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,
@@ -39,6 +44,9 @@ const MAX_REUSABLE_CATALOG_SNAPSHOTS = 256;
 type ToolSearchMode = "code" | "tools";
 type CatalogSource = "openclaw" | "mcp" | "client";
 type CatalogTool = AnyAgentTool | ToolDefinition;
+type CatalogVisibilityOptions = {
+  includeMcp?: boolean;
+};
 
 type ReusableCatalogSnapshot = {
   entries: ToolSearchCatalogEntry[];
@@ -55,6 +63,7 @@ export type ToolSearchCatalogToolExecutor = (params: {
   onUpdate?: AgentToolUpdateCallback;
 }) => Promise<AgentToolResult<unknown>>;
 
+/** Transcript projection for target tool calls made through Tool Search. */
 export type ToolSearchTargetTranscriptProjection = {
   parentToolCallId?: string;
   toolCallId: string;
@@ -65,6 +74,7 @@ export type ToolSearchTargetTranscriptProjection = {
   timestamp?: number;
 };
 
+/** Resolved Tool Search config after defaults, limits, and runtime support checks. */
 export type ToolSearchConfig = {
   enabled: boolean;
   mode: ToolSearchMode;
@@ -73,6 +83,7 @@ export type ToolSearchConfig = {
   maxSearchLimit: number;
 };
 
+/** Per-run/session context used by Tool Search control tools. */
 export type ToolSearchToolContext = {
   config?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
@@ -85,10 +96,12 @@ export type ToolSearchToolContext = {
   executeTool?: ToolSearchCatalogToolExecutor;
 };
 
+/** Catalog entry retained behind compacted Tool Search control tools. */
 export type ToolSearchCatalogEntry = {
   id: string;
   source: CatalogSource;
   sourceName?: string;
+  mcp?: PluginToolMcpMeta;
   name: string;
   label?: string;
   description: string;
@@ -213,6 +226,8 @@ function buildModelScriptSource(code) {
 }
 
 function buildControllerSource() {
+  // The controller returns promise-like bridge handles. The model code can await
+  // them naturally, while the parent process serializes real tool calls.
   return (
     '"use strict";\n' +
     "(() => {\n" +
@@ -403,12 +418,17 @@ function readInteger(value: unknown, fallback: number): number {
 }
 
 let toolSearchCodeModeSupportedForTest: boolean | undefined;
+let toolSearchMinCodeTimeoutMsForTest: number | undefined;
 
 function isToolSearchCodeModeSupported(): boolean {
   if (toolSearchCodeModeSupportedForTest !== undefined) {
     return toolSearchCodeModeSupportedForTest;
   }
   return process.allowedNodeEnvironmentFlags.has("--permission");
+}
+
+function resolveMinCodeTimeoutMs(): number {
+  return toolSearchMinCodeTimeoutMsForTest ?? 1000;
 }
 
 export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {
@@ -427,7 +447,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     enabled: readBoolean(raw.enabled, configured),
     mode,
     codeTimeoutMs: Math.max(
-      1000,
+      resolveMinCodeTimeoutMs(),
       Math.min(60_000, readInteger(raw.codeTimeoutMs, DEFAULT_CODE_TIMEOUT_MS)),
     ),
     searchDefaultLimit: Math.max(
@@ -512,12 +532,15 @@ function catalogToolIdentity(tool: CatalogTool): number {
 }
 
 function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): string {
+  // Fingerprints include object identity for executable tools because function
+  // bodies are not JSON-stable but catalog reuse must not bind stale executors.
   return entries
     .map((entry) =>
       [
         entry.id,
         entry.source,
         entry.sourceName ?? "",
+        stableJsonFingerprint(entry.mcp),
         entry.name,
         entry.label ?? "",
         entry.description,
@@ -597,11 +620,20 @@ function rememberReusableCatalog(key: string | undefined, catalog: ToolSearchCat
   }
 }
 
-function classifyTool(tool: CatalogTool): { source: CatalogSource; sourceName?: string } {
+function classifyTool(tool: CatalogTool): {
+  source: CatalogSource;
+  sourceName?: string;
+  mcp?: PluginToolMcpMeta;
+} {
   const meta = getPluginToolMeta(tool as AnyAgentTool);
   const pluginId = meta?.pluginId?.trim();
   if (pluginId === "bundle-mcp") {
-    return { source: "mcp", sourceName: pluginId };
+    const mcp = meta?.mcp;
+    return {
+      source: "mcp",
+      sourceName: pluginId,
+      ...(mcp ? { mcp } : {}),
+    };
   }
   if (pluginId) {
     return { source: "openclaw", sourceName: pluginId };
@@ -635,6 +667,7 @@ function toCatalogEntry(
     id: makeCatalogId(tool, source, sourceName),
     source,
     sourceName,
+    ...(source === "mcp" && classified.mcp ? { mcp: classified.mcp } : {}),
     name: tool.name,
     label: tool.label,
     description: tool.description ?? "",
@@ -807,10 +840,12 @@ export function projectToolSearchTargetTranscriptMessages(
   return projected;
 }
 
+/** Create an explicit catalog holder for callers that cannot rely on session keys. */
 export function createToolSearchCatalogRef(): ToolSearchCatalogRef {
   return {};
 }
 
+/** Replace visible tools with Tool Search controls and register hidden catalog entries. */
 export function applyToolSearchCatalog(params: {
   tools: AnyAgentTool[];
   config?: OpenClawConfig;
@@ -837,6 +872,7 @@ export function applyToolSearchCatalog(params: {
   });
 }
 
+/** Move client-provided tools into an existing Tool Search catalog. */
 export function addClientToolsToToolSearchCatalog(params: {
   tools: ToolDefinition[];
   config?: OpenClawConfig;
@@ -852,6 +888,7 @@ export function addClientToolsToToolSearchCatalog(params: {
   });
 }
 
+/** Register catalog entries under run/session keys and optional direct refs. */
 export function registerToolSearchCatalog(params: {
   sessionId?: string;
   sessionKey?: string;
@@ -893,6 +930,7 @@ export function registerToolSearchCatalog(params: {
   return next;
 }
 
+/** Clear Tool Search catalog state for a run/session/ref. */
 export function clearToolSearchCatalog(params: {
   sessionId?: string;
   sessionKey?: string;
@@ -948,6 +986,7 @@ function compactEntry(entry: ToolSearchCatalogEntry) {
     id: entry.id,
     source: entry.source,
     sourceName: entry.sourceName,
+    ...(entry.mcp ? { mcp: entry.mcp } : {}),
     name: entry.name,
     label: entry.label,
     description: entry.description,
@@ -994,11 +1033,33 @@ function scoreEntry(entry: ToolSearchCatalogEntry, terms: string[]): number {
   return score;
 }
 
-function findEntry(catalog: ToolSearchCatalogSession, id: string): ToolSearchCatalogEntry {
+function visibleCatalogEntries(
+  catalog: ToolSearchCatalogSession,
+  options?: CatalogVisibilityOptions,
+): ToolSearchCatalogEntry[] {
+  return options?.includeMcp === false
+    ? catalog.entries.filter((entry) => entry.source !== "mcp")
+    : catalog.entries;
+}
+
+function findEntry(
+  catalog: ToolSearchCatalogSession,
+  id: string,
+  options?: CatalogVisibilityOptions,
+): ToolSearchCatalogEntry {
   const needle = id.trim();
-  const entry = catalog.entries.find(
+  const entry = visibleCatalogEntries(catalog, options).find(
     (candidate) => candidate.id === needle || candidate.name === needle,
   );
+  if (!entry) {
+    throw new ToolInputError(`Unknown tool id: ${needle}`);
+  }
+  return entry;
+}
+
+function findEntryByExactId(catalog: ToolSearchCatalogSession, id: string): ToolSearchCatalogEntry {
+  const needle = id.trim();
+  const entry = catalog.entries.find((candidate) => candidate.id === needle);
   if (!entry) {
     throw new ToolInputError(`Unknown tool id: ${needle}`);
   }
@@ -1078,12 +1139,12 @@ export class ToolSearchRuntime {
     private readonly config: ToolSearchConfig,
   ) {}
 
-  search = async (query: string, options?: { limit?: number }) => {
+  search = async (query: string, options?: { limit?: number } & CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.searchCount += 1;
     const limit = readLimit(options?.limit, this.config);
     const terms = tokenize(query);
-    return catalog.entries
+    return visibleCatalogEntries(catalog, options)
       .map((entry) => ({ entry, score: scoreEntry(entry, terms) }))
       .filter((hit) => hit.score > 0)
       .toSorted((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id))
@@ -1091,15 +1152,24 @@ export class ToolSearchRuntime {
       .map((hit) => compactEntry(hit.entry));
   };
 
-  all = () => {
+  all = (options?: CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
-    return catalog.entries.map((entry) => compactEntry(entry));
+    return visibleCatalogEntries(catalog, options).map((entry) => compactEntry(entry));
   };
 
-  describe = async (id: string) => {
+  namespaceEntries = () => {
+    const catalog = resolveCatalog(this.ctx);
+    return catalog.entries.map((entry) =>
+      Object.assign(compactEntry(entry), {
+        parameters: entry.parameters ?? {},
+      }),
+    );
+  };
+
+  describe = async (id: string, options?: CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.describeCount += 1;
-    return describeEntry(findEntry(catalog, id));
+    return describeEntry(findEntry(catalog, id, options));
   };
 
   call = async (
@@ -1113,6 +1183,33 @@ export class ToolSearchRuntime {
   ) => {
     const catalog = resolveCatalog(this.ctx);
     const entry = findEntry(catalog, id);
+    return await this.callEntry(catalog, entry, input, options);
+  };
+
+  callExactId = async (
+    id: string,
+    input?: unknown,
+    options?: {
+      parentToolCallId?: string;
+      signal?: AbortSignal;
+      onUpdate?: AgentToolUpdateCallback;
+    },
+  ) => {
+    const catalog = resolveCatalog(this.ctx);
+    const entry = findEntryByExactId(catalog, id);
+    return await this.callEntry(catalog, entry, input, options);
+  };
+
+  private readonly callEntry = async (
+    catalog: ToolSearchCatalogSession,
+    entry: ToolSearchCatalogEntry,
+    input?: unknown,
+    options?: {
+      parentToolCallId?: string;
+      signal?: AbortSignal;
+      onUpdate?: AgentToolUpdateCallback;
+    },
+  ) => {
     catalog.callCount += 1;
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;
@@ -1146,6 +1243,7 @@ export class ToolSearchRuntime {
   }
 }
 
+/** Compact a native tool list into visible control tools plus hidden catalog entries. */
 export function applyToolCatalogCompaction(params: {
   tools: AnyAgentTool[];
   enabled: boolean;
@@ -1269,6 +1367,7 @@ export function applyToolCatalogCompaction(params: {
   };
 }
 
+/** Append client-side tool definitions to an already registered catalog. */
 export function addClientToolsToToolCatalog(params: {
   tools: ToolDefinition[];
   enabled: boolean;
@@ -1303,7 +1402,8 @@ function toJsonSafe(value: unknown): unknown {
     return null;
   }
   try {
-    return JSON.parse(JSON.stringify(value)) as unknown;
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
   } catch {
     if (value instanceof Error) {
       return value.message;
@@ -1381,9 +1481,9 @@ async function runCodeModeBridgeRequest(
       if (typeof query !== "string") {
         throw new ToolInputError("search query must be a string.");
       }
-      const options = isRecord(values[1]) ? values[1] : undefined;
+      const optionsLocal = isRecord(values[1]) ? values[1] : undefined;
       return await runtime.search(query, {
-        limit: typeof options?.limit === "number" ? options.limit : undefined,
+        limit: typeof optionsLocal?.limit === "number" ? optionsLocal.limit : undefined,
       });
     }
     case "describe": {
@@ -1422,10 +1522,8 @@ function runCodeModeChild(params: {
     const stderr: string[] = [];
     let settled = false;
     let timedOut = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let exitRejectionTimer: ReturnType<typeof setTimeout> | undefined;
     const bridgeAbortController = new AbortController();
-    let abortFromParent: () => void;
     const settle = (callback: () => void) => {
       if (settled) {
         return;
@@ -1441,22 +1539,22 @@ function runCodeModeChild(params: {
       child.kill();
       callback();
     };
-    abortFromParent = () => {
+    const abortFromParent: () => void = () => {
       bridgeAbortController.abort(params.signal?.reason);
       child.kill("SIGKILL");
       settle(() => reject(new Error("tool_search_code aborted")));
     };
-    if (params.signal?.aborted) {
-      abortFromParent();
-      return;
-    }
-    params.signal?.addEventListener("abort", abortFromParent, { once: true });
-    timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
       timedOut = true;
       bridgeAbortController.abort(new Error("tool_search_code timed out"));
       child.kill("SIGKILL");
       settle(() => reject(new Error("tool_search_code timed out")));
     }, params.config.codeTimeoutMs);
+    params.signal?.addEventListener("abort", abortFromParent, { once: true });
+    if (params.signal?.aborted) {
+      abortFromParent();
+      return;
+    }
 
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
@@ -1484,6 +1582,8 @@ function runCodeModeChild(params: {
         );
       };
       if (code === 0 && signal === null) {
+        // A clean exit can race the final IPC result. Wait briefly before
+        // treating it as failure so flushed bridge/result messages can arrive.
         exitRejectionTimer = setTimeout(rejectOnExit, 250);
         return;
       }
@@ -1567,6 +1667,7 @@ function readCode(args: unknown): string {
   return code;
 }
 
+/** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const runtime = new ToolSearchRuntime(ctx, config);
@@ -1651,6 +1752,12 @@ export const testing = {
   isToolSearchCodeModeSupported,
   setToolSearchCodeModeSupportedForTest: (value: boolean | undefined) => {
     toolSearchCodeModeSupportedForTest = value;
+  },
+  setToolSearchMinCodeTimeoutMsForTest: (value: number | undefined) => {
+    toolSearchMinCodeTimeoutMsForTest =
+      typeof value === "number" && Number.isFinite(value) && value > 0
+        ? Math.floor(value)
+        : undefined;
   },
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,

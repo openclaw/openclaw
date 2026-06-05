@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements harness parity behavior.
 import { createHash } from "node:crypto";
 import type {
   RuntimeId,
@@ -414,8 +415,8 @@ export function buildHarnessParityResult(params: {
   if (
     compareTranscriptStructure &&
     (leftTranscriptRecords !== rightTranscriptRecords ||
-      (!params.left.finalText && !!params.right.finalText) ||
-      (!!params.left.finalText && !params.right.finalText))
+      (!params.left.finalText && Boolean(params.right.finalText)) ||
+      (Boolean(params.left.finalText) && !params.right.finalText))
   ) {
     return {
       scenarioId: params.scenarioId,

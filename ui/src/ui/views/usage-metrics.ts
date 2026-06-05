@@ -1,3 +1,4 @@
+// Control UI view renders usage metrics screen content.
 import { html } from "lit";
 import {
   buildUsageAggregateTail,
@@ -291,9 +292,9 @@ function buildUsageMosaicStats(
     }
 
     if (
-      !forEachSessionHourSlice(session, timeZone, ({ usage, hour, weekday, share }) => {
-        hourTotals[hour] += usage.totalTokens * share;
-        weekdayTotals[weekday] += usage.totalTokens * share;
+      !forEachSessionHourSlice(session, timeZone, ({ usage: usageLocal, hour, weekday, share }) => {
+        hourTotals[hour] += usageLocal.totalTokens * share;
+        weekdayTotals[weekday] += usageLocal.totalTokens * share;
       })
     ) {
       continue;

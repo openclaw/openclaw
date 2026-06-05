@@ -1,3 +1,4 @@
+// Mattermost tests cover monitor.inbound system event plugin behavior.
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorMattermostProvider } from "./monitor.js";
@@ -904,9 +905,10 @@ describe("mattermost inbound user posts", () => {
       team_id: "team-1",
       type: "D",
     });
-    const { monitorMattermostProvider } = await import("./monitor.js");
+    const { monitorMattermostProvider: monitorMattermostProviderLocal } =
+      await import("./monitor.js");
 
-    const monitor = monitorMattermostProvider({
+    const monitor = monitorMattermostProviderLocal({
       config: directConfig,
       runtime: testRuntime(),
       abortSignal: abortController.signal,

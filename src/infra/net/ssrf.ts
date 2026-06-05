@@ -1,6 +1,7 @@
+// SSRF policy helpers validate hostnames/IP literals, build pinned DNS lookups,
+// and create dispatcher policies for guarded network fetches.
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import type { Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
   isCloudMetadataIpAddress,
@@ -14,8 +15,9 @@ import {
   isLegacyIpv4Literal,
   parseCanonicalIpAddress,
   parseLooseIpAddress,
-} from "../../shared/net/ip.js";
-import { normalizeUniqueStringEntries } from "../../shared/string-normalization.js";
+} from "@openclaw/net-policy/ip";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { Dispatcher } from "undici";
 import { normalizeHostname } from "./hostname.js";
 import {
   createHttp1Agent,
@@ -71,6 +73,8 @@ function normalizePolicyHostnames(values?: string[]): string[] {
 }
 
 function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
+  // Policy equality needs deterministic set ordering and normalized host/origin
+  // forms so equivalent operator config compares equal.
   if (!policy) {
     return null;
   }
@@ -230,6 +234,8 @@ function shouldSkipPrivateNetworkChecks(hostname: string, policy?: SsrFPolicy): 
 }
 
 export function resolveSsrFPolicyForUrl(url: URL, policy?: SsrFPolicy): SsrFPolicy | undefined {
+  // allowedOrigins trust only the current request hostname for the matching
+  // origin; redirects must re-evaluate against their own URL.
   if (!policy?.allowedOrigins?.length) {
     return policy;
   }

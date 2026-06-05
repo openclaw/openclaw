@@ -1,3 +1,6 @@
+/**
+ * Gateway request context construction tests.
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import {
@@ -48,6 +51,7 @@ function makeContextParams(
     chatDeltaLastBroadcastText: new Map(),
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
+    clearChatRunState: vi.fn(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     subscribeSessionEvents: vi.fn(),

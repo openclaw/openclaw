@@ -1,3 +1,4 @@
+// Doctor memory-search tests cover QMD availability, memory config, and doctor prompt behavior.
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -24,7 +25,7 @@ const repairShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
 const noteWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
 const maybeRepairWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -175,10 +176,11 @@ describe("noteMemorySearchHealth", () => {
     hasAnyAuthProfileStoreSource.mockReturnValue(true);
     getActiveMemorySearchManager.mockReset();
     resolveActiveMemoryBackendConfig.mockReset();
-    resolveActiveMemoryBackendConfig.mockImplementation(({ cfg }: { cfg: OpenClawConfig }) =>
-      cfg.memory?.backend === "qmd"
-        ? { backend: "qmd", qmd: cfg.memory.qmd ?? {} }
-        : { backend: "builtin" },
+    resolveActiveMemoryBackendConfig.mockImplementation(
+      ({ cfg: cfgLocal }: { cfg: OpenClawConfig }) =>
+        cfgLocal.memory?.backend === "qmd"
+          ? { backend: "qmd", qmd: cfgLocal.memory.qmd ?? {} }
+          : { backend: "builtin" },
     );
     getActiveMemorySearchManager.mockResolvedValue({
       manager: {

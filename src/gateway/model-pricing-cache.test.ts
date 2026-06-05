@@ -1,3 +1,5 @@
+// Model pricing cache tests protect provider/model normalization, manifest
+// metadata lookup, fetch preconnect behavior, cache refresh, and logging.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { modelKey } from "../agents/model-selection.js";
 import type { normalizeProviderModelIdWithRuntime } from "../agents/provider-model-normalization.runtime.js";
@@ -1107,7 +1109,7 @@ describe("model-pricing-cache", () => {
               "abort",
               () => {
                 abortedUrls.push(url);
-                reject(signal.reason);
+                reject(toLintErrorObject(signal.reason, "Non-Error rejection"));
               },
               { once: true },
             );
@@ -1276,4 +1278,18 @@ function createManifestRecord(overrides: Partial<PluginManifestRecord>): PluginM
     manifestPath: "/tmp/plugin/openclaw.plugin.json",
     ...overrides,
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

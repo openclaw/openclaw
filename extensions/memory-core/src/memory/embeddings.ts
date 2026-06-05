@@ -1,3 +1,4 @@
+// Memory Core plugin module implements embeddings behavior.
 import {
   getEmbeddingProvider,
   type EmbeddingProviderAdapter,
@@ -144,6 +145,17 @@ export function resolveEmbeddingProviderFallbackModel(
     getLegacyMemoryEmbeddingProvider(providerId, config) ??
     getEmbeddingProvider(providerId, config);
   return adapter?.defaultModel ?? fallbackSourceModel;
+}
+
+export function resolveEmbeddingProviderAdapterId(
+  providerId: string,
+  config?: MemoryEmbeddingProviderCreateOptions["config"],
+): string | undefined {
+  try {
+    return getAdapter(providerId, config).id;
+  } catch {
+    return undefined;
+  }
 }
 
 async function createWithAdapter(

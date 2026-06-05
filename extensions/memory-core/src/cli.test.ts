@@ -1,3 +1,4 @@
+// Memory Core tests cover cli plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -412,6 +413,36 @@ describe("memory cli", () => {
     expectLogged(log, "Vector path: /opt/sqlite-vec.dylib");
     expectLogged(log, "FTS: ready");
     expectLogged(log, "Embedding cache: enabled (123 entries)");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints index identity mismatch reasons", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      status: () =>
+        makeMemoryStatus({
+          dirty: true,
+          provider: "ollama",
+          model: "nomic-embed-text",
+          requestedProvider: "ollama",
+          custom: {
+            indexIdentity: {
+              status: "mismatched",
+              reason: "index was built for provider openai, expected ollama",
+            },
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expectLogged(log, "Provider: ollama (requested: ollama)");
+    expectLogged(log, "Dirty: yes");
+    expectLogged(log, "Index identity: index was built for provider openai, expected ollama");
+    expectLogged(log, "Vector search: paused until memory is rebuilt");
+    expectLogged(log, "Fix: Run: openclaw memory status --index --agent main");
     expect(close).toHaveBeenCalled();
   });
 
@@ -1108,10 +1139,10 @@ describe("memory cli", () => {
     mockManager({ search, close });
 
     const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["search", "hello"]);
+    await runMemoryCli(["search", "hello", "--max-results", "+02"]);
 
     expect(search).toHaveBeenCalledWith("hello", {
-      maxResults: undefined,
+      maxResults: 2,
       minScore: undefined,
       sessionKey: "agent:main:cli:direct:memory-search",
     });
@@ -1235,12 +1266,14 @@ describe("memory cli", () => {
       await runMemoryCli([
         "promote",
         "--json",
+        "--limit",
+        "+01",
         "--min-score",
         "0",
         "--min-recall-count",
-        "0",
+        "+0",
         "--min-unique-queries",
-        "0",
+        "00",
       ]);
 
       const payload = firstWrittenJsonArg<{ candidates: unknown[] }>(writeJson);
@@ -1976,7 +2009,7 @@ describe("memory cli", () => {
     });
   });
 
-  async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
+  async function waitFor<T>(task: () => Promise<T>, timeoutMs = 1500): Promise<T> {
     let value: T | undefined;
     await vi.waitFor(
       async () => {

@@ -1,3 +1,4 @@
+// Doctor sandbox tests cover warnings when sandbox mode is enabled without Docker availability.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -26,7 +27,7 @@ vi.mock("../agents/sandbox/registry.js", () => ({
   migrateLegacySandboxRegistryFiles,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 

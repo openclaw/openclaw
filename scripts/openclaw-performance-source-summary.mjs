@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Summarizes OpenClaw performance source fixtures for reports.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -444,7 +445,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack : String(error));
-  process.exitCode = 1;
-});
+main().catch(
+  /** @param {unknown} error */ (error) => {
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exitCode = 1;
+  },
+);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Dispatches full release validation against a temporary SHA-pinned branch.
 import { execFileSync, spawnSync } from "node:child_process";
 
 const WORKFLOW = "full-release-validation.yml";
@@ -202,7 +203,7 @@ function main() {
     stdio: "inherit",
   });
 
-  let parentRunId = "";
+  let parentRunId;
   try {
     const dispatchArgs = ["workflow", "run", WORKFLOW, "--ref", branch];
     for (const [key, value] of Object.entries(dispatchInputs)) {

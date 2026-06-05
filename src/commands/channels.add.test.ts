@@ -1,3 +1,4 @@
+// Channels add tests cover guided setup, plugin install paths, and channel account config writes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
@@ -65,6 +66,7 @@ const bundledMocks = vi.hoisted(() => ({
 vi.mock("../channels/plugins/catalog.js", () => ({
   getChannelPluginCatalogEntry: catalogMocks.getChannelPluginCatalogEntry,
   listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
+  listRawChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
 }));
 
 vi.mock("./channel-setup/discovery.js", () => ({
@@ -1022,10 +1024,10 @@ describe("channelsAddCommand", () => {
     pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls.mockImplementationOnce(
       async (params: { nextConfig: OpenClawConfig }) => {
         const { installs: _installs, ...plugins } = params.nextConfig.plugins ?? {};
-        const writtenConfig = { ...params.nextConfig, plugins };
-        await configMocks.writeConfigFile(writtenConfig);
+        const writtenConfigLocal = { ...params.nextConfig, plugins };
+        await configMocks.writeConfigFile(writtenConfigLocal);
         return {
-          config: writtenConfig,
+          config: writtenConfigLocal,
           installRecords,
           movedInstallRecords: true,
         };

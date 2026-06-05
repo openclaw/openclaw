@@ -1,3 +1,4 @@
+// Covers agent-command reply normalization and outbound delivery status.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
@@ -46,6 +47,8 @@ const slackOutboundForTest: ChannelOutboundAdapter = {
   }),
 };
 
+// Two registries let tests switch between no-channel and Slack-capable delivery
+// without loading the full plugin runtime.
 const emptyRegistry = createTestRegistry([]);
 const slackRegistry = createTestRegistry([
   {
@@ -172,6 +175,8 @@ async function deliverMediaReplyForTest(
   outboundSession: DeliverParams["outboundSession"],
   optsOverrides: Partial<AgentCommandOpts> = {},
 ) {
+  // Media replies go through the same normalizer seam as production so relative
+  // paths are interpreted with agent/session context before delivery.
   const runtime = { log: vi.fn(), error: vi.fn() };
   return await deliverAgentCommandResult({
     cfg: {
@@ -213,6 +218,8 @@ describe("normalizeAgentCommandReplyPayloads", () => {
   });
 
   it("keeps Slack directives in text for direct agent deliveries", () => {
+    // Direct CLI deliveries preserve Slack directive markup because no channel
+    // adapter has consumed it yet.
     const normalized = normalizeAgentCommandReplyPayloads({
       cfg: {
         channels: {
@@ -248,7 +255,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
           durationMs: 1,
           agentMeta: {
             sessionId: "session-1",
-            provider: "openai-codex",
+            provider: "openai",
             model: "gpt-5.4",
           },
         },
@@ -256,7 +263,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
 
     expect(normalized).toHaveLength(1);
-    expectTextPayload(normalized[0], "[openai-codex/gpt-5.4] Ready.");
+    expectTextPayload(normalized[0], "[openai/gpt-5.4] Ready.");
   });
 
   it("keeps Slack options text intact for local preview when delivery is disabled", async () => {
