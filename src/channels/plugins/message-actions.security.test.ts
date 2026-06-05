@@ -94,15 +94,30 @@ describe("dispatchChannelMessageAction trusted sender guard", () => {
     expect(handleAction).toHaveBeenCalledOnce();
   });
 
-  it("does not require trusted sender without tool context", async () => {
-    await dispatchChannelMessageAction({
-      channel: "discord",
-      action: "kick",
-      cfg: {} as OpenClawConfig,
-      params: { guildId: "g1", userId: "u1" },
-    });
+  it("rejects protected actions without current provider context", async () => {
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "discord",
+        action: "kick",
+        cfg: {} as OpenClawConfig,
+        params: { guildId: "g1", userId: "u1" },
+      }),
+    ).rejects.toThrow(
+      "Current channel provider context is required for discord:kick before trusted sender identity can be accepted",
+    );
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "legacy-chat",
+        action: "topic-create",
+        cfg: {} as OpenClawConfig,
+        params: { groupId: "g1", userId: "u1" },
+        requesterSenderId: "detached-sender",
+      }),
+    ).rejects.toThrow(
+      "Current channel provider context is required for legacy-chat:topic-create before trusted sender identity can be accepted",
+    );
 
-    expect(handleAction).toHaveBeenCalledOnce();
+    expect(handleAction).not.toHaveBeenCalled();
   });
 
   it("rejects canonical protected actions even when the plugin omits the hook", async () => {

@@ -16,9 +16,6 @@ function normalizeMessageActionChannel(raw?: string | null): string | undefined 
 function resolveProtectedActionCurrentProvider(
   ctx: ChannelMessageActionContext,
 ): string | undefined {
-  if (!isTrustedRequesterChannelManagementAction(ctx.action)) {
-    return undefined;
-  }
   return normalizeMessageActionChannel(ctx.toolContext?.currentChannelProvider);
 }
 
@@ -33,16 +30,23 @@ export async function dispatchChannelMessageAction(
     return null;
   }
 
-  // Canonical channel-management actions mutate guild/channel state. Keep them
-  // fail-closed for same-channel tool turns even if a plugin omits the hook.
-  const protectedActionCurrentProvider = resolveProtectedActionCurrentProvider(ctx);
-  if (
-    protectedActionCurrentProvider &&
-    protectedActionCurrentProvider !== normalizeMessageActionChannel(ctx.channel)
-  ) {
-    throw new Error(
-      `Trusted sender identity for ${ctx.channel}:${ctx.action} must come from ${ctx.channel}, not ${protectedActionCurrentProvider}.`,
-    );
+  // Canonical channel-management actions mutate guild/channel state. Require
+  // a matching provider context so bare sender ids cannot be reused as proof.
+  const isProtectedAction = isTrustedRequesterChannelManagementAction(ctx.action);
+  const protectedActionCurrentProvider = isProtectedAction
+    ? resolveProtectedActionCurrentProvider(ctx)
+    : undefined;
+  if (isProtectedAction) {
+    if (!protectedActionCurrentProvider) {
+      throw new Error(
+        `Current channel provider context is required for ${ctx.channel}:${ctx.action} before trusted sender identity can be accepted.`,
+      );
+    }
+    if (protectedActionCurrentProvider !== normalizeMessageActionChannel(ctx.channel)) {
+      throw new Error(
+        `Trusted sender identity for ${ctx.channel}:${ctx.action} must come from ${ctx.channel}, not ${protectedActionCurrentProvider}.`,
+      );
+    }
   }
   const pluginRequiresTrustedSender = Boolean(
     plugin.actions.requiresTrustedRequesterSender?.({
@@ -50,8 +54,7 @@ export async function dispatchChannelMessageAction(
       toolContext: ctx.toolContext,
     }),
   );
-  const requiresTrustedSender =
-    pluginRequiresTrustedSender || Boolean(protectedActionCurrentProvider);
+  const requiresTrustedSender = pluginRequiresTrustedSender || isProtectedAction;
   // Some plugin actions depend on the sender identity to enforce channel-local
   // trust. Reject tool-driven calls before invoking the plugin without it.
   if (requiresTrustedSender && !ctx.requesterSenderId?.trim()) {
