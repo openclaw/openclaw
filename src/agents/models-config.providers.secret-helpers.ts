@@ -333,7 +333,10 @@ export function resolveMissingProviderApiKey(params: {
     };
   }
 
-  const fromEnv = resolveEnvApiKeyVarName(params.providerKey, params.env);
+  const fromEnvVarName = resolveEnvApiKeyVarName(params.providerKey, params.env);
+  // resolveEnvApiKeyVarName drops non-env-var markers (e.g. "gcp-vertex-credentials" whose source
+  // is "gcloud adc"). Fall back to the raw resolved value so ADC providers pass isWritableProviderConfig.
+  const fromEnv = fromEnvVarName ?? resolveEnvApiKey(params.providerKey, params.env)?.apiKey;
   const apiKey = fromEnv ?? params.profileApiKey?.apiKey;
   if (!apiKey?.trim()) {
     return params.provider;
