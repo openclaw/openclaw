@@ -594,6 +594,25 @@ export class RealtimeCallHandler {
         }),
       );
     };
+    const cancelOutputAudioForBargeIn = (source: "local" | "provider", reason: string): boolean => {
+      if (!talk.outputAudioActive) {
+        return false;
+      }
+      const interruptedTurnId = ensureTalkTurn();
+      const clearedBytes = audioPacer.clearAudio();
+      console.log(
+        `[voice-call] realtime outbound audio cleared by ${source} barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+      );
+      finishOutputAudio(reason);
+      const cancelled = talk.cancelTurn({
+        turnId: interruptedTurnId,
+        payload: { callId, providerCallId: callSid, reason },
+      });
+      if (cancelled.ok) {
+        rememberTalkEvent(cancelled.event);
+      }
+      return cancelled.ok;
+    };
     emitTalkEvent({
       type: "session.started",
       payload: { callId, providerCallId: callSid, streamSid },
@@ -784,21 +803,7 @@ export class RealtimeCallHandler {
       },
       onEvent: (event) => {
         if (event.type === "input_audio_buffer.speech_started") {
-          const interruptedTurnId = ensureTalkTurn();
-          if (talk.outputAudioActive) {
-            const clearedBytes = audioPacer.clearAudio();
-            console.log(
-              `[voice-call] realtime outbound audio cleared by provider barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
-            );
-            finishOutputAudio("provider-barge-in");
-            const cancelled = talk.cancelTurn({
-              turnId: interruptedTurnId,
-              payload: { callId, providerCallId: callSid, reason: "provider-barge-in" },
-            });
-            if (cancelled.ok) {
-              rememberTalkEvent(cancelled.event);
-            }
-          }
+          cancelOutputAudioForBargeIn("provider", "provider-barge-in");
           return;
         }
         if (event.type === "input_audio_buffer.speech_stopped") {
@@ -885,6 +890,7 @@ export class RealtimeCallHandler {
         console.log(
           `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );
+        cancelOutputAudioForBargeIn("local", "local-barge-in");
       }
       emitTalkEvent({
         type: "input.audio.delta",
