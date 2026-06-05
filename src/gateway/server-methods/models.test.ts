@@ -435,6 +435,56 @@ describe("models.list", () => {
     );
   });
 
+  it("keeps non-env SecretRef-backed auth profile availability unknown", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-models-list-file-profile-",
+        agentEnv: "main",
+      },
+      async (state) => {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "demo-provider:file": {
+              type: "token",
+              provider: "demo-provider",
+              tokenRef: {
+                source: "file",
+                provider: "mounted-json",
+                id: "/providers/demo/token",
+              },
+              expires: Date.now() + 60_000,
+            },
+          },
+        });
+
+        const { request, respond } = requestModelsList({
+          view: "all",
+          loadGatewayModelCatalog: vi.fn(() =>
+            Promise.resolve([{ id: "demo-model", name: "Demo Model", provider: "demo-provider" }]),
+          ),
+          reqId: "req-models-list-file-profile",
+        });
+        await request;
+
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              {
+                id: "demo-model",
+                name: "Demo Model",
+                provider: "demo-provider",
+              },
+            ],
+          },
+          undefined,
+        );
+      },
+    );
+  });
+
   it("preserves catalog load errors before the timeout fallback wins", async () => {
     const { request, respond } = requestModelsList({
       view: "configured",

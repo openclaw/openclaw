@@ -20,11 +20,7 @@ import {
   loadModelCatalogForBrowse,
   type ModelCatalogBrowseView,
 } from "../../agents/model-catalog-browse.js";
-import {
-  modelCatalogEntryHasProviderAuth,
-  type ProviderAuthChecker,
-  resolveVisibleModelCatalog,
-} from "../../agents/model-catalog-visibility.js";
+import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -33,9 +29,23 @@ import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListView = ModelCatalogBrowseView;
 type ModelsListEntry = ModelCatalogEntry & { available?: boolean };
+type ModelsListAvailability = boolean | undefined;
+type ModelsListProviderAuthChecker = (
+  provider: string,
+  modelApi?: string,
+) => ModelsListAvailability | Promise<ModelsListAvailability>;
 
 let loggedSlowModelsListCatalog = false;
 const OAUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
+const OPENAI_CODEX_ROUTABLE_MODEL_IDS = new Set([
+  "gpt-5.5",
+  "gpt-5.5-pro",
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.4-mini",
+]);
 
 // Unknown views are rejected by protocol validation first; this helper keeps the
 // handler default explicit for older clients that omit the field.
@@ -65,9 +75,9 @@ function modelCatalogEntryHasUnknownSecretRefAvailability(
 }
 
 function createInFlightProviderAuthChecker(
-  providerAuthChecker: ProviderAuthChecker,
-): ProviderAuthChecker {
-  const pending = new Map<string, Promise<boolean>>();
+  providerAuthChecker: ModelsListProviderAuthChecker,
+): ModelsListProviderAuthChecker {
+  const pending = new Map<string, Promise<ModelsListAvailability>>();
   return (provider, modelApi) => {
     const key = `${normalizeProviderId(provider)}\0${modelApi ?? ""}`;
     const cached = pending.get(key);
@@ -88,6 +98,10 @@ function hasAvailableEnvSecretRef(value: unknown): boolean {
   return isSecretRef(value) && value.source === "env" && hasLiteralSecret(process.env[value.id]);
 }
 
+function hasSecretRef(value: unknown): boolean {
+  return isSecretRef(value);
+}
+
 function profileModeAllowedForModel(
   provider: string,
   modelApi: string | undefined,
@@ -106,21 +120,27 @@ function profileHasReadOnlyAvailableAuth(params: {
   provider: string;
   modelApi?: string;
   now: number;
-}): boolean {
+}): ModelsListAvailability {
   if (!profileModeAllowedForModel(params.provider, params.modelApi, params.credential.type)) {
     return false;
   }
   if (params.credential.type === "api_key") {
-    return (
-      hasLiteralSecret(params.credential.key) || hasAvailableEnvSecretRef(params.credential.keyRef)
-    );
+    if (
+      hasLiteralSecret(params.credential.key) ||
+      hasAvailableEnvSecretRef(params.credential.keyRef)
+    ) {
+      return true;
+    }
+    return hasSecretRef(params.credential.keyRef) ? undefined : false;
   }
   if (params.credential.type === "token") {
-    return (
-      (hasLiteralSecret(params.credential.token) ||
-        hasAvailableEnvSecretRef(params.credential.tokenRef)) &&
-      (params.credential.expires === undefined || params.credential.expires > params.now)
-    );
+    const hasCurrentToken =
+      hasLiteralSecret(params.credential.token) ||
+      hasAvailableEnvSecretRef(params.credential.tokenRef);
+    if (hasCurrentToken) {
+      return params.credential.expires === undefined || params.credential.expires > params.now;
+    }
+    return hasSecretRef(params.credential.tokenRef) ? undefined : false;
   }
   return (
     hasLiteralSecret(params.credential.access) &&
@@ -133,31 +153,39 @@ function hasReadOnlyAvailableProfileAuth(params: {
   modelApi?: string;
   cfg: OpenClawConfig;
   store: AuthProfileStore;
-}): boolean {
+}): ModelsListAvailability {
   const now = Date.now();
-  return resolveAuthProfileOrder({
+  let sawUnknown = false;
+  for (const profileId of resolveAuthProfileOrder({
     cfg: params.cfg,
     store: params.store,
     provider: params.provider,
-  }).some((profileId) => {
+  })) {
     const credential = params.store.profiles[profileId];
-    return (
-      credential !== undefined &&
-      profileHasReadOnlyAvailableAuth({
-        credential,
-        provider: params.provider,
-        modelApi: params.modelApi,
-        now,
-      })
-    );
-  });
+    if (!credential) {
+      continue;
+    }
+    const available = profileHasReadOnlyAvailableAuth({
+      credential,
+      provider: params.provider,
+      modelApi: params.modelApi,
+      now,
+    });
+    if (available === true) {
+      return true;
+    }
+    if (available === undefined) {
+      sawUnknown = true;
+    }
+  }
+  return sawUnknown ? undefined : false;
 }
 
 function createModelsListProviderAuthChecker(params: {
   cfg: OpenClawConfig;
   agentId: string;
   workspaceDir: string;
-}): ProviderAuthChecker {
+}): ModelsListProviderAuthChecker {
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
   const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: false,
@@ -182,10 +210,31 @@ function createModelsListProviderAuthChecker(params: {
   );
 }
 
+function isCodexRoutableOpenAIPlatformCatalogEntry(entry: ModelCatalogEntry): boolean {
+  return (
+    normalizeProviderId(entry.provider) === OPENAI_PROVIDER_ID &&
+    entry.api !== undefined &&
+    entry.api !== OPENAI_CODEX_RESPONSES_API &&
+    OPENAI_CODEX_ROUTABLE_MODEL_IDS.has(entry.id.trim().toLowerCase())
+  );
+}
+
+async function resolveModelsListEntryAvailability(
+  providerAuthChecker: ModelsListProviderAuthChecker,
+  entry: ModelCatalogEntry,
+): Promise<ModelsListAvailability> {
+  const primary = await providerAuthChecker(entry.provider, entry.api);
+  if (primary === true || !isCodexRoutableOpenAIPlatformCatalogEntry(entry)) {
+    return primary;
+  }
+  const codexResponses = await providerAuthChecker(entry.provider, OPENAI_CODEX_RESPONSES_API);
+  return codexResponses ?? primary;
+}
+
 async function buildPublicModelsListEntry(params: {
   entry: ModelCatalogEntry;
   cfg: OpenClawConfig;
-  providerAuthChecker?: ProviderAuthChecker;
+  providerAuthChecker?: ModelsListProviderAuthChecker;
 }): Promise<ModelsListEntry> {
   const publicEntry = omitRuntimeModelParams(params.entry);
   if (modelCatalogEntryHasUnknownSecretRefAvailability(params.cfg, params.entry)) {
@@ -194,9 +243,16 @@ async function buildPublicModelsListEntry(params: {
   if (!params.providerAuthChecker) {
     return publicEntry;
   }
+  const available = await resolveModelsListEntryAvailability(
+    params.providerAuthChecker,
+    params.entry,
+  );
+  if (available === undefined) {
+    return publicEntry;
+  }
   return {
     ...publicEntry,
-    available: await modelCatalogEntryHasProviderAuth(params.providerAuthChecker, params.entry),
+    available,
   };
 }
 
