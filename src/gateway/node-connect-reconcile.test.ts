@@ -291,6 +291,7 @@ describe("reconcileNodePairingOnConnect", () => {
       connectParams: makeNodeConnectParams({
         caps: ["camera", "screen"],
         commands: [],
+        device: makeDevice("openclaw-ios"),
       }),
       pairedNode: makePairedNode({
         caps: ["camera"],
