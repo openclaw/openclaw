@@ -13,6 +13,8 @@ const trustedRequesterChannelManagementActions = new Set<ChannelMessageActionNam
   "category-edit",
   "category-delete",
   "event-create",
+  "topic-create",
+  "topic-edit",
   "timeout",
   "kick",
   "ban",

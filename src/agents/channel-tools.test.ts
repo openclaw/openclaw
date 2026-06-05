@@ -160,7 +160,7 @@ describe("channel tools", () => {
       },
       actions: {
         describeMessageTool: () => ({
-          actions: ["send", "react", "kick", "channel-delete"],
+          actions: ["send", "react", "kick", "channel-delete", "topic-create", "topic-edit"],
         }),
       },
     };
@@ -180,6 +180,8 @@ describe("channel tools", () => {
       "react",
       "kick",
       "channel-delete",
+      "topic-create",
+      "topic-edit",
     ]);
   });
 });
