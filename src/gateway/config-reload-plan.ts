@@ -227,13 +227,57 @@ function listReloadRules(): ReloadRule[] {
   return rules;
 }
 
+/**
+ * Match a config path against reload rules, supporting `*` as a single-segment
+ * wildcard.  When multiple rules match (e.g. a concrete prefix and a wildcard
+ * variant), the rule with the most matching segments wins.  This ensures that
+ * a specific prefix like `channels.telegram.botToken` takes priority over a
+ * wildcard like `channels.telegram.*.botToken`.
+ *
+ * The wildcard matches exactly one dot-separated segment, so an account-scoped
+ * pattern `channels.telegram.accounts.*.dmPolicy` matches
+ * `channels.telegram.accounts.mybot.dmPolicy` but not
+ * `channels.telegram.accounts.mybot.sub.dmPolicy`.
+ */
 function matchRule(path: string): ReloadRule | null {
+  const pathSegments = path.split(".");
+  let best: ReloadRule | null = null;
+  let bestSegmentCount = -1;
+
   for (const rule of listReloadRules()) {
-    if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
-      return rule;
+    const prefixSegments = rule.prefix.split(".");
+    const wildcardIndex = prefixSegments.indexOf("*");
+    if (wildcardIndex === -1) {
+      // No wildcard: exact match or prefix match.
+      if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
+        if (prefixSegments.length > bestSegmentCount) {
+          best = rule;
+          bestSegmentCount = prefixSegments.length;
+        }
+      }
+    } else {
+      // Wildcard: must have enough segments and match before and after the `*`.
+      if (pathSegments.length !== prefixSegments.length) {
+        continue;
+      }
+      let matches = true;
+      for (let i = 0; i < prefixSegments.length; i++) {
+        if (prefixSegments[i] === "*") {
+          continue;
+        }
+        if (pathSegments[i] !== prefixSegments[i]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches && prefixSegments.length > bestSegmentCount) {
+        best = rule;
+        bestSegmentCount = prefixSegments.length;
+      }
     }
   }
-  return null;
+
+  return best;
 }
 
 export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {

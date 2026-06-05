@@ -185,9 +185,8 @@ export function createTelegramPluginBase(params: {
     security: telegramSecurityAdapter,
     reload: {
       // Transport-affecting keys that require a full channel restart to take effect.
-      // Runtime-only keys (groups, dmPolicy, streaming, allowList, blockList, welcome,
-      // commandDescriptions, agentConfig, etc.) are caught by the broad noop prefix
-      // and do NOT restart the channel, preserving in-memory session state.
+      // Each path is individually listed - no catch-all prefix that could mask
+      // lifecycle, credential, webhook, network, or security-sensitive changes.
       configPrefixes: [
         "channels.telegram.botToken",
         "channels.telegram.tokenFile",
@@ -196,7 +195,44 @@ export function createTelegramPluginBase(params: {
         "channels.telegram.webhookSecret",
         "channels.telegram.accounts",
       ],
-      noopPrefixes: ["channels.telegram"],
+      // Runtime-only policy / read paths that can be hot-reloaded without
+      // restarting the channel.  Account-scoped sub-paths are matched via the
+      // `*` wildcard segment (e.g. accounts.<id>.dmPolicy matches the
+      // "channels.telegram.accounts.*.dmPolicy" prefix).
+      // When adding a new key here, verify it does not affect transport,
+      // lifecycle, or identity - otherwise add it to configPrefixes instead.
+      noopPrefixes: [
+        "channels.telegram.groups",
+        "channels.telegram.dmPolicy",
+        "channels.telegram.allowFrom",
+        "channels.telegram.defaultTo",
+        "channels.telegram.groupAllowFrom",
+        "channels.telegram.groupPolicy",
+        "channels.telegram.mentionPatterns",
+        "channels.telegram.contextVisibility",
+        "channels.telegram.historyLimit",
+        "channels.telegram.dmHistoryLimit",
+        "channels.telegram.streaming",
+        "channels.telegram.welcome",
+        "channels.telegram.commandDescriptions",
+        "channels.telegram.agentConfig",
+        "channels.telegram.blockStreaming",
+        "channels.telegram.accounts.*.groups",
+        "channels.telegram.accounts.*.dmPolicy",
+        "channels.telegram.accounts.*.allowFrom",
+        "channels.telegram.accounts.*.defaultTo",
+        "channels.telegram.accounts.*.groupAllowFrom",
+        "channels.telegram.accounts.*.groupPolicy",
+        "channels.telegram.accounts.*.mentionPatterns",
+        "channels.telegram.accounts.*.contextVisibility",
+        "channels.telegram.accounts.*.historyLimit",
+        "channels.telegram.accounts.*.dmHistoryLimit",
+        "channels.telegram.accounts.*.streaming",
+        "channels.telegram.accounts.*.welcome",
+        "channels.telegram.accounts.*.commandDescriptions",
+        "channels.telegram.accounts.*.agentConfig",
+        "channels.telegram.accounts.*.blockStreaming",
+      ],
     },
     configSchema: TelegramChannelConfigSchema,
     config: {
