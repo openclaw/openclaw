@@ -65,10 +65,11 @@ Print the generated JSON schema for `openclaw.json` to stdout as JSON.
 openclaw config schema
 ```
 
-OpenClaw config writers create `openclaw.schema.json` beside the active
-`openclaw.json` and add `"$schema": "./openclaw.schema.json"` when the config
-does not already declare a schema. Pipe the schema manually when you want a copy
-outside the active config directory:
+OpenClaw config writers refresh `openclaw.schema.json` beside the active
+`openclaw.json`. Writes that already commit the root config also add
+`"$schema": "./openclaw.schema.json"` when the root config does not already
+declare a schema. Pipe the schema manually when you want a copy outside the
+active config directory:
 
 ```bash
 openclaw config schema > openclaw.schema.json
