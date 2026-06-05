@@ -808,10 +808,12 @@ describe("CLI attempt execution", () => {
 
   it("persists the current CLI user turn before the runner can fail", async () => {
     const sessionKey = "agent:main:subagent:cli-user-before-failure";
+    const taskCwd = path.join(tmpDir, "task");
     const sessionEntry: SessionEntry = {
       sessionId: "session-cli-user-before-failure",
       updatedAt: Date.now(),
     };
+    await fs.mkdir(taskCwd);
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
     const onUserMessagePersisted = vi.fn();
@@ -829,6 +831,7 @@ describe("CLI attempt execution", () => {
         sessionAgentId: "main",
         sessionFile: path.join(tmpDir, "session.jsonl"),
         workspaceDir: tmpDir,
+        cwd: taskCwd,
         body: "runtime wrapper\nvisible ask",
         transcriptBody: "visible ask",
         isFallbackRetry: false,
@@ -852,7 +855,14 @@ describe("CLI attempt execution", () => {
     ).rejects.toThrow("cli crashed before reply");
 
     expect(onUserMessagePersisted).toHaveBeenCalledTimes(1);
-    const messages = await readSessionMessages(sessionStore[sessionKey]?.sessionFile ?? "");
+    expect(firstRunCliAgentArg().cwd).toBe(taskCwd);
+    const sessionFile = sessionStore[sessionKey]?.sessionFile ?? "";
+    const entries = await readSessionFileEntries(sessionFile);
+    expectRecordFields(requireRecord(entries[0], "session entry"), {
+      type: "session",
+      cwd: taskCwd,
+    });
+    const messages = await readSessionMessages(sessionFile);
     expect(messages).toHaveLength(1);
     expectRecordFields(requireRecord(messages[0], "persisted user message"), {
       role: "user",
