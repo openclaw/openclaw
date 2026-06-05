@@ -315,6 +315,16 @@ function resolveRecoveryNoticeTranscriptPath(params: {
     // sessions dir, so the resolver handles the missing agentId on its own.
     undefined,
   );
+  // The read path serves the first *existing* candidate, so append the notice
+  // there. Appending to a non-existent preferred candidate would create a
+  // notice-only transcript that reconnect then reads first, hiding the real
+  // session history (e.g. a missing custom/timestamped sessionFile alongside an
+  // existing canonical <sessionId>.jsonl). Only create the read-path preferred
+  // target when no candidate exists yet.
+  const existingCandidate = candidates.find((candidate) => fs.existsSync(candidate));
+  if (existingCandidate) {
+    return existingCandidate;
+  }
   if (candidates[0]) {
     return candidates[0];
   }

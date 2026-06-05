@@ -911,6 +911,57 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:webchat:room-1"]?.status).toBe("failed");
   });
 
+  it("appends the WebChat recovery notice to the existing canonical <sessionId>.jsonl when a custom sessionFile is missing (#87808)", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const sessionId = "main-session";
+    // A custom/timestamped sessionFile that the resolver classifies as `custom`
+    // (not stale): its `-topic-` prefix is not a generated session id, so it
+    // resolves cleanly inside the sessions dir and would be the read path's
+    // *preferred* (first) candidate. Crucially we never create it on disk, so
+    // it is a missing preferred candidate while the canonical <sessionId>.jsonl
+    // already holds the real (unresumable) history.
+    const customSessionFile = "main-session-topic-9999.jsonl";
+    await writeStore(sessionsDir, {
+      "agent:main:webchat:room-1": {
+        sessionId,
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        sessionFile: customSessionFile,
+        lastChannel: "webchat",
+        lastTo: "webchat:room-1",
+        lastAccountId: "default",
+      },
+    });
+    // The real session history lives in the existing canonical transcript.
+    await writeTranscript(sessionsDir, sessionId, [
+      { role: "user", content: "do the thing" },
+      { role: "assistant", content: "partial answer" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    const issuedMessageAction = vi
+      .mocked(callGateway)
+      .mock.calls.some((c) => (c[0] as { method?: string })?.method === "message.action");
+    expect(issuedMessageAction).toBe(false);
+    // (a) The notice is appended to the existing canonical <sessionId>.jsonl,
+    // which is the first *existing* candidate the reconnect read path serves.
+    const transcript = await fs.readFile(path.join(sessionsDir, `${sessionId}.jsonl`), "utf8");
+    expect(transcript).toContain("couldn't safely resume");
+    // (c) The original user/assistant history is preserved (the notice is
+    // appended, not replaced by a notice-only transcript).
+    expect(transcript).toContain("do the thing");
+    expect(transcript).toContain("partial answer");
+    // (b) The missing custom sessionFile must never be created: appending the
+    // notice there would create a notice-only transcript that reconnect reads
+    // first, hiding the real session history.
+    await expect(fs.access(path.join(sessionsDir, customSessionFile))).rejects.toThrow();
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:webchat:room-1"]?.status).toBe("failed");
+  });
+
   it("reports a not-ok WebChat transcript append as a failed notice (#87808)", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
