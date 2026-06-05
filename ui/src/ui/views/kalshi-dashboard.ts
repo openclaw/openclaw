@@ -1757,6 +1757,200 @@ function listItems(items: string[] | undefined) {
   return items.map((item) => html`<li>${item}</li>`);
 }
 
+type LiveReadinessGate = NonNullable<KalshiDashboardSnapshot["live_readiness_gate"]>;
+
+function gateTone(state: string | undefined): "ok" | "warn" | "danger" {
+  const normalized = (state ?? "").toLowerCase();
+  if (normalized.includes("pass") || normalized.includes("ready_for_next_approval")) {
+    return "ok";
+  }
+  if (normalized.includes("research_only") || normalized.includes("unknown")) {
+    return "warn";
+  }
+  return "danger";
+}
+
+function gateLabel(value: string | undefined): string {
+  return plainOpportunityToken(value ?? "unknown");
+}
+
+function renderGateTokens(tokens: string[] | undefined) {
+  if (!tokens?.length) {
+    return nothing;
+  }
+  return html`
+    <div class="kalshi-gate-token-row" aria-label="Live-readiness gate states">
+      ${tokens.map((token) => {
+        const tone = gateTone(token);
+        return html`
+          <span class="kalshi-gate-token kalshi-gate-token--${tone}">${gateLabel(token)}</span>
+        `;
+      })}
+    </div>
+  `;
+}
+
+function renderLiveReadinessGate(liveGate: LiveReadinessGate | undefined) {
+  if (!liveGate?.overall_state) {
+    return nothing;
+  }
+  const blockers = liveGate.blockers?.slice(0, 10) ?? [];
+  const marketRows = liveGate.market_family_readiness ?? [];
+  const approval = liveGate.exact_next_human_approval_needed ?? {};
+  const forbiddenActions = liveGate.forbidden_actions?.slice(0, 12) ?? [];
+  const artifactPaths = liveGate.artifact_paths?.slice(0, 8) ?? [];
+  return html`
+    <section class="kalshi-panel kalshi-panel--live-gate">
+      <div class="kalshi-live-gate__header">
+        <div>
+          <p class="kalshi-overline">Operational gate</p>
+          <h3>Live-Readiness Gate</h3>
+          <p class="kalshi-section-intro">
+            Active branch: ${gateLabel(liveGate.active_branch)}. Current decision:
+            ${gateLabel(liveGate.current_operational_gate_decision)}.
+          </p>
+        </div>
+        <span class="kalshi-gate-token kalshi-gate-token--${gateTone(liveGate.overall_state)}">
+          ${gateLabel(liveGate.overall_state)}
+        </span>
+      </div>
+      ${renderGateTokens(liveGate.state_tokens)}
+      <div class="kalshi-grid kalshi-grid--three kalshi-live-gate__cards">
+        ${metricCard(
+          "No-Live Validator",
+          liveGate.safety?.no_live_validator_ok ? "PASS" : "CHECK",
+          `Mode: ${liveGate.safety?.mode ?? "READ_ONLY"}. Live orders: ${
+            liveGate.safety?.live_order_allowed ? "allowed" : "disabled"
+          }.`,
+          liveGate.safety?.no_live_validator_ok ? "ok" : "warn",
+        )}
+        ${metricCard(
+          "Snapshot Gate",
+          gateLabel(liveGate.snapshot_state),
+          liveGate.fresh_snapshot_readiness?.decision ??
+            "Fresh snapshot remains blocked until approval and operations proof exist.",
+          gateTone(liveGate.snapshot_state),
+        )}
+        ${metricCard(
+          "STS Boundary",
+          liveGate.safety?.sts_logic_changed ||
+            liveGate.safety?.sts_weights_changed ||
+            liveGate.safety?.sts_recommendation_made_generated_or_applied
+            ? "CHECK"
+            : "UNCHANGED",
+          "No STS logic, weights, recommendations, ML, replay, signals, or live trading are authorized here.",
+          liveGate.safety?.sts_logic_changed ||
+            liveGate.safety?.sts_weights_changed ||
+            liveGate.safety?.sts_recommendation_made_generated_or_applied
+            ? "danger"
+            : "ok",
+        )}
+      </div>
+      <div class="kalshi-grid kalshi-grid--two">
+        <section class="kalshi-live-gate__subpanel">
+          <h4>Current Blockers</h4>
+          <div class="kalshi-table-scroll">
+            <table aria-label="Current operational gate blockers">
+              <thead>
+                <tr>
+                  <th>Gate</th>
+                  <th>State</th>
+                  <th>Evidence</th>
+                  <th>Needed</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${blockers.length
+                  ? blockers.map(
+                      (blocker) => html`
+                        <tr>
+                          <td>${gateLabel(blocker.blocker)}</td>
+                          <td>
+                            <span
+                              class="kalshi-gate-token kalshi-gate-token--${gateTone(
+                                blocker.state,
+                              )}"
+                            >
+                              ${gateLabel(blocker.state)}
+                            </span>
+                          </td>
+                          <td class="kalshi-artifact-path">${blocker.artifact_path ?? "n/a"}</td>
+                          <td>${blocker.pass_requirement ?? "Source-backed proof required."}</td>
+                        </tr>
+                      `,
+                    )
+                  : html`<tr>
+                      <td colspan="4">No active blocker rows were reported.</td>
+                    </tr>`}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section class="kalshi-live-gate__subpanel">
+          <h4>Market-Family Readiness</h4>
+          <div class="kalshi-table-scroll">
+            <table aria-label="Market family readiness">
+              <thead>
+                <tr>
+                  <th>Family</th>
+                  <th>State</th>
+                  <th>Rows</th>
+                  <th>Blocker</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${marketRows.map(
+                  (row) => html`
+                    <tr>
+                      <td>${gateLabel(row.family)}</td>
+                      <td>
+                        <span class="kalshi-gate-token kalshi-gate-token--${gateTone(row.state)}">
+                          ${gateLabel(row.state)}
+                        </span>
+                      </td>
+                      <td>
+                        frozen ${fmt(row.frozen_direct_rows ?? 0)} / post-boundary
+                        ${fmt(row.post_boundary_rows ?? 0)}
+                      </td>
+                      <td>
+                        ${row.blocker ?? "No blocker summary."}
+                        <br />
+                        <span class="kalshi-artifact-path">${row.artifact_path ?? "n/a"}</span>
+                      </td>
+                    </tr>
+                  `,
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+      <div class="kalshi-grid kalshi-grid--two">
+        <section class="kalshi-live-gate__subpanel">
+          <h4>Exact Next Approval Needed</h4>
+          <p>${approval.summary ?? "Approve one bounded operational reliability probe."}</p>
+          <p class="muted">${approval.max_scope ?? ""}</p>
+          <p class="kalshi-artifact-path">${approval.artifact_path ?? "n/a"}</p>
+          <h5>Recovery proof required</h5>
+          <ul>
+            ${listItems(approval.recovery_proof_required)}
+          </ul>
+        </section>
+        <section class="kalshi-live-gate__subpanel">
+          <h4>Forbidden Actions</h4>
+          <ul>
+            ${listItems(forbiddenActions)}
+          </ul>
+          <h5>Source Artifacts</h5>
+          <ul class="kalshi-artifact-list">
+            ${listItems(artifactPaths)}
+          </ul>
+        </section>
+      </div>
+    </section>
+  `;
+}
+
 type TrendPoint = NonNullable<
   NonNullable<NonNullable<KalshiDashboardSnapshot["strategy_scorecard"]>["trend"]>["points"]
 >[number];
@@ -3350,6 +3544,7 @@ export function renderKalshiDashboard(props: KalshiDashboardProps) {
     weather.latest_run_trade_ready ??
     weather.latest_discovery_trade_ready ??
     weatherTradeReadyCities.length;
+  const liveGate = snapshot?.live_readiness_gate;
   const cryptoCreatedCount = cryptoEvidence.created_count ?? 0;
   const recentChanges = [
     `Updated ${generatedAt}`,
@@ -3392,6 +3587,7 @@ export function renderKalshiDashboard(props: KalshiDashboardProps) {
       </section>
 
       ${props.error ? html`<div class="alert danger">${props.error}</div>` : nothing}
+      ${renderLiveReadinessGate(liveGate)}
       <section class="kalshi-routing-strip" aria-label="STS routing controls">
         <div>
           <p class="kalshi-overline">Routing gate you can test now</p>

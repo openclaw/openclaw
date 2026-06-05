@@ -451,6 +451,96 @@
   margin-top: 10px;
 }
 
+.kalshi-panel--live-gate {
+  border-color: rgba(214, 67, 58, 0.22);
+  background:
+    linear-gradient(135deg, rgba(214, 67, 58, 0.08), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.18)),
+    var(--kalshi-panel);
+}
+
+.kalshi-live-gate__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.kalshi-gate-token-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 16px;
+}
+
+.kalshi-gate-token {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid var(--kalshi-line-strong);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--kalshi-text);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.kalshi-gate-token--ok {
+  border-color: rgba(19, 138, 91, 0.22);
+  background: rgba(231, 248, 239, 0.9);
+  color: var(--kalshi-green);
+}
+
+.kalshi-gate-token--warn {
+  border-color: rgba(168, 105, 8, 0.24);
+  background: rgba(255, 246, 224, 0.9);
+  color: var(--kalshi-amber);
+}
+
+.kalshi-gate-token--danger {
+  border-color: rgba(214, 67, 58, 0.24);
+  background: rgba(255, 235, 232, 0.92);
+  color: var(--kalshi-red);
+}
+
+.kalshi-live-gate__cards {
+  margin: 16px 0;
+}
+
+.kalshi-live-gate__subpanel {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--kalshi-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.kalshi-live-gate__subpanel h4,
+.kalshi-live-gate__subpanel h5 {
+  margin: 0 0 10px;
+  color: var(--kalshi-text);
+  letter-spacing: 0;
+}
+
+.kalshi-live-gate__subpanel h5 {
+  margin-top: 14px;
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.kalshi-artifact-path,
+.kalshi-artifact-list li {
+  color: var(--kalshi-muted);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .kalshi-overline {
   margin: 0 0 6px;
   color: var(--kalshi-muted);

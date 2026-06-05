@@ -1512,6 +1512,146 @@ describe("Kalshi dashboard view", () => {
     expect(text).not.toMatch(/\bold baseline\b/i);
   });
 
+  it("renders the live-readiness gate with blocker evidence and approval scope", () => {
+    const container = document.createElement("div");
+    const base = createProps();
+    if (!base.snapshot) {
+      throw new Error("fixture snapshot is required");
+    }
+
+    render(
+      renderKalshiDashboard({
+        ...base,
+        snapshot: {
+          ...base.snapshot,
+          live_readiness_gate: {
+            overall_state: "LIVE_BLOCKED",
+            state_tokens: [
+              "LIVE_BLOCKED",
+              "SNAPSHOT_BLOCKED_NEEDS_APPROVAL",
+              "SOURCE_GATE_BLOCKED",
+              "RESEARCH_ONLY",
+              "READY_FOR_NEXT_APPROVAL",
+            ],
+            active_branch: "operations/safety",
+            current_operational_gate_decision: "snapshot_blocked_needs_approval",
+            live_trading_state: "LIVE_BLOCKED",
+            snapshot_state: "SNAPSHOT_BLOCKED_NEEDS_APPROVAL",
+            source_gate_state: "SOURCE_GATE_BLOCKED",
+            research_state: "RESEARCH_ONLY",
+            next_approval_state: "READY_FOR_NEXT_APPROVAL",
+            safety: {
+              no_live_validator_ok: true,
+              mode: "READ_ONLY",
+              live_order_allowed: false,
+              live_trading_enabled: false,
+              sts_logic_changed: false,
+              sts_weights_changed: false,
+              sts_recommendation_made_generated_or_applied: false,
+            },
+            fresh_snapshot_readiness: {
+              decision: "snapshot_blocked_needs_approval",
+              state: "SNAPSHOT_BLOCKED_NEEDS_APPROVAL",
+              recommended_by_freshness_audit: true,
+              snapshot_created: false,
+              evidence_artifact_path: "work/scripts/kalshi/dataset_freshness_drift_audit_v1.json",
+            },
+            blockers: [
+              {
+                blocker: "Gateway cron control",
+                state: "SNAPSHOT_BLOCKED_NEEDS_APPROVAL",
+                artifact_path: "work/scripts/kalshi/gateway_cron_control_failure_audit_v1.json",
+                last_known_raw_output: "gateway_cron_control_not_proven",
+                pass_requirement: "Prove helper-based Gateway cron status/control.",
+                human_approval_required: true,
+              },
+              {
+                blocker: "sports source gate",
+                state: "SOURCE_GATE_BLOCKED",
+                artifact_path: "work/scripts/kalshi/state_handoff_after_167_v1.json",
+                last_known_raw_output: "exact sports JSONL source path missing",
+                pass_requirement:
+                  "Approve exactly one local sports source JSONL path before sports advancement.",
+                human_approval_required: true,
+              },
+            ],
+            market_family_readiness: [
+              {
+                family: "sports",
+                state: "SOURCE_GATE_BLOCKED",
+                blocker:
+                  "Exact approved repo-root sports JSONL source path is still required before source-backed sports advancement.",
+                artifact_path: "work/scripts/kalshi/state_handoff_after_167_v1.json",
+                frozen_direct_rows: 5642,
+                post_boundary_rows: 4278,
+              },
+              {
+                family: "crypto",
+                state: "RESEARCH_ONLY",
+                blocker:
+                  "Strict V2 label source and diagnostic replay remain approval-gated; no STS or replay work is active.",
+                artifact_path: "work/scripts/kalshi/state_handoff_after_167_v1.json",
+                frozen_direct_rows: 2432,
+                post_boundary_rows: 1721,
+              },
+              {
+                family: "weather",
+                state: "RESEARCH_ONLY",
+                blocker:
+                  "Weather branch is preserved with a design-only repair plan; operations/safety gates supersede immediate collection.",
+                artifact_path: "work/scripts/kalshi/state_handoff_after_167_v1.json",
+                frozen_direct_rows: 10,
+                post_boundary_rows: 60,
+              },
+            ],
+            exact_next_human_approval_needed: {
+              summary: "One bounded Kalshi operational reliability probe.",
+              max_scope: "One bounded operational reliability probe using helper scripts.",
+              what_is_approved: ["Read-only status checks"],
+              what_is_not_approved: ["Live trading", "Snapshot creation"],
+              allowed_command_classes: ["no-live validator"],
+              stop_conditions: ["no-live validator fails"],
+              recovery_proof_required: ["Re-run no-live validator"],
+              human_approval_required: true,
+              artifact_path: "work/scripts/kalshi/NEXT_APPROVAL_SCOPE_RECOMMENDATION.md",
+            },
+            forbidden_actions: [
+              "live trading",
+              "write-capable Kalshi endpoints",
+              "STS logic or weight changes",
+            ],
+            artifact_paths: [
+              "work/scripts/kalshi/OPERATIONAL_GATE_TRUTH_TABLE.md",
+              "work/scripts/kalshi/STATE_HANDOFF_AFTER_167.md",
+            ],
+            live_order_allowed: false,
+            auto_live_promotion_allowed: false,
+          },
+        },
+      }),
+      container,
+    );
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("Live-Readiness Gate");
+    expect(text).toContain("operations/safety");
+    expect(text).toContain("snapshot blocked needs approval");
+    expect(text).toContain("LIVE BLOCKED");
+    expect(text).toContain("SNAPSHOT BLOCKED NEEDS APPROVAL");
+    expect(text).toContain("SOURCE GATE BLOCKED");
+    expect(text).toContain("RESEARCH ONLY");
+    expect(text).toContain("READY FOR NEXT APPROVAL");
+    expect(text).toContain("Gateway cron control");
+    expect(text).toContain("work/scripts/kalshi/gateway_cron_control_failure_audit_v1.json");
+    expect(text).toContain("sports source gate");
+    expect(text).toContain("crypto");
+    expect(text).toContain("weather");
+    expect(text).toContain("One bounded Kalshi operational reliability probe.");
+    expect(text).toContain("work/scripts/kalshi/NEXT_APPROVAL_SCOPE_RECOMMENDATION.md");
+    expect(text).toContain("write-capable Kalshi endpoints");
+    expect(container.querySelector(".kalshi-panel--live-gate")).not.toBeNull();
+  });
+
   it("renders crypto regime coverage and inverse repair shadow diagnostics", () => {
     const base = createProps();
     const container = document.createElement("div");

@@ -1244,6 +1244,74 @@ export type KalshiDashboardSnapshot = {
       brier_score?: number | null;
     };
   };
+  live_readiness_gate?: {
+    schema_version?: number;
+    overall_state?: string;
+    state_tokens?: string[];
+    active_branch?: string;
+    current_operational_gate_decision?: string;
+    live_trading_state?: string;
+    snapshot_state?: string;
+    source_gate_state?: string;
+    research_state?: string;
+    next_approval_state?: string;
+    safety?: {
+      no_live_validator_ok?: boolean;
+      mode?: string;
+      live_order_allowed?: boolean;
+      live_trading_enabled?: boolean;
+      sts_logic_changed?: boolean;
+      sts_weights_changed?: boolean;
+      sts_recommendation_made_generated_or_applied?: boolean;
+    };
+    fresh_snapshot_readiness?: {
+      decision?: string;
+      state?: string;
+      recommended_by_freshness_audit?: boolean;
+      snapshot_created?: boolean;
+      evidence_artifact_path?: string;
+    };
+    operational_gates?: Array<{
+      gate?: string;
+      status?: string;
+      state?: string;
+      evidence_artifact_path?: string;
+      last_known_raw_output?: string;
+      what_would_make_it_pass?: string;
+      human_approval_required?: boolean;
+    }>;
+    blockers?: Array<{
+      blocker?: string;
+      state?: string;
+      artifact_path?: string;
+      last_known_raw_output?: string;
+      pass_requirement?: string;
+      human_approval_required?: boolean;
+    }>;
+    market_family_readiness?: Array<{
+      family?: string;
+      state?: string;
+      blocker?: string;
+      artifact_path?: string;
+      frozen_direct_rows?: number;
+      post_boundary_rows?: number;
+    }>;
+    exact_next_human_approval_needed?: {
+      summary?: string;
+      max_scope?: string;
+      what_is_approved?: string[];
+      what_is_not_approved?: string[];
+      allowed_command_classes?: string[];
+      stop_conditions?: string[];
+      recovery_proof_required?: string[];
+      human_approval_required?: boolean;
+      artifact_path?: string;
+    };
+    forbidden_actions?: string[];
+    artifact_paths?: string[];
+    live_order_allowed?: boolean;
+    auto_live_promotion_allowed?: boolean;
+  };
   no_live_validator?: {
     critical_failures?: string[];
   };

@@ -33,6 +33,14 @@ function createDashboardFixture(opts?: {
   return { dataPath, guardPath, root, scriptPath };
 }
 
+function writeKalshiArtifact(
+  fixture: DashboardFixture,
+  filename: string,
+  artifact: Record<string, unknown>,
+): void {
+  fs.writeFileSync(path.join(path.dirname(fixture.scriptPath), filename), JSON.stringify(artifact));
+}
+
 async function withDashboardFixture(
   opts: Parameters<typeof createDashboardFixture>[0],
   fn: (fixture: DashboardFixture) => Promise<void> | void,
@@ -194,6 +202,134 @@ describe("kalshi dashboard gateway method", () => {
         await expect(__testing.loadKalshiDashboardSnapshot()).rejects.toThrow(/live_order_allowed/);
 
         expect(runner).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("derives the live-readiness gate from local safety artifacts", async () => {
+    await withDashboardFixture(
+      { cache: { live_order_allowed: false, mode: "READ_ONLY", version: "cached" } },
+      async (fixture) => {
+        writeKalshiArtifact(fixture, "operational_gate_truth_table_v1.json", {
+          snapshot_safety_decision: "snapshot_blocked_needs_approval",
+          current_safety_state: {
+            no_live_validator_ok: true,
+            mode: "READ_ONLY",
+            live_order_allowed: false,
+            live_trading_enabled: false,
+            sts_logic_changed: false,
+            sts_weights_changed: false,
+            sts_recommendation_made_generated_or_applied: false,
+          },
+          truth_table: [
+            {
+              gate: "Gateway cron control",
+              status: "blocked",
+              evidence_artifact_path:
+                "work/scripts/kalshi/gateway_cron_control_failure_audit_v1.json",
+              last_known_raw_output: "gateway_cron_control_not_proven",
+              what_would_make_it_pass: "Prove helper-based Gateway cron status/control.",
+              human_approval_required: true,
+            },
+            {
+              gate: "STS artifact immutability",
+              status: "pass",
+              evidence_artifact_path: "work/scripts/kalshi/state_handoff_after_167_v1.json",
+              last_known_raw_output: "STS unchanged",
+              what_would_make_it_pass: "Keep STS files unchanged.",
+              human_approval_required: false,
+            },
+          ],
+          approval_language: {
+            what_is_approved: ["One bounded Kalshi operational reliability probe."],
+            what_is_not_approved: ["Live trading", "Snapshot creation"],
+            max_scope: "One bounded operational reliability probe.",
+            allowed_command_classes: ["no-live validator"],
+            stop_conditions: ["no-live validator fails"],
+            recovery_proof_required: ["Re-run no-live validator"],
+          },
+        });
+        writeKalshiArtifact(fixture, "state_handoff_after_167_v1.json", {
+          active_branch: "operations/safety",
+          freshness_drift_decision: {
+            metrics: {
+              post_boundary_category_growth: {
+                sports: 4278,
+                crypto: 1721,
+                weather: 60,
+                economics: 2,
+                politics: 0,
+                other: 348,
+              },
+            },
+          },
+        });
+        writeKalshiArtifact(fixture, "dataset_freshness_drift_audit_v1.json", {
+          decision: "new_snapshot_recommended",
+          snapshot_created: false,
+          frozen_baseline: {
+            snapshot_local_direct_by_category: {
+              sports: 5642,
+              crypto: 2432,
+              weather: 10,
+              economics: 4,
+              politics: 0,
+              other: 502,
+            },
+          },
+        });
+
+        const snapshot = (await __testing.loadKalshiDashboardSnapshot()) as Record<string, unknown>;
+
+        expect(snapshot.live_readiness_gate).toMatchObject({
+          overall_state: "LIVE_BLOCKED",
+          snapshot_state: "SNAPSHOT_BLOCKED_NEEDS_APPROVAL",
+          source_gate_state: "SOURCE_GATE_BLOCKED",
+          research_state: "RESEARCH_ONLY",
+          next_approval_state: "READY_FOR_NEXT_APPROVAL",
+          active_branch: "operations/safety",
+          safety: {
+            no_live_validator_ok: true,
+            live_order_allowed: false,
+            live_trading_enabled: false,
+          },
+          exact_next_human_approval_needed: {
+            summary: "One bounded Kalshi operational reliability probe.",
+          },
+        });
+        expect(snapshot.live_readiness_gate).toEqual(
+          expect.objectContaining({
+            forbidden_actions: expect.arrayContaining([
+              "Live trading",
+              "write-capable Kalshi endpoints",
+              "STS logic or weight changes",
+            ]),
+            blockers: expect.arrayContaining([
+              expect.objectContaining({
+                blocker: "Gateway cron control",
+                state: "SNAPSHOT_BLOCKED_NEEDS_APPROVAL",
+                artifact_path: "work/scripts/kalshi/gateway_cron_control_failure_audit_v1.json",
+              }),
+              expect.objectContaining({
+                blocker: "sports source gate",
+                state: "SOURCE_GATE_BLOCKED",
+              }),
+            ]),
+            market_family_readiness: expect.arrayContaining([
+              expect.objectContaining({
+                family: "sports",
+                state: "SOURCE_GATE_BLOCKED",
+                frozen_direct_rows: 5642,
+                post_boundary_rows: 4278,
+              }),
+              expect.objectContaining({
+                family: "crypto",
+                state: "RESEARCH_ONLY",
+                post_boundary_rows: 1721,
+              }),
+            ]),
+          }),
+        );
       },
     );
   });
@@ -366,6 +502,20 @@ describe("kalshi dashboard gateway method", () => {
         headline: "Shadow learning is fresh while accepted proof is gated.",
         next_steps: ["Keep scoring weather and crypto shadow outcomes."],
         internal_rows: Array.from({ length: 100 }, (_, index) => index),
+        live_order_allowed: false,
+      },
+      live_readiness_gate: {
+        overall_state: "LIVE_BLOCKED",
+        snapshot_state: "SNAPSHOT_BLOCKED_NEEDS_APPROVAL",
+        source_gate_state: "SOURCE_GATE_BLOCKED",
+        blockers: [
+          {
+            blocker: "Gateway cron control",
+            state: "SNAPSHOT_BLOCKED_NEEDS_APPROVAL",
+            artifact_path: "work/scripts/kalshi/gateway_cron_control_failure_audit_v1.json",
+            pass_requirement: "Prove helper-based Gateway cron status/control.",
+          },
+        ],
         live_order_allowed: false,
       },
       crypto_evidence: {
@@ -631,6 +781,20 @@ describe("kalshi dashboard gateway method", () => {
       plain_english_status: {
         headline: "Shadow learning is fresh while accepted proof is gated.",
         next_steps: ["Keep scoring weather and crypto shadow outcomes."],
+        live_order_allowed: false,
+      },
+      live_readiness_gate: {
+        overall_state: "LIVE_BLOCKED",
+        snapshot_state: "SNAPSHOT_BLOCKED_NEEDS_APPROVAL",
+        source_gate_state: "SOURCE_GATE_BLOCKED",
+        blockers: [
+          {
+            blocker: "Gateway cron control",
+            state: "SNAPSHOT_BLOCKED_NEEDS_APPROVAL",
+            artifact_path: "work/scripts/kalshi/gateway_cron_control_failure_audit_v1.json",
+            pass_requirement: "Prove helper-based Gateway cron status/control.",
+          },
+        ],
         live_order_allowed: false,
       },
       crypto_evidence: {

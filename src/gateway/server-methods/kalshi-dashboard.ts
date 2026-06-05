@@ -54,6 +54,34 @@ type AuditTableMeta = {
   total_rows: number;
 };
 
+const KALSHI_LIVE_GATE_ARTIFACTS = {
+  truthTableJson: "operational_gate_truth_table_v1.json",
+  truthTableMarkdown: "OPERATIONAL_GATE_TRUTH_TABLE.md",
+  handoffJson: "state_handoff_after_167_v1.json",
+  handoffMarkdown: "STATE_HANDOFF_AFTER_167.md",
+  nextPrompts: "NEXT_5_PROMPTS_AFTER_168.md",
+  freshnessJson: "dataset_freshness_drift_audit_v1.json",
+  freshnessMarkdown: "DATASET_FRESHNESS_DRIFT_AUDIT.md",
+  freshnessExecutionMarkdown: "FRESHNESS_DECISION_EXECUTION.md",
+  approvalMarkdown: "NEXT_APPROVAL_SCOPE_RECOMMENDATION.md",
+} as const;
+
+const KALSHI_LIVE_GATE_FORBIDDEN_ACTIONS = [
+  "live trading",
+  "live permission changes",
+  "write-capable Kalshi endpoints",
+  "STS logic or weight changes",
+  "STS recommendations",
+  "ML training",
+  "replay or evaluation",
+  "signal or filter activation",
+  "collection",
+  "snapshot creation without explicit approval",
+  "raw-log or frozen-snapshot rewrites",
+  "direct cron JSON edits",
+  "pnpm openclaw cron edit",
+] as const;
+
 let dashboardRefreshInFlight: Promise<unknown> | null = null;
 let lastDashboardRefreshStartedAt = 0;
 let lastDashboardRefreshError: string | null = null;
@@ -200,6 +228,336 @@ function objectField(source: unknown, field: string): unknown {
     return undefined;
   }
   return (source as DashboardRecord)[field];
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function stringField(source: unknown, field: string): string | undefined {
+  return stringValue(objectField(source, field));
+}
+
+function booleanField(source: unknown, field: string): boolean | undefined {
+  const value = objectField(source, field);
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function numberField(source: unknown, field: string): number | undefined {
+  const value = objectField(source, field);
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function objectArray(value: unknown): DashboardRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(
+    (item): item is DashboardRecord =>
+      Boolean(item) && typeof item === "object" && !Array.isArray(item),
+  );
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
+function kalshiArtifactPath(filename: string): string {
+  return `work/scripts/kalshi/${filename}`;
+}
+
+function readKalshiJsonArtifact(scriptPath: string, filename: string): DashboardRecord | null {
+  try {
+    const artifactPath = path.join(path.dirname(scriptPath), filename);
+    const parsed = JSON.parse(fs.readFileSync(artifactPath, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as DashboardRecord;
+  } catch {
+    return null;
+  }
+}
+
+function gateStateFromStatus(status: string | undefined): string {
+  const normalized = status?.toLowerCase();
+  if (normalized === "pass" || normalized === "healthy") {
+    return "PASS";
+  }
+  if (normalized === "not_applicable") {
+    return "NOT_APPLICABLE";
+  }
+  if (normalized === "unknown" || normalized === "warning") {
+    return "UNKNOWN";
+  }
+  return "BLOCKED";
+}
+
+function buildOperationalGateRows(truthTable: unknown): DashboardRecord[] {
+  return objectArray(truthTable).map((row) => {
+    const status = stringField(row, "status") ?? "unknown";
+    return {
+      gate: stringField(row, "gate") ?? "unknown gate",
+      status,
+      state: gateStateFromStatus(status),
+      evidence_artifact_path:
+        stringField(row, "evidence_artifact_path") ??
+        kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.truthTableMarkdown),
+      last_known_raw_output: stringField(row, "last_known_raw_output") ?? "No raw output recorded.",
+      what_would_make_it_pass:
+        stringField(row, "what_would_make_it_pass") ??
+        "Record source-backed evidence for this gate.",
+      human_approval_required: booleanField(row, "human_approval_required") === true,
+    };
+  });
+}
+
+function gateRowByName(rows: readonly DashboardRecord[], gateName: string): DashboardRecord | null {
+  const normalized = gateName.toLowerCase();
+  return (
+    rows.find((row) => stringField(row, "gate")?.toLowerCase() === normalized) ??
+    rows.find((row) => stringField(row, "gate")?.toLowerCase().includes(normalized)) ??
+    null
+  );
+}
+
+function buildOperationalBlocker(row: DashboardRecord, state = "SNAPSHOT_BLOCKED_NEEDS_APPROVAL") {
+  return {
+    blocker: stringField(row, "gate") ?? "operational gate",
+    state,
+    artifact_path:
+      stringField(row, "evidence_artifact_path") ??
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.truthTableMarkdown),
+    last_known_raw_output: stringField(row, "last_known_raw_output") ?? "No raw output recorded.",
+    pass_requirement:
+      stringField(row, "what_would_make_it_pass") ??
+      "Capture a passing, source-backed operational gate result.",
+    human_approval_required: booleanField(row, "human_approval_required") === true,
+  };
+}
+
+function categoryGrowthRows(handoff: DashboardRecord | null): DashboardRecord[] {
+  const metrics = objectField(objectField(handoff, "freshness_drift_decision"), "metrics");
+  const growth = objectField(metrics, "post_boundary_category_growth");
+  const categories = ["sports", "crypto", "weather", "economics", "politics", "other"] as const;
+  return categories.map((category) => ({
+    family: category,
+    post_boundary_rows: numberField(growth, category) ?? 0,
+  }));
+}
+
+function buildMarketFamilyReadiness(params: {
+  freshness: DashboardRecord | null;
+  handoff: DashboardRecord | null;
+}): DashboardRecord[] {
+  const growthRows = new Map(categoryGrowthRows(params.handoff).map((row) => [row.family, row]));
+  const frozenBaseline = objectField(params.freshness, "frozen_baseline");
+  const snapshotCategoryRows = objectField(frozenBaseline, "snapshot_local_direct_by_category");
+  const base = (family: string, state: string, blocker: string, artifactPath: string) => ({
+    family,
+    state,
+    blocker,
+    artifact_path: artifactPath,
+    frozen_direct_rows: numberField(snapshotCategoryRows, family) ?? 0,
+    post_boundary_rows:
+      numberField(growthRows.get(family), "post_boundary_rows") ??
+      (family === "other" ? numberField(growthRows.get("other"), "post_boundary_rows") : 0),
+  });
+
+  return [
+    base(
+      "sports",
+      "SOURCE_GATE_BLOCKED",
+      "Exact approved repo-root sports JSONL source path is still required before source-backed sports advancement.",
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.handoffJson),
+    ),
+    base(
+      "crypto",
+      "RESEARCH_ONLY",
+      "Strict V2 label source and diagnostic replay remain approval-gated; no STS or replay work is active.",
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.handoffJson),
+    ),
+    base(
+      "weather",
+      "RESEARCH_ONLY",
+      "Weather branch is preserved with a design-only repair plan; operations/safety gates supersede immediate collection.",
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.handoffJson),
+    ),
+    base(
+      "economics",
+      "RESEARCH_ONLY",
+      "Economics remains preserved but thin and deferred until source and label coverage improve.",
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.handoffJson),
+    ),
+    base(
+      "politics",
+      "RESEARCH_ONLY",
+      "Politics remains preserved but currently has no post-boundary growth and no live-ready source path.",
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.handoffJson),
+    ),
+    base(
+      "other",
+      "RESEARCH_ONLY",
+      "Other markets remain tracked but are deferred behind operations/safety and source-boundary gates.",
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.handoffJson),
+    ),
+  ];
+}
+
+function buildKalshiLiveReadinessGate(
+  snapshot: DashboardRecord,
+  scriptPath = resolveKalshiDashboardScript(),
+): DashboardRecord {
+  const truth = readKalshiJsonArtifact(scriptPath, KALSHI_LIVE_GATE_ARTIFACTS.truthTableJson);
+  const handoff = readKalshiJsonArtifact(scriptPath, KALSHI_LIVE_GATE_ARTIFACTS.handoffJson);
+  const freshness = readKalshiJsonArtifact(scriptPath, KALSHI_LIVE_GATE_ARTIFACTS.freshnessJson);
+  const approval = objectField(truth, "approval_language");
+  const operationalRows = buildOperationalGateRows(objectField(truth, "truth_table"));
+  const blockedGateNames = [
+    "Gateway cron control",
+    "approved cron disable/enable path",
+    "dashboard sentinel/refresh safety",
+    "LaunchAgent visibility",
+    "background writer detection",
+    "preservation validator readiness",
+    "quiescence reliability",
+    "service recovery proof",
+    "daily learning report status",
+    "stale temp dirs",
+    "dashboard artifact freshness",
+    "source/log/snapshot mutation risk",
+    "fresh snapshot approval status",
+  ];
+  const operationalBlockers = blockedGateNames
+    .map((name) => gateRowByName(operationalRows, name))
+    .filter((row): row is DashboardRecord => row !== null)
+    .map((row) => buildOperationalBlocker(row));
+  const forbiddenActions = [
+    ...new Set([
+      ...stringArray(objectField(approval, "what_is_not_approved")),
+      ...KALSHI_LIVE_GATE_FORBIDDEN_ACTIONS,
+    ]),
+  ];
+  const snapshotDecision =
+    stringField(truth, "snapshot_safety_decision") ??
+    stringField(objectField(handoff, "freshness_drift_decision"), "snapshot_execution_status") ??
+    "snapshot_blocked_unknown_state";
+  const liveOrderAllowed = snapshot.live_order_allowed === true;
+  const currentSafety = objectField(truth, "current_safety_state");
+  const noLiveOk =
+    booleanField(currentSafety, "no_live_validator_ok") ??
+    (snapshot.live_order_allowed === false && !liveOrderAllowed);
+  const marketFamilyReadiness = buildMarketFamilyReadiness({ freshness, handoff });
+  const sourceBlockers = [
+    {
+      blocker: "sports source gate",
+      state: "SOURCE_GATE_BLOCKED",
+      artifact_path: kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.handoffJson),
+      last_known_raw_output:
+        "Sports is preserved but exact approval plus one repo-root local sports JSONL path remain required.",
+      pass_requirement:
+        "Approve exactly one local sports source JSONL path before sports research can advance.",
+      human_approval_required: true,
+    },
+    {
+      blocker: "crypto label and replay gate",
+      state: "RESEARCH_ONLY",
+      artifact_path: kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.handoffJson),
+      last_known_raw_output:
+        "Crypto V2 label-source path remains approval-gated; no diagnostic replay is authorized.",
+      pass_requirement:
+        "Resolve source-backed labels and create preregistration before any diagnostic replay.",
+      human_approval_required: true,
+    },
+  ];
+
+  return {
+    schema_version: 1,
+    overall_state: "LIVE_BLOCKED",
+    state_tokens: [
+      "LIVE_BLOCKED",
+      "SNAPSHOT_BLOCKED_NEEDS_APPROVAL",
+      "SOURCE_GATE_BLOCKED",
+      "RESEARCH_ONLY",
+      "READY_FOR_NEXT_APPROVAL",
+    ],
+    active_branch: stringField(handoff, "active_branch") ?? "operations/safety",
+    current_operational_gate_decision: snapshotDecision,
+    live_trading_state: "LIVE_BLOCKED",
+    snapshot_state:
+      snapshotDecision === "snapshot_blocked_needs_approval"
+        ? "SNAPSHOT_BLOCKED_NEEDS_APPROVAL"
+        : "SNAPSHOT_BLOCKED_UNKNOWN_STATE",
+    source_gate_state: "SOURCE_GATE_BLOCKED",
+    research_state: "RESEARCH_ONLY",
+    next_approval_state: "READY_FOR_NEXT_APPROVAL",
+    safety: {
+      no_live_validator_ok: noLiveOk,
+      mode: stringField(currentSafety, "mode") ?? stringField(snapshot, "mode") ?? "READ_ONLY",
+      live_order_allowed: liveOrderAllowed,
+      live_trading_enabled: booleanField(currentSafety, "live_trading_enabled") === true,
+      sts_logic_changed: booleanField(currentSafety, "sts_logic_changed") === true,
+      sts_weights_changed: booleanField(currentSafety, "sts_weights_changed") === true,
+      sts_recommendation_made_generated_or_applied:
+        booleanField(currentSafety, "sts_recommendation_made_generated_or_applied") === true,
+    },
+    fresh_snapshot_readiness: {
+      decision: snapshotDecision,
+      state:
+        snapshotDecision === "snapshot_blocked_needs_approval"
+          ? "SNAPSHOT_BLOCKED_NEEDS_APPROVAL"
+          : "SNAPSHOT_BLOCKED_UNKNOWN_STATE",
+      recommended_by_freshness_audit:
+        stringField(freshness, "decision") === "new_snapshot_recommended",
+      snapshot_created: booleanField(freshness, "snapshot_created") === true,
+      evidence_artifact_path: kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.freshnessJson),
+    },
+    operational_gates: operationalRows,
+    blockers: [...operationalBlockers, ...sourceBlockers],
+    market_family_readiness: marketFamilyReadiness,
+    exact_next_human_approval_needed: {
+      summary:
+        stringArray(objectField(approval, "what_is_approved"))[0] ??
+        "Approve one bounded operational reliability probe before any fresh snapshot can be considered.",
+      max_scope:
+        stringField(approval, "max_scope") ??
+        "One bounded operational reliability probe using local helper scripts and read-only status checks.",
+      what_is_approved: stringArray(objectField(approval, "what_is_approved")),
+      what_is_not_approved: forbiddenActions,
+      allowed_command_classes: stringArray(objectField(approval, "allowed_command_classes")),
+      stop_conditions: stringArray(objectField(approval, "stop_conditions")),
+      recovery_proof_required: stringArray(objectField(approval, "recovery_proof_required")),
+      human_approval_required: true,
+      artifact_path: kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.approvalMarkdown),
+    },
+    forbidden_actions: forbiddenActions,
+    artifact_paths: [
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.truthTableMarkdown),
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.truthTableJson),
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.handoffMarkdown),
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.handoffJson),
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.nextPrompts),
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.freshnessMarkdown),
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.freshnessJson),
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.freshnessExecutionMarkdown),
+      kalshiArtifactPath(KALSHI_LIVE_GATE_ARTIFACTS.approvalMarkdown),
+    ],
+    live_order_allowed: false,
+    auto_live_promotion_allowed: false,
+  };
+}
+
+function attachLiveReadinessGate(
+  snapshot: Record<string, unknown>,
+  scriptPath = resolveKalshiDashboardScript(),
+): Record<string, unknown> {
+  return {
+    ...snapshot,
+    live_readiness_gate: buildKalshiLiveReadinessGate(snapshot, scriptPath),
+  };
 }
 
 function mutableObjectField(source: DashboardRecord, field: string): DashboardRecord {
@@ -940,6 +1298,7 @@ function compactKalshiWorkspaceSnapshot(snapshot: unknown): DashboardRecord {
   const stsWeatherSelectorRepair = data.sts_weather_selector_repair;
   const stsCryptoEvidenceRepair = data.sts_crypto_evidence_repair;
   const stsUnlockQueue = data.sts_unlock_queue;
+  const liveReadinessGate = data.live_readiness_gate;
   const weatherLane = compactWeatherLane(objectField(accelerator, "weather_lane"));
   const compact: DashboardRecord = {
     generated_at_utc: data.generated_at_utc,
@@ -973,6 +1332,7 @@ function compactKalshiWorkspaceSnapshot(snapshot: unknown): DashboardRecord {
       "live_order_allowed",
     ]),
     live_readiness: data.live_readiness,
+    live_readiness_gate: liveReadinessGate,
     log_counts: data.log_counts,
     warnings: data.warnings,
     top_action: data.top_action,
@@ -1587,7 +1947,7 @@ export async function loadKalshiDashboardSnapshot(opts?: {
   if (isKalshiDashboardRefreshSuspended(script)) {
     try {
       const snapshot = readDashboardDataSnapshot(dataPath);
-      return attachRefreshStatus(snapshot, {
+      return attachRefreshStatus(attachLiveReadinessGate(snapshot, script), {
         inProgress: false,
         stale: ageMs === null || ageMs >= KALSHI_DASHBOARD_BACKGROUND_REFRESH_MIN_INTERVAL_MS,
         ageMs,
@@ -1620,12 +1980,15 @@ export async function loadKalshiDashboardSnapshot(opts?: {
         });
     }
     const snapshot = await dashboardRefreshInFlight;
-    return attachRefreshStatus(parseDashboardDataObject(snapshot), {
-      inProgress: false,
-      stale: false,
-      ageMs: dashboardDataAgeMs(dataPath),
-      lastError: lastDashboardRefreshError,
-    });
+    return attachRefreshStatus(
+      attachLiveReadinessGate(parseDashboardDataObject(snapshot), script),
+      {
+        inProgress: false,
+        stale: false,
+        ageMs: dashboardDataAgeMs(dataPath),
+        lastError: lastDashboardRefreshError,
+      },
+    );
   }
   const refresh = startDashboardRefreshIfDue({ python, script, dataPath });
   if (refresh) {
@@ -1633,7 +1996,7 @@ export async function loadKalshiDashboardSnapshot(opts?: {
   }
   try {
     const snapshot = readDashboardDataSnapshot(dataPath);
-    return attachRefreshStatus(snapshot, {
+    return attachRefreshStatus(attachLiveReadinessGate(snapshot, script), {
       inProgress: Boolean(refresh),
       stale: ageMs === null || ageMs >= KALSHI_DASHBOARD_BACKGROUND_REFRESH_MIN_INTERVAL_MS,
       ageMs,
@@ -1644,12 +2007,15 @@ export async function loadKalshiDashboardSnapshot(opts?: {
       throw readError;
     }
     const refreshed = await refresh;
-    return attachRefreshStatus(parseDashboardDataObject(refreshed), {
-      inProgress: false,
-      stale: false,
-      ageMs: dashboardDataAgeMs(dataPath),
-      lastError: lastDashboardRefreshError,
-    });
+    return attachRefreshStatus(
+      attachLiveReadinessGate(parseDashboardDataObject(refreshed), script),
+      {
+        inProgress: false,
+        stale: false,
+        ageMs: dashboardDataAgeMs(dataPath),
+        lastError: lastDashboardRefreshError,
+      },
+    );
   }
 }
 
@@ -1696,6 +2062,7 @@ export const __testing = {
   resolveExecutable,
   isKalshiDashboardRefreshSuspended,
   attachRefreshStatus,
+  buildKalshiLiveReadinessGate,
   loadKalshiDashboardSnapshot,
   setDashboardRefreshRunnerForTest(runner: DashboardRefreshRunner): void {
     dashboardRefreshRunner = runner;
