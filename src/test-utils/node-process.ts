@@ -1,3 +1,4 @@
+// Test helpers for spawning Node processes and asserting their output.
 import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 
 type NodeEvalArgsOptions = {

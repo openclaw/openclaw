@@ -1,3 +1,4 @@
+// Provider stream shared helpers implement reusable stream wrappers and payload policies.
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import {

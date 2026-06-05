@@ -1,3 +1,4 @@
+// Installs validated registry npm specs through archive install helpers.
 import type { NpmIntegrityDriftPayload } from "./npm-integrity.js";
 import {
   finalizeNpmSpecArchiveInstall,

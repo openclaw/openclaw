@@ -1,3 +1,4 @@
+// API baseline helpers hash public SDK exports for contract drift checks.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

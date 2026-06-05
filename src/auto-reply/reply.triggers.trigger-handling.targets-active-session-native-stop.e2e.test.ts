@@ -1,3 +1,4 @@
+/** E2E tests for native /stop targeting the active auto-reply session. */
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";

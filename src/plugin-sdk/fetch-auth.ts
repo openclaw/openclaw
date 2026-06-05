@@ -1,3 +1,4 @@
+// Fetch auth helpers provide scoped bearer-token retries for plugin HTTP requests.
 import {
   normalizeHeadersInitForFetch,
   normalizeRequestInitHeadersForFetch,

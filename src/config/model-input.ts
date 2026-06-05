@@ -1,3 +1,4 @@
+// Normalizes model input config into provider and model references.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeGooglePreviewModelId,

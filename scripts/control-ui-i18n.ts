@@ -1,3 +1,4 @@
+// Control Ui I18N script supports OpenClaw repository automation.
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";

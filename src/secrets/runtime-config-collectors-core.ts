@@ -1,3 +1,4 @@
+/** Collects core config secret refs during runtime preparation. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
@@ -641,6 +642,7 @@ function collectSandboxSshAssignments(params: {
 }
 
 /** Collects SecretRef assignments from core-owned config surfaces. */
+/** Collects SecretRef assignments from core non-plugin config surfaces. */
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;

@@ -1,3 +1,4 @@
+// Normalizes and validates system-run commands before approval binding.
 import {
   extractShellWrapperCommand,
   hasEnvManipulationBeforeShellWrapper,

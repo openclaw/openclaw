@@ -1,3 +1,8 @@
+/**
+ * Gateway exec approval E2E tests.
+ * Exercises a real gateway server approval flow, approval follow-up text, and
+ * approval timeout behavior in an isolated temp config.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

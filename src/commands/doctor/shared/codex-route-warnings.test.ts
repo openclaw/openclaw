@@ -1,3 +1,4 @@
+// Codex route warning tests cover doctor diagnostics for Codex route configuration.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";

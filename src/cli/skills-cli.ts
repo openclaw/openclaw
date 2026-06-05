@@ -1,3 +1,4 @@
+// Skills CLI for workspace status, install/update, ClawHub verification, and workshop proposals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
@@ -72,6 +73,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   workspaceDir: string;
   agentId: string;
 } {
+  // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
   const config = getRuntimeConfig();
   const explicitAgentId = normalizeOptionalString(options?.agentId);
   const inferredAgentId = explicitAgentId

@@ -1,3 +1,4 @@
+/** Tests secrets runtime state clone isolation and refresh context. */
 import { afterEach, describe, expect, it } from "vitest";
 import {
   activateSecretsRuntimeSnapshotState,

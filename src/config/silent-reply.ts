@@ -1,3 +1,4 @@
+// Normalizes silent-reply config for channel response suppression.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   classifySilentReplyConversationType,

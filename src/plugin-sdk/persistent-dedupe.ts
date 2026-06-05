@@ -1,3 +1,4 @@
+// Persistent dedupe helpers give plugins bounded replay protection across process restarts.
 import { createDedupeCache } from "../infra/dedupe.js";
 import { resolveNonNegativeIntegerOption } from "../infra/numeric-options.js";
 import type { FileLockOptions } from "./file-lock.js";

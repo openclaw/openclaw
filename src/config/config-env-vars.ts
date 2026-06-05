@@ -1,3 +1,4 @@
+// Defines environment-variable config metadata and preservation rules.
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,

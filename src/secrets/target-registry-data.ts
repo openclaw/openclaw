@@ -1,3 +1,4 @@
+/** Builds the static and plugin-derived registry of secret migration targets. */
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
@@ -484,11 +485,13 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
 }
 
 /** Returns only core-owned secret target registry entries. */
+/** Returns static core secret target registry entries without plugin-derived targets. */
 export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return CORE_SECRET_TARGET_REGISTRY;
 }
 
 /** Returns the process-cached registry including bundled plugin/channel metadata. */
+/** Returns core plus plugin/channel secret target registry entries for the current metadata view. */
 export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   if (cachedSecretTargetRegistry) {
     return cachedSecretTargetRegistry;

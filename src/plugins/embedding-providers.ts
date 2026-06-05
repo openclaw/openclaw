@@ -1,3 +1,4 @@
+/** Registry for plugin-contributed embedding providers. */
 import type {
   EmbeddingProviderAdapter,
   RegisteredEmbeddingProvider,
@@ -36,6 +37,7 @@ function getEmbeddingProviders(): Map<string, RegisteredEmbeddingProvider> {
 }
 
 /** Registers an embedding provider adapter for the current process. */
+/** Registers an embedding provider adapter for plugin and built-in memory callers. */
 export function registerEmbeddingProvider(
   adapter: EmbeddingProviderAdapter,
   options?: { ownerPluginId?: string },
@@ -47,6 +49,7 @@ export function registerEmbeddingProvider(
 }
 
 /** Returns the registered embedding provider entry, including core defaults. */
+/** Looks up the registered embedding provider entry, including owner metadata. */
 export function getRegisteredEmbeddingProvider(
   id: string,
 ): RegisteredEmbeddingProvider | undefined {

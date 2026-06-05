@@ -1,3 +1,4 @@
+// Kitchen Sink Rpc Walk tests cover kitchen sink rpc walk script behavior.
 import { EventEmitter } from "node:events";
 import fs, {
   existsSync,
@@ -211,6 +212,48 @@ describe("kitchen-sink RPC gateway teardown", () => {
     }
   });
 
+  it("aborts stalled readiness probes when the gateway exits mid-probe", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-exit-during-ready-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, "gateway died during readiness\n");
+      const child = Object.assign(new EventEmitter(), {
+        exitCode: null,
+        signalCode: null as NodeJS.Signals | null,
+      });
+      const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              const reason = init.signal?.reason;
+              reject(reason instanceof Error ? reason : new Error("fetch aborted"));
+            },
+            { once: true },
+          );
+        });
+      });
+      const startedAt = Date.now();
+      setTimeout(() => {
+        child.signalCode = "SIGTERM";
+        child.emit("exit", null, "SIGTERM");
+      }, 25);
+
+      await expect(
+        waitForGatewayReady(child, 9, logPath, {
+          fetchImpl,
+          pollDelayMs: 5_000,
+          timeoutMs: 2_000,
+        }),
+      ).rejects.toThrow("gateway exited before ready");
+
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(Date.now() - startedAt).toBeLessThan(500);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps stalled readiness probes inside the caller deadline", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-stalled-ready-"));
     try {
@@ -319,6 +362,23 @@ describe("kitchen-sink RPC gateway readiness logs", () => {
         {
           line: "[ERROR] late failure",
           lineNumber: 2002,
+        },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not allowlist dirty error lines that mention zero errors", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-zero-error-smuggle-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, "[ERROR] 0 errors reported but fatal state remained\n");
+
+      expect(findErrorLogFindings(logPath)).toEqual([
+        {
+          line: "[ERROR] 0 errors reported but fatal state remained",
+          lineNumber: 1,
         },
       ]);
     } finally {
@@ -553,9 +613,7 @@ describe("kitchen-sink RPC command catalog assertions", () => {
   it("requires every expected Kitchen Sink plugin tool", () => {
     expect(() =>
       assertExpectedKitchenSinkToolEntries(
-        [
-          { id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" },
-        ],
+        [{ id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" }],
         "tools.catalog plugin tools",
         { requirePluginProvenance: true },
       ),

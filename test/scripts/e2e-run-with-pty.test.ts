@@ -1,3 +1,4 @@
+// E2E Run With Pty tests cover e2e run with pty script behavior.
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -100,6 +101,23 @@ describe("run-with-pty", () => {
       expect(log).toContain(marker);
       expect(result.stdout.length).toBeLessThan(512);
       expect(log.length).toBeLessThan(512);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the transcript log cannot be written", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
+    try {
+      const result = await runPtyProbe(
+        tempRoot,
+        {},
+        [process.execPath, "-e", "console.log('ready')"],
+        "",
+      );
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("run-with-pty transcript log failed:");
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }

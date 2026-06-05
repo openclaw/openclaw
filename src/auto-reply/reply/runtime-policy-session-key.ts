@@ -1,3 +1,4 @@
+/** Resolves runtime policy session keys distinct from transcript session keys. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -84,6 +85,7 @@ function isMainSessionAlias(params: {
 }
 
 /** Resolves the session key used for runtime policy checks and direct-message scoping. */
+/** Resolves the session key used for sandbox/tool/runtime policy lookups. */
 export function resolveRuntimePolicySessionKey(params: {
   cfg?: OpenClawConfig;
   ctx?: RuntimePolicyContext;

@@ -14,7 +14,7 @@ import { isRecord, readString } from "./comment-shared.js";
 import {
   hasProcessedFeishuMessage,
   recordProcessedFeishuMessage,
-  warmupDedupFromDisk,
+  warmupDedupFromPluginState,
 } from "./dedup.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
@@ -469,9 +469,9 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     throw new Error(`Feishu account "${accountId}" webhook mode requires encryptKey`);
   }
 
-  const warmupCount = await warmupDedupFromDisk(accountId, log);
+  const warmupCount = await warmupDedupFromPluginState(accountId, log);
   if (warmupCount > 0) {
-    log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from disk`);
+    log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from plugin state`);
   }
 
   let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null | undefined;

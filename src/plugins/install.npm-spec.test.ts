@@ -1,3 +1,4 @@
+// Covers npm spec parsing for plugin install inputs.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

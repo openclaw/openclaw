@@ -1,3 +1,4 @@
+// Qqbot plugin module implements channel behavior.
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
 import {
   createMessageReceiptFromOutboundResults,

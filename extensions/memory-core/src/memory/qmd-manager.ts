@@ -1,3 +1,4 @@
+// Memory Core plugin module implements qmd manager behavior.
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";

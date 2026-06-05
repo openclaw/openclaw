@@ -1,3 +1,4 @@
+// Windows spawn helpers resolve Windows command execution details for plugin runtimes.
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import {

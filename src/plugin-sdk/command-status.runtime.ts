@@ -1,3 +1,4 @@
+// Command status runtime helpers collect agent/session state for plugin command status output.
 import { listAgentEntries, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { buildStatusReply } from "../auto-reply/reply/commands-status.js";

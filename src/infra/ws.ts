@@ -1,3 +1,4 @@
+// Normalizes WebSocket raw payload data to strings.
 import { Buffer } from "node:buffer";
 import type WebSocket from "ws";
 

@@ -1,3 +1,4 @@
+/** Runtime adapter for channel text-to-speech secret contracts. */
 import type {
   ChannelAccountPredicate,
   ChannelAccountSurface,

@@ -1,3 +1,4 @@
+// Installs package directories under canonical plugin roots.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";

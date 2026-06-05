@@ -1,3 +1,4 @@
+// Converts ClawHub plugin entries into install records.
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { ClawHubPackageChannel, ClawHubPackageFamily } from "../infra/clawhub.js";
 

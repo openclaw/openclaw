@@ -1,3 +1,4 @@
+// TTS runtime types define plugin-facing text-to-speech synthesis hooks and results.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolvedTtsPersona, TtsAutoMode, TtsProvider } from "../config/types.tts.js";
 import type {

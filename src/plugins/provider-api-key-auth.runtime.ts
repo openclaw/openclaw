@@ -1,3 +1,4 @@
+// Runtime bridge for provider API-key auth configured by plugins.
 import { applyAuthProfileConfig, buildApiKeyCredential } from "./provider-auth-helpers.js";
 import {
   ensureApiKeyFromOptionEnvOrPrompt,

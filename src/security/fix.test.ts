@@ -1,3 +1,4 @@
+// Covers security fixer behavior for supported audit findings.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

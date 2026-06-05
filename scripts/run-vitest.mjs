@@ -25,8 +25,10 @@ const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
 const LONG_RUNNING_VITEST_CONFIGS = new Set([
   "test/vitest/vitest.e2e.config.ts",
+  GATEWAY_VITEST_CONFIG,
   "test/vitest/vitest.ui-e2e.config.ts",
   "test/vitest/vitest.full-agentic.config.ts",
   "test/vitest/vitest.full-core-contracts.config.ts",

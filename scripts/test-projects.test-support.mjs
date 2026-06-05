@@ -1789,6 +1789,7 @@ export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
   const useBroadFallback = options.broad ?? shouldUseBroadChangedTargets(env);
   const skipImportGraph = changedLanes.lanes.all && !useBroadFallback;
   const targets = [];
+  const skippedBroadFallbackPaths = [];
   for (const changedPath of changedPaths) {
     const preciseTargets = resolvePreciseChangedTestTargets(changedPath, {
       ...options,
@@ -1803,6 +1804,7 @@ export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
       if (useBroadFallback) {
         return { mode: "broad", targets: [] };
       }
+      skippedBroadFallbackPaths.push(changedPath);
       continue;
     }
     if (isRoutableChangedTarget(changedPath)) {
@@ -1812,7 +1814,11 @@ export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
   if (useBroadFallback && changedLanes.extensionImpactFromCore) {
     targets.push("extensions");
   }
-  return { mode: "targets", targets: [...new Set(targets)] };
+  const plan = { mode: "targets", targets: [...new Set(targets)] };
+  if (skippedBroadFallbackPaths.length > 0) {
+    plan.skippedBroadFallbackPaths = [...new Set(skippedBroadFallbackPaths)];
+  }
+  return plan;
 }
 
 export function listFullExtensionVitestProjectConfigs() {
@@ -1828,19 +1834,31 @@ export function resolveChangedTargetArgs(
   listChangedPaths = listChangedPathsFromGit,
   options = {},
 ) {
+  const plan = resolveChangedTestTargetPlanForArgs(args, cwd, listChangedPaths, options);
+  if (!plan) {
+    return null;
+  }
+  if (plan.mode === "broad") {
+    return null;
+  }
+  return plan.targets;
+}
+
+export function resolveChangedTestTargetPlanForArgs(
+  args,
+  cwd = process.cwd(),
+  listChangedPaths = listChangedPathsFromGit,
+  options = {},
+) {
   const baseRef = extractChangedBaseRef(args);
   if (!baseRef) {
     return null;
   }
   const changedPaths = listChangedPaths(baseRef, cwd);
-  const plan = resolveChangedTestTargetPlan(changedPaths, {
+  return resolveChangedTestTargetPlan(changedPaths, {
     cwd,
     ...options,
   });
-  if (plan.mode === "broad") {
-    return null;
-  }
-  return plan.targets;
 }
 
 function classifyTarget(arg, cwd) {

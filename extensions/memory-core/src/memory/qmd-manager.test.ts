@@ -1,3 +1,4 @@
+// Memory Core tests cover qmd manager plugin behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";

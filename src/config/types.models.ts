@@ -1,3 +1,4 @@
+// Defines model selection and provider configuration types.
 import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,

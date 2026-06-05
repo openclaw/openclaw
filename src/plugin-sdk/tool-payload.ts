@@ -1,3 +1,4 @@
+// Tool payload helpers normalize provider tool-call schemas and compatibility payloads.
 import {
   parseStandalonePlainTextToolCallBlocks as parseStandaloneRepairToolCallBlocks,
   stripPlainTextToolCallBlocks as stripRepairToolCallBlocks,

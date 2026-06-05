@@ -1,3 +1,4 @@
+/** Registry for image-generation providers contributed by plugin capabilities. */
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -63,12 +64,14 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
   return { canonical, aliases };
 }
 
+/** Lists canonical image-generation providers visible for config. */
 export function listImageGenerationProviders(
   cfg?: OpenClawConfig,
 ): ImageGenerationProviderPlugin[] {
   return [...buildProviderMaps(cfg).canonical.values()];
 }
 
+/** Resolves an image-generation provider by canonical id or alias. */
 export function getImageGenerationProvider(
   providerId: string | undefined,
   cfg?: OpenClawConfig,

@@ -1,3 +1,4 @@
+// Resolves package entrypoints for installed and bundled plugins.
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 

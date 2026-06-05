@@ -1,3 +1,4 @@
+// SSRF policy helpers enforce network target safety for plugin HTTP requests.
 import { asNullableRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeUniqueStringEntries } from "../../packages/normalization-core/src/string-normalization.js";

@@ -1,3 +1,4 @@
+// Resolves per-agent runtime limits from config.
 import type { OpenClawConfig } from "./types.js";
 
 /** Default maximum concurrent top-level agent runs. */

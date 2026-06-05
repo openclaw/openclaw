@@ -1,3 +1,4 @@
+/** Discovers plugin-declared environment variable names for channel credential setup. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
