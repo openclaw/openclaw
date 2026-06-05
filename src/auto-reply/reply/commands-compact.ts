@@ -208,7 +208,14 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     logVerbose(
       `Ignoring /compact from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { shouldContinue: false };
+    return {
+      shouldContinue: false,
+      reply: {
+        text:
+          "⚙️ Slash commands cannot be executed via --message from the CLI. " +
+          "Use: openclaw sessions compact <session-key>",
+      },
+    };
   }
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   if (!targetSessionEntry?.sessionId) {

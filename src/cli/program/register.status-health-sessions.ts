@@ -322,6 +322,54 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     });
 
   sessionsCmd
+    .command("compact")
+    .description("Compact a session transcript to reduce context size")
+    .argument("<session-key>", "Session key to compact")
+    .option("--agent <id>", "Agent id (default: resolved from session key)")
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--max-lines <n>", "Compact session down to N output lines")
+    .option("--timeout <ms>", "Gateway call timeout in milliseconds", "180000")
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            "openclaw sessions compact agent:main:slack:direct:U0123",
+            "Compact a Slack DM session.",
+          ],
+          [
+            "openclaw sessions compact agent:main:slack:direct:U0123 --max-lines 200",
+            "Compact to ~200 lines.",
+          ],
+          ["openclaw sessions compact my-session --json", "Machine-readable result."],
+        ])}`,
+    )
+    .action(async (sessionKey, opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            json?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsCompactCommand } = await import("../../commands/sessions-compact.js");
+        await sessionsCompactCommand(
+          {
+            sessionKey,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            maxLines: opts.maxLines
+              ? (parsePositiveIntOrUndefined(opts.maxLines) ?? undefined)
+              : undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
     .command("export-trajectory")
     .description("Export a redacted trajectory bundle for a stored session")
     .option("--session-key <key>", "Session key to export")

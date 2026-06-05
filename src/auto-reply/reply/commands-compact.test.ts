@@ -129,7 +129,14 @@ describe("handleCompactCommand", () => {
       true,
     );
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text:
+          "⚙️ Slash commands cannot be executed via --message from the CLI. " +
+          "Use: openclaw sessions compact <session-key>",
+      },
+    });
     expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
   });
 
