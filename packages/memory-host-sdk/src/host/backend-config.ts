@@ -1,3 +1,4 @@
+// Memory Host SDK module implements backend config behavior.
 import fs from "node:fs";
 import path from "node:path";
 import {

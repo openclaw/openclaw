@@ -1,3 +1,4 @@
+// Facade runtime helpers load plugin API facades from installed plugin packages.
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

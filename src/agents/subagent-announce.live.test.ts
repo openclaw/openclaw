@@ -1,3 +1,5 @@
+// Live subagent announce E2E tests exercise real gateway, session, and provider
+// flows for subagent completion delivery.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -67,6 +69,8 @@ function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
 }
 
 function requireLiveSubagentAuth(config: LiveSubagentModelConfig): void {
+  // Live E2E runs need the provider credential that matches the selected model
+  // family; fail early before gateway startup.
   expect(process.env[config.requiredEnv]?.trim(), config.requiredEnv).toBeTruthy();
 }
 

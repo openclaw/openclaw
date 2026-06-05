@@ -1,3 +1,4 @@
+// Normalizes MCP server config for runtime launch and validation.
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
 import {

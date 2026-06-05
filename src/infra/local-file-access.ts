@@ -1,3 +1,4 @@
+// Exposes local file URL helpers with fs-safe defaults.
 import "./fs-safe-defaults.js";
 
 // Local user-file URL helpers centralize encoded separator and UNC path checks.

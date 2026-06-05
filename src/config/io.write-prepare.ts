@@ -1,3 +1,4 @@
+// Prepares config writes by diffing current state and preserving metadata.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";

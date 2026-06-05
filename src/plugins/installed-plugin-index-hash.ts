@@ -1,3 +1,4 @@
+// Hashes installed plugin index records for change detection.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import type { PluginDiagnostic } from "./manifest-types.js";

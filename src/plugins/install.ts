@@ -1,3 +1,4 @@
+// Installs plugins from package specs, local paths, and catalogs.
 import { createHash } from "node:crypto";
 import { constants as fsConstants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";

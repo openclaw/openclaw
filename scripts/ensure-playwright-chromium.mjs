@@ -61,6 +61,11 @@ export function resolvePlaywrightInstallRunner(options = {}) {
   });
 }
 
+function isTruthyEnvFlag(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 export function shouldInstallPlaywrightSystemDependencies(options = {}) {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
@@ -71,7 +76,11 @@ export function shouldInstallPlaywrightSystemDependencies(options = {}) {
   if (typeof getuid === "function" && getuid() === 0) {
     return true;
   }
-  return env.CI === "true" || env.GITHUB_ACTIONS === "true";
+  return (
+    isTruthyEnvFlag(env.CI) ||
+    isTruthyEnvFlag(env.GITHUB_ACTIONS) ||
+    isTruthyEnvFlag(env.OPENCLAW_TESTBOX)
+  );
 }
 
 export function isDirectScriptExecution(

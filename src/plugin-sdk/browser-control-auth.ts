@@ -1,3 +1,4 @@
+// Browser control auth helpers resolve plugin browser credentials from OpenClaw config.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 

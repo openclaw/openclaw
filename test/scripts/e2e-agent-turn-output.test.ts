@@ -1,3 +1,4 @@
+// E2E Agent Turn Output tests cover e2e agent turn output script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,6 +75,27 @@ describe("scripts/e2e/lib/agent-turn-output", () => {
       expect(() =>
         assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_PROMPT_ECHO", outputPath),
       ).toThrow(/agent reply payload did not contain marker/u);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores stale reply markers outside the recent output tail", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
+    try {
+      const outputPath = join(dir, "agent.log");
+      writeFileSync(
+        outputPath,
+        [
+          JSON.stringify({ payloads: [{ text: "OPENCLAW_E2E_OK_STALE" }] }),
+          "x".repeat(2_200_000),
+          JSON.stringify({ payloads: [{ text: "current reply without marker" }] }),
+        ].join("\n"),
+      );
+
+      expect(() => assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_STALE", outputPath)).toThrow(
+        /agent reply payload did not contain marker/u,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

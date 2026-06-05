@@ -1,3 +1,4 @@
+// Channel ingress helpers normalize inbound channel messages before agent routing.
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   decideChannelIngress,

@@ -1,3 +1,4 @@
+// Facade loader helpers resolve plugin public API modules from source, dist, or installed roots.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";

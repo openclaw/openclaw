@@ -1,3 +1,4 @@
+/** Converts loaded plugin registries into stable plugin records for status and diagnostics. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";

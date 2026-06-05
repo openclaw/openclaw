@@ -1,3 +1,4 @@
+// Ensure Playwright Chromium tests cover ensure playwright chromium script behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   ensurePlaywrightChromium,
@@ -274,12 +275,7 @@ describe("ensurePlaywrightChromium", () => {
         platform: "win32",
       }),
     ).toEqual({
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        "pnpm.cmd --dir ui exec playwright install chromium",
-      ],
+      args: ["/d", "/s", "/c", "pnpm.cmd --dir ui exec playwright install chromium"],
       command: "C:\\Windows\\System32\\cmd.exe",
       shell: false,
       windowsVerbatimArguments: true,
@@ -295,12 +291,7 @@ describe("ensurePlaywrightChromium", () => {
         withDeps: true,
       }),
     ).toEqual({
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        "pnpm.cmd --dir ui exec playwright install --with-deps chromium",
-      ],
+      args: ["/d", "/s", "/c", "pnpm.cmd --dir ui exec playwright install --with-deps chromium"],
       command: "C:\\Windows\\System32\\cmd.exe",
       shell: false,
       windowsVerbatimArguments: true,
@@ -311,6 +302,20 @@ describe("ensurePlaywrightChromium", () => {
     expect(
       shouldInstallPlaywrightSystemDependencies({
         env: { CI: "true" },
+        getuid: () => 501,
+        platform: "linux",
+      }),
+    ).toBe(true);
+    expect(
+      shouldInstallPlaywrightSystemDependencies({
+        env: { CI: "1" },
+        getuid: () => 501,
+        platform: "linux",
+      }),
+    ).toBe(true);
+    expect(
+      shouldInstallPlaywrightSystemDependencies({
+        env: { OPENCLAW_TESTBOX: "1" },
         getuid: () => 501,
         platform: "linux",
       }),

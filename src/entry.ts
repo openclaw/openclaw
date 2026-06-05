@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Boots the OpenClaw CLI entry point under Node.
 // CLI process entrypoint for OpenClaw command execution.
 import process from "node:process";
 import { fileURLToPath } from "node:url";

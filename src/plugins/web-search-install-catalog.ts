@@ -1,3 +1,4 @@
+// Builds web-search install catalog entries from plugin metadata.
 import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

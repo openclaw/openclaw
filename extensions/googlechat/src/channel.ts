@@ -1,3 +1,4 @@
+// Googlechat plugin module implements channel behavior.
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";

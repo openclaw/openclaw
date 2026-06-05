@@ -1,3 +1,4 @@
+// Normalizes provider model metadata from plugin manifests and hooks.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeModelCompat } from "./provider-model-compat.js";

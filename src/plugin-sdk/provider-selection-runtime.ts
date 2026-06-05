@@ -1,3 +1,4 @@
+// Provider selection runtime helpers resolve plugin/provider choices from config and CLI input.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 
 export type AutoSelectableProvider = {
