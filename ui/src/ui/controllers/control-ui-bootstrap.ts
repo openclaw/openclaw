@@ -10,6 +10,7 @@ import { normalizeBasePath } from "../navigation.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
 import { loadLocalAssistantIdentity } from "../storage.ts";
 import { normalizeOptionalString } from "../string-coerce.ts";
+import { setTimezone } from "../timezone.ts";
 
 export type ControlUiBootstrapState = {
   basePath: string;
@@ -136,6 +137,9 @@ export async function loadControlUiBootstrapConfig(
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth
         : null;
+    if (typeof parsed.timezone === "string" && parsed.timezone) {
+      setTimezone(parsed.timezone);
+    }
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }

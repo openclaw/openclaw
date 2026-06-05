@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { toLocaleTimeString } from "../timezone.ts";
 import type { LogEntry, LogLevel } from "../types.ts";
 
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
@@ -31,7 +32,7 @@ function formatTime(value?: string | null) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleTimeString();
+  return toLocaleTimeString(date);
 }
 
 function matchesFilter(entry: LogEntry, needle: string) {

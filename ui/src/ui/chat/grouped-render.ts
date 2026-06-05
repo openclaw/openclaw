@@ -10,6 +10,7 @@ import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../markdown.ts
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
+import { toLocaleString } from "../timezone.ts";
 import { resolveToolDisplay } from "../tool-display.ts";
 import type {
   MessageContentItem,
@@ -64,14 +65,14 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
   }
 
   return {
-    label: date.toLocaleString([], {
+    label: toLocaleString(date, [], {
       month: "short",
       day: "numeric",
       year: "numeric",
       hour: "numeric",
       minute: "2-digit",
     }),
-    title: date.toLocaleString([], {
+    title: toLocaleString(date, [], {
       weekday: "long",
       month: "long",
       day: "numeric",

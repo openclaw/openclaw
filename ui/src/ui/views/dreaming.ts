@@ -9,6 +9,7 @@ import type {
   WikiMemoryPalace,
 } from "../controllers/dreaming.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { toLocaleString, toLocaleTimeString } from "../timezone.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────
 
@@ -404,7 +405,7 @@ function formatPhaseNextRun(nextRunAtMs?: number): string {
     return "—";
   }
   const d = new Date(nextRunAtMs);
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return toLocaleTimeString(d, [], { hour: "numeric", minute: "2-digit" });
 }
 
 function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
@@ -503,7 +504,7 @@ function formatCompactDateTime(value: string): string {
   if (!Number.isFinite(parsed)) {
     return value;
   }
-  return new Date(parsed).toLocaleString([], {
+  return toLocaleString(new Date(parsed), [], {
     month: "short",
     day: "numeric",
     hour: "numeric",

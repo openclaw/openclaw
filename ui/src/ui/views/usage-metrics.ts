@@ -7,6 +7,7 @@ import {
 } from "../../../../src/shared/usage-aggregates.js";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { toLocaleDateString, toLocaleTimeString } from "../timezone.ts";
 import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -28,7 +29,7 @@ function formatTokens(n: number): string {
 function formatHourLabel(hour: number): string {
   const date = new Date();
   date.setHours(hour, 0, 0, 0);
-  return date.toLocaleTimeString(undefined, { hour: "numeric" });
+  return toLocaleTimeString(date, undefined, { hour: "numeric" });
 }
 
 function forEachSessionHourSlice(
@@ -461,7 +462,7 @@ function formatDayLabel(dateStr: string): string {
   if (!date) {
     return dateStr;
   }
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return toLocaleDateString(date, undefined, { month: "short", day: "numeric" });
 }
 
 function formatFullDate(dateStr: string): string {
@@ -469,7 +470,7 @@ function formatFullDate(dateStr: string): string {
   if (!date) {
     return dateStr;
   }
-  return date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+  return toLocaleDateString(date, undefined, { month: "long", day: "numeric", year: "numeric" });
 }
 
 const emptyUsageTotals = (): UsageTotals => ({
