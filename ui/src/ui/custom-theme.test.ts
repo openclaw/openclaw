@@ -148,6 +148,18 @@ describe("custom theme import helpers", () => {
     });
   });
 
+  it("rejects malformed short tweakcn theme IDs below 4 characters", () => {
+    // 1-3 character IDs are too short to be valid theme IDs.
+    expect(() => normalizeTweakcnThemeUrl("https://tweakcn.com/themes/abc")).toThrow(
+      "Unsupported tweakcn link",
+    );
+    expect(() => normalizeTweakcnThemeUrl("/r/themes/ab")).toThrow(
+      "Unsupported tweakcn link",
+    );
+    // Single character raw string is rejected as missing URL before ID check.
+    expect(() => normalizeTweakcnThemeUrl("a")).toThrow();
+  });
+
   it("maps a tweakcn payload into a normalized imported theme record", () => {
     const imported = createImportedTheme();
 
