@@ -77,7 +77,9 @@ const MAX_PROPOSAL_DIRECTORY_ENTRIES = MAX_PROPOSAL_SUPPORT_FILES * 4;
 const MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES = 160;
 
 /** Reconcile pending `create` proposals whose target skill file already exists
- * on disk (e.g. manually installed) by marking them stale. */
+ * on disk (e.g. manually installed) by marking them stale.
+ * Uses the proposal target lock and re-reads the record inside the lock to
+ * avoid racing with concurrent apply/mutate operations. */
 async function reconcileStaleCreateProposals(workspaceDir: string): Promise<void> {
   const manifest = await readSkillProposalManifest();
   for (const proposal of manifest.proposals) {
@@ -91,10 +93,22 @@ async function reconcileStaleCreateProposals(workspaceDir: string): Promise<void
     if (record.kind !== "create") {
       continue;
     }
-    const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
-    if (currentContent !== null) {
-      await markProposalStale(record, "Target skill was created after proposal creation.");
-    }
+    await withSkillProposalTargetLock(record, async () => {
+      // Re-read the record inside the lock so we see the latest state
+      const lockedRecord = await readSkillProposalRecord(proposal.id);
+      if (
+        !lockedRecord ||
+        lockedRecord.status !== "pending" ||
+        lockedRecord.kind !== "create" ||
+        !isProposalInWorkspace(lockedRecord, workspaceDir)
+      ) {
+        return;
+      }
+      const currentContent = await readWorkspaceSkillFile(lockedRecord.target.skillFile);
+      if (currentContent !== null) {
+        await markProposalStale(lockedRecord, "Target skill was created after proposal creation.");
+      }
+    });
   }
 }
 
@@ -132,15 +146,27 @@ export async function inspectSkillProposal(
     return null;
   }
   // Reconcile a pending create proposal whose target skill file now
-  // exists on disk (manually installed).
+  // exists on disk (manually installed). Uses the proposal target lock and
+  // re-reads the record inside the lock to avoid racing with concurrent apply.
   if (read.record.status === "pending" && read.record.kind === "create" && options.workspaceDir) {
-    const currentContent = await readWorkspaceSkillFile(read.record.target.skillFile);
-    if (currentContent !== null) {
-      await markProposalStale(read.record, "Target skill was created after proposal creation.");
-      const refreshed = await readSkillProposal(proposalId);
-      if (refreshed) {
-        return await hydrateProposalSupportFiles(refreshed);
+    await withSkillProposalTargetLock(read.record, async () => {
+      const lockedRecord = await readSkillProposalRecord(proposalId);
+      if (
+        !lockedRecord ||
+        lockedRecord.status !== "pending" ||
+        lockedRecord.kind !== "create" ||
+        !isProposalInWorkspace(lockedRecord, options.workspaceDir!)
+      ) {
+        return;
       }
+      const currentContent = await readWorkspaceSkillFile(lockedRecord.target.skillFile);
+      if (currentContent !== null) {
+        await markProposalStale(lockedRecord, "Target skill was created after proposal creation.");
+      }
+    });
+    const refreshed = await readSkillProposal(proposalId);
+    if (refreshed) {
+      return await hydrateProposalSupportFiles(refreshed);
     }
   }
   return await hydrateProposalSupportFiles(read);
