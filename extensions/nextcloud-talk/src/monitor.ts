@@ -1,6 +1,5 @@
 // Nextcloud Talk plugin module implements monitor behavior.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createAuthRateLimiter,
@@ -110,8 +109,39 @@ function formatError(err: unknown): string {
   return typeof err === "string" ? err : JSON.stringify(err);
 }
 
-function parseWebhookPayload(body: string): NextcloudTalkWebhookPayload | null {
-  return safeParseJsonWithSchema(NextcloudTalkWebhookPayloadSchema, body);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseWebhookJson(body: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(body) as unknown };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function parseWebhookPayload(value: unknown): NextcloudTalkWebhookPayload | null {
+  const parsed = NextcloudTalkWebhookPayloadSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function isSupportedMessagePayloadCandidate(value: Record<string, unknown>): boolean {
+  const object = value.object;
+  return (
+    (value.type === "Create" || value.type === "Update" || value.type === "Delete") &&
+    isRecord(object) &&
+    object.type === "Note"
+  );
+}
+
+function isActivityPayloadCandidate(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.type === "string" ||
+    isRecord(value.actor) ||
+    isRecord(value.object) ||
+    isRecord(value.target)
+  );
 }
 
 function writeJsonResponse(
@@ -184,8 +214,20 @@ function decodeWebhookCreateMessage(params: {
   | { kind: "message"; message: NextcloudTalkInboundMessage }
   | { kind: "ignore" }
   | { kind: "invalid" } {
-  const payload = parseWebhookPayload(params.body);
+  const decodedJson = parseWebhookJson(params.body);
+  if (!decodedJson.ok || !isRecord(decodedJson.value)) {
+    writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
+    return { kind: "invalid" };
+  }
+
+  const payload = parseWebhookPayload(decodedJson.value);
   if (!payload) {
+    if (
+      isActivityPayloadCandidate(decodedJson.value) &&
+      !isSupportedMessagePayloadCandidate(decodedJson.value)
+    ) {
+      return { kind: "ignore" };
+    }
     writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
     return { kind: "invalid" };
   }
