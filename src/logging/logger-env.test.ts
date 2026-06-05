@@ -1,3 +1,4 @@
+// Logger env tests cover log level and transport behavior from environment config.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getResolvedConsoleSettings,

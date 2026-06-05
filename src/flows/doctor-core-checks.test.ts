@@ -1,3 +1,4 @@
+// Doctor core checks tests cover core doctor checks and repair hints.
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -1,3 +1,4 @@
+// Runtime web-channel plugin tests cover web channel plugin activation and runtime behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 afterEach(() => {

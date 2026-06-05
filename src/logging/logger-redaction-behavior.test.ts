@@ -1,3 +1,4 @@
+// Logger redaction behavior tests cover secret scrubbing before log writes.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";

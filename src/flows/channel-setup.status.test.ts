@@ -1,3 +1,4 @@
+// Channel setup status tests cover status text and docs link rendering.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeCatalogEntry,

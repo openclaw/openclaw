@@ -1,3 +1,4 @@
+// Log tail redaction tests cover scrubbing sensitive data from tailed logs.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

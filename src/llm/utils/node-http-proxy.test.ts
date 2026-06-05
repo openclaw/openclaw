@@ -1,3 +1,4 @@
+// Node HTTP proxy tests cover proxy agent creation for provider requests.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createHttpProxyAgentsForTarget,

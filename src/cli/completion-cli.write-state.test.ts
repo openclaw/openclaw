@@ -1,3 +1,4 @@
+// Completion write-state tests cover shell completion state file writes.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
