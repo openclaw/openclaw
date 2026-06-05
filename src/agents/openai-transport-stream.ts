@@ -26,6 +26,7 @@ import { calculateCost } from "../llm/model-utils.js";
 import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
 import { convertMessages } from "../llm/providers/openai-completions.js";
 import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
+import { sanitizeResponsesInput } from "../llm/providers/openai-responses-shared.js";
 import type { Api, Context, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
@@ -959,6 +960,7 @@ async function createResponsesStreamWithEncryptedContentRetry(params: {
   requestOptions: unknown;
   model: Model;
 }): Promise<AsyncIterable<unknown>> {
+  sanitizeResponsesInput(params.request.input);
   try {
     return (await params.client.responses.create(
       params.request as never,
@@ -973,6 +975,7 @@ async function createResponsesStreamWithEncryptedContentRetry(params: {
       `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
         `api=${params.model.api} model=${params.model.id}`,
     );
+    sanitizeResponsesInput(retryRequest.input);
     return (await params.client.responses.create(
       retryRequest as never,
       params.requestOptions as never,
@@ -2370,6 +2373,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           params as Record<string, unknown>,
         ) as typeof params;
         params = sanitizeResponsesImagePayload(params as Record<string, unknown>) as typeof params;
+        sanitizeResponsesInput(params.input);
         if (
           (options as { openclawCodeModeToolSurface?: unknown } | undefined)
             ?.openclawCodeModeToolSurface === true
@@ -4306,6 +4310,7 @@ export const testing = {
   createOpenAIResponsesClient,
   enforceCodeModeResponsesToolSurface,
   sanitizeOpenAICodexResponsesParams,
+  sanitizeResponsesInput,
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
   processResponsesStream,

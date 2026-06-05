@@ -10330,4 +10330,24 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
 
     expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
   });
+
+  it("sanitizes null content in managed transport Responses input before SDK serialization", () => {
+    const input = [
+      { role: "system", content: "You are a helpful assistant" },
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: null },
+      { role: "user", content: null },
+      { role: "developer", content: null },
+      { type: "function_call", name: "test", arguments: "{}" },
+    ] as unknown as Parameters<typeof testing.sanitizeResponsesInput>[0];
+
+    testing.sanitizeResponsesInput(input);
+
+    expect(input[0]).toEqual({ role: "system", content: "You are a helpful assistant" });
+    expect(input[1]).toEqual({ role: "user", content: "Hello" });
+    expect(input[2]).toEqual({ role: "assistant", content: [] });
+    expect(input[3]).toEqual({ role: "user", content: "" });
+    expect(input[4]).toEqual({ role: "developer", content: "" });
+    expect(input[5]).toEqual({ type: "function_call", name: "test", arguments: "{}" });
+  });
 });
