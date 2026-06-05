@@ -238,6 +238,9 @@ describe("sendMessageSignal receipts", () => {
       text: "actual sent body",
       persist: false,
     });
+    expect(
+      rememberSignalSelfReplyEchoMock.mock.calls.every(([entry]) => entry?.persist === false),
+    ).toBe(true);
   });
 
   it("keeps memory-only pre-send self-echo markers when Signal send is ambiguous", async () => {
@@ -290,6 +293,35 @@ describe("sendMessageSignal receipts", () => {
       accountIdentity: "+15550001111",
       messageId: "unknown",
       text: "hello failed self",
+    });
+  });
+
+  it("clears memory-only pre-send self-echo markers when Signal REST send fails", async () => {
+    signalRpcRequestMock.mockRejectedValueOnce(new Error("Signal REST 500: Internal Server Error"));
+
+    await expect(
+      sendMessageSignal("+15550001111", "hello rest failed self", {
+        cfg: {
+          channels: {
+            signal: {
+              accounts: {
+                default: {
+                  httpUrl: "http://signal.test",
+                  account: "+15550001111",
+                  ingressMode: "note-to-self",
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("Signal REST 500");
+
+    expect(forgetSignalSelfReplyEchoMock).toHaveBeenCalledWith({
+      accountId: "default",
+      accountIdentity: "+15550001111",
+      messageId: "unknown",
+      text: "hello rest failed self",
     });
   });
 
@@ -437,6 +469,29 @@ describe("sendMessageSignal receipts", () => {
         text: "hello discovered self",
       }),
     );
+  });
+
+  it("does not discover the account UUID for external phone recipients", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567897 });
+
+    await sendMessageSignal("+15550002222", "hello external", {
+      cfg: {
+        channels: {
+          signal: {
+            accounts: {
+              default: {
+                httpUrl: "http://signal.test",
+                account: "+15550001111",
+                ingressMode: "note-to-self",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(discoverSignalAccountUuidMock).not.toHaveBeenCalled();
+    expect(rememberSignalSelfReplyEchoMock).not.toHaveBeenCalled();
   });
 
   it("uses a supplied account UUID for note-to-self self-target detection", async () => {

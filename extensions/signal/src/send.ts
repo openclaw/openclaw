@@ -29,6 +29,7 @@ import {
   rememberSignalSelfReplyEcho,
   resolveSignalSelfReplyMediaEchoText,
 } from "./self-reply-echoes.js";
+import { looksLikeUuid } from "./uuid.js";
 
 export type SignalSendOpts = {
   cfg: OpenClawConfig;
@@ -71,7 +72,11 @@ function isDefiniteSignalSendFailure(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
-  return /\b(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN)\b|^Signal RPC\b/i.test(error.message);
+  return /\b(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN)\b|^Signal (?:RPC|REST)\b/i.test(error.message);
+}
+
+function isSignalUuidRecipient(value: string): boolean {
+  return looksLikeUuid(value.trim().replace(/^uuid:/i, ""));
 }
 
 async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
@@ -302,7 +307,7 @@ export async function sendMessageSignal(
     accountUuid == null &&
     accountInfo.config.ingressMode === "note-to-self" &&
     target.type === "recipient" &&
-    normalizeSignalUuidForCompare(target.recipient)
+    isSignalUuidRecipient(target.recipient)
   ) {
     await discoverAccountUuid();
   }
@@ -396,6 +401,7 @@ export async function sendMessageSignal(
       accountIdentity: accountUuid ?? account,
       messageId: "unknown",
       text: fallbackEchoText,
+      persist: false,
     });
   }
   return {

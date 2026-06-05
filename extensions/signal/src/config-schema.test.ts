@@ -1,6 +1,7 @@
 // Signal tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { SignalConfigSchema } from "../config-api.js";
+import { signalConfigAdapter } from "./shared.js";
 
 function expectValidSignalConfig(config: unknown) {
   const res = SignalConfigSchema.safeParse(config);
@@ -17,6 +18,24 @@ function expectInvalidSignalConfig(config: unknown) {
 }
 
 describe("signal groups schema", () => {
+  it("clears note-to-self root account fields when deleting the default account", () => {
+    const updated = signalConfigAdapter.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            ingressMode: "note-to-self",
+            httpUrl: "http://signal.test",
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(updated?.channels?.signal).toBeUndefined();
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const issues = expectInvalidSignalConfig({
       dmPolicy: "open",

@@ -33,7 +33,17 @@ export const signalConfigAdapter = createScopedChannelConfigAdapter<ResolvedSign
   listAccountIds: (cfg) => listSignalAccountIds(cfg),
   resolveAccount: adaptScopedAccountAccessor((params) => resolveSignalAccount(params)),
   defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),
-  clearBaseFields: ["account", "configPath", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
+  clearBaseFields: [
+    "account",
+    "accountUuid",
+    "configPath",
+    "httpUrl",
+    "httpHost",
+    "httpPort",
+    "cliPath",
+    "ingressMode",
+    "name",
+  ],
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     normalizeStringifiedEntries(allowFrom)
