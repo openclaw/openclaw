@@ -1,7 +1,12 @@
-import { chmod, mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   SPEAKEASY_VOICE_BUTTON_LABEL,
   SPEAKEASY_VOICE_CALLBACK_PREFIX,
@@ -14,9 +19,27 @@ import {
   reserveSpeakeasyVoiceGeneration,
   resolveSpeakeasyCachedText,
   resolveSpeakeasyWorkspaceDir,
+  setSpeakeasyVoiceStateStoreForTest,
   shouldAllowSpeakeasyVoiceGeneration,
   withSpeakeasyVoiceButton,
+  writeSpeakeasyCache,
+  type SpeakeasyVoiceStateRecord,
 } from "./speakeasy-voice.js";
+
+beforeEach(() => {
+  resetPluginStateStoreForTests();
+  setSpeakeasyVoiceStateStoreForTest(
+    createPluginStateSyncKeyedStoreForTests<SpeakeasyVoiceStateRecord>("telegram", {
+      namespace: "telegram.speakeasy-voice",
+      maxEntries: 8_192,
+    }),
+  );
+});
+
+afterEach(() => {
+  setSpeakeasyVoiceStateStoreForTest(undefined);
+  resetPluginStateStoreForTests();
+});
 
 async function withSpeakeasyWorkspace<T>(
   fn: (params: {
@@ -25,6 +48,7 @@ async function withSpeakeasyWorkspace<T>(
   }) => Promise<T>,
 ) {
   const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
+  const previousSpeakeasyWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
   await mkdir(path.join(workspaceDir, "config"), { recursive: true });
   await mkdir(path.join(workspaceDir, "state"), { recursive: true });
   await writeFile(
@@ -32,11 +56,13 @@ async function withSpeakeasyWorkspace<T>(
     JSON.stringify({ enabled: ["telegram:123"] }),
   );
   try {
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
     return await fn({
       workspaceDir,
       cfg: { agents: { defaults: { workspace: workspaceDir } } },
     });
   } finally {
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousSpeakeasyWorkspace;
     await rm(workspaceDir, { recursive: true, force: true });
   }
 }
@@ -71,9 +97,7 @@ describe("speakeasy voice button", () => {
           text: "This reply is long enough to qualify for on-demand voice playback.",
         },
       );
-      expect(
-        (await stat(path.join(workspaceDir, "state", "speakeasy-cache.json"))).mode & 0o777,
-      ).toBe(0o600);
+      expect(existsSync(path.join(workspaceDir, "state", "speakeasy-cache.json"))).toBe(false);
     });
   });
 
@@ -107,24 +131,6 @@ describe("speakeasy voice button", () => {
       expect(
         resolveSpeakeasyCachedText({ cfg, cache, data: secondCallbackData, chatId: "123" }),
       ).toMatchObject({ ok: true, text: expect.stringContaining("second reply") });
-    });
-  });
-
-  it("fixes existing cache file permissions before writing reply text", async () => {
-    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
-      const cachePath = path.join(workspaceDir, "state", "speakeasy-cache.json");
-      await writeFile(cachePath, JSON.stringify({ version: 1, entries: {}, generations: {} }), {
-        mode: 0o644,
-      });
-
-      withSpeakeasyVoiceButton({
-        reply: { text: "This reply is long enough to qualify for on-demand voice playback." },
-        cfg,
-        chatId: "123",
-      });
-      await flushSpeakeasyCacheWritesForTest();
-
-      expect((await stat(cachePath)).mode & 0o777).toBe(0o600);
     });
   });
 
@@ -185,14 +191,14 @@ describe("speakeasy voice button", () => {
           "import sys",
           "if sys.argv[1] != 'Hello from Speakeasy':",
           "    raise SystemExit('missing text argument')",
-          "print('state/speakeasy/out.ogg')",
+          "print('state/speakeasy/generated/out.ogg')",
           "",
         ].join("\n"),
       );
       await chmod(scriptPath, 0o755);
 
       await expect(generateSpeakeasyVoiceNote({ cfg, text: "Hello from Speakeasy" })).resolves.toBe(
-        path.join(workspaceDir, "state", "speakeasy", "out.ogg"),
+        path.join(workspaceDir, "state", "speakeasy", "generated", "out.ogg"),
       );
     });
   });
@@ -202,7 +208,7 @@ describe("speakeasy voice button", () => {
       await mkdir(path.join(workspaceDir, "scripts"), { recursive: true });
       await writeFile(
         path.join(workspaceDir, "scripts", "speakeasy_helper.py"),
-        "def output_path():\n    return 'state/speakeasy/helper.ogg'\n",
+        "def output_path():\n    return 'state/speakeasy/generated/helper.ogg'\n",
       );
       const scriptPath = path.join(workspaceDir, "scripts", "tts_elevenlabs_v2.py");
       await writeFile(
@@ -217,8 +223,34 @@ describe("speakeasy voice button", () => {
       await chmod(scriptPath, 0o755);
 
       await expect(generateSpeakeasyVoiceNote({ cfg, text: "Hello from Speakeasy" })).resolves.toBe(
-        path.join(workspaceDir, "state", "speakeasy", "helper.ogg"),
+        path.join(workspaceDir, "state", "speakeasy", "generated", "helper.ogg"),
       );
+    });
+  });
+
+  it("copies legacy TTS output paths into the generated audio directory", async () => {
+    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
+      await mkdir(path.join(workspaceDir, "scripts"), { recursive: true });
+      const scriptPath = path.join(workspaceDir, "scripts", "tts_elevenlabs_v2.py");
+      const legacyOutputPath = path.join(workspaceDir, "state", "speakeasy", "reusable.ogg");
+      await mkdir(path.dirname(legacyOutputPath), { recursive: true });
+      await writeFile(legacyOutputPath, "voice bytes");
+      await writeFile(
+        scriptPath,
+        ["#!/usr/bin/env python3", "print('state/speakeasy/reusable.ogg')", ""].join("\n"),
+      );
+      await chmod(scriptPath, 0o755);
+
+      const generatedPath = await generateSpeakeasyVoiceNote({
+        cfg,
+        text: "Hello from Speakeasy",
+      });
+      const generatedRelativePath = path.relative(
+        path.join(workspaceDir, "state", "speakeasy", "generated"),
+        generatedPath,
+      );
+      expect(generatedRelativePath).toMatch(/^[^.].+\.ogg$/);
+      expect(existsSync(legacyOutputPath)).toBe(true);
     });
   });
 
@@ -263,49 +295,6 @@ describe("speakeasy voice button", () => {
       expect(failure).toBeInstanceOf(Error);
       expect((failure as Error).message).toMatch(/Speakeasy TTS failed/);
       expect((failure as Error).message.length).toBeLessThan(1024 * 1024 + 1024);
-    });
-  });
-
-  it("keeps optional voice-button delivery off the synchronous cache-write path", async () => {
-    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-cache-fail-"));
-    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
-    await writeFile(
-      path.join(workspaceDir, "config", "speakeasy-chats.json"),
-      JSON.stringify({ enabled: ["telegram:123"] }),
-    );
-    await writeFile(path.join(workspaceDir, "state"), "not a directory");
-    try {
-      const reply = { text: "This reply is long enough to qualify for on-demand voice playback." };
-      const enriched = withSpeakeasyVoiceButton({
-        reply,
-        cfg: { agents: { defaults: { workspace: workspaceDir } } },
-        chatId: "123",
-      }) as {
-        channelData?: { telegram?: { buttons?: Array<Array<{ callback_data: string }>> } };
-      };
-
-      expect(enriched.channelData?.telegram?.buttons?.[0]?.[0]?.callback_data).toMatch(
-        /^tts:speakeasy:/,
-      );
-      await flushSpeakeasyCacheWritesForTest();
-    } finally {
-      await rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("does not wait on a fresh cache lock before adding the optional voice button", async () => {
-    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
-      const cachePath = path.join(workspaceDir, "state", "speakeasy-cache.json");
-      const lockPath = `${cachePath}.lock`;
-      await writeFile(lockPath, "active lock");
-      const reply = { text: "This reply is long enough to qualify for on-demand voice playback." };
-
-      const enriched = withSpeakeasyVoiceButton({ reply, cfg, chatId: "123" }) as {
-        channelData?: { telegram?: { buttons?: Array<Array<{ callback_data: string }>> } };
-      };
-      expect(enriched.channelData?.telegram?.buttons?.[0]?.[0]?.callback_data).toMatch(
-        /^tts:speakeasy:/,
-      );
     });
   });
 
@@ -408,7 +397,7 @@ describe("speakeasy voice button", () => {
     });
   });
 
-  it("reserves and releases generation quota under the cache lock", async () => {
+  it("reserves and releases generation quota in plugin state", async () => {
     await withSpeakeasyWorkspace(async ({ cfg }) => {
       const reply = withSpeakeasyVoiceButton({
         reply: { text: "This reply is long enough to qualify for on-demand voice playback." },
@@ -435,48 +424,20 @@ describe("speakeasy voice button", () => {
   });
 
   it("prunes generation records from prior days", async () => {
-    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
-      await writeFile(
-        path.join(workspaceDir, "state", "speakeasy-cache.json"),
-        JSON.stringify({
-          version: 1,
-          entries: {},
-          generations: {
-            "123:2026-01-01": { date: "2026-01-01", count: 50 },
-            [`123:${new Date().toISOString().slice(0, 10)}`]: {
-              date: new Date().toISOString().slice(0, 10),
-              count: 1,
-            },
-          },
-        }),
-      );
-
+    await withSpeakeasyWorkspace(async ({ cfg }) => {
       const cache = loadSpeakeasyCache(cfg);
-      expect(cache.generations["123:2026-01-01"]).toBeUndefined();
-      expect(cache.generations[`123:${new Date().toISOString().slice(0, 10)}`]?.count).toBe(1);
-    });
-  });
-
-  it("recovers stale cache locks", async () => {
-    await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
-      const cachePath = path.join(workspaceDir, "state", "speakeasy-cache.json");
-      const lockPath = `${cachePath}.lock`;
-      await writeFile(lockPath, "");
-      const stale = new Date(Date.now() - 60_000);
-      await utimes(lockPath, stale, stale);
-
-      const reply = withSpeakeasyVoiceButton({
-        reply: { text: "This reply is long enough to qualify for on-demand voice playback." },
-        cfg,
-        chatId: "123",
-      }) as {
-        channelData?: { telegram?: { buttons?: Array<Array<{ callback_data: string }>> } };
+      cache.generations = {
+        "123:2026-01-01": { date: "2026-01-01", count: 50 },
+        [`123:${new Date().toISOString().slice(0, 10)}`]: {
+          date: new Date().toISOString().slice(0, 10),
+          count: 1,
+        },
       };
-      await flushSpeakeasyCacheWritesForTest();
+      writeSpeakeasyCache(cfg, cache);
 
-      expect(reply.channelData?.telegram?.buttons?.[0]?.[0]?.callback_data).toMatch(
-        /^tts:speakeasy:/,
-      );
+      const reloaded = loadSpeakeasyCache(cfg);
+      expect(reloaded.generations["123:2026-01-01"]).toBeUndefined();
+      expect(reloaded.generations[`123:${new Date().toISOString().slice(0, 10)}`]?.count).toBe(1);
     });
   });
 });

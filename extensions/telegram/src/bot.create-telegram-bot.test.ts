@@ -1,5 +1,5 @@
 // Telegram tests cover bot.create telegram bot plugin behavior.
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -56,7 +56,12 @@ const {
 type BuildModelsProviderDataMock = ReturnType<
   typeof vi.fn<NonNullable<typeof telegramBotDepsForTest.buildModelsProviderData>>
 >;
-const { SPEAKEASY_VOICE_CALLBACK_PREFIX } = await import("./speakeasy-voice.js");
+const {
+  SPEAKEASY_VOICE_CALLBACK_PREFIX,
+  loadSpeakeasyCache,
+  setSpeakeasyVoiceStateStoreForTest,
+  writeSpeakeasyCache,
+} = await import("./speakeasy-voice.js");
 const { resolveTelegramFetch } = await import("./fetch.js");
 const {
   createTelegramBotCore: createTelegramBotBase,
@@ -208,6 +213,32 @@ function expectBotClientFields(expected: Record<string, unknown>, callIndex = 0)
   expectRecordFields(options.client, expected, `bot constructor client ${callIndex}`);
 }
 
+function seedSpeakeasyCache(params: {
+  workspaceDir: string;
+  entries?: Record<string, { chatId: string; text: string; createdAt: number }>;
+  generations?: Record<string, { date: string; count: number }>;
+}): void {
+  writeSpeakeasyCache(
+    { agents: { defaults: { workspace: params.workspaceDir } } },
+    {
+      version: 1,
+      entries: params.entries ?? {},
+      generations: params.generations ?? {},
+    },
+  );
+}
+
+function readSpeakeasyCacheForWorkspace(workspaceDir: string) {
+  return loadSpeakeasyCache({ agents: { defaults: { workspace: workspaceDir } } });
+}
+
+async function writeGeneratedSpeakeasyAudio(workspaceDir: string, name = "speakeasy.ogg") {
+  const audioPath = path.join(workspaceDir, "state", "speakeasy", "generated", name);
+  await mkdir(path.dirname(audioPath), { recursive: true });
+  await writeFile(audioPath, "voice bytes");
+  return audioPath;
+}
+
 describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
@@ -221,6 +252,7 @@ describe("createTelegramBot", () => {
   });
   afterEach(() => {
     messageDispatchDedupe.setTelegramMessageDispatchDedupeStoreForTest(undefined);
+    setSpeakeasyVoiceStateStoreForTest(undefined);
     pluginStateTestRuntime.resetPluginStateStoreForTests();
   });
   beforeEach(async () => {
@@ -244,6 +276,12 @@ describe("createTelegramBot", () => {
     >;
     await store.clear();
     messageDispatchDedupe.setTelegramMessageDispatchDedupeStoreForTest(store);
+    setSpeakeasyVoiceStateStoreForTest(
+      pluginStateTestRuntime.createPluginStateSyncKeyedStoreForTests("telegram", {
+        namespace: "telegram.speakeasy-voice",
+        maxEntries: 8_192,
+      }),
+    );
   });
 
   // groupPolicy tests
@@ -1235,27 +1273,22 @@ describe("createTelegramBot", () => {
       path.join(workspaceDir, "config", "speakeasy-chats.json"),
       JSON.stringify({ enabled: ["telegram:1234"] }),
     );
-    await writeFile(
-      path.join(workspaceDir, "state", "speakeasy-cache.json"),
-      JSON.stringify({
-        version: 1,
-        entries: {
-          voiceid: {
-            chatId: "1234",
-            text: "This is the exact source bubble text to render as a voice note.",
-            createdAt: Date.now(),
-          },
+    seedSpeakeasyCache({
+      workspaceDir,
+      entries: {
+        voiceid: {
+          chatId: "1234",
+          text: "This is the exact source bubble text to render as a voice note.",
+          createdAt: Date.now(),
         },
-        generations: {},
-      }),
-    );
+      },
+    });
 
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query") as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    const audioPath = path.join(workspaceDir, "state", "speakeasy-generated.ogg");
-    await writeFile(audioPath, "voice bytes");
+    const audioPath = await writeGeneratedSpeakeasyAudio(workspaceDir);
     generateSpeakeasyVoiceNoteSpy.mockResolvedValueOnce(audioPath);
 
     try {
@@ -1311,20 +1344,16 @@ describe("createTelegramBot", () => {
       path.join(workspaceDir, "config", "speakeasy-chats.json"),
       JSON.stringify({ enabled: ["telegram:1234"] }),
     );
-    await writeFile(
-      path.join(workspaceDir, "state", "speakeasy-cache.json"),
-      JSON.stringify({
-        version: 1,
-        entries: {
-          voiceid: {
-            chatId: "1234",
-            text: "This is the exact source bubble text to render as a voice note.",
-            createdAt: Date.now(),
-          },
+    seedSpeakeasyCache({
+      workspaceDir,
+      entries: {
+        voiceid: {
+          chatId: "1234",
+          text: "This is the exact source bubble text to render as a voice note.",
+          createdAt: Date.now(),
         },
-        generations: {},
-      }),
-    );
+      },
+    });
     loadConfig.mockReturnValue({
       agents: { defaults: { workspace: workspaceDir } },
       channels: {
@@ -1375,7 +1404,32 @@ describe("createTelegramBot", () => {
       path.join(workspaceDir, "config", "speakeasy-chats.json"),
       JSON.stringify({ enabled: ["telegram:1234"] }),
     );
-    await writeFile(path.join(workspaceDir, "state"), "not a directory");
+    setSpeakeasyVoiceStateStoreForTest({
+      register: () => {
+        throw new Error("state store unavailable");
+      },
+      registerIfAbsent: () => {
+        throw new Error("state store unavailable");
+      },
+      update: () => {
+        throw new Error("state store unavailable");
+      },
+      lookup: () => {
+        throw new Error("state store unavailable");
+      },
+      consume: () => {
+        throw new Error("state store unavailable");
+      },
+      delete: () => {
+        throw new Error("state store unavailable");
+      },
+      entries: () => {
+        throw new Error("state store unavailable");
+      },
+      clear: () => {
+        throw new Error("state store unavailable");
+      },
+    });
 
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query") as (
@@ -1421,20 +1475,16 @@ describe("createTelegramBot", () => {
       path.join(workspaceDir, "config", "speakeasy-chats.json"),
       JSON.stringify({ enabled: ["telegram:1234"] }),
     );
-    await writeFile(
-      path.join(workspaceDir, "state", "speakeasy-cache.json"),
-      JSON.stringify({
-        version: 1,
-        entries: {
-          voiceid: {
-            chatId: "1234",
-            text: "This is the exact source bubble text to render as a voice note.",
-            createdAt: Date.now(),
-          },
+    seedSpeakeasyCache({
+      workspaceDir,
+      entries: {
+        voiceid: {
+          chatId: "1234",
+          text: "This is the exact source bubble text to render as a voice note.",
+          createdAt: Date.now(),
         },
-        generations: {},
-      }),
-    );
+      },
+    });
 
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query") as (
@@ -1477,25 +1527,23 @@ describe("createTelegramBot", () => {
       path.join(workspaceDir, "config", "speakeasy-chats.json"),
       JSON.stringify({ enabled: ["telegram:1234"] }),
     );
-    await writeFile(
-      path.join(workspaceDir, "state", "speakeasy-cache.json"),
-      JSON.stringify({
-        version: 1,
-        entries: {
-          voiceid: {
-            chatId: "1234",
-            text: "This is the exact source bubble text to render as a voice note.",
-            createdAt: Date.now(),
-          },
+    seedSpeakeasyCache({
+      workspaceDir,
+      entries: {
+        voiceid: {
+          chatId: "1234",
+          text: "This is the exact source bubble text to render as a voice note.",
+          createdAt: Date.now(),
         },
-        generations: {},
-      }),
-    );
+      },
+    });
 
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query") as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
+    const audioPath = await writeGeneratedSpeakeasyAudio(workspaceDir, "send-fail.ogg");
+    generateSpeakeasyVoiceNoteSpy.mockResolvedValueOnce(audioPath);
     sendVoiceSpy.mockRejectedValueOnce(new Error("telegram rejected voice"));
 
     try {
@@ -1517,9 +1565,7 @@ describe("createTelegramBot", () => {
         }),
       ).rejects.toThrow();
 
-      const cache = JSON.parse(
-        await readFile(path.join(workspaceDir, "state", "speakeasy-cache.json"), "utf8"),
-      ) as { generations?: Record<string, { count: number }> };
+      const cache = readSpeakeasyCacheForWorkspace(workspaceDir);
       const today = new Date().toISOString().slice(0, 10);
       expect(cache.generations?.[`1234:${today}`]?.count ?? 0).toBeGreaterThanOrEqual(1);
     } finally {
@@ -1537,20 +1583,16 @@ describe("createTelegramBot", () => {
       path.join(workspaceDir, "config", "speakeasy-chats.json"),
       JSON.stringify({ enabled: ["telegram:1234"] }),
     );
-    await writeFile(
-      path.join(workspaceDir, "state", "speakeasy-cache.json"),
-      JSON.stringify({
-        version: 1,
-        entries: {
-          voiceid: {
-            chatId: "1234",
-            text: "This is the exact source bubble text to render as a voice note.",
-            createdAt: Date.now(),
-          },
+    seedSpeakeasyCache({
+      workspaceDir,
+      entries: {
+        voiceid: {
+          chatId: "1234",
+          text: "This is the exact source bubble text to render as a voice note.",
+          createdAt: Date.now(),
         },
-        generations: {},
-      }),
-    );
+      },
+    });
 
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query") as (
@@ -1561,6 +1603,8 @@ describe("createTelegramBot", () => {
         "GrammyError: Call to 'sendVoice' failed! (400: Bad Request: VOICE_MESSAGES_FORBIDDEN)",
       ),
     );
+    const audioPath = await writeGeneratedSpeakeasyAudio(workspaceDir, "voice-forbidden.ogg");
+    generateSpeakeasyVoiceNoteSpy.mockResolvedValueOnce(audioPath);
 
     try {
       await callbackHandler({
@@ -1597,6 +1641,66 @@ describe("createTelegramBot", () => {
       await rm(workspaceDir, { recursive: true, force: true });
     }
   });
+  it("keeps voice-forbidden fallback send failures retryable", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await mkdir(path.join(workspaceDir, "state"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:1234"] }),
+    );
+    seedSpeakeasyCache({
+      workspaceDir,
+      entries: {
+        voiceid: {
+          chatId: "1234",
+          text: "This is the exact source bubble text to render as a voice note.",
+          createdAt: Date.now(),
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    const audioPath = await writeGeneratedSpeakeasyAudio(workspaceDir, "fallback-fail.ogg");
+    generateSpeakeasyVoiceNoteSpy.mockResolvedValueOnce(audioPath);
+    sendVoiceSpy.mockRejectedValueOnce(
+      new Error(
+        "GrammyError: Call to 'sendVoice' failed! (400: Bad Request: VOICE_MESSAGES_FORBIDDEN)",
+      ),
+    );
+    sendMessageSpy.mockRejectedValueOnce(new Error("fallback send failed"));
+
+    try {
+      await expect(
+        callbackHandler({
+          callbackQuery: {
+            id: "cbq-speakeasy-voice-forbidden-fallback-fail",
+            data: `${SPEAKEASY_VOICE_CALLBACK_PREFIX}voiceid`,
+            from: { id: 9, first_name: "Ada", username: "ada_bot" },
+            message: {
+              chat: { id: 1234, type: "private" },
+              date: 1736380800,
+              message_id: 10,
+              text: "This is the exact source bubble text to render as a voice note.",
+            },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ download: async () => new Uint8Array() }),
+        }),
+      ).rejects.toThrow("fallback send failed");
+      const cache = readSpeakeasyCacheForWorkspace(workspaceDir);
+      const today = new Date().toISOString().slice(0, 10);
+      expect(cache.generations?.[`1234:${today}`]?.count ?? 0).toBe(0);
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
   it("rolls back Speakeasy quota when voice generation fails", async () => {
     const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
     const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
@@ -1607,20 +1711,16 @@ describe("createTelegramBot", () => {
       path.join(workspaceDir, "config", "speakeasy-chats.json"),
       JSON.stringify({ enabled: ["telegram:1234"] }),
     );
-    await writeFile(
-      path.join(workspaceDir, "state", "speakeasy-cache.json"),
-      JSON.stringify({
-        version: 1,
-        entries: {
-          voiceid: {
-            chatId: "1234",
-            text: "This is the exact source bubble text to render as a voice note.",
-            createdAt: Date.now(),
-          },
+    seedSpeakeasyCache({
+      workspaceDir,
+      entries: {
+        voiceid: {
+          chatId: "1234",
+          text: "This is the exact source bubble text to render as a voice note.",
+          createdAt: Date.now(),
         },
-        generations: {},
-      }),
-    );
+      },
+    });
 
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query") as (
@@ -1647,9 +1747,7 @@ describe("createTelegramBot", () => {
         }),
       ).rejects.toThrow();
 
-      const cache = JSON.parse(
-        await readFile(path.join(workspaceDir, "state", "speakeasy-cache.json"), "utf8"),
-      ) as { generations?: Record<string, { count: number }> };
+      const cache = readSpeakeasyCacheForWorkspace(workspaceDir);
       const today = new Date().toISOString().slice(0, 10);
       expect(cache.generations?.[`1234:${today}`]?.count ?? 0).toBe(0);
     } finally {
@@ -1666,14 +1764,6 @@ describe("createTelegramBot", () => {
     await writeFile(
       path.join(workspaceDir, "config", "speakeasy-chats.json"),
       JSON.stringify({ enabled: ["telegram:1234"] }),
-    );
-    await writeFile(
-      path.join(workspaceDir, "state", "speakeasy-cache.json"),
-      JSON.stringify({
-        version: 1,
-        entries: {},
-        generations: {},
-      }),
     );
 
     createTelegramBot({ token: "tok" });

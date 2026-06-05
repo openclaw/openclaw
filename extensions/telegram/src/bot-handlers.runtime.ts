@@ -150,9 +150,9 @@ import {
 import { parseTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
 import {
-  assertSpeakeasyVoiceNoteOutputPath,
   generateSpeakeasyVoiceNote,
   isSpeakeasyVoiceCallbackData,
+  prepareSpeakeasyGeneratedVoiceNoteOutput,
   releaseSpeakeasyVoiceGenerationReservation,
   reserveSpeakeasyVoiceGeneration,
 } from "./speakeasy-voice.js";
@@ -2220,7 +2220,10 @@ export const registerTelegramHandlers = ({
               text: reserved.text,
             },
           );
-          assertSpeakeasyVoiceNoteOutputPath(audioPath);
+          audioPath = prepareSpeakeasyGeneratedVoiceNoteOutput({
+            cfg: runtimeCfg,
+            outputPath: audioPath,
+          });
         } catch (err) {
           try {
             releaseSpeakeasyVoiceGenerationReservation({
@@ -2256,21 +2259,33 @@ export const registerTelegramHandlers = ({
             logVerbose(
               "telegram speakeasy sendVoice forbidden (recipient has voice messages blocked); falling back to text",
             );
-            await sendTelegramWithThreadFallback({
-              operation: "sendMessage",
-              runtime,
-              requestParams: {
-                ...(messageThreadId != null ? { message_thread_id: messageThreadId } : {}),
-                reply_parameters: {
-                  message_id: callbackMessage.message_id,
-                  allow_sending_without_reply: true,
+            try {
+              await sendTelegramWithThreadFallback({
+                operation: "sendMessage",
+                runtime,
+                requestParams: {
+                  ...(messageThreadId != null ? { message_thread_id: messageThreadId } : {}),
+                  reply_parameters: {
+                    message_id: callbackMessage.message_id,
+                    allow_sending_without_reply: true,
+                  },
                 },
-              },
-              send: (effectiveParams) =>
-                bot.api.sendMessage(callbackMessage.chat.id, SPEAKEASY_VOICE_FALLBACK_TEXT, {
-                  ...effectiveParams,
-                }),
-            });
+                send: (effectiveParams) =>
+                  bot.api.sendMessage(callbackMessage.chat.id, SPEAKEASY_VOICE_FALLBACK_TEXT, {
+                    ...effectiveParams,
+                  }),
+              });
+            } catch (fallbackErr) {
+              try {
+                releaseSpeakeasyVoiceGenerationReservation({
+                  cfg: runtimeCfg,
+                  chatId: String(chatId),
+                });
+              } catch (rollbackErr) {
+                logVerbose(`telegram speakeasy quota rollback failed: ${String(rollbackErr)}`);
+              }
+              throw new TelegramRetryableCallbackError(fallbackErr);
+            }
             return;
           }
           throw new TelegramRetryableCallbackError(err);
