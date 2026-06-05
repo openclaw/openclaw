@@ -637,6 +637,39 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it("preserves restored terminal failed delivery during cleanup replay", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "final answer" },
+      delivery: {
+        status: "failed",
+        announcedAt: 12_300,
+        deliveredAt: 12_300,
+        lastError: "completion agent did not use the message tool",
+      },
+      outcome: { status: "ok" },
+      retainAttachmentsOnKeep: true,
+    });
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+
+    expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+
+    await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(entry.delivery?.status).toBe("failed");
+    expect(entry.delivery?.announcedAt).toBe(12_300);
+    expect(entry.delivery?.lastError).toBe("completion agent did not use the message tool");
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: entry.runId,
+      deliveryStatus: "failed",
+      error: "completion agent did not use the message tool",
+    });
+  });
+
   it("skips announce delivery when completion messages are disabled", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({
