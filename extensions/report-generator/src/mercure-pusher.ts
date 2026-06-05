@@ -8,6 +8,12 @@ interface PushOptions {
   userId?: string;
   /** Download/report task id; lets the frontend bind this event to its card. */
   taskId?: number;
+  /**
+   * Mercure topic to publish on. When set (chat-initiated tasks carry the
+   * frontend's subscription topic, e.g. "lobster/user/<uid>") it is used
+   * verbatim; otherwise falls back to the legacy `user/<topic>` target.
+   */
+  targetTopic?: string;
 }
 
 export class MercurePusher {
@@ -61,7 +67,7 @@ export class MercurePusher {
    * Mercure hub URL is like http://localhost:3000/.well-known/mercure
    */
   async push(options: PushOptions): Promise<void> {
-    const { topic, title, content, taskId } = options;
+    const { topic, title, content, taskId, targetTopic } = options;
 
     const payload = {
       title,
@@ -71,7 +77,11 @@ export class MercurePusher {
       ...(taskId === undefined ? {} : { taskId }),
     };
 
-    await this.sendToMercure(`user/${topic}`, payload);
+    // The final report must land on the SAME topic the frontend subscribed
+    // to for this chat (where report_created/report_text/report_done went);
+    // publishing to the legacy `user/<uid>` while the frontend listens on
+    // e.g. `lobster/user/<uid>` silently drops the finished report.
+    await this.sendToMercure(targetTopic || `user/${topic}`, payload);
   }
 
   /**

@@ -247,6 +247,13 @@ export default definePluginEntry({
               content: report.content,
               userId: String(task.uid),
               taskId: task.id,
+              // Chat-initiated tasks carry the frontend's subscription topic
+              // in params.mercureTopic (= streamTopic); deliver the final
+              // report there. Legacy tasks keep the user/<uid> fallback.
+              targetTopic:
+                typeof params.mercureTopic === "string" && params.mercureTopic
+                  ? streamTopic
+                  : undefined,
             });
             await mercurePusher.pushReportDone(streamTopic, task.id);
 
