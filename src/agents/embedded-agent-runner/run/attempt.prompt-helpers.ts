@@ -23,12 +23,19 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-pr
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
+import type { AgentMessage } from "../../runtime/index.js";
+import {
+  buildSessionContext as buildSessionContextFromEntries,
+  loadEntriesFromFile,
+  type SessionEntry,
+} from "../../sessions/index.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
+import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -93,6 +100,28 @@ function rememberDrainedInjections(
 export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): void {
   if (runId) {
     promptBuildDrainCache.delete(runId);
+  }
+}
+
+export function loadSkillRouteRecentMessages(params: {
+  config?: EmbeddedRunAttemptParams["config"];
+  sessionFile: string;
+  sessionKey?: string;
+}): AgentMessage[] {
+  try {
+    const entries = loadEntriesFromFile(params.sessionFile).filter(
+      (entry): entry is SessionEntry => entry.type !== "session",
+    );
+    if (entries.length === 0) {
+      return [];
+    }
+    const messages = buildSessionContextFromEntries(entries).messages;
+    return limitHistoryTurns(
+      messages,
+      getHistoryLimitFromSessionKey(params.sessionKey, params.config),
+    );
+  } catch {
+    return [];
   }
 }
 
