@@ -1,3 +1,4 @@
+// Control UI config module wires vitest behavior.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
@@ -9,6 +10,48 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
+const workspaceSourceAliases = [
+  {
+    find: "../logging/redact.js",
+    replacement: path.resolve(here, "src/ui/browser-redact.ts"),
+  },
+  {
+    find: "openclaw/plugin-sdk/test-fixtures",
+    replacement: path.resolve(repoRoot, "src/plugin-sdk/test-fixtures.ts"),
+  },
+  {
+    find: /^@openclaw\/model-catalog-core\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/$1.ts"),
+  },
+  {
+    find: "@openclaw/model-catalog-core",
+    replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/index.ts"),
+  },
+  {
+    find: /^@openclaw\/normalization-core\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/normalization-core/src/$1"),
+  },
+  {
+    find: "@openclaw/normalization-core",
+    replacement: path.resolve(repoRoot, "packages/normalization-core/src/index.ts"),
+  },
+  {
+    find: /^@openclaw\/media-core\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/media-core/src/$1"),
+  },
+  {
+    find: "@openclaw/media-core",
+    replacement: path.resolve(repoRoot, "packages/media-core/src/index.ts"),
+  },
+  {
+    find: /^@openclaw\/net-policy\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/net-policy/src/$1"),
+  },
+  {
+    find: "@openclaw/net-policy",
+    replacement: path.resolve(repoRoot, "packages/net-policy/src/index.ts"),
+  },
+];
 const sharedUiTestConfig = {
   isolate: false,
   pool: resolveDefaultVitestPool(),
@@ -21,21 +64,15 @@ const nodeDrivenBrowserLayoutTests = [
 
 export default defineConfig({
   resolve: {
-    alias: [
-      {
-        find: /^@openclaw\/normalization-core\/(.+)$/u,
-        replacement: path.resolve(repoRoot, "packages/normalization-core/src/$1"),
-      },
-      {
-        find: /^@openclaw\/media-core\/(.+)$/u,
-        replacement: path.resolve(repoRoot, "packages/media-core/src/$1"),
-      },
-    ],
+    alias: workspaceSourceAliases,
   },
   test: {
     ...sharedUiTestConfig,
     projects: [
       defineProject({
+        resolve: {
+          alias: workspaceSourceAliases,
+        },
         test: {
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
@@ -47,6 +84,9 @@ export default defineConfig({
         },
       }),
       defineProject({
+        resolve: {
+          alias: workspaceSourceAliases,
+        },
         test: {
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
@@ -57,6 +97,9 @@ export default defineConfig({
         },
       }),
       defineProject({
+        resolve: {
+          alias: workspaceSourceAliases,
+        },
         test: {
           ...sharedUiTestConfig,
           name: "browser",

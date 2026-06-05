@@ -1,3 +1,5 @@
+// Gateway chat/agent abort tracking.
+// Registers active run abort controllers and projects in-flight chat state.
 import {
   asDateTimestampMs,
   resolveDateTimestampMs,
@@ -133,6 +135,8 @@ export function registerChatAbortController(params: {
   };
 
   if (!params.sessionKey || params.chatAbortControllers.has(params.runId)) {
+    // Duplicate run ids keep their fresh controller for caller cancellation, but
+    // do not replace the registered entry that owns active-run projection.
     return { controller, registered: false, cleanup };
   }
 
@@ -295,6 +299,38 @@ export type ChatAbortOps = {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
 };
+
+export type TrackedChatRunAbortOps = {
+  chatAbortControllers: ChatAbortOps["chatAbortControllers"];
+  chatRunBuffers: ChatAbortOps["chatRunBuffers"];
+  chatRunState: {
+    abortedRuns: ChatAbortOps["chatAbortedRuns"];
+    clearRun: ChatAbortOps["clearChatRunState"];
+  };
+  removeChatRun: ChatAbortOps["removeChatRun"];
+  agentRunSeq: ChatAbortOps["agentRunSeq"];
+  broadcast: ChatAbortOps["broadcast"];
+  nodeSendToSession: ChatAbortOps["nodeSendToSession"];
+};
+
+export function abortTrackedChatRunById(
+  ops: TrackedChatRunAbortOps,
+  params: Parameters<typeof abortChatRunById>[1],
+) {
+  return abortChatRunById(
+    {
+      chatAbortControllers: ops.chatAbortControllers,
+      chatRunBuffers: ops.chatRunBuffers,
+      chatAbortedRuns: ops.chatRunState.abortedRuns,
+      clearChatRunState: ops.chatRunState.clearRun,
+      removeChatRun: ops.removeChatRun,
+      agentRunSeq: ops.agentRunSeq,
+      broadcast: ops.broadcast,
+      nodeSendToSession: ops.nodeSendToSession,
+    },
+    params,
+  );
+}
 
 function resolveChatAbortDeliverySessionKeys(
   ops: ChatAbortOps,

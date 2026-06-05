@@ -1,3 +1,5 @@
+// Node invoke approval-bypass tests protect signed node identity checks so
+// unpaired or spoofed devices cannot receive forwarded invoke requests.
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -19,25 +21,31 @@ import {
   startServerWithClient,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
+import {
+  acknowledgeNodeInvokeRequestForTest,
+  getConnectedNodeIdForTest,
+} from "./test-helpers.node-invoke.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const NODE_CONNECT_TIMEOUT_MS = 10_000;
 const CONNECT_REQ_TIMEOUT_MS = 2_000;
 
-function createDeviceIdentity(): DeviceIdentity {
+function createDeviceKeyMaterial(label: string): DeviceIdentity & { publicKeyRaw: string } {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
   const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
   const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
   const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
-  const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
-  if (!deviceId) {
-    throw new Error("failed to create test device identity");
-  }
+  const deviceId = requireNonEmptyString(deriveDeviceIdFromPublicKey(publicKeyRaw), label);
   return {
     deviceId,
     publicKeyPem,
     privateKeyPem,
+    publicKeyRaw,
   };
+}
+
+function createDeviceIdentity(): DeviceIdentity {
+  return createDeviceKeyMaterial("test device id");
 }
 
 async function expectNoForwardedInvoke(hasInvoke: () => boolean): Promise<void> {
@@ -83,6 +91,16 @@ function createInvokeParamCapture() {
   };
 }
 
+async function expectForwardedApprovedParams(params: {
+  invokeCapture: ReturnType<typeof createInvokeParamCapture>;
+  absentKey: string;
+}): Promise<void> {
+  const forwardedParams = await params.invokeCapture.waitForParams();
+  expect(forwardedParams["approved"]).toBe(true);
+  expect(forwardedParams["approvalDecision"]).toBe("allow-once");
+  expect(forwardedParams[params.absentKey]).toBeUndefined();
+}
+
 function requireNonEmptyString(value: string | null | undefined, label: string): string {
   if (!value) {
     throw new Error(`expected ${label}`);
@@ -98,19 +116,6 @@ function requireRecord(
     throw new Error(`expected ${label}`);
   }
   return value;
-}
-
-async function getConnectedNodeId(ws: WebSocket): Promise<string> {
-  const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
-    ws,
-    "node.list",
-    {},
-  );
-  expect(nodes.ok).toBe(true);
-  return requireNonEmptyString(
-    nodes.payload?.nodes?.find((n) => n.connected)?.nodeId,
-    "connected node id",
-  );
 }
 
 async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
@@ -370,14 +375,7 @@ describe("node.invoke approval bypass", () => {
   };
 
   const connectOperatorWithNewDevice = async (scopes: string[]) => {
-    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
-    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
-    const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
-    const deviceId = requireNonEmptyString(
-      deriveDeviceIdFromPublicKey(publicKeyRaw),
-      "operator device id",
-    );
+    const { deviceId, publicKeyRaw, privateKeyPem } = createDeviceKeyMaterial("operator device id");
     return await connectOperatorWithRetry(scopes, (nonce) => {
       const signedAtMs = Date.now();
       const payload = buildDeviceAuthPayload({
@@ -428,27 +426,7 @@ describe("node.invoke approval bypass", () => {
         commands,
         deviceIdentity: resolvedDeviceIdentity,
         onHelloOk: () => readyResolve?.(),
-        onEvent: (evt) => {
-          if (evt.event !== "node.invoke.request") {
-            return;
-          }
-          onInvoke(evt.payload);
-          const payload = evt.payload as {
-            id?: string;
-            nodeId?: string;
-          };
-          const id = typeof payload?.id === "string" ? payload.id : "";
-          const nodeId = typeof payload?.nodeId === "string" ? payload.nodeId : "";
-          if (!id || !nodeId) {
-            return;
-          }
-          void client.request("node.invoke.result", {
-            id,
-            nodeId,
-            ok: true,
-            payloadJSON: JSON.stringify({ ok: true }),
-          });
-        },
+        onEvent: (event) => acknowledgeNodeInvokeRequestForTest({ client, event, onInvoke }),
       });
       client.start();
       let timer: NodeJS.Timeout | undefined;
@@ -485,7 +463,7 @@ describe("node.invoke approval bypass", () => {
     });
     const ws = await connectOperator(["operator.write"]);
     try {
-      const nodeId = await getConnectedNodeId(ws);
+      const nodeId = await getConnectedNodeIdForTest(ws);
       const cases = [
         {
           name: "rawCommand mismatch",
@@ -550,7 +528,7 @@ describe("node.invoke approval bypass", () => {
     );
     const ws = await connectOperator(["operator.write"]);
     try {
-      const nodeId = await getConnectedNodeId(ws);
+      const nodeId = await getConnectedNodeIdForTest(ws);
       const res = await rpcReq(ws, "node.invoke", {
         nodeId,
         command: "browser.proxy",
@@ -581,7 +559,7 @@ describe("node.invoke approval bypass", () => {
     const wsOtherDevice = await connectOperatorWithNewDevice(["operator.write"]);
 
     try {
-      const nodeId = await getConnectedNodeId(wsApprover);
+      const nodeId = await getConnectedNodeIdForTest(wsApprover);
 
       const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
       // Separate caller connection simulates per-call clients.
@@ -595,10 +573,7 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
-      const forwardedParams = await invokeCapture.waitForParams();
-      expect(forwardedParams["approved"]).toBe(true);
-      expect(forwardedParams["approvalDecision"]).toBe("allow-once");
-      expect(forwardedParams["injected"]).toBeUndefined();
+      await expectForwardedApprovedParams({ invokeCapture, absentKey: "injected" });
 
       const replayApprovalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
       const invokeCountBeforeReplay = invokeCapture.count();
@@ -627,7 +602,7 @@ describe("node.invoke approval bypass", () => {
     const wsReplay = await connectTrustedBackend(["operator.write", "operator.approvals"]);
 
     try {
-      const nodeId = await getConnectedNodeId(wsRequest);
+      const nodeId = await getConnectedNodeIdForTest(wsRequest);
       const context: ChatApprovalContext = {
         agentId: "main",
         sessionKey: "agent:main:telegram:direct:12345",
@@ -650,10 +625,7 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
-      const forwardedParams = await invokeCapture.waitForParams();
-      expect(forwardedParams["approved"]).toBe(true);
-      expect(forwardedParams["approvalDecision"]).toBe("allow-once");
-      expect(forwardedParams["turnSourceTo"]).toBeUndefined();
+      await expectForwardedApprovedParams({ invokeCapture, absentKey: "turnSourceTo" });
 
       const mismatchApprovalId = await requestChatAllowOnceApproval({
         ws: wsRequest,

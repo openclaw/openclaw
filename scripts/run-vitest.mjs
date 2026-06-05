@@ -25,16 +25,22 @@ const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
 const LONG_RUNNING_VITEST_CONFIGS = new Set([
   "test/vitest/vitest.e2e.config.ts",
+  GATEWAY_VITEST_CONFIG,
   "test/vitest/vitest.ui-e2e.config.ts",
+  "test/vitest/vitest.full-agentic.config.ts",
+  "test/vitest/vitest.full-core-contracts.config.ts",
 ]);
 const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/openclaw-e2e-instance.test.ts",
 ]);
+const EXPLICIT_FILE_TARGET_RE = /\.(?:[cm]?[jt]sx?)$/u;
 const EXPLICIT_TEST_FILE_RE = /\.(?:test|e2e|live)\.(?:[cm]?[jt]sx?)$/u;
 const GLOB_PATTERN_CHARS_RE = /[*?[\]{}]/u;
+const NON_RUN_VITEST_SUBCOMMANDS = new Set(["bench", "list", "related"]);
 const VITEST_OPTIONS_WITH_VALUE = new Set([
   "--attachmentsDir",
   "--bail",
@@ -44,6 +50,7 @@ const VITEST_OPTIONS_WITH_VALUE = new Set([
   "-c",
   "--changed",
   "--dir",
+  "--diff",
   "--environment",
   "--exclude",
   "--execArgv",
@@ -142,7 +149,11 @@ function resolveHydratedVitestPackageJson({ baseDir, env, fsImpl }) {
   if (!modulesDir) {
     return null;
   }
-  const packageJsonPath = path.join(resolvePathFromBase(modulesDir, baseDir), "vitest", "package.json");
+  const packageJsonPath = path.join(
+    resolvePathFromBase(modulesDir, baseDir),
+    "vitest",
+    "package.json",
+  );
   return fsImpl.existsSync(packageJsonPath) ? packageJsonPath : null;
 }
 
@@ -314,9 +325,7 @@ export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
   const hasHeartbeat = Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
   return {
     ...env,
-    ...(!hasTimeout
-      ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(defaultTimeoutMs) }
-      : {}),
+    ...(!hasTimeout ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(defaultTimeoutMs) } : {}),
     ...(!hasHeartbeat && timeoutMs !== null && DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS < timeoutMs
       ? { [VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]: String(DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS) }
       : {}),
@@ -422,16 +431,24 @@ function optionConsumesNextArg(arg) {
   );
 }
 
-function isExplicitTestFileArg(arg) {
-  if (!EXPLICIT_TEST_FILE_RE.test(arg) || GLOB_PATTERN_CHARS_RE.test(arg)) {
-    return false;
-  }
+function isPathLikeExplicitFileArg(arg) {
   return (
     path.isAbsolute(arg) || arg.startsWith("./") || arg.startsWith("../") || /[/\\]/u.test(arg)
   );
 }
 
-function collectExplicitTestFileArgs(argv) {
+function isExplicitFileTargetArg(arg) {
+  if (!EXPLICIT_FILE_TARGET_RE.test(arg) || GLOB_PATTERN_CHARS_RE.test(arg)) {
+    return false;
+  }
+  return isPathLikeExplicitFileArg(arg);
+}
+
+function isExplicitTestFileArg(arg) {
+  return EXPLICIT_TEST_FILE_RE.test(arg) && isExplicitFileTargetArg(arg);
+}
+
+function collectExplicitFileTargetArgs(argv, predicate = isExplicitFileTargetArg) {
   const files = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -445,11 +462,15 @@ function collectExplicitTestFileArgs(argv) {
     if (arg.startsWith("-")) {
       continue;
     }
-    if (isExplicitTestFileArg(arg)) {
+    if (predicate(arg)) {
       files.push(arg);
     }
   }
   return files;
+}
+
+function collectExplicitTestFileArgs(argv) {
+  return collectExplicitFileTargetArgs(argv, isExplicitTestFileArg);
 }
 
 export function resolveExplicitTestFileNoPassArgs(argv) {
@@ -545,15 +566,34 @@ function stripRunSubcommand(argv) {
   return stripped;
 }
 
+function hasNonRunVitestSubcommand(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      return false;
+    }
+    if (optionConsumesNextArg(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    return NON_RUN_VITEST_SUBCOMMANDS.has(arg);
+  }
+  return false;
+}
+
 export function resolveTestProjectsDelegationArgs(argv) {
   if (
     hasExplicitVitestConfigArg(argv) ||
     hasAlternateVitestRootArg(argv) ||
     hasExplicitVitestProjectArg(argv) ||
     resolveExplicitVitestMode(argv) === "watch" ||
+    hasNonRunVitestSubcommand(argv) ||
     hasExplicitDisabledRunFlag(argv) ||
     hasSeparateVitestOptionValueArg(argv) ||
-    collectExplicitTestFileArgs(argv).length === 0
+    collectExplicitFileTargetArgs(argv).length === 0
   ) {
     return null;
   }
@@ -564,7 +604,7 @@ export function resolveMissingExplicitTestFiles(argv, cwd = process.cwd(), fsImp
   if (hasExplicitVitestConfigArg(argv) || hasAlternateVitestRootArg(argv)) {
     return [];
   }
-  return collectExplicitTestFileArgs(argv)
+  return collectExplicitFileTargetArgs(argv)
     .filter((arg) => {
       const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
       return !fsImpl.existsSync(filePath);
@@ -824,11 +864,22 @@ export function resolveTestProjectsRunnerEnv(env) {
   return resolveVitestSpawnEnv(env);
 }
 
-function spawnTestProjectsRunner(argv, env) {
-  return spawn(process.execPath, [testProjectsRunnerPath, ...argv], {
+export function resolveTestProjectsRunnerSpawnParams(env, platform = process.platform) {
+  return {
     env: resolveTestProjectsRunnerEnv(env),
+    detached: shouldUseDetachedVitestProcessGroup(platform),
     stdio: "inherit",
+  };
+}
+
+function spawnTestProjectsRunner(argv, env) {
+  const child = spawn(process.execPath, [testProjectsRunnerPath, ...argv], {
+    ...resolveTestProjectsRunnerSpawnParams(env),
   });
+  const teardown = installVitestProcessGroupCleanup({
+    child,
+  });
+  return { child, teardown };
 }
 
 function main(argv = process.argv.slice(2), env = process.env) {
@@ -841,7 +892,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   if (missingTestFiles.length > 0) {
     console.error(
       [
-        "[vitest] explicit test file(s) not found:",
+        "[vitest] explicit test/source file(s) not found:",
         ...missingTestFiles.map((file) => `  - ${file}`),
       ].join("\n"),
     );
@@ -850,8 +901,9 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
-    const child = spawnTestProjectsRunner(delegatedArgs, env);
+    const { child, teardown } = spawnTestProjectsRunner(delegatedArgs, env);
     child.on("exit", (code, signal) => {
+      teardown();
       if (signal) {
         process.kill(process.pid, signal);
         return;
@@ -859,6 +911,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
       process.exit(code ?? 1);
     });
     child.on("error", (error) => {
+      teardown();
       console.error(error);
       process.exit(1);
     });

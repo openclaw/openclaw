@@ -1,3 +1,4 @@
+// Openai Web Search Minimal Client tests cover openai web search minimal client script behavior.
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/e2e/lib/openai-web-search-minimal/client.mjs";
 
@@ -9,6 +10,17 @@ describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
         error: new Error(`gateway failed: ${testing.DEFAULT_RAW_SCHEMA_ERROR}`),
       }),
     ).toContain(testing.DEFAULT_RAW_SCHEMA_ERROR);
+  });
+
+  it("accepts the gateway schema rejection wrapper in reject mode", () => {
+    expect(
+      testing.validateRejectResult({
+        ok: false,
+        error: new Error(
+          `GatewayClientRequestError: FailoverError: ${testing.DEFAULT_GATEWAY_SCHEMA_ERROR}.`,
+        ),
+      }),
+    ).toContain(testing.DEFAULT_GATEWAY_SCHEMA_ERROR);
   });
 
   it("fails reject mode when the agent run unexpectedly succeeds", () => {

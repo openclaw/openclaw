@@ -1,3 +1,6 @@
+/**
+ * Handles assistant-stage failover decisions during embedded-agent attempts.
+ */
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -32,6 +35,11 @@ type AssistantFailoverOutcome =
       error: FailoverError;
     };
 
+/**
+ * Applies an assistant-stage failover decision and returns the next run action.
+ * It owns auth-profile rotation, overload/rate-limit escalation, same-model
+ * idle-timeout retry, and FailoverError construction for outer model fallback.
+ */
 export async function handleAssistantFailover(params: {
   initialDecision: AssistantFailoverDecision;
   aborted: boolean;
@@ -165,6 +173,8 @@ export async function handleAssistantFailover(params: {
       );
     }
     if (rotated) {
+      // Marking the failed profile is non-blocking after rotation succeeds; the
+      // retry can proceed with the next profile while the failure record settles.
       void markFailedProfilePromise;
       params.logAssistantFailoverDecision("rotate_profile");
       await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);
@@ -200,6 +210,8 @@ export async function handleAssistantFailover(params: {
   }
 
   if (decision.action === "fallback_model") {
+    // Backoff runs before throwing so the outer fallback model starts after the
+    // provider-specific overload delay.
     await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);
     const message = resolveAssistantFailoverErrorMessage(params);
     const status =

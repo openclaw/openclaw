@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover index behavior.
 import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provider.js";
 import * as protocol from "./index.js";
@@ -5,6 +6,7 @@ import {
   formatValidationErrors,
   validateChatAbortParams,
   validateChatHistoryParams,
+  validateChatMetadataParams,
   validateChatSendParams,
   validateChatEvent,
   validateCommandsListParams,
@@ -35,6 +37,15 @@ import {
   type ValidationError,
 } from "./index.js";
 
+/**
+ * Broad protocol validator smoke tests.
+ *
+ * This file exercises exported lazy validators, readable validation errors, and
+ * representative cross-surface payloads so schema registry changes fail before
+ * they reach CLI, Gateway, channel, or dashboard consumers.
+ */
+
+/** Builds a validation error fixture while keeping only the field under test noisy. */
 const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
   keyword: "type",
   instancePath: "",
@@ -44,6 +55,7 @@ const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
   ...overrides,
 });
 
+/** Runtime shape shared by all exported lazy protocol validator functions. */
 type ProtocolValidator = (value: unknown) => boolean;
 
 describe("lazy protocol validators", () => {
@@ -102,6 +114,53 @@ describe("lazy protocol validators", () => {
         agentId: "work",
       }),
     ).toBe(true);
+  });
+
+  it("accepts selected-agent scope on chat metadata params", () => {
+    expect(validateChatMetadataParams({})).toBe(true);
+    expect(validateChatMetadataParams({ agentId: "work" })).toBe(true);
+    expect(validateChatMetadataParams({ agentId: "" })).toBe(false);
+    expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
+  });
+
+  it("validates chat sends that suppress command interpretation", () => {
+    expect(
+      validateChatSendParams({
+        sessionKey: "agent:main",
+        message: "/reset examples",
+        suppressCommandInterpretation: true,
+        idempotencyKey: "chat-run-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("validates Skill Workshop revision request params", () => {
+    expect(
+      protocol.validateSkillsProposalRequestRevisionParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        targetAgentId: "writer",
+        instructions: "Make the support files 5",
+        sessionKey: "agent:main:session:skill-workshop",
+        idempotencyKey: "revision-run-1",
+      }),
+    ).toBe(true);
+    expect(
+      protocol.validateSkillsProposalRequestRevisionParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        instructions: "",
+        sessionKey: "agent:main:session:skill-workshop",
+        idempotencyKey: "revision-run-1",
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalRequestRevisionParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        instructions: "Make the support files 5",
+        sessionKey: "agent:main:session:skill-workshop",
+        idempotencyKey: "revision-run-1",
+        hiddenPrompt: "do not accept caller-provided hidden prompts",
+      }),
+    ).toBe(false);
   });
 
   it("can still compile every exported protocol validator", () => {

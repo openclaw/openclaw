@@ -1,3 +1,4 @@
+// Googlechat plugin module implements channel.adapters behavior.
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelThreadingContext,

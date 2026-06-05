@@ -1,3 +1,4 @@
+// Commander registration for onboard setup flags and lazy onboard runtime execution.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -63,6 +64,7 @@ function extractCliFlags(cliOption: string): string[] {
 }
 
 function resolveOnboardAuthFlags(): OnboardAuthFlag[] {
+  // Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
   const seenCliFlags = new Set<string>();
   const flags: OnboardAuthFlag[] = [];
   for (const flag of [...CORE_ONBOARD_AUTH_FLAGS, ...resolveManifestProviderOnboardAuthFlags()]) {
@@ -141,7 +143,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
     .option(
       "--custom-compatibility <mode>",
-      "Custom provider API compatibility: openai|anthropic (default: openai)",
+      "Custom provider API compatibility: openai|openai-responses|anthropic (default: openai)",
     )
     .option("--custom-image-input", "Mark the custom provider model as image-capable")
     .option("--custom-text-input", "Mark the custom provider model as text-only")
@@ -217,7 +219,11 @@ export function registerOnboardCommand(program: Command): void {
           customApiKey: opts.customApiKey as string | undefined,
           customModelId: opts.customModelId as string | undefined,
           customProviderId: opts.customProviderId as string | undefined,
-          customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
+          customCompatibility: opts.customCompatibility as
+            | "openai"
+            | "openai-responses"
+            | "anthropic"
+            | undefined,
           customImageInput:
             opts.customTextInput === true
               ? false

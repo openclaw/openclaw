@@ -1,7 +1,11 @@
+// Memory Host SDK module implements batch runner behavior.
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { splitBatchRequests } from "./batch-utils.js";
 import { runWithConcurrency } from "./internal.js";
 
+// Shared runner for splitting and executing remote embedding batch groups.
+
+/** Execution controls for provider embedding batch submissions and polling. */
 export type EmbeddingBatchExecutionParams = {
   wait: boolean;
   pollIntervalMs: number;
@@ -10,6 +14,7 @@ export type EmbeddingBatchExecutionParams = {
   debug?: (message: string, data?: Record<string, unknown>) => void;
 };
 
+/** Clamp polling to both configured poll interval and total timeout budget. */
 function resolveEmbeddingBatchPollIntervalMs(params: {
   pollIntervalMs: number;
   timeoutMs: number;
@@ -24,6 +29,7 @@ function resolveEmbeddingBatchPollIntervalMs(params: {
   return Math.min(safePollIntervalMs, safeTimeoutMs);
 }
 
+/** Run request groups with bounded concurrency and return embeddings by custom id. */
 export async function runEmbeddingBatchGroups<TRequest>(params: {
   requests: TRequest[];
   maxRequests: number;
@@ -72,6 +78,7 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
   return byCustomId;
 }
 
+/** Build normalized batch-group options for provider-specific runners. */
 export function buildEmbeddingBatchGroupOptions<TRequest>(
   params: { requests: TRequest[] } & EmbeddingBatchExecutionParams,
   options: { maxRequests: number; debugLabel: string },

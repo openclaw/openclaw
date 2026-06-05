@@ -1,3 +1,6 @@
+/**
+ * Installs context guards for oversized tool-result histories.
+ */
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -324,6 +327,7 @@ export function installContextEngineLoopHook(params: {
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
+  repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
   onAfterTurnCheckpoint?: (messageCount: number) => void;
   getRuntimeContext?: (params: {
@@ -425,13 +429,13 @@ export function installContextEngineLoopHook(params: {
         tokenBudget,
         model: modelId,
       });
-      if (
-        assembled &&
-        Array.isArray(assembled.messages) &&
-        assembled.messages !== providerMessages
-      ) {
-        lastAssembledView = assembled.messages;
-        return assembled.messages;
+      if (assembled && Array.isArray(assembled.messages)) {
+        const repairedMessages =
+          params.repairAssembledMessages?.(assembled.messages) ?? assembled.messages;
+        if (repairedMessages !== providerMessages || assembled.messages !== providerMessages) {
+          lastAssembledView = repairedMessages;
+          return repairedMessages;
+        }
       }
       lastAssembledView = null;
     } catch {
