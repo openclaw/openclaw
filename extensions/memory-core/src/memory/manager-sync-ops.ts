@@ -40,6 +40,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterId,
+  resolveEmbeddingProviderFallbackModel,
   type EmbeddingProvider,
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
@@ -299,6 +300,14 @@ export abstract class MemoryManagerSyncOps {
     hasIndexedChunks?: boolean;
   }): MemoryIndexIdentityState {
     const hasProviderOverride = params && "provider" in params;
+    // The plain `memory status` path resolves identity before the provider is
+    // initialized, so settings.model is still the unresolved default: an empty
+    // string when no explicit model is configured. Mirror provider init's model
+    // resolution here (configured model, else adapter default) so identity does
+    // not falsely report a mismatch against meta with a blank "expected" model.
+    const configuredModel =
+      this.settings.model.trim() ||
+      resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg);
     const configuredProvider =
       this.settings.provider === "none"
         ? null
@@ -306,7 +315,7 @@ export abstract class MemoryManagerSyncOps {
             id:
               resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
               this.settings.provider,
-            model: this.settings.model,
+            model: configuredModel,
           };
     const provider = hasProviderOverride
       ? params.provider!
