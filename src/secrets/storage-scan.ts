@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
-import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -66,7 +66,10 @@ export function listAgentModelsJsonPaths(
 ): string[] {
   const resolvedStateDir = resolveUserPath(stateDir);
   const paths = new Set<string>();
-  paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
+  // Use the configured default agent instead of hard-coding "main" so deployments
+  // that set `default: true` on a non-"main" agent resolve the correct models.json path.
+  const defaultAgentId = resolveDefaultAgentId(config);
+  paths.add(path.join(resolvedStateDir, "agents", defaultAgentId, "agent", "models.json"));
   paths.add(path.join(resolveActiveAgentDir(stateDir, env), "models.json"));
 
   const agentsRoot = path.join(resolvedStateDir, "agents");
@@ -80,10 +83,6 @@ export function listAgentModelsJsonPaths(
   }
 
   for (const agentId of listAgentIds(config)) {
-    if (agentId === "main") {
-      paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
-      continue;
-    }
     const agentDir = resolveAgentDir(config, agentId);
     paths.add(path.join(resolveUserPath(agentDir), "models.json"));
   }
