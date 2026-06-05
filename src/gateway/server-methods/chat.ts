@@ -3159,9 +3159,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     // Record a terminal abort outcome for this chat run, mirroring the
     // {status:"timeout", stopReason} shape sessions.abort and the pre-registered
     // agent abort already use. Reusing the existing terminal shape (not a new
-    // "aborted" status) keeps agent.wait/dedupe consumers consistent; a
+    // "aborted" status) keeps agent.wait/dedupe consumers consistent. An
     // "rpc"/"stop" stopReason classifies as a sticky cancellation so a late
-    // "started"/"in_flight" write cannot resurrect the aborted run. Issue #84176.
+    // "started"/"in_flight" write cannot resurrect the run; a maintenance-driven
+    // "timeout" stopReason is terminal but not sticky (benign today: no later
+    // write targets this runId). Issue #84176.
     const cacheChatSendAbortedDedupe = (stopReason: string) => {
       const endedAt = Date.now();
       setGatewayDedupeEntry({

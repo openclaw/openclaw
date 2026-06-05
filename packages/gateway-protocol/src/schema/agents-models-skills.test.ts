@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   AgentsListResultSchema,
   SkillsProposalInspectResultSchema,
+  SkillsProposalRequestRevisionResultSchema,
   ToolsEffectiveResultSchema,
 } from "./agents-models-skills.js";
 
@@ -147,5 +148,21 @@ describe("SkillsProposalInspectResultSchema", () => {
     };
 
     expect(Value.Check(SkillsProposalInspectResultSchema, result)).toBe(true);
+  });
+});
+
+describe("SkillsProposalRequestRevisionResultSchema", () => {
+  it("accepts the forwarded chat.send ack statuses including terminal timeout/error (#84176)", () => {
+    for (const status of ["started", "in_flight", "ok", "timeout", "error"]) {
+      expect(Value.Check(SkillsProposalRequestRevisionResultSchema, { runId: "r1", status })).toBe(
+        true,
+      );
+    }
+  });
+
+  it("rejects an unknown ack status", () => {
+    expect(
+      Value.Check(SkillsProposalRequestRevisionResultSchema, { runId: "r1", status: "bogus" }),
+    ).toBe(false);
   });
 });

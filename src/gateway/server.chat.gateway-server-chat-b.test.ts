@@ -3057,6 +3057,18 @@ describe("gateway server chat", () => {
         expect(aborted).toBe(true);
       }, FAST_WAIT_OPTS);
 
+      // Post-dispatch abort must leave the run dedupe terminal (#84176) so a
+      // duplicate send / agent.wait observes the abort, not a stuck "started".
+      await vi.waitFor(async () => {
+        const dupAfterAbort = await rpcReq<{ status?: string }>(ws, "chat.send", {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-abort-1",
+        });
+        expect(dupAfterAbort.ok).toBe(true);
+        expect(dupAfterAbort.payload?.status).toBe("timeout");
+      }, FAST_WAIT_OPTS);
+
       spy.mockClear();
       spy.mockResolvedValueOnce(undefined);
 

@@ -778,11 +778,22 @@ export const SkillsProposalRequestRevisionParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Chat-run acknowledgement returned after queueing a Skill Workshop revision request. */
+/**
+ * Chat-run acknowledgement returned after queueing a Skill Workshop revision
+ * request. This forwards the chat.send ack, which can be a terminal
+ * {status:"timeout"|"error"} when the run was aborted or failed before/at
+ * dispatch, so the status union must match chat.send's ack statuses.
+ */
 export const SkillsProposalRequestRevisionResultSchema = Type.Object(
   {
     runId: NonEmptyString,
-    status: Type.Union([Type.Literal("started"), Type.Literal("in_flight"), Type.Literal("ok")]),
+    status: Type.Union([
+      Type.Literal("started"),
+      Type.Literal("in_flight"),
+      Type.Literal("ok"),
+      Type.Literal("timeout"),
+      Type.Literal("error"),
+    ]),
   },
   { additionalProperties: true },
 );
