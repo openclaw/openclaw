@@ -650,6 +650,7 @@ export class OpenClawApp extends LitElement {
   @state() skillWorkshopQueueWidth = 360;
   @state() skillWorkshopMode: SkillWorkshopState["skillWorkshopMode"] = loadSkillWorkshopMode();
   @state() skillWorkshopUseCurrentChatForRevisions = loadSkillWorkshopUseCurrentChatForRevisions();
+  @state() skillWorkshopAgentId: string | null = null;
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
