@@ -2351,6 +2351,7 @@ export async function dispatchReplyFromConfig(
       routedFinalCount: number;
       deliveredMedia: boolean;
       deliveredFinal: boolean;
+      deliveredFinalVisibleText: boolean;
     }> => {
       const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
       const throwIfFinalDeliveryAborted = () => {
@@ -2383,6 +2384,11 @@ export async function dispatchReplyFromConfig(
         markInboundDedupeReplayUnsafe();
         finalReplyDeliveryStarted = true;
       }
+      // Capture the original reply's media before TTS so we can tell a genuinely
+      // synthesized captioned voice (no media in, media out) apart from an ordinary
+      // image/file final. Only synthesized media should count as delivered TTS media
+      // for the captioned block-text fallback gate.
+      const replyHadOwnMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
       const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
         cfg,
@@ -2402,7 +2408,9 @@ export async function dispatchReplyFromConfig(
         ? { ...ttsPayload, text: directiveOnlyCaptionText }
         : ttsPayload;
       const normalizedPayload = await normalizeReplyMediaPayload(finalTtsPayload);
-      const payloadHasMedia = resolveSendableOutboundReplyParts(normalizedPayload).hasMedia;
+      const normalizedFinalParts = resolveSendableOutboundReplyParts(normalizedPayload);
+      const payloadHasMedia = normalizedFinalParts.hasMedia;
+      const payloadHasVisibleText = normalizedFinalParts.hasText;
       throwIfFinalDeliveryAborted();
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
@@ -2426,10 +2434,16 @@ export async function dispatchReplyFromConfig(
           routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
           // Only treat media as delivered when the route actually delivered it, so a
           // failed/suppressed final send still lets the accumulated-text fallback run.
-          deliveredMedia: payloadHasMedia && isRoutedReplyDelivered(result),
+          // Restrict to TTS-synthesized media (original had none) so an ordinary
+          // image/file final does not falsely satisfy the captioned TTS-media gate.
+          deliveredMedia: payloadHasMedia && isRoutedReplyDelivered(result) && !replyHadOwnMedia,
           // Delivered-to-user: false on suppress/fail. Drives the accumulated-block
           // fallback so a hook-suppressed final (ok but not delivered) is not dropped.
           deliveredFinal: isRoutedReplyDelivered(result),
+          // Whether the delivered final actually carried visible text/caption. Lets
+          // the captioned fallback gate distinguish a text-bearing final from an
+          // ordinary media-only final that left accumulated block text undelivered.
+          deliveredFinalVisibleText: payloadHasVisibleText && isRoutedReplyDelivered(result),
         };
       }
       throwIfFinalDeliveryAborted();
@@ -2491,8 +2505,9 @@ export async function dispatchReplyFromConfig(
       return {
         queuedFinal,
         routedFinalCount: 0,
-        deliveredMedia: payloadHasMedia && deliveredFinal,
+        deliveredMedia: payloadHasMedia && deliveredFinal && !replyHadOwnMedia,
         deliveredFinal,
+        deliveredFinalVisibleText: payloadHasVisibleText && deliveredFinal,
       };
     };
 
@@ -3360,6 +3375,11 @@ export async function dispatchReplyFromConfig(
     let routedFinalCount = 0;
     let deliveredFinalTtsMedia = false;
     let deliveredFinalToUser = false;
+    // Tracks whether any delivered final carried visible text/caption. In
+    // captioned-final mode an ordinary media-only final delivers to the user but
+    // carries no text, so deliveredFinalToUser alone would wrongly suppress the
+    // accumulated block-text fallback. This signal keeps that text flowing.
+    let deliveredFinalVisibleText = false;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
     // Explicit command turns (native or authorized text-slash like /compact) are
@@ -3402,6 +3422,7 @@ export async function dispatchReplyFromConfig(
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       deliveredFinalTtsMedia = finalReply.deliveredMedia || deliveredFinalTtsMedia;
       deliveredFinalToUser = finalReply.deliveredFinal || deliveredFinalToUser;
+      deliveredFinalVisibleText = finalReply.deliveredFinalVisibleText || deliveredFinalVisibleText;
       routedFinalCount += finalReply.routedFinalCount;
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
         finalDeliveryFailed = true;
@@ -3427,8 +3448,13 @@ export async function dispatchReplyFromConfig(
         !deliveredFinalTtsMedia &&
         // Gate on delivered-to-user, not the handled flag: a hook-suppressed final
         // sets queuedFinal (handled) but never reaches the user, so the synth + text
-        // fallback must still run. Genuine deliveries keep this blocked.
-        !deliveredFinalToUser &&
+        // fallback must still run. Genuine deliveries keep this blocked. In
+        // captioned-final mode an ordinary media-only final delivers to the user but
+        // carries no visible text, so block on delivered visible text/TTS media there
+        // instead — otherwise the accumulated assistant text would be dropped.
+        (willUseCaptionedFinalTts
+          ? !(deliveredFinalTtsMedia || deliveredFinalVisibleText)
+          : !deliveredFinalToUser) &&
         blockCount > 0 &&
         accumulatedBlockTtsText.trim()
       ) {
