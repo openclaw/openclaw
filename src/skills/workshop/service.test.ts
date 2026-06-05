@@ -889,4 +889,56 @@ describe("skill workshop proposals", () => {
       fs.access(path.join(workspaceDir, "skills", "tamper-guard", "SKILL.md")),
     ).rejects.toThrow();
   });
+
+  it("marks pending create proposals stale when listSkillProposals finds the target skill file already exists", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Auto-Stale Check",
+      description: "Proposal that should go stale",
+      content: "# Auto-Stale\n\nThis skill was installed manually.\n",
+    });
+
+    // Manually create the target skill file on disk (simulating manual install)
+    const skillDir = path.dirname(proposal.record.target.skillFile);
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      proposal.record.target.skillFile,
+      "---\nname: auto-stale-check\ndescription: Already installed\n---\n\n# Auto-Stale\n",
+      "utf8",
+    );
+
+    // Proposal should still be pending before reconciliation
+    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("pending");
+
+    // listSkillProposals with workspaceDir triggers reconciliation
+    await listSkillProposals({ workspaceDir });
+
+    // Proposal should now be stale
+    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("stale");
+  });
+
+  it("marks pending create proposals stale when inspectSkillProposal finds the target skill file already exists", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Inspect-Stale Test",
+      description: "Proposal to go stale via inspect path",
+      content: "# Inspect-Stale\n\nManually installed.\n",
+    });
+
+    // Manually create the target skill file on disk
+    const skillDir = path.dirname(proposal.record.target.skillFile);
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      proposal.record.target.skillFile,
+      "---\nname: inspect-stale-test\ndescription: Installed manually\n---\n\n# Inspect-Stale\n",
+      "utf8",
+    );
+
+    // inspectSkillProposal with workspaceDir should reconcile and return stale
+    const result = await inspectSkillProposal(proposal.record.id, { workspaceDir });
+    expect(result?.record.status).toBe("stale");
+    expect(result?.record.statusReason).toBe("Target skill was created after proposal creation.");
+  });
 });

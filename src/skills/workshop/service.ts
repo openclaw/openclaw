@@ -76,6 +76,28 @@ const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
 const MAX_PROPOSAL_DIRECTORY_ENTRIES = MAX_PROPOSAL_SUPPORT_FILES * 4;
 const MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES = 160;
 
+/** Reconcile pending `create` proposals whose target skill file already exists
+ * on disk (e.g. manually installed) by marking them stale. */
+async function reconcileStaleCreateProposals(workspaceDir: string): Promise<void> {
+  const manifest = await readSkillProposalManifest();
+  for (const proposal of manifest.proposals) {
+    if (proposal.status !== "pending") {
+      continue;
+    }
+    const record = await readSkillProposalRecord(proposal.id);
+    if (!record || !isProposalInWorkspace(record, workspaceDir)) {
+      continue;
+    }
+    if (record.kind !== "create") {
+      continue;
+    }
+    const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
+    if (currentContent !== null) {
+      await markProposalStale(record, "Target skill was created after proposal creation.");
+    }
+  }
+}
+
 /** Lists skill workshop proposals, optionally scoped to a workspace. */
 export async function listSkillProposals(
   options: SkillProposalScopeOptions = {},
@@ -84,14 +106,44 @@ export async function listSkillProposals(
   if (!options.workspaceDir) {
     return manifest;
   }
+  // Reconcile stale create proposals before listing so returned
+  // manifest reflects current disk state.
+  await reconcileStaleCreateProposals(options.workspaceDir);
+  const refreshed = await readSkillProposalManifest();
   const proposals: SkillProposalManifest["proposals"] = [];
-  for (const proposal of manifest.proposals) {
+  for (const proposal of refreshed.proposals) {
     const record = await readSkillProposalRecord(proposal.id);
     if (record && isProposalInWorkspace(record, options.workspaceDir)) {
       proposals.push(proposal);
     }
   }
-  return { ...manifest, proposals };
+  return { ...refreshed, proposals };
+}
+
+export async function inspectSkillProposal(
+  proposalId: string,
+  options: SkillProposalScopeOptions = {},
+): Promise<SkillProposalReadResult | null> {
+  const read = await readSkillProposal(proposalId);
+  if (!read) {
+    return null;
+  }
+  if (options.workspaceDir && !isProposalInWorkspace(read.record, options.workspaceDir)) {
+    return null;
+  }
+  // Reconcile a pending create proposal whose target skill file now
+  // exists on disk (manually installed).
+  if (read.record.status === "pending" && read.record.kind === "create" && options.workspaceDir) {
+    const currentContent = await readWorkspaceSkillFile(read.record.target.skillFile);
+    if (currentContent !== null) {
+      await markProposalStale(read.record, "Target skill was created after proposal creation.");
+      const refreshed = await readSkillProposal(proposalId);
+      if (refreshed) {
+        return await hydrateProposalSupportFiles(refreshed);
+      }
+    }
+  }
+  return await hydrateProposalSupportFiles(read);
 }
 
 export async function readSkillProposalDraftFile(filePath: string): Promise<string> {
@@ -180,20 +232,6 @@ function normalizeProposalOrigin(
     ...(runId ? { runId } : {}),
     ...(messageId ? { messageId } : {}),
   };
-}
-
-export async function inspectSkillProposal(
-  proposalId: string,
-  options: SkillProposalScopeOptions = {},
-): Promise<SkillProposalReadResult | null> {
-  const read = await readSkillProposal(proposalId);
-  if (!read) {
-    return null;
-  }
-  if (options.workspaceDir && !isProposalInWorkspace(read.record, options.workspaceDir)) {
-    return null;
-  }
-  return await hydrateProposalSupportFiles(read);
 }
 
 export async function resolvePendingSkillProposal(input: {
