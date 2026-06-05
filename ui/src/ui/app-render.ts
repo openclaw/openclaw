@@ -681,6 +681,7 @@ type ChatWorkspaceFilesState = {
   error: string | null;
   list: AgentsFilesListResult | null;
   loading: boolean;
+  open: boolean;
   requestId: number;
 };
 
@@ -701,6 +702,7 @@ function getChatWorkspaceFilesState(state: AppViewState, agentId: string): ChatW
     error: null,
     list: null,
     loading: false,
+    open: false,
     requestId: 0,
   };
   chatWorkspaceFilesStates.set(state, next);
@@ -3532,8 +3534,13 @@ export function renderApp(state: AppViewState) {
                     loading: chatWorkspaceFiles.loading,
                     error: chatWorkspaceFiles.error,
                     activeName: chatWorkspaceFiles.activeName,
+                    open: chatWorkspaceFiles.open,
                     onRefresh: refreshChatWorkspaceFiles,
                     onOpenFile: openChatWorkspaceFile,
+                    onToggleOpen: () => {
+                      chatWorkspaceFiles.open = !chatWorkspaceFiles.open;
+                      requestHostUpdate?.();
+                    },
                   },
                   autoExpandToolCalls: false,
                   onRefresh: () => {

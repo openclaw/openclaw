@@ -868,6 +868,7 @@ describe("chat composer workbench", () => {
   it("renders session controls in the composer and workspace files in the rail", () => {
     const onRefresh = vi.fn();
     const onOpenFile = vi.fn();
+    const onToggleOpen = vi.fn();
     const container = renderChatView({
       composerControls: html`<button class="test-composer-control">Model</button>`,
       workspaceFiles: {
@@ -887,8 +888,10 @@ describe("chat composer workbench", () => {
         loading: false,
         error: null,
         activeName: "AGENTS.md",
+        open: true,
         onRefresh,
         onOpenFile,
+        onToggleOpen,
       },
     });
 
@@ -905,6 +908,29 @@ describe("chat composer workbench", () => {
     file?.click();
 
     expect(onOpenFile).toHaveBeenCalledWith("AGENTS.md");
+  });
+
+  it("hides the workspace files rail by default", () => {
+    const container = renderChatView({
+      workspaceFiles: {
+        agentId: "main",
+        list: {
+          agentId: "main",
+          workspace: "/workspace",
+          files: [{ name: "AGENTS.md", path: "/workspace/AGENTS.md", missing: false, size: 2048 }],
+        },
+        loading: false,
+        error: null,
+        activeName: null,
+        open: false,
+        onRefresh: vi.fn(),
+        onOpenFile: vi.fn(),
+        onToggleOpen: vi.fn(),
+      },
+    });
+
+    expect(container.querySelector(".chat-workspace-rail")).toBeNull();
+    expect(container.querySelector(".chat-workbench--with-rail")).toBeNull();
   });
 
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {
