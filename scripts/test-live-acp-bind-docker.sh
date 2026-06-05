@@ -85,16 +85,15 @@ else
   CACHE_HOME_DIR="$HOME/.cache/openclaw/docker-cache"
 fi
 
-mkdir -p "$CLI_TOOLS_DIR"
-mkdir -p "$CACHE_HOME_DIR"
-if openclaw_live_is_ci; then
+openclaw_live_prepare_bind_dir_for_container_user "$CLI_TOOLS_DIR"
+openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"
+if openclaw_live_uses_managed_bind_dirs; then
   DOCKER_USER="$(id -u):$(id -g)"
 fi
 
 PROFILE_MOUNT=()
 PROFILE_STATUS="none"
 if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
-  PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
   PROFILE_STATUS="$PROFILE_FILE"
 fi
 
@@ -326,10 +325,16 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
 
   DOCKER_HOME_MOUNT=()
   DOCKER_AUTH_PRESTAGED=0
-  if openclaw_live_is_ci; then
+  if openclaw_live_uses_managed_bind_dirs; then
     DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
     TEMP_DIRS+=("$DOCKER_HOME_DIR")
+    openclaw_live_prepare_bind_dir_for_container_user "$DOCKER_HOME_DIR"
     DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
+    if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
+      openclaw_live_stage_profile_into_home "$DOCKER_HOME_DIR" "$PROFILE_FILE"
+    fi
+  elif [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
+    PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
   fi
 
   if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
@@ -376,6 +381,14 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   echo "==> Profile file: $PROFILE_STATUS"
   echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
   echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
+  if openclaw_live_uses_managed_bind_dirs; then
+    openclaw_live_chown_bind_dirs_for_container_user \
+      "$LIVE_IMAGE_NAME" \
+      "$DOCKER_USER" \
+      "$CLI_TOOLS_DIR" \
+      "$CACHE_HOME_DIR" \
+      "${DOCKER_HOME_DIR:-}"
+  fi
   DOCKER_RUN_ARGS=()
   openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_ACP_BIND_DOCKER_RUN_TIMEOUT:-2700s}"
   DOCKER_RUN_ARGS+=(--rm -t \

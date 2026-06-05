@@ -19,6 +19,7 @@ type ProviderEnableConfigCarrier = {
   };
 };
 
+/** Result of enabling a provider plugin while honoring plugin allow/deny policy. */
 export type PluginEnableResult<TConfig extends ProviderEnableConfigCarrier> = {
   /** Config object to persist after the enable attempt. Unchanged when policy blocks the plugin. */
   config: TConfig;

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import {
   getDefaultRedactPatterns,
   redactSecrets,
@@ -13,7 +14,7 @@ import {
 } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
-const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+const originalEnv = captureEnv(["OPENCLAW_CONFIG_PATH"]);
 let tempDirs: string[] = [];
 
 function writeConfig(source: string): void {
@@ -25,11 +26,7 @@ function writeConfig(source: string): void {
 }
 
 afterEach(() => {
-  if (originalConfigPath === undefined) {
-    delete process.env.OPENCLAW_CONFIG_PATH;
-  } else {
-    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
-  }
+  originalEnv.restore();
   for (const dir of tempDirs) {
     fs.rmSync(dir, { force: true, recursive: true });
   }

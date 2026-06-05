@@ -8,6 +8,7 @@ import {
 } from "./facade-runtime.js";
 import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 
+/** CLI registration exported by a QA runner plugin runtime surface. */
 export type QaRunnerCliRegistration = {
   commandName: string;
   register(qa: Command): void;
@@ -28,6 +29,7 @@ type QaRuntimeSurface = {
   startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
 };
 
+/** Resolved QA runner CLI contribution declared by plugin manifest metadata. */
 export type QaRunnerCliContribution =
   | {
       pluginId: string;
@@ -54,6 +56,7 @@ function isMissingQaRuntimeError(error: unknown) {
   );
 }
 
+/** Load the private QA Lab runtime facade used by QA runner commands. */
 export function loadQaRuntimeModule(): QaRuntimeSurface {
   const env = resolvePrivateQaBundledPluginsEnv();
   return loadBundledPluginPublicSurfaceModuleSync<QaRuntimeSurface>({
@@ -64,6 +67,7 @@ export function loadQaRuntimeModule(): QaRuntimeSurface {
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- QA runtime loader uses caller-supplied test API surface type.
+/** Load a bundled QA runner plugin test API facade by plugin id. */
 export function loadQaRunnerBundledPluginTestApi<T extends object>(pluginId: string): T {
   const env = resolvePrivateQaBundledPluginsEnv();
   return loadBundledPluginPublicSurfaceModuleSync<T>({
@@ -73,6 +77,7 @@ export function loadQaRunnerBundledPluginTestApi<T extends object>(pluginId: str
   });
 }
 
+/** Returns whether the private QA Lab runtime facade is available in this build. */
 export function isQaRuntimeAvailable(): boolean {
   try {
     loadQaRuntimeModule();
@@ -147,6 +152,7 @@ function loadQaRunnerRuntimeSurface(
   });
 }
 
+/** List QA runner CLI contributions declared by manifests and backed by runtime registrations. */
 export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution[] {
   const env = resolvePrivateQaBundledPluginsEnv();
   const contributions = new Map<string, QaRunnerCliContribution>();

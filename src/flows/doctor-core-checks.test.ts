@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   CORE_HEALTH_CHECKS,
   createCoreHealthChecks,
@@ -322,9 +323,7 @@ describe("CORE_HEALTH_CHECKS", () => {
 
   it("skips gateway auth warning when SecretRef-managed token resolves in lint checks", async () => {
     const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
-    const previousToken = process.env.OPENCLAW_TEST_GATEWAY_TOKEN;
-    process.env.OPENCLAW_TEST_GATEWAY_TOKEN = "resolved-test-token";
-    try {
+    await withEnvAsync({ OPENCLAW_TEST_GATEWAY_TOKEN: "resolved-test-token" }, async () => {
       const findings = await check?.detect({
         mode: "lint",
         runtime: { log() {}, error() {}, exit() {} },
@@ -350,64 +349,49 @@ describe("CORE_HEALTH_CHECKS", () => {
       });
 
       expect(findings).toEqual([]);
-    } finally {
-      if (previousToken === undefined) {
-        delete process.env.OPENCLAW_TEST_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_TEST_GATEWAY_TOKEN = previousToken;
-      }
-    }
+    });
   });
 
   it("reports unresolved SecretRefs even when OPENCLAW_GATEWAY_TOKEN is set", async () => {
     const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
-    const previousFallbackToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    const previousRefToken = process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
-    delete process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN;
-    try {
-      const findings = await check?.detect({
-        mode: "lint",
-        runtime: { log() {}, error() {}, exit() {} },
-        cfg: {
-          gateway: {
-            mode: "local",
-            auth: {
-              mode: "token",
-              token: {
-                source: "env",
-                provider: "default",
-                id: "OPENCLAW_MISSING_GATEWAY_REF_TOKEN",
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: "fallback-token",
+        OPENCLAW_MISSING_GATEWAY_REF_TOKEN: undefined,
+      },
+      async () => {
+        const findings = await check?.detect({
+          mode: "lint",
+          runtime: { log() {}, error() {}, exit() {} },
+          cfg: {
+            gateway: {
+              mode: "local",
+              auth: {
+                mode: "token",
+                token: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_MISSING_GATEWAY_REF_TOKEN",
+                },
+              },
+            },
+            secrets: {
+              providers: {
+                default: { source: "env" },
               },
             },
           },
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
-        },
-        cwd: tmp,
-      });
+          cwd: tmp,
+        });
 
-      expect(findings).toContainEqual(
-        expect.objectContaining({
-          checkId: "core/doctor/gateway-auth",
-          message: expect.stringContaining("Gateway token SecretRef could not be resolved:"),
-        }),
-      );
-    } finally {
-      if (previousFallbackToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = previousFallbackToken;
-      }
-      if (previousRefToken === undefined) {
-        delete process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN;
-      } else {
-        process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN = previousRefToken;
-      }
-    }
+        expect(findings).toContainEqual(
+          expect.objectContaining({
+            checkId: "core/doctor/gateway-auth",
+            message: expect.stringContaining("Gateway token SecretRef could not be resolved:"),
+          }),
+        );
+      },
+    );
   });
 
   it("does not execute or warn for valid exec SecretRefs during default gateway auth lint checks", async () => {
@@ -512,12 +496,9 @@ describe("CORE_HEALTH_CHECKS", () => {
       "utf8",
     );
     const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
-    const previousFallbackToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
 
-    let findings: readonly HealthFinding[] | undefined;
-    try {
-      findings = await check?.detect({
+    const findings = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "fallback-token" }, async () => {
+      return await check?.detect({
         mode: "lint",
         runtime: { log() {}, error() {}, exit() {} },
         cfg: {
@@ -547,13 +528,7 @@ describe("CORE_HEALTH_CHECKS", () => {
         },
         allowExecSecretRefs: true,
       });
-    } finally {
-      if (previousFallbackToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = previousFallbackToken;
-      }
-    }
+    });
 
     expect(findings).toContainEqual(
       expect.objectContaining({

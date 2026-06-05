@@ -1,3 +1,4 @@
+// Ci Workflow Guards tests cover ci workflow guards script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";

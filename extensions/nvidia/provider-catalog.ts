@@ -1,3 +1,4 @@
+// Nvidia provider module implements model/runtime integration.
 import { lookup as dnsLookup } from "node:dns/promises";
 import {
   isFutureDateTimestampMs,

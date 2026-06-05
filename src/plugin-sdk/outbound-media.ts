@@ -2,6 +2,7 @@
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "../media/load-options.js";
 import { loadWebMedia } from "./web-media.js";
 
+/** Media loading policy used before plugin media is handed to channel delivery. */
 export type OutboundMediaLoadOptions = {
   /** Maximum allowed media payload size before the load is rejected. */
   maxBytes?: number;

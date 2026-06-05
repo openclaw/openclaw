@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   resolveConfiguredTtsMode,
   resolveEffectiveTtsConfig,
@@ -11,7 +12,7 @@ import {
 } from "./tts-config.js";
 
 describe("shouldAttemptTtsPayload", () => {
-  let originalPrefsPath: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let root = "";
   let dir: string;
   let prefsPath: string;
@@ -28,7 +29,7 @@ describe("shouldAttemptTtsPayload", () => {
   });
 
   beforeEach(() => {
-    originalPrefsPath = process.env.OPENCLAW_TTS_PREFS;
+    envSnapshot = captureEnv(["OPENCLAW_TTS_PREFS"]);
     dir = path.join(root, `case-${caseId++}`);
     mkdirSync(dir, { recursive: true });
     prefsPath = path.join(dir, "tts.json");
@@ -36,11 +37,8 @@ describe("shouldAttemptTtsPayload", () => {
   });
 
   afterEach(() => {
-    if (originalPrefsPath === undefined) {
-      delete process.env.OPENCLAW_TTS_PREFS;
-    } else {
-      process.env.OPENCLAW_TTS_PREFS = originalPrefsPath;
-    }
+    envSnapshot?.restore();
+    envSnapshot = undefined;
   });
 
   it("skips TTS when config, prefs, and session state leave auto mode off", () => {
