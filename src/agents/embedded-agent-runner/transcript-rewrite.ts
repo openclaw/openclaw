@@ -407,6 +407,12 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
         sessionFile: target.sessionFile,
         sessionKey: target.sessionKey,
         agentId: target.agentId,
+        target: {
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          targetKind: "active-session-file",
+        },
       });
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +
@@ -466,6 +472,16 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
         sessionFile: params.sessionFile,
         sessionKey: params.sessionKey,
         ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.sessionId && params.sessionKey && params.agentId
+          ? {
+              target: {
+                agentId: params.agentId,
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                targetKind: "active-session-file",
+              },
+            }
+          : {}),
       });
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +

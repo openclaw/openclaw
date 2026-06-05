@@ -300,6 +300,12 @@ async function persistTextTurnTranscript(
     sessionFile,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
+    target: {
+      agentId: params.sessionAgentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      targetKind: "active-session-file",
+    },
   });
   return sessionEntry;
 }

@@ -1,3 +1,5 @@
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+
 export * from "../../packages/memory-host-sdk/src/engine-foundation.js";
 export {
   resolveAgentContextLimits,
@@ -39,6 +41,15 @@ export { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export { resolveGlobalSingleton } from "../shared/global-singleton.js";
 export { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 export { splitShellArgs } from "../utils/shell-argv.js";
+
+const MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY = Symbol.for(
+  "openclaw.memoryCore.sessionTranscriptUpdateSubscriber",
+);
+
+// Memory-core needs target-only internal updates before the SQLite flip, but
+// the public SDK listener must stay file-backed. Keep this hook process-local.
+(globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] ??=
+  onInternalSessionTranscriptUpdate;
 export {
   resolveUserPath,
   shortenHomeInString,

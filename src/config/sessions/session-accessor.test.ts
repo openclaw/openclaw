@@ -296,8 +296,15 @@ describe("session accessor file-backed seam", () => {
         agentId: "main",
         message: appended.message,
         messageId: appended.messageId,
+        sessionId: scope.sessionId,
         sessionFile: transcriptPath,
         sessionKey: scope.sessionKey,
+        target: {
+          agentId: "main",
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+          targetKind: "active-session-file",
+        },
       },
     ]);
   });

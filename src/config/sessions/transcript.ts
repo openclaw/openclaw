@@ -343,6 +343,16 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
             sessionFile,
             sessionKey,
             ...(params.agentId ? { agentId: params.agentId } : {}),
+            ...(params.agentId
+              ? {
+                  target: {
+                    agentId: params.agentId,
+                    sessionId: entry.sessionId,
+                    sessionKey,
+                    targetKind: "active-session-file",
+                  },
+                }
+              : {}),
             message: appendedMessage,
             messageId,
           });
@@ -352,6 +362,16 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
             sessionFile,
             sessionKey,
             ...(params.agentId ? { agentId: params.agentId } : {}),
+            ...(params.agentId
+              ? {
+                  target: {
+                    agentId: params.agentId,
+                    sessionId: entry.sessionId,
+                    sessionKey,
+                    targetKind: "active-session-file",
+                  },
+                }
+              : {}),
           });
           break;
         case "none":

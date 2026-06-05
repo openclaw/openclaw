@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { emitSessionTranscriptUpdate, onSessionTranscriptUpdate } from "./transcript-events.js";
+import {
+  emitInternalSessionTranscriptUpdate,
+  emitSessionTranscriptUpdate,
+  onInternalSessionTranscriptUpdate,
+  onSessionTranscriptUpdate,
+  type SessionTranscriptUpdate,
+} from "./transcript-events.js";
 
 const cleanup: Array<() => void> = [];
 
@@ -40,6 +46,94 @@ describe("transcript events", () => {
       message: { role: "assistant", content: "hi" },
       messageId: "msg-1",
       messageSeq: 2,
+    });
+  });
+
+  it("does not expose identity-only updates to public listeners", () => {
+    const listener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(listener));
+
+    emitSessionTranscriptUpdate({
+      target: {
+        agentId: " main ",
+        sessionId: " sess-1 ",
+        sessionKey: " agent:main:main ",
+        targetKind: "runtime-session",
+      },
+      messageId: " msg-1 ",
+    } as unknown as SessionTranscriptUpdate);
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("emits storage-neutral identity updates to internal listeners", () => {
+    const listener = vi.fn();
+    cleanup.push(onInternalSessionTranscriptUpdate(listener));
+
+    emitInternalSessionTranscriptUpdate({
+      target: {
+        agentId: " main ",
+        sessionId: " sess-1 ",
+        sessionKey: " agent:main:main ",
+        targetKind: "runtime-session",
+      },
+      messageId: " msg-1 ",
+    });
+
+    expect(listener).toHaveBeenCalledWith({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+        targetKind: "runtime-session",
+      },
+      agentId: "main",
+      sessionId: "sess-1",
+      sessionKey: "agent:main:main",
+      messageId: "msg-1",
+    });
+  });
+
+  it("includes target identity on public file updates when provided", () => {
+    const listener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(listener));
+
+    emitSessionTranscriptUpdate({
+      sessionFile: "/tmp/session.jsonl",
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+        targetKind: "active-session-file",
+      },
+    });
+
+    expect(listener).toHaveBeenCalledWith({
+      sessionFile: "/tmp/session.jsonl",
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+        targetKind: "active-session-file",
+      },
+      agentId: "main",
+      sessionId: "sess-1",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("keeps public global file updates on the compatibility shape", () => {
+    const listener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(listener));
+
+    emitSessionTranscriptUpdate({
+      sessionFile: "/tmp/session.jsonl",
+      sessionKey: "global",
+    });
+
+    expect(listener).toHaveBeenCalledWith({
+      sessionFile: "/tmp/session.jsonl",
+      sessionKey: "global",
     });
   });
 

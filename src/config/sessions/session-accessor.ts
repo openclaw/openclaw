@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import type {
+  SessionTranscriptUpdate,
+  SessionTranscriptUpdateTarget,
+} from "../../sessions/transcript-events.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionTranscriptPathInDir, resolveStorePath } from "./paths.js";
@@ -263,6 +266,7 @@ export async function publishTranscriptUpdate(
   emitSessionTranscriptUpdate({
     ...update,
     sessionFile: transcript.sessionFile,
+    ...(transcript.target ? { target: transcript.target } : {}),
   });
 }
 
@@ -373,17 +377,37 @@ function resolveAccessStorePath(scope: SessionAccessScope): string {
   });
 }
 
-async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Promise<{
+type ResolvedTranscriptAccess = {
   sessionFile: string;
-}> {
+  target?: SessionTranscriptUpdateTarget;
+};
+
+function projectTranscriptUpdateTarget(
+  target: SessionTranscriptRuntimeTarget,
+): SessionTranscriptUpdateTarget {
+  return {
+    agentId: target.agentId,
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    targetKind: target.targetKind,
+  };
+}
+
+async function resolveTranscriptAccess(
+  scope: SessionTranscriptWriteScope,
+): Promise<ResolvedTranscriptAccess> {
   if (!scope.sessionId) {
     if (scope.sessionFile?.trim()) {
       return { sessionFile: scope.sessionFile };
     }
     throw new Error(`Cannot resolve transcript scope without a session id: ${scope.sessionKey}`);
   }
-  return await resolveSessionTranscriptTarget({
+  const target = await resolveSessionTranscriptTarget({
     ...scope,
     sessionId: scope.sessionId,
   });
+  return {
+    sessionFile: target.sessionFile,
+    target: projectTranscriptUpdateTarget(target),
+  };
 }

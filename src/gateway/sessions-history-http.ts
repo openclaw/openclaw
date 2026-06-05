@@ -8,7 +8,8 @@ import {
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -297,17 +298,19 @@ export async function handleSessionHistoryHttpRequest(
     });
   }, 15_000);
 
-  const unsubscribe: (() => void) | undefined = onSessionTranscriptUpdate((update) => {
+  const unsubscribe: (() => void) | undefined = onInternalSessionTranscriptUpdate((update) => {
     // Filter to candidate sessions synchronously before enqueueing any async
-    // work. `onSessionTranscriptUpdate` is a global fan-out listener, so every
-    // transcript write in the gateway would otherwise append a Promise-chain
-    // entry capturing `update.message` to every open SSE stream's queue —
-    // O(streams × updates) for busy deployments.
+    // work. Transcript updates are a global fan-out signal, so every transcript
+    // write in the gateway would otherwise append a Promise-chain entry
+    // capturing `update.message` to every open SSE stream's queue.
     if (!entry?.sessionId) {
       return;
     }
-    const updatePath = canonicalizePath(update.sessionFile);
-    if (!updatePath || !transcriptCandidates.has(updatePath)) {
+    const updateMatchesIdentity =
+      update.target?.sessionId === entry.sessionId &&
+      normalizeAgentId(update.target.agentId) === normalizeAgentId(target.agentId);
+    const updatePath = update.sessionFile ? canonicalizePath(update.sessionFile) : undefined;
+    if (!updateMatchesIdentity && (!updatePath || !transcriptCandidates.has(updatePath))) {
       return;
     }
     queueStreamWork(async () => {

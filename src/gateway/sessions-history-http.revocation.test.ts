@@ -26,7 +26,7 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../sessions/transcript-events.js", () => ({
-  onSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
+  onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
     transcriptUpdateHandler = cb;
     return () => {
       if (transcriptUpdateHandler === cb) {

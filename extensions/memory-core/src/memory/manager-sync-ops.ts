@@ -114,14 +114,45 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 ]);
 
 const log = createSubsystemLogger("memory");
+const MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY = Symbol.for(
+  "openclaw.memoryCore.sessionTranscriptUpdateSubscriber",
+);
 const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
 const TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
+
+type MemorySessionTranscriptUpdate = {
+  agentId?: string;
+  sessionFile?: string;
+  sessionKey?: string;
+  target?: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    targetKind: "active-session-file" | "runtime-session";
+  };
+};
+
+type MemoryTranscriptUpdateSubscriber = (
+  listener: (update: MemorySessionTranscriptUpdate) => void,
+) => () => void;
 
 type NativeMemoryWatchPair = {
   dir: string;
   main: fsSync.FSWatcher;
   parent: fsSync.FSWatcher | null;
 };
+
+function subscribeMemorySessionTranscriptUpdates(
+  listener: (update: MemorySessionTranscriptUpdate) => void,
+): () => void {
+  const injected = (globalThis as Record<symbol, unknown>)[
+    MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY
+  ];
+  if (typeof injected === "function") {
+    return (injected as MemoryTranscriptUpdateSubscriber)(listener);
+  }
+  return onSessionTranscriptUpdate(listener);
+}
 
 function resolveMemoryWatchFactory(): typeof chokidar.watch {
   if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
@@ -776,17 +807,17 @@ export abstract class MemoryManagerSyncOps {
     if (!this.sources.has("sessions") || this.sessionUnsubscribe) {
       return;
     }
-    this.sessionUnsubscribe = onSessionTranscriptUpdate((update) => {
+    this.sessionUnsubscribe = subscribeMemorySessionTranscriptUpdates((update) => {
       if (this.closed) {
-        return;
-      }
-      const sessionFile = update.sessionFile;
-      if (!this.isSessionFileForAgent(sessionFile)) {
         return;
       }
       const target = this.resolveSessionTranscriptUpdateSyncTarget(update);
       if (target) {
         this.scheduleSessionDirty(target);
+        return;
+      }
+      const sessionFile = update.sessionFile;
+      if (!sessionFile || !this.isSessionFileForAgent(sessionFile)) {
         return;
       }
       this.scheduleSessionDirty(sessionFile);
@@ -1053,18 +1084,44 @@ export abstract class MemoryManagerSyncOps {
 
   private resolveSessionTranscriptUpdateSyncTarget(update: {
     agentId?: string;
-    sessionFile: string;
+    sessionFile?: string;
     sessionKey?: string;
+    target?: {
+      agentId: string;
+      sessionId: string;
+      sessionKey: string;
+      targetKind: "active-session-file" | "runtime-session";
+    };
   }): MemorySessionSyncTarget | null {
+    if (update.sessionFile && isSessionArchiveArtifactName(path.basename(update.sessionFile))) {
+      return null;
+    }
+    if (update.target?.targetKind === "runtime-session") {
+      const agentId = update.target.agentId.trim();
+      const sessionId = update.target.sessionId.trim();
+      const sessionKey = update.target.sessionKey.trim();
+      if (!agentId || !sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
+        return null;
+      }
+      return {
+        agentId,
+        sessionId,
+        ...(sessionKey ? { sessionKey } : {}),
+      };
+    }
+    if (!update.sessionFile) {
+      return null;
+    }
     const parsed = parseCanonicalSessionSyncTargetFromPath(update.sessionFile);
-    if (!parsed || isSessionArchiveArtifactName(path.basename(update.sessionFile))) {
+    if (!parsed) {
       return null;
     }
     const agentId = update.agentId?.trim() || parsed.agentId;
     if (!agentId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
       return null;
     }
-    const sessionKey = update.sessionKey?.trim();
+    const sessionKey =
+      update.target?.targetKind === "active-session-file" ? undefined : update.sessionKey?.trim();
     return {
       agentId,
       sessionId: parsed.sessionId,
