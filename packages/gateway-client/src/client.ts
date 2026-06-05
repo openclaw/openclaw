@@ -1044,7 +1044,7 @@ export class GatewayClient {
     const { nonce, role, scopes, signatureToken, signedAtMs, platform } = params;
     // The signed payload mirrors server verification exactly; keep metadata
     // normalized here so different hosts sign the same logical device facts.
-    const payloadParams = {
+    const payload = buildDeviceAuthPayloadV3({
       deviceId: this.opts.deviceIdentity.deviceId,
       clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
@@ -1055,8 +1055,7 @@ export class GatewayClient {
       nonce,
       platform,
       deviceFamily: this.opts.deviceFamily,
-    };
-    const payload = buildDeviceAuthPayloadV3(payloadParams);
+    });
     const signature = this.deps.signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
     return {
       id: this.opts.deviceIdentity.deviceId,
