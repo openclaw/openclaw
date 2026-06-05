@@ -454,15 +454,23 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
     );
 
     expect(reset.ok).toBe(true);
-    expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
+    expect(broadcast.mock.calls[0]?.[0]).toBe("socket.drain");
     expect(broadcast.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        sessionKey: "global",
+        reason: "reset",
+      }),
+    );
+    expect(broadcast.mock.calls[0]?.[2]).toEqual(new Set(["conn-work"]));
+    expect(broadcast.mock.calls[1]?.[0]).toBe("sessions.changed");
+    expect(broadcast.mock.calls[1]?.[1]).toEqual(
       expect.objectContaining({
         sessionKey: "global",
         agentId: "work",
         reason: "reset",
       }),
     );
-    expect(broadcast.mock.calls[0]?.[2]).toEqual(new Set(["conn-work"]));
+    expect(broadcast.mock.calls[1]?.[2]).toEqual(new Set(["conn-work"]));
   });
 });
 
