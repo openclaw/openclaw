@@ -4,10 +4,16 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
+  resolveMissingOfficialExternalChannelPluginRepairHint: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: mocks.listChannelPlugins,
+}));
+
+vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
+  resolveMissingOfficialExternalChannelPluginRepairHint:
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint,
 }));
 
 import { webHandlers } from "./web.js";
@@ -45,6 +51,7 @@ function createOptions(
       stopChannel: vi.fn(),
       startChannel: vi.fn(),
       getRuntimeSnapshot: vi.fn(createRunningWhatsappSnapshot),
+      getRuntimeConfig: vi.fn(() => ({ channels: { whatsapp: { enabled: true } } })),
     },
     ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
@@ -60,6 +67,7 @@ function createRunningWhatsappContext() {
       stopChannel,
       startChannel,
       getRuntimeSnapshot: vi.fn(createRunningWhatsappSnapshot),
+      getRuntimeConfig: vi.fn(() => ({ channels: { whatsapp: { enabled: true } } })),
     } as unknown as GatewayRequestHandlerOptions["context"],
   };
 }
@@ -67,6 +75,45 @@ function createRunningWhatsappContext() {
 describe("webHandlers web.login.start", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
+  });
+
+  it("surfaces the missing official external plugin hint when no web-login provider is loaded", async () => {
+    mocks.listChannelPlugins.mockReturnValue([]);
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue({
+      pluginId: "whatsapp",
+      channelId: "whatsapp",
+      label: "WhatsApp",
+      installSpec: "clawhub:@openclaw/whatsapp",
+      installCommand: "openclaw plugins install clawhub:@openclaw/whatsapp",
+      doctorFixCommand: "openclaw doctor --fix",
+      repairHint:
+        "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/whatsapp, or run: openclaw doctor --fix.",
+    });
+    const respond = vi.fn();
+
+    await webHandlers["web.login.start"](
+      createOptions(
+        { accountId: "default" },
+        {
+          respond,
+        },
+      ),
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message:
+          "web login provider is not available. Install the official external plugin with: openclaw plugins install clawhub:@openclaw/whatsapp, or run: openclaw doctor --fix.",
+      }),
+    );
+    expect(mocks.resolveMissingOfficialExternalChannelPluginRepairHint).toHaveBeenCalledWith({
+      config: { channels: { whatsapp: { enabled: true } } },
+      channelId: "whatsapp",
+    });
   });
 
   it("restarts a previously running channel when login start exits early without a QR", async () => {
@@ -182,6 +229,7 @@ describe("webHandlers web.login.start", () => {
 describe("webHandlers web.login.wait", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
   });
 
   it("passes refreshed QR payloads back to the client while login is still pending", async () => {

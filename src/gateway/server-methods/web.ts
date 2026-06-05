@@ -6,8 +6,9 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
@@ -31,11 +32,35 @@ function resolveAccountId(params: unknown): string | undefined {
     : undefined;
 }
 
-function respondProviderUnavailable(respond: RespondFn) {
-  respond(
+function resolveMissingWebLoginPluginHint(context: GatewayRequestContext): string | null {
+  const cfg = context.getRuntimeConfig();
+  const channels = cfg.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return null;
+  }
+  const hints = Object.keys(channels)
+    .map((channelId) =>
+      resolveMissingOfficialExternalChannelPluginRepairHint({
+        config: cfg,
+        channelId,
+      }),
+    )
+    .filter((hint) => Boolean(hint));
+  return hints.length === 1 ? hints[0]?.repairHint ?? null : null;
+}
+
+function respondProviderUnavailable(params: {
+  respond: RespondFn;
+  context: GatewayRequestContext;
+}) {
+  const repairHint = resolveMissingWebLoginPluginHint(params.context);
+  const message = repairHint
+    ? `web login provider is not available. ${repairHint}`
+    : "web login provider is not available";
+  params.respond(
     false,
     undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "web login provider is not available"),
+    errorShape(ErrorCodes.INVALID_REQUEST, message),
   );
 }
 
@@ -55,6 +80,7 @@ function respondWebLoginUnavailable(respond: RespondFn, err: unknown) {
 function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
   rawParams: unknown;
   respond: RespondFn;
+  context: GatewayRequestContext;
   gatewayMethod: TMethod;
 }): {
   accountId?: string;
@@ -64,7 +90,10 @@ function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
   const accountId = resolveAccountId(params.rawParams);
   const provider = resolveWebLoginProvider();
   if (!provider) {
-    respondProviderUnavailable(params.respond);
+    respondProviderUnavailable({
+      respond: params.respond,
+      context: params.context,
+    });
     return null;
   }
   const gateway = provider.gateway;
@@ -106,6 +135,7 @@ export const webHandlers: GatewayRequestHandlers = {
       const request = resolveWebLoginRequest({
         rawParams: params,
         respond,
+        context,
         gatewayMethod: "loginWithQrStart",
       });
       if (!request) {
@@ -144,6 +174,7 @@ export const webHandlers: GatewayRequestHandlers = {
       const request = resolveWebLoginRequest({
         rawParams: params,
         respond,
+        context,
         gatewayMethod: "loginWithQrWait",
       });
       if (!request) {
