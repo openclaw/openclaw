@@ -1,6 +1,13 @@
 // Discord plugin module implements runtime.messaging.shared behavior.
+import { ChannelType } from "discord-api-types/v10";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { mergeDiscordAccountConfig, resolveDefaultDiscordAccountId } from "../accounts.js";
+import {
+  mergeDiscordAccountConfig,
+  resolveDefaultDiscordAccountId,
+  resolveDiscordAccountAllowFrom,
+  resolveDiscordAccountDmPolicy,
+} from "../accounts.js";
 import { createDiscordRuntimeAccountContext } from "../client.js";
 import {
   isDiscordGroupAllowedByPolicy,
@@ -8,10 +15,12 @@ import {
   resolveDiscordChannelConfigWithFallback,
   type DiscordGuildEntryResolved,
 } from "../monitor/allow-list.js";
+import { resolveDiscordDmCommandAccess } from "../monitor/dm-command-auth.js";
 import {
   type ActionGate,
   readStringParam,
   type DiscordActionConfig,
+  type DiscordAccountConfig,
   type OpenClawConfig,
   withNormalizedTimestamp,
 } from "../runtime-api.js";
@@ -100,6 +109,8 @@ function resolveDiscordActionGuildEntry(params: {
 
 type DiscordReadTargetContext = {
   channelId: string;
+  channelType?: number;
+  dmRecipientId?: string;
   guildId?: string;
   channelName?: string;
   channelSlug: string;
@@ -131,9 +142,24 @@ function readDiscordChannelType(value: unknown): number | undefined {
   return typeof type === "number" ? type : undefined;
 }
 
+function readDiscordSingleDmRecipientId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const recipients = (value as Record<string, unknown>).recipients;
+  if (!Array.isArray(recipients) || recipients.length !== 1) {
+    return undefined;
+  }
+  return readDiscordChannelStringField(recipients[0], "id");
+}
+
 function isDiscordThreadChannel(value: unknown): boolean {
   const type = readDiscordChannelType(value);
   return type === 10 || type === 11 || type === 12;
+}
+
+function isDiscordDmChannelType(channelType: number | undefined): boolean {
+  return channelType === ChannelType.DM || channelType === ChannelType.GroupDM;
 }
 
 function isDiscordReadTargetAllowedInGuild(params: {
@@ -179,6 +205,46 @@ function isDiscordReadTargetExplicitlyAllowedById(params: {
   });
 }
 
+async function isDiscordOneToOneDmReadTargetAllowed(params: {
+  accountId: string;
+  cfg: OpenClawConfig;
+  discordConfig: DiscordAccountConfig;
+  dmEnabled: boolean;
+  target: DiscordReadTargetContext;
+}): Promise<boolean> {
+  if (params.target.guildId || params.target.channelType !== ChannelType.DM) {
+    return false;
+  }
+  const recipientId = params.target.dmRecipientId;
+  if (!recipientId) {
+    return false;
+  }
+  const dmPolicy =
+    resolveDiscordAccountDmPolicy({
+      cfg: params.cfg,
+      accountId: params.accountId,
+    }) ?? "pairing";
+  if (!params.dmEnabled || dmPolicy === "disabled") {
+    return false;
+  }
+  const access = await resolveDiscordDmCommandAccess({
+    accountId: params.accountId,
+    dmPolicy,
+    configuredAllowFrom:
+      resolveDiscordAccountAllowFrom({
+        cfg: params.cfg,
+        accountId: params.accountId,
+      }) ?? [],
+    sender: {
+      id: recipientId,
+    },
+    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
+    cfg: params.cfg,
+    eventKind: "message",
+  });
+  return access.senderAccess.decision === "allow";
+}
+
 export function createDiscordMessagingActionContext(params: {
   action: string;
   input: Record<string, unknown>;
@@ -201,6 +267,7 @@ export function createDiscordMessagingActionContext(params: {
   });
   const withOpts = (extra?: Record<string, unknown>) =>
     createDiscordActionOptions({ cfg: params.cfg, accountId, extra });
+  const resolvedActionAccountId = accountId ?? resolveDefaultDiscordAccountId(params.cfg);
   const resolvedReactionAccountId = accountId ?? resolveDefaultDiscordAccountId(params.cfg);
   const reactionRuntimeOptions = resolvedReactionAccountId
     ? createDiscordRuntimeAccountContext({
@@ -268,6 +335,14 @@ export function createDiscordMessagingActionContext(params: {
       channelId,
       channelSlug: channelName ? normalizeDiscordSlug(channelName) : fallback.channelSlug,
     };
+    const channelType = readDiscordChannelType(channelInfo);
+    if (channelType !== undefined) {
+      target.channelType = channelType;
+    }
+    const dmRecipientId = readDiscordSingleDmRecipientId(channelInfo);
+    if (dmRecipientId) {
+      target.dmRecipientId = dmRecipientId;
+    }
     const targetGuildId = readDiscordChannelStringField(channelInfo, "guild_id", "guildId");
     if (targetGuildId) {
       target.guildId = targetGuildId;
@@ -313,10 +388,25 @@ export function createDiscordMessagingActionContext(params: {
       ),
     assertReadTargetAllowed: async ({ guildId, channelId }) => {
       const targetChannelId = discordMessagingActionRuntime.resolveDiscordChannelId(channelId);
+      const target = await resolveReadTargetContext(targetChannelId);
+      if (isDiscordDmChannelType(target.channelType)) {
+        if (
+          !guildId &&
+          (await isDiscordOneToOneDmReadTargetAllowed({
+            accountId: resolvedActionAccountId,
+            cfg: params.cfg,
+            discordConfig: accountConfig,
+            dmEnabled: accountConfig.dm?.enabled ?? true,
+            target,
+          }))
+        ) {
+          return;
+        }
+        throw new Error("Discord read target channel is not allowed.");
+      }
       if (!hasGuildEntries && groupPolicy !== "disabled" && groupPolicy !== "allowlist") {
         return;
       }
-      const target = await resolveReadTargetContext(targetChannelId);
       if (guildId) {
         if (target.guildId && target.guildId !== guildId) {
           throw new Error("Discord read target channel is not allowed.");
