@@ -22,6 +22,87 @@ const EXTENDED_THINKING_LEVELS: ModelThinkingLevel[] = [
   "max",
 ];
 
+type CompatReasoningEffortConfig = {
+  reasoningEffortMap?: unknown;
+  supportedReasoningEfforts?: unknown;
+};
+
+const normalizeReasoningEffort = (value: unknown): string =>
+  typeof value === "string" ? value.trim().toLowerCase() : "";
+
+function getCompatReasoningEffortConfig<TApi extends Api>(
+  model: Model<TApi>,
+): CompatReasoningEffortConfig | undefined {
+  const compat = (model as { compat?: unknown }).compat;
+  if (!compat || typeof compat !== "object" || Array.isArray(compat)) {
+    return undefined;
+  }
+  return compat as CompatReasoningEffortConfig;
+}
+
+function getCompatSupportedReasoningEfforts(
+  compat: CompatReasoningEffortConfig | undefined,
+): Set<string> {
+  if (!Array.isArray(compat?.supportedReasoningEfforts)) {
+    return new Set();
+  }
+  return new Set(
+    compat.supportedReasoningEfforts
+      .map((effort) => normalizeReasoningEffort(effort))
+      .filter(Boolean),
+  );
+}
+
+function getCompatReasoningEffortMap(
+  compat: CompatReasoningEffortConfig | undefined,
+): Record<string, unknown> | undefined {
+  const map = compat?.reasoningEffortMap;
+  if (!map || typeof map !== "object" || Array.isArray(map)) {
+    return undefined;
+  }
+  return map as Record<string, unknown>;
+}
+
+function mappedReasoningEffortIsSupported(mapped: unknown, supportedEfforts: Set<string>): boolean {
+  const normalized = normalizeReasoningEffort(mapped);
+  if (!normalized) {
+    return false;
+  }
+  return (
+    supportedEfforts.size === 0 ||
+    supportedEfforts.has(normalized) ||
+    (normalized === "max" && supportedEfforts.has("xhigh"))
+  );
+}
+
+function compatSupportsThinkingLevel<TApi extends Api>(
+  model: Model<TApi>,
+  level: ModelThinkingLevel,
+): boolean {
+  const compat = getCompatReasoningEffortConfig(model);
+  const supportedEfforts = getCompatSupportedReasoningEfforts(compat);
+  const effortMap = getCompatReasoningEffortMap(compat);
+  const mappedEffort = effortMap?.[level];
+  if (mappedEffort === null) {
+    return false;
+  }
+  if (mappedReasoningEffortIsSupported(mappedEffort, supportedEfforts)) {
+    return true;
+  }
+
+  const effortLevel = level === "max" ? "xhigh" : level;
+  if (supportedEfforts.has(effortLevel)) {
+    return true;
+  }
+
+  if (level === "max") {
+    const mappedXHigh = effortMap?.xhigh;
+    return mappedXHigh !== null && mappedReasoningEffortIsSupported(mappedXHigh, supportedEfforts);
+  }
+
+  return false;
+}
+
 /** Returns thinking levels exposed by a reasoning-capable model. */
 export function getSupportedThinkingLevels<TApi extends Api>(
   model: Model<TApi>,
@@ -36,7 +117,7 @@ export function getSupportedThinkingLevels<TApi extends Api>(
       return false;
     }
     if (level === "xhigh" || level === "max") {
-      return mapped !== undefined;
+      return mapped !== undefined || compatSupportsThinkingLevel(model, level);
     }
     return true;
   });
