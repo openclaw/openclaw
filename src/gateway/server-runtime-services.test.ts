@@ -181,6 +181,36 @@ describe("server-runtime-services", () => {
     });
   });
 
+  it("periodically retries pending restart continuation deliveries every 60 seconds", async () => {
+    vi.useFakeTimers();
+    const log = createLog();
+    activateScheduledServicesForTest({ log });
+
+    // Advance past the initial 1_250ms delay to trigger the first recovery call
+    await vi.advanceTimersByTimeAsync(1_250);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+
+    hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
+
+    // Advance by 60_000ms — the periodic retry should fire again
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith({
+      deps: {},
+      maxEnqueuedAt: 123,
+      log: log.child.mock.results[2]?.value,
+    });
+
+    hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
+
+    // Advance another 60_000ms — the periodic retry should fire a third time
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+  });
+
   it("can defer cron startup while activating other scheduled services", async () => {
     vi.useFakeTimers();
     const cron = { start: vi.fn(async () => undefined) };

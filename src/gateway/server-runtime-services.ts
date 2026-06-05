@@ -172,6 +172,26 @@ function recoverPendingSessionDeliveries(params: {
     );
   }, 1_250);
   timer.unref?.();
+
+  // Schedule periodic retry so session deliveries deferred by retry backoff
+  // are retried automatically after their backoff window elapses. The recovery
+  // function's backoff/eligibility/drain-protection logic prevents redundant
+  // or premature retries.
+  const periodicTimer = setInterval(() => {
+    void (async () => {
+      const { recoverPendingRestartContinuationDeliveries } =
+        await import("./server-restart-sentinel.js");
+      const logRecovery = params.log.child("session-delivery-recovery");
+      await recoverPendingRestartContinuationDeliveries({
+        deps: params.deps,
+        log: logRecovery,
+        maxEnqueuedAt: params.maxEnqueuedAt,
+      });
+    })().catch((err: unknown) =>
+      params.log.error(`Session delivery periodic retry failed: ${String(err)}`),
+    );
+  }, 60_000);
+  periodicTimer.unref?.();
 }
 
 function startGatewayModelPricingRefreshOnDemand(params: {
