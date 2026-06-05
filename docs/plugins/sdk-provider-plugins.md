@@ -627,40 +627,43 @@ API key auth, and dynamic model resolution.
       | 10 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
       | 11 | `prepareDynamicModel` | Async metadata fetch before resolving |
       | 12 | `normalizeResolvedModel` | Transport rewrites before the runner |
-      | 13 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
-      | 14 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
-      | 15 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
-      | 16 | `prepareExtraParams` | Default request params |
-      | 17 | `createStreamFn` | Fully custom StreamFn transport |
-      | 19 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
-      | 20 | `resolveTransportTurnState` | Native per-turn headers/metadata |
-      | 21 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
-      | 22 | `formatApiKey` | Custom runtime token shape |
-      | 23 | `refreshOAuth` | Custom OAuth refresh |
-      | 24 | `buildAuthDoctorHint` | Auth repair guidance |
-      | 25 | `matchesContextOverflowError` | Provider-owned overflow detection |
-      | 26 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
-      | 27 | `isCacheTtlEligible` | Prompt cache TTL gating |
-      | 28 | `buildMissingAuthMessage` | Custom missing-auth hint |
-      | 29 | `augmentModelCatalog` | Synthetic forward-compat rows |
-      | 30 | `resolveThinkingProfile` | Model-specific `/think` option set |
-      | 31 | `isBinaryThinking` | Binary thinking on/off compatibility |
-      | 32 | `supportsXHighThinking` | `xhigh` reasoning support compatibility |
-      | 33 | `resolveDefaultThinkingLevel` | Default `/think` policy compatibility |
-      | 34 | `isModernModelRef` | Live/smoke model matching |
-      | 35 | `prepareRuntimeAuth` | Token exchange before inference |
-      | 36 | `resolveUsageAuth` | Custom usage credential parsing |
-      | 37 | `fetchUsageSnapshot` | Custom usage endpoint |
-      | 38 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
-      | 39 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
-      | 40 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
-      | 41 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
-      | 42 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      | 13 | `contributeResolvedModelCompat` | Compat flags for vendor models behind another compatible transport |
+      | 14 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
+      | 15 | `resolveToolSchemaCacheKey` | Provider-owned cache key for `normalizeToolSchemas` results |
+      | 16 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
+      | 17 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
+      | 18 | `prepareExtraParams` | Default request params |
+      | 19 | `createStreamFn` | Fully custom StreamFn transport |
+      | 20 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
+      | 21 | `resolveTransportTurnState` | Native per-turn headers/metadata |
+      | 22 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
+      | 23 | `formatApiKey` | Custom runtime token shape |
+      | 24 | `refreshOAuth` | Custom OAuth refresh |
+      | 25 | `buildAuthDoctorHint` | Auth repair guidance |
+      | 26 | `matchesContextOverflowError` | Provider-owned overflow detection |
+      | 27 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
+      | 28 | `isCacheTtlEligible` | Prompt cache TTL gating |
+      | 29 | `buildMissingAuthMessage` | Custom missing-auth hint |
+      | 30 | `augmentModelCatalog` | Synthetic forward-compat rows |
+      | 31 | `resolveThinkingProfile` | Model-specific `/think` option set |
+      | 32 | `isBinaryThinking` | Binary thinking on/off compatibility |
+      | 33 | `supportsXHighThinking` | `xhigh` reasoning support compatibility |
+      | 34 | `resolveDefaultThinkingLevel` | Default `/think` policy compatibility |
+      | 35 | `isModernModelRef` | Live/smoke model matching |
+      | 36 | `prepareRuntimeAuth` | Token exchange before inference |
+      | 37 | `resolveUsageAuth` | Custom usage credential parsing |
+      | 38 | `fetchUsageSnapshot` | Custom usage endpoint |
+      | 39 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
+      | 40 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
+      | 41 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | 42 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
+      | 43 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
       Runtime fallback notes:
 
       - `normalizeConfig` checks the matched provider first, then other hook-capable provider plugins until one actually changes the config. If no provider hook rewrites a supported Google-family config entry, the bundled Google config normalizer still applies.
       - `resolveConfigApiKey` uses the provider hook when exposed. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
+      - `normalizeToolSchemas` results are cached only when the same provider plugin also implements `resolveToolSchemaCacheKey`. Return a stable JSON-compatible key that covers every context field the schema normalizer reads, or return `null`, `undefined`, or `false` to bypass caching.
       - `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
       - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over `before_prompt_build` when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 
