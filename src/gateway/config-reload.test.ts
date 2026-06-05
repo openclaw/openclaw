@@ -144,7 +144,17 @@ describe("buildGatewayReloadPlan", () => {
       listAccountIds: () => [],
       resolveAccount: () => ({}),
     },
-    reload: { configPrefixes: ["channels.telegram"] },
+    reload: {
+      configPrefixes: [
+        "channels.telegram.botToken",
+        "channels.telegram.tokenFile",
+        "channels.telegram.apiRoot",
+        "channels.telegram.network",
+        "channels.telegram.webhookSecret",
+        "channels.telegram.accounts",
+      ],
+      noopPrefixes: ["channels.telegram"],
+    },
   };
   const whatsappPlugin: ChannelPlugin = {
     id: "whatsapp",
@@ -241,6 +251,13 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set());
     expect(plan.noopPaths).toContain("channels.whatsapp.replyToMode");
+  });
+
+  it("keeps runtime-only channels.telegram.* changes as hot no-ops (does not restart the channel)", () => {
+    const plan = buildGatewayReloadPlan(["channels.telegram.dmPolicy"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(plan.noopPaths).toContain("channels.telegram.dmPolicy");
   });
 
   it("refreshes channel reload rules when only the tracked channel registry changes", () => {

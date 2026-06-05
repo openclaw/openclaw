@@ -183,7 +183,21 @@ export function createTelegramPluginBase(params: {
     },
     doctor: telegramDoctor,
     security: telegramSecurityAdapter,
-    reload: { configPrefixes: ["channels.telegram"] },
+    reload: {
+      // Transport-affecting keys that require a full channel restart to take effect.
+      // Runtime-only keys (groups, dmPolicy, streaming, allowList, blockList, welcome,
+      // commandDescriptions, agentConfig, etc.) are caught by the broad noop prefix
+      // and do NOT restart the channel, preserving in-memory session state.
+      configPrefixes: [
+        "channels.telegram.botToken",
+        "channels.telegram.tokenFile",
+        "channels.telegram.apiRoot",
+        "channels.telegram.network",
+        "channels.telegram.webhookSecret",
+        "channels.telegram.accounts",
+      ],
+      noopPrefixes: ["channels.telegram"],
+    },
     configSchema: TelegramChannelConfigSchema,
     config: {
       ...telegramConfigAdapter,
