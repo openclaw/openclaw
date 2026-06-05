@@ -38,6 +38,7 @@ export function resolveGatewayScopedTools(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   messageProvider?: string;
+  requesterSourceProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
@@ -153,6 +154,7 @@ export function resolveGatewayScopedTools(params: {
   const allTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     agentChannel: params.messageProvider ?? undefined,
+    agentSourceProvider: params.requesterSourceProvider ?? params.messageProvider,
     agentAccountId: params.accountId,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,

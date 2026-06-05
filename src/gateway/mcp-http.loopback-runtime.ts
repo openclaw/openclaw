@@ -25,6 +25,7 @@ export type McpLoopbackAuthContext = {
   agentId?: string;
   accountId?: string;
   messageProvider?: string;
+  requesterSourceProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string;
@@ -39,6 +40,7 @@ export type McpLoopbackBoundContext = Pick<
   | "agentId"
   | "accountId"
   | "messageProvider"
+  | "requesterSourceProvider"
   | "currentChannelId"
   | "currentThreadTs"
   | "currentMessageId"
@@ -52,6 +54,7 @@ export type McpLoopbackBoundContextInput = {
   agentId?: string | null;
   accountId?: string | null;
   messageProvider?: string | null;
+  requesterSourceProvider?: string | null;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
   currentMessageId?: string | number | null;
@@ -99,6 +102,7 @@ export function normalizeMcpLoopbackBoundContext(
     agentId: normalizeOptionalString(context?.agentId),
     accountId: normalizeOptionalString(context?.accountId),
     messageProvider: normalizeScopedMessageProvider(context?.messageProvider),
+    requesterSourceProvider: normalizeScopedMessageProvider(context?.requesterSourceProvider),
     currentChannelId: normalizeOptionalString(context?.currentChannelId),
     currentThreadTs: normalizeOptionalString(context?.currentThreadTs),
     currentMessageId: normalizeOptionalStringifiedId(context?.currentMessageId),
@@ -128,11 +132,17 @@ function readScopedAuth(encodedPayload: string): McpLoopbackAuthContext | null {
       const messageProvider = normalizeScopedMessageProvider(
         (decoded as { messageProvider?: unknown }).messageProvider as string | undefined,
       );
+      const requesterSourceProvider = normalizeScopedMessageProvider(
+        (decoded as { requesterSourceProvider?: unknown }).requesterSourceProvider as
+          | string
+          | undefined,
+      );
       const boundContext = normalizeMcpLoopbackBoundContext({
         sessionKey: (decoded as { sessionKey?: unknown }).sessionKey as string | undefined,
         agentId: (decoded as { agentId?: unknown }).agentId as string | undefined,
         accountId: (decoded as { accountId?: unknown }).accountId as string | undefined,
         messageProvider,
+        requesterSourceProvider,
         currentChannelId: (decoded as { currentChannelId?: unknown }).currentChannelId as
           | string
           | undefined,
@@ -266,6 +276,7 @@ export function createMcpLoopbackServerConfig(port: number) {
           "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+          "x-openclaw-requester-source-provider": "${OPENCLAW_MCP_REQUESTER_SOURCE_PROVIDER}",
           "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
           "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
           "x-openclaw-current-message-id": "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",

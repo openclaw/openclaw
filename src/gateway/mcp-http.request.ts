@@ -39,6 +39,7 @@ function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): voi
 type McpRequestContext = {
   sessionKey: string;
   messageProvider: string | undefined;
+  requesterSourceProvider: string | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | undefined;
@@ -77,6 +78,7 @@ const MCP_LOOPBACK_BOUND_CONTEXT_FIELDS = [
   "agentId",
   "accountId",
   "messageProvider",
+  "requesterSourceProvider",
   "currentChannelId",
   "currentThreadTs",
   "currentMessageId",
@@ -93,6 +95,7 @@ function resolveMcpLoopbackBoundRequestContext(req: IncomingMessage): McpLoopbac
     agentId: getHeader(req, "x-openclaw-agent-id"),
     accountId: getHeader(req, "x-openclaw-account-id"),
     messageProvider: getHeader(req, "x-openclaw-message-channel"),
+    requesterSourceProvider: getHeader(req, "x-openclaw-requester-source-provider"),
     currentChannelId: getHeader(req, "x-openclaw-current-channel-id"),
     currentThreadTs: getHeader(req, "x-openclaw-current-thread-ts"),
     currentMessageId: getHeader(req, "x-openclaw-current-message-id"),
@@ -340,6 +343,8 @@ export function resolveMcpRequestContext(
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
+    requesterSourceProvider:
+      normalizeMessageChannel(getHeader(req, "x-openclaw-requester-source-provider")) ?? undefined,
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),

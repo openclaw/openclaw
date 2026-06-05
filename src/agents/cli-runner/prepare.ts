@@ -291,6 +291,7 @@ export async function prepareCliRunContext(
               agentId: sessionAgentId,
               accountId: params.agentAccountId,
               messageProvider: params.messageChannel ?? params.messageProvider,
+              requesterSourceProvider: params.messageProvider,
               currentChannelId: params.currentChannelId,
               currentThreadTs: params.currentThreadTs,
               currentMessageId: params.currentMessageId,
@@ -303,6 +304,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
+          OPENCLAW_MCP_REQUESTER_SOURCE_PROVIDER: params.messageProvider ?? "",
           OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
           OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
           OPENCLAW_MCP_CURRENT_MESSAGE_ID:
@@ -382,6 +384,7 @@ export async function prepareCliRunContext(
           cfg: params.config ?? getRuntimeConfig(),
           sessionKey: params.sessionKey ?? "",
           messageProvider: params.messageChannel ?? params.messageProvider,
+          requesterSourceProvider: params.messageProvider,
           currentChannelId: params.currentChannelId,
           currentThreadTs: params.currentThreadTs,
           currentMessageId: params.currentMessageId,

@@ -26,6 +26,7 @@ type ScopedToolsCall = {
   sessionKey?: string;
   accountId?: string;
   messageProvider?: string;
+  requesterSourceProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
@@ -582,6 +583,35 @@ describe("mcp loopback server", () => {
     ]);
   });
 
+  it("preserves requester source separately from the routeable MCP message channel", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const token = runtime
+      ? resolveMcpLoopbackBearerToken(runtime, false, {
+          senderId: "source-user",
+          sessionKey: "agent:main:discord:group:g1",
+          messageProvider: "discord",
+          requesterSourceProvider: "telegram",
+          currentChannelId: "discord:g1",
+        })
+      : undefined;
+
+    const response = await sendLoopbackToolsList({
+      token,
+      headers: {
+        "x-session-key": "agent:main:discord:group:g1",
+        "x-openclaw-message-channel": "discord",
+        "x-openclaw-requester-source-provider": "telegram",
+        "x-openclaw-current-channel-id": "discord:g1",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const call = getScopedToolsCall(0);
+    expect(call.senderId).toBe("source-user");
+    expect(call.messageProvider).toBe("discord");
+    expect(call.requesterSourceProvider).toBe("telegram");
+  });
+
   it("derives sender identity from scoped bearer token and ignores spoofed sender headers", async () => {
     const { runtime } = await startLoopbackServerForTest();
     const token = runtime
@@ -636,6 +666,7 @@ describe("mcp loopback server", () => {
       "x-openclaw-agent-id": "main",
       "x-openclaw-account-id": "work",
       "x-openclaw-message-channel": "discord",
+      "x-openclaw-requester-source-provider": "telegram",
       "x-openclaw-current-channel-id": "discord:g1",
       "x-openclaw-current-thread-ts": "thread-a",
       "x-openclaw-current-message-id": "message-a",
@@ -649,6 +680,7 @@ describe("mcp loopback server", () => {
       agentId: baseHeaders["x-openclaw-agent-id"],
       accountId: baseHeaders["x-openclaw-account-id"],
       messageProvider: baseHeaders["x-openclaw-message-channel"],
+      requesterSourceProvider: baseHeaders["x-openclaw-requester-source-provider"],
       currentChannelId: baseHeaders["x-openclaw-current-channel-id"],
       currentThreadTs: baseHeaders["x-openclaw-current-thread-ts"],
       currentMessageId: baseHeaders["x-openclaw-current-message-id"],
@@ -661,6 +693,7 @@ describe("mcp loopback server", () => {
       ["session key", { "x-session-key": "agent:main:discord:group:g2" }],
       ["agent id", { "x-openclaw-agent-id": "secondary" }],
       ["account id", { "x-openclaw-account-id": "personal" }],
+      ["requester source", { "x-openclaw-requester-source-provider": "discord" }],
       ["channel id", { "x-openclaw-current-channel-id": "discord:g2" }],
       ["thread", { "x-openclaw-current-thread-ts": "thread-b" }],
       ["message id", { "x-openclaw-current-message-id": "message-b" }],
@@ -1076,6 +1109,9 @@ describe("createMcpLoopbackServerConfig", () => {
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-requester-source-provider"]).toBe(
+      "${OPENCLAW_MCP_REQUESTER_SOURCE_PROVIDER}",
     );
     expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-id");
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-channel-id"]).toBe(
