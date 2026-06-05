@@ -4,7 +4,20 @@
  * Completion handoff and requester-visible replies use this to choose between
  * steering a subagent and directly delivering a message, with phase evidence.
  */
-type SubagentDeliveryPath = "steered" | "direct" | "none";
+type SubagentDeliveryPath =
+  | "steered"
+  | "direct"
+  | "none"
+  /**
+   * The trigger message was committed to the requester's in-process
+   * durable system-event inbox because the direct agent-call dispatch
+   * returned a non-terminal pending status (e.g., gateway accepted but
+   * parent is yielded/queued/compaction-prep). The parent drains the
+   * inbox at next turn-start. Treated as a delivered path; downstream
+   * consumers that previously short-circuited on `direct`/`steered`
+   * should treat `durable_queue` as durable as well.
+   */
+  | "durable_queue";
 /** Stable reasons an announcement delivery can fail without throwing. */
 export type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"

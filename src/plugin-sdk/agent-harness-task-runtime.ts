@@ -263,6 +263,15 @@ export function isDurableAgentHarnessCompletionDelivery(
   if (delivery.path === "steered") {
     return true;
   }
+  if (delivery.path === "durable_queue") {
+    // The durable in-process system-event inbox idempotently holds the
+    // trigger message until the parent's next turn-start drains it. Once
+    // the announce flow returns this path, the completion is committed —
+    // monitor retry would only enqueue a duplicate (which the inbox
+    // dedupes by `(text, contextKey, deliveryContext)`, but the
+    // bookkeeping churn is wasted).
+    return true;
+  }
   if (delivery.path !== "direct") {
     return false;
   }
