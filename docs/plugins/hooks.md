@@ -392,8 +392,13 @@ metadata, or any `before_prompt_build` hook-injected content.
 `rawBody` is present when the run originates from a user message on a
 channel plugin (Telegram, Discord, Slack, iMessage, and others). It is
 `undefined` when the run originates from CLI invocations, heartbeat
-polls, cron events, exec events, or steered messages injected into an
-already-running prompt.
+polls, cron events, or exec events.
+
+When a user steers an already-running turn (`queue.mode=steer` /
+`steer-backlog`), the active run refreshes `rawBody` to the steered
+message's clean text, so subsequent `before_prompt_build` and
+`agent_end` events on that run report the most recent user input rather
+than the turn's original text.
 
 Treat absence as "use the message content instead", not "the user sent
 an empty message":
