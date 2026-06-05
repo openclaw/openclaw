@@ -73,7 +73,10 @@ describe("node.pending handlers", () => {
     await nodePendingHandlers["node.pending.drain"]({
       params: { maxItems: 3 },
       respond: respond as never,
-      client: { connect: { device: { id: "ios-node-1" } } } as never,
+      client: {
+        nodeIdentity: { nodeId: "ios-node-1" },
+        connect: { device: { id: "ios-node-1" } },
+      } as never,
       context: makeContext() as never,
       req: { type: "req", id: "req-node-pending-drain", method: "node.pending.drain" },
       isWebchatConnect: () => false,
@@ -107,6 +110,7 @@ describe("node.pending handlers", () => {
       params: { maxItems: 2 },
       respond: respond as never,
       client: {
+        nodeIdentity: { nodeId: "custom-node-id" },
         connect: {
           client: {
             id: "node-host",
@@ -151,7 +155,7 @@ describe("node.pending handlers", () => {
 
     const call = respondCall(respond);
     expect(call?.[0]).toBe(false);
-    expect(call?.[2]?.message).toContain("connected device identity");
+    expect(call?.[2]?.message).toContain("approved node identity");
   });
 
   it("enqueues pending work and wakes a disconnected node once", async () => {

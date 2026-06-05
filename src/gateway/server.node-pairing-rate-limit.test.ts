@@ -63,6 +63,7 @@ async function approveNodeIdentity(params: { identityPath: string; caps: string[
   const identity = loadOrCreateDeviceIdentity(params.identityPath);
   const request = await requestNodePairing({
     nodeId: identity.deviceId,
+    ownerDeviceId: identity.deviceId,
     platform: NODE_CLIENT.platform,
     deviceFamily: NODE_CLIENT.deviceFamily,
     caps: params.caps,
