@@ -2406,6 +2406,7 @@ export async function runEmbeddedAttempt(
                   }),
                 }),
             }),
+          isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
         });
         const removeGuard = installToolResultContextGuard({
           agent: activeSession.agent,
@@ -4691,6 +4692,7 @@ export async function runEmbeddedAttempt(
             sessionManager: activeSessionManager,
             config: params.config,
             warn: (message) => log.warn(message),
+            isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
           });
         }
 

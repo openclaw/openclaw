@@ -147,6 +147,8 @@ export async function finalizeHarnessContextEngineTurn(params: {
   sessionManager?: unknown;
   config?: SessionWriteLockAcquireTimeoutConfig;
   warn: (message: string) => void;
+  /** True when this turn belongs to a heartbeat run. */
+  isHeartbeat?: boolean;
 }) {
   if (!params.contextEngine) {
     return { postTurnFinalizationSucceeded: true };
@@ -168,6 +170,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
         prePromptMessageCount: conversationSnapshot.prePromptMessageCount,
         tokenBudget: params.tokenBudget,
         runtimeContext: params.runtimeContext,
+        isHeartbeat: params.isHeartbeat,
       });
     } catch (afterTurnErr) {
       postTurnFinalizationSucceeded = false;

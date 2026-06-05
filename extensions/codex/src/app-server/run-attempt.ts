@@ -2392,6 +2392,7 @@ export async function runCodexAppServerAttempt(
         runMaintenance: runHarnessContextEngineMaintenance,
         config: params.config,
         warn: (message) => embeddedAgentLog.warn(message),
+        isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
       });
     }
     runAgentHarnessLlmOutputHook({
