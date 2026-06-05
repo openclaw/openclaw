@@ -128,6 +128,75 @@ describe("legacy memory search config migrate", () => {
     ]);
   });
 
+  it("preserves legacy openai-codex context metadata when canonical OpenAI provider already exists (all 3 cases)", () => {
+    // Case 1: openai.models is empty — legacy model entry should be copied entirely
+    // Case 2: existing canonical model without contextWindow/contextTokens/maxTokens — merge missing fields
+    // Case 3: existing canonical model with explicit contextTokens — leave unchanged
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            models: [
+              {
+                id: "gpt-4.1",
+                name: "GPT-4.1",
+                contextWindow: 2_000_000,
+                contextTokens: 1_000_000,
+              },
+              { id: "gpt-5.5", name: "GPT-5.5" },
+            ],
+          },
+          "openai-codex": {
+            api: "openai-chatgpt-responses",
+            models: [
+              { id: "gpt-4.1", name: "GPT-4.1", contextTokens: 128000 },
+              { id: "gpt-5.5", name: "GPT-5.5", contextTokens: 200000, maxTokens: 16384 },
+              {
+                id: "o3",
+                name: "O3",
+                contextWindow: 200_000,
+                contextTokens: 100000,
+                maxTokens: 100000,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const openaiProvider = res.config?.models?.providers?.openai;
+    expect(openaiProvider).toBeDefined();
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+
+    // Case 3: gpt-4.1 already has contextWindow and contextTokens explicitly set — should NOT be overwritten
+    const gpt41 = openaiProvider!.models!.find((m: any) => m.id === "gpt-4.1");
+    expect(gpt41.contextWindow).toBe(2_000_000);
+    expect(gpt41.contextTokens).toBe(1_000_000);
+
+    // Case 2: gpt-5.5 exists without context metadata — should receive contextTokens and maxTokens from legacy
+    const gpt55 = openaiProvider!.models!.find((m: any) => m.id === "gpt-5.5");
+    expect(gpt55.contextTokens).toBe(200000);
+    expect(gpt55.maxTokens).toBe(16384);
+
+    // Case 1: o3 does not exist in openai.models — entire entry should be copied verbatim
+    const o3 = openaiProvider!.models!.find((m: any) => m.id === "o3");
+    expect(o3).toBeDefined();
+    expect(o3.contextWindow).toBe(200_000);
+    expect(o3.contextTokens).toBe(100000);
+    expect(o3.maxTokens).toBe(100000);
+
+    expect(res.changes).toContain(
+      "Removed models.providers.openai-codex because models.providers.openai already exists.",
+    );
+    expect(res.changes).toContain(
+      "Copied models.providers.openai-codex.models[].o3 → models.providers.openai.models[].o3.",
+    );
+    expect(res.changes).toContain(
+      "Merged models.providers.openai-codex.models[].gpt-5.5 (contextTokens=200000, maxTokens=16384) → models.providers.openai.models[].gpt-5.5.",
+    );
+  });
+
   it("rewrites top-level legacy auto provider after moving memorySearch into agent defaults", () => {
     const raw = {
       memorySearch: {

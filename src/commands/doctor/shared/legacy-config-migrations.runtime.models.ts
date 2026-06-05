@@ -972,6 +972,86 @@ function normalizeLegacyOpenAIResponsesApi(
   return { value: next, changed };
 }
 
+// ModelDefinitionConfig context-window metadata to preserve from legacy codex model entries.
+const CONTEXT_METADATA_FIELDS = ["contextWindow", "contextTokens", "maxTokens"] as const;
+
+/**
+ * Merge legacy openai-codex model entries into the canonical openai provider,
+ * preserving context-window metadata.
+ *
+ * Three cases:
+ *  1. Model absent from openai.models → copy the entire legacy entry.
+ *  2. Model exists without context metadata → merge missing fields.
+ *  3. Model already has explicit context metadata → leave it unchanged.
+ */
+function migrateLegacyContextMetadata(
+  codexProvider: Record<string, unknown>,
+  openaiProvider: Record<string, unknown>,
+  changes: string[],
+): void {
+  const codexModels = Array.isArray(codexProvider.models) ? codexProvider.models : [];
+  if (codexModels.length === 0) {
+    return;
+  }
+
+  let openaiModels = Array.isArray(openaiProvider.models) ? openaiProvider.models : [];
+  let changed = false;
+  const modelIdLookup = new Map<string, number>();
+  for (let i = 0; i < openaiModels.length; i++) {
+    const r = getRecord(openaiModels[i]);
+    if (r && typeof r.id === "string") {
+      modelIdLookup.set(r.id, i);
+    }
+  }
+
+  for (const codexModel of codexModels) {
+    const codexRecord = getRecord(codexModel);
+    if (!codexRecord || typeof codexRecord.id !== "string") {
+      continue;
+    }
+    const modelId = codexRecord.id;
+    const existingIndex = modelIdLookup.get(modelId);
+
+    if (existingIndex === undefined) {
+      // Case 1: Model not in openai.models — copy the entire legacy entry as-is
+      openaiModels.push({ ...codexRecord });
+      changed = true;
+      changes.push(
+        `Copied models.providers.openai-codex.models[].${modelId} → models.providers.openai.models[].${modelId}.`,
+      );
+    } else {
+      // Cases 2 & 3: Merge only missing context metadata
+      const existing = getRecord(openaiModels[existingIndex]);
+      if (!existing) {
+        continue;
+      }
+
+      const next = { ...existing };
+      const mergedFields: string[] = [];
+
+      for (const field of CONTEXT_METADATA_FIELDS) {
+        const codexVal = codexRecord[field];
+        if (typeof codexVal === "number" && typeof existing[field] !== "number") {
+          next[field] = codexVal;
+          mergedFields.push(`${field}=${codexVal}`);
+        }
+      }
+
+      if (mergedFields.length > 0) {
+        openaiModels[existingIndex] = next;
+        changed = true;
+        changes.push(
+          `Merged models.providers.openai-codex.models[].${modelId} (${mergedFields.join(", ")}) → models.providers.openai.models[].${modelId}.`,
+        );
+      }
+    }
+  }
+
+  if (changed) {
+    openaiProvider.models = openaiModels;
+  }
+}
+
 function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes: string[]): void {
   const models = getRecord(raw.models);
   const providers = getRecord(models?.providers);
@@ -1001,6 +1081,11 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
         `Moved models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} → models.providers.${OPENAI_PROVIDER_ID}.`,
       );
     } else {
+      // Preserve legacy context-window metadata by merging into existing openai models before removing the codex provider
+      const openaiProvider = getRecord(providers[OPENAI_PROVIDER_ID]);
+      if (openaiProvider) {
+        migrateLegacyContextMetadata(normalized.value, openaiProvider, changes);
+      }
       changes.push(
         `Removed models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} because models.providers.${OPENAI_PROVIDER_ID} already exists.`,
       );
