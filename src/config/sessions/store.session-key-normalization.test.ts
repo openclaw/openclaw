@@ -1,3 +1,4 @@
+// Store session key tests cover session key normalization during disk writes.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -130,6 +131,47 @@ describe("session store key normalization", () => {
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(store[CANONICAL_KEY]?.sessionId).toBe("legacy-session");
     expect(store[MIXED_CASE_KEY]).toBeUndefined();
+  });
+
+  it("preserves ACP metadata when inbound metadata normalizes a legacy key", async () => {
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [CANONICAL_KEY]: {
+            sessionId: "canonical-session",
+            updatedAt: 2,
+          },
+          [MIXED_CASE_KEY]: {
+            sessionId: "legacy-session",
+            updatedAt: 1,
+            acp: {
+              backend: "codex",
+              agent: "main",
+              runtimeSessionName: "runtime-1",
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: 1,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearSessionStoreCacheForTest();
+
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: CANONICAL_KEY,
+      ctx: {},
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(store)).toEqual([CANONICAL_KEY]);
+    expect(store[CANONICAL_KEY]?.sessionId).toBe("canonical-session");
+    expect(store[CANONICAL_KEY]?.acp).toBeUndefined();
   });
 
   it("preserves updatedAt when recording inbound metadata for an existing session", async () => {

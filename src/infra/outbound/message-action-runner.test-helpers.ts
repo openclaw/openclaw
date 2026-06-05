@@ -1,3 +1,5 @@
+// Message-action runner test helpers define reusable plugin fixtures, target
+// parsers, and dry-run wrappers.
 import type {
   ChannelDirectoryEntryKind,
   ChannelMessageActionName,
@@ -9,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
+/** Workspace-style config fixture used by message action runner tests. */
 export const workspaceConfig = {
   channels: {
     workspace: {
@@ -18,6 +21,7 @@ export const workspaceConfig = {
   },
 } as OpenClawConfig;
 
+/** Direct-chat config fixture that allows any sender. */
 export const directChatConfig = {
   channels: {
     directchat: {
@@ -27,6 +31,15 @@ export const directChatConfig = {
 } as OpenClawConfig;
 
 export const directOutbound: ChannelOutboundAdapter = { deliveryMode: "direct" };
+
+// Test plugins model token-gated workspace sends without booting real channel runtimes.
+function hasChannelBotToken(channelConfig: unknown): boolean {
+  if (channelConfig == null || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
+    return false;
+  }
+  const token = (channelConfig as Record<string, unknown>).botToken;
+  return typeof token === "string" && Boolean(token.trim());
+}
 
 export const runDryAction = (params: {
   cfg: OpenClawConfig;
@@ -119,7 +132,7 @@ function createConfiguredTestPlugin(params: {
 
 export const workspaceTestPlugin = createConfiguredTestPlugin({
   id: "workspace",
-  isConfigured: (cfg) => Boolean(cfg.channels?.workspace?.botToken?.trim()),
+  isConfigured: (cfg) => hasChannelBotToken(cfg.channels?.workspace),
   normalizeTarget: (raw) => normalizeWorkspaceTarget(raw) || undefined,
   resolveTarget: (input) => {
     const normalized = normalizeWorkspaceTarget(input);
@@ -136,7 +149,7 @@ export const workspaceTestPlugin = createConfiguredTestPlugin({
 
 export const forumTestPlugin = createConfiguredTestPlugin({
   id: "forum",
-  isConfigured: (cfg) => Boolean(cfg.channels?.forum?.botToken?.trim()),
+  isConfigured: (cfg) => hasChannelBotToken(cfg.channels?.forum),
   normalizeTarget: (raw) => raw.trim() || undefined,
   resolveTarget: (input) => {
     const normalized = input.trim();

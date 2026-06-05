@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getCliSessionBinding } from "../agents/cli-session.js";
 import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
 import {
@@ -11,7 +12,6 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { performGatewaySessionReset } from "./session-reset-service.js";
 import {
   resolveFreshestSessionStoreMatchFromStoreKeys,

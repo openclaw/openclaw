@@ -1,21 +1,23 @@
+// Gateway shutdown and restart close orchestration.
+// Coordinates hooks, drains, sockets, sidecars, plugins, and runtime cleanup.
 import type { Server as HttpServer } from "node:http";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocketServer } from "ws";
+import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
-import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateSqliteStore } from "../plugin-state/plugin-state-store.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { abortTrackedChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   measureGatewayRestartTrace,
   recordGatewayRestartTrace,
 } from "./restart-trace.js";
-import type { ChatRunState } from "./server-chat-state.js";
+import type { ChatRunEntry, ChatRunState } from "./server-chat-state.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
@@ -37,6 +39,7 @@ export type ShutdownResult = {
   warnings: string[];
 };
 
+/** Create a timeout promise plus cleanup hook for shutdown races. */
 function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   timer = setTimeout(() => {
@@ -64,6 +67,7 @@ function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
   };
 }
 
+/** Run one shutdown step and record a warning instead of aborting the whole close. */
 async function shutdownStep(
   name: string,
   fn: () => Promise<void> | void,
@@ -80,47 +84,52 @@ async function shutdownStep(
   }
 }
 
+/** Record a shutdown warning once. */
 function recordShutdownWarning(warnings: string[], name: string): void {
   if (!warnings.includes(name)) {
     warnings.push(name);
   }
 }
 
+/** Count pending replies and active runs that must drain before restart shutdown. */
 function getRestartReplyDrainCounts(params: {
   getPendingReplyCount: () => number;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
   const pendingReplyCount = params.getPendingReplyCount();
-  const activeChatRuns = listRestartDrainChatRuns(params.chatAbortControllers).length;
+  const activeRuns = listRestartDrainRuns(params.chatAbortControllers).length;
   return {
     pendingReplies:
       Number.isFinite(pendingReplyCount) && pendingReplyCount > 0
         ? Math.floor(pendingReplyCount)
         : 0,
-    activeChatRuns,
+    activeRuns,
   };
 }
 
-function listRestartDrainChatRuns(
+/** List active runs participating in restart drain. */
+function listRestartDrainRuns(
   chatAbortControllers: Map<string, ChatAbortControllerEntry>,
 ): Array<[string, ChatAbortControllerEntry]> {
-  return Array.from(chatAbortControllers.entries()).filter(([, entry]) => entry.kind !== "agent");
+  return Array.from(chatAbortControllers.entries());
 }
 
+/** Format drain counts for shutdown logs. */
 function formatRestartReplyDrainDetails(counts: {
   pendingReplies: number;
-  activeChatRuns: number;
+  activeRuns: number;
 }): string {
   const details: string[] = [];
   if (counts.pendingReplies > 0) {
     details.push(`${counts.pendingReplies} pending reply(ies)`);
   }
-  if (counts.activeChatRuns > 0) {
-    details.push(`${counts.activeChatRuns} active chat run(s)`);
+  if (counts.activeRuns > 0) {
+    details.push(`${counts.activeRuns} active run(s)`);
   }
   return details.length > 0 ? details.join(", ") : "no pending reply work";
 }
 
+/** Sleep helper with unref'd timer for restart drain polling. */
 async function sleepForRestartReplyDrain(delayMs: number): Promise<void> {
   await new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, delayMs);
@@ -128,6 +137,20 @@ async function sleepForRestartReplyDrain(delayMs: number): Promise<void> {
   });
 }
 
+type RestartRunAbortParams = {
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatRunState: ChatRunState;
+  removeChatRun: (
+    sessionId: string,
+    clientRunId: string,
+    sessionKey?: string,
+  ) => ChatRunEntry | undefined;
+  agentRunSeq: Map<string, number>;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+};
+
+/** Wait for pending replies and active runs to drain before restart shutdown. */
 async function waitForRestartReplyDrain(params: {
   getPendingReplyCount: () => number;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
@@ -136,12 +159,12 @@ async function waitForRestartReplyDrain(params: {
 }): Promise<{
   drained: boolean;
   elapsedMs: number;
-  counts: { pendingReplies: number; activeChatRuns: number };
+  counts: { pendingReplies: number; activeRuns: number };
 }> {
   const timeoutMs = Math.max(0, Math.floor(params.timeoutMs));
   const pollMs = Math.max(25, Math.floor(params.pollMs ?? RESTART_REPLY_DRAIN_POLL_MS));
   let counts = getRestartReplyDrainCounts(params);
-  if (counts.pendingReplies <= 0 && counts.activeChatRuns <= 0) {
+  if (counts.pendingReplies <= 0 && counts.activeRuns <= 0) {
     return { drained: true, elapsedMs: 0, counts };
   }
   if (timeoutMs <= 0) {
@@ -156,41 +179,18 @@ async function waitForRestartReplyDrain(params: {
     }
     await sleepForRestartReplyDrain(Math.min(pollMs, timeoutMs - elapsedMs));
     counts = getRestartReplyDrainCounts(params);
-    if (counts.pendingReplies <= 0 && counts.activeChatRuns <= 0) {
+    if (counts.pendingReplies <= 0 && counts.activeRuns <= 0) {
       return { drained: true, elapsedMs: Date.now() - startedAt, counts };
     }
   }
 }
 
-function abortActiveChatRunsForRestart(params: {
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunState: ChatRunState;
-  removeChatRun: (
-    sessionId: string,
-    clientRunId: string,
-    sessionKey?: string,
-  ) => { sessionKey: string; clientRunId: string } | undefined;
-  agentRunSeq: Map<string, number>;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
-  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
-}): number {
+/** Abort active chat runs that did not drain before restart shutdown. */
+function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
   let aborted = 0;
-  for (const [runId, entry] of listRestartDrainChatRuns(params.chatAbortControllers)) {
-    const result = abortChatRunById(
-      {
-        chatAbortControllers: params.chatAbortControllers,
-        chatRunBuffers: params.chatRunState.buffers,
-        chatDeltaSentAt: params.chatRunState.deltaSentAt,
-        chatDeltaLastBroadcastLen: params.chatRunState.deltaLastBroadcastLen,
-        chatDeltaLastBroadcastText: params.chatRunState.deltaLastBroadcastText,
-        agentDeltaSentAt: params.chatRunState.agentDeltaSentAt,
-        bufferedAgentEvents: params.chatRunState.bufferedAgentEvents,
-        chatAbortedRuns: params.chatRunState.abortedRuns,
-        removeChatRun: params.removeChatRun,
-        agentRunSeq: params.agentRunSeq,
-        broadcast: params.broadcast,
-        nodeSendToSession: params.nodeSendToSession,
-      },
+  for (const [runId, entry] of listRestartDrainRuns(params.chatAbortControllers)) {
+    const result = abortTrackedChatRunById(
+      { ...params, chatRunBuffers: params.chatRunState.buffers },
       {
         runId,
         sessionKey: entry.sessionKey,
@@ -204,23 +204,16 @@ function abortActiveChatRunsForRestart(params: {
   return aborted;
 }
 
-async function drainRestartPendingRepliesForShutdown(params: {
-  getPendingReplyCount: () => number;
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunState: ChatRunState;
-  removeChatRun: (
-    sessionId: string,
-    clientRunId: string,
-    sessionKey?: string,
-  ) => { sessionKey: string; clientRunId: string } | undefined;
-  agentRunSeq: Map<string, number>;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
-  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
-  timeoutMs: number;
-  warnings: string[];
-}): Promise<void> {
+/** Drain or abort pending reply work before restart shutdown proceeds. */
+async function drainRestartPendingRepliesForShutdown(
+  params: {
+    getPendingReplyCount: () => number;
+    timeoutMs: number;
+    warnings: string[];
+  } & RestartRunAbortParams,
+): Promise<void> {
   const initialCounts = getRestartReplyDrainCounts(params);
-  if (initialCounts.pendingReplies <= 0 && initialCounts.activeChatRuns <= 0) {
+  if (initialCounts.pendingReplies <= 0 && initialCounts.activeRuns <= 0) {
     return;
   }
 
@@ -246,16 +239,16 @@ async function drainRestartPendingRepliesForShutdown(params: {
   );
   recordShutdownWarning(params.warnings, "restart-reply-drain");
 
-  if (drainResult.counts.activeChatRuns <= 0) {
+  if (drainResult.counts.activeRuns <= 0) {
     return;
   }
 
-  const abortedRuns = abortActiveChatRunsForRestart(params);
+  const abortedRuns = abortActiveRunsForRestart(params);
   if (abortedRuns <= 0) {
     return;
   }
 
-  shutdownLog.warn(`aborted ${abortedRuns} active chat run(s) during restart shutdown`);
+  shutdownLog.warn(`aborted ${abortedRuns} active run(s) during restart shutdown`);
   const postAbortDrain = await waitForRestartReplyDrain({
     getPendingReplyCount: params.getPendingReplyCount,
     chatAbortControllers: params.chatAbortControllers,
@@ -319,7 +312,7 @@ async function disposeRuntimeWithShutdownGrace(params: {
 }
 
 async function disposeAllBundleLspRuntimesOnDemand(): Promise<void> {
-  const { disposeAllBundleLspRuntimes } = await import("../agents/pi-bundle-lsp-runtime.js");
+  const { disposeAllBundleLspRuntimes } = await import("../agents/agent-bundle-lsp-runtime.js");
   await disposeAllBundleLspRuntimes();
 }
 
@@ -361,51 +354,70 @@ function isServerNotRunningError(err: unknown): boolean {
   );
 }
 
-export function createGatewayCloseHandler(params: {
-  bonjourStop: (() => Promise<void>) | null;
-  tailscaleCleanup: (() => Promise<void>) | null;
-  releasePluginRouteRegistry?: (() => void) | null;
-  channelIds?: readonly ChannelId[];
-  stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
-  pluginServices: PluginServicesHandle | null;
-  postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
-  disposeSessionMcpRuntimes?: () => Promise<void>;
-  disposeBundleLspRuntimes?: () => Promise<void>;
-  cron: { stop: () => void };
-  heartbeatRunner: HeartbeatRunner;
-  updateCheckStop?: (() => void) | null;
-  stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
-  nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
-  tickInterval: ReturnType<typeof setInterval>;
-  healthInterval: ReturnType<typeof setInterval>;
-  dedupeCleanup: ReturnType<typeof setInterval>;
-  mediaCleanup: ReturnType<typeof setInterval> | null;
-  dailySessionReset: ReturnType<typeof setInterval> | null;
-  agentUnsub: (() => void) | null;
-  heartbeatUnsub: (() => void) | null;
-  transcriptUnsub: (() => void) | null;
-  lifecycleUnsub: (() => void) | null;
-  chatRunState: ChatRunState;
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  removeChatRun: (
-    sessionId: string,
-    clientRunId: string,
-    sessionKey?: string,
-  ) => { sessionKey: string; clientRunId: string } | undefined;
-  agentRunSeq: Map<string, number>;
-  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
-  getPendingReplyCount?: () => number;
-  clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
-  configReloader: { stop: () => Promise<void> };
-  wss: WebSocketServer;
-  httpServer: HttpServer;
-  httpServers?: HttpServer[];
-  drainActiveSessionsForShutdown?: (params: {
-    reason: "shutdown" | "restart";
-    totalTimeoutMs?: number;
-  }) => Promise<{ emittedSessionIds: string[]; timedOut: boolean }>;
-}) {
+async function waitForHttpClose(params: {
+  closePromise: Promise<void>;
+  timeoutMs: number;
+  label: string;
+  warnings: string[];
+}): Promise<boolean> {
+  const timeout = createTimeoutRace(params.timeoutMs, () => false as const);
+  try {
+    return await Promise.race([
+      params.closePromise.then(
+        () => true,
+        (err: unknown) => {
+          throw err;
+        },
+      ),
+      timeout.promise,
+    ]).catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      shutdownLog.warn(`${params.label}: ${detail}`);
+      recordShutdownWarning(params.warnings, params.label);
+      return true;
+    });
+  } finally {
+    timeout.clear();
+  }
+}
+
+export function createGatewayCloseHandler(
+  params: {
+    bonjourStop: (() => Promise<void>) | null;
+    tailscaleCleanup: (() => Promise<void>) | null;
+    releasePluginRouteRegistry?: (() => void) | null;
+    channelIds?: readonly ChannelId[];
+    stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
+    pluginServices: PluginServicesHandle | null;
+    postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
+    disposeSessionMcpRuntimes?: () => Promise<void>;
+    disposeBundleLspRuntimes?: () => Promise<void>;
+    cron: { stop: () => void };
+    heartbeatRunner: HeartbeatRunner;
+    updateCheckStop?: (() => void) | null;
+    stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
+    nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
+    tickInterval: ReturnType<typeof setInterval>;
+    healthInterval: ReturnType<typeof setInterval>;
+    dedupeCleanup: ReturnType<typeof setInterval>;
+    mediaCleanup: ReturnType<typeof setInterval> | null;
+    dailySessionReset: ReturnType<typeof setInterval> | null;
+    agentUnsub: (() => void) | null;
+    heartbeatUnsub: (() => void) | null;
+    transcriptUnsub: (() => void) | null;
+    lifecycleUnsub: (() => void) | null;
+    getPendingReplyCount?: () => number;
+    clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
+    configReloader: { stop: () => Promise<void> };
+    wss: WebSocketServer;
+    httpServer: HttpServer;
+    httpServers?: HttpServer[];
+    drainActiveSessionsForShutdown?: (params: {
+      reason: "shutdown" | "restart";
+      totalTimeoutMs?: number;
+    }) => Promise<{ emittedSessionIds: string[]; timedOut: boolean }>;
+  } & RestartRunAbortParams,
+) {
   return async (opts?: {
     reason?: string;
     restartExpectedMs?: number | null;
@@ -528,6 +540,18 @@ export function createGatewayCloseHandler(params: {
       if (params.tailscaleCleanup) {
         await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
       }
+      if (params.postReadySidecars?.length) {
+        await measureCloseStep("post-ready-sidecars", async () => {
+          for (const [index, sidecar] of params.postReadySidecars!.entries()) {
+            await shutdownStep(`post-ready-sidecar/${index}`, () => sidecar.stop(), warnings);
+          }
+        });
+      }
+      if (params.pluginServices) {
+        await measureCloseStep("plugin-services", () =>
+          shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings),
+        );
+      }
       await measureCloseStep("channels", async () => {
         const channelIds = params.channelIds ?? listChannelPlugins().map((plugin) => plugin.id);
         for (const channelId of channelIds) {
@@ -551,11 +575,6 @@ export function createGatewayCloseHandler(params: {
           }),
         ]);
       });
-      if (params.pluginServices) {
-        await measureCloseStep("plugin-services", () =>
-          shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings),
-        );
-      }
       await shutdownStep("plugin-state-store", () => closePluginStateSqliteStore(), warnings);
       await measureCloseStep("config-reloader", () =>
         shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
@@ -616,7 +635,9 @@ export function createGatewayCloseHandler(params: {
       params.clients.clear();
       await measureCloseStep("websocket-server", async () => {
         const wsClients = params.wss.clients ?? new Set();
-        const closePromise = new Promise<void>((resolve) => params.wss.close(() => resolve()));
+        const closePromise = new Promise<void>((resolve) => {
+          params.wss.close(() => resolve());
+        });
         const websocketGraceTimeout = createTimeoutRace(
           WEBSOCKET_CLOSE_GRACE_MS,
           () => false as const,
@@ -661,57 +682,34 @@ export function createGatewayCloseHandler(params: {
           if (typeof httpServer.closeIdleConnections === "function") {
             httpServer.closeIdleConnections();
           }
-          const closePromise = new Promise<void>((resolve, reject) =>
+          const closePromise = new Promise<void>((resolve, reject) => {
             httpServer.close((err) => {
               if (!err || isServerNotRunningError(err)) {
                 resolve();
                 return;
               }
               reject(err);
-            }),
-          );
-          void closePromise.catch(() => undefined);
-          const httpGraceTimeout = createTimeoutRace(HTTP_CLOSE_GRACE_MS, () => false as const);
-          const closedWithinGrace = await Promise.race([
-            closePromise.then(
-              () => true,
-              (err: unknown) => {
-                throw err;
-              },
-            ),
-            httpGraceTimeout.promise,
-          ]).catch((err: unknown) => {
-            const detail = err instanceof Error ? err.message : String(err);
-            shutdownLog.warn(`${label}: ${detail}`);
-            recordShutdownWarning(warnings, label);
-            return true;
+            });
           });
-          httpGraceTimeout.clear();
+          void closePromise.catch(() => undefined);
+          const closedWithinGrace = await waitForHttpClose({
+            closePromise,
+            timeoutMs: HTTP_CLOSE_GRACE_MS,
+            label,
+            warnings,
+          });
           if (!closedWithinGrace) {
             shutdownLog.warn(
               `${label} close exceeded ${HTTP_CLOSE_GRACE_MS}ms; forcing connection shutdown and waiting for close`,
             );
             recordShutdownWarning(warnings, label);
             httpServer.closeAllConnections?.();
-            const httpForceTimeout = createTimeoutRace(
-              HTTP_CLOSE_FORCE_WAIT_MS,
-              () => false as const,
-            );
-            const closedAfterForce = await Promise.race([
-              closePromise.then(
-                () => true,
-                (err: unknown) => {
-                  throw err;
-                },
-              ),
-              httpForceTimeout.promise,
-            ]).catch((err: unknown) => {
-              const detail = err instanceof Error ? err.message : String(err);
-              shutdownLog.warn(`${label}: ${detail}`);
-              recordShutdownWarning(warnings, label);
-              return true;
+            const closedAfterForce = await waitForHttpClose({
+              closePromise,
+              timeoutMs: HTTP_CLOSE_FORCE_WAIT_MS,
+              label,
+              warnings,
             });
-            httpForceTimeout.clear();
             if (!closedAfterForce) {
               throw new Error(
                 `${label} close still pending after forced connection shutdown (${HTTP_CLOSE_FORCE_WAIT_MS}ms)`,

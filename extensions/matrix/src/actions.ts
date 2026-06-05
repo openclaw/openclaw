@@ -1,6 +1,7 @@
+// Matrix plugin module implements actions behavior.
 import {
   createActionGate,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
   ToolAuthorizationError,
 } from "openclaw/plugin-sdk/channel-actions";
@@ -218,7 +219,9 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "reactions") {
       const messageId = readStringParam(params, "messageId", { required: true });
-      const limit = readNumberParam(params, "limit", { integer: true });
+      const limit = readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      });
       return await dispatch({
         action: "reactions",
         roomId: resolveRoomId(),
@@ -228,7 +231,9 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "read") {
-      const limit = readNumberParam(params, "limit", { integer: true });
+      const limit = readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      });
       return await dispatch({
         action: "readMessages",
         roomId: resolveRoomId(),

@@ -1,3 +1,4 @@
+// Matrix tests cover replies plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../../../runtime-api.js";
 import type { MatrixClient } from "../sdk.js";
@@ -56,8 +57,8 @@ describe("deliverMatrixReplies", () => {
       text: {
         resolveMarkdownTableMode: (params: unknown) => resolveMarkdownTableModeMock(params),
         convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
-        resolveChunkMode: (cfg: unknown, channel: unknown, accountId?: unknown) =>
-          resolveChunkModeMock(cfg, channel, accountId),
+        resolveChunkMode: (cfgLocal: unknown, channel: unknown, accountId?: unknown) =>
+          resolveChunkModeMock(cfgLocal, channel, accountId),
         chunkMarkdownTextWithMode: (text: string) => chunkMarkdownTextWithModeMock(text),
       },
     },

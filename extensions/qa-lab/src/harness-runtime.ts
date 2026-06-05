@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements harness runtime behavior.
 import {
   buildMentionRegexes,
   implicitMentionKindWhen,
@@ -84,9 +85,9 @@ export function createQaRunnerRuntime(): PluginRuntime {
           });
         },
       },
-      turn: {
-        async runAssembled(
-          params: Parameters<PluginRuntime["channel"]["turn"]["runAssembled"]>[0],
+      inbound: {
+        async dispatchReply(
+          params: Parameters<PluginRuntime["channel"]["inbound"]["dispatchReply"]>[0],
         ) {
           const sessionKey =
             typeof params.ctxPayload.SessionKey === "string"

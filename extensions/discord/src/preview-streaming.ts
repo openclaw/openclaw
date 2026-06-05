@@ -1,7 +1,8 @@
+// Discord plugin module implements preview streaming behavior.
 import {
   resolveChannelPreviewStreamMode,
   type StreamingMode,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 
 type DiscordPreviewStreamMode = StreamingMode;
 

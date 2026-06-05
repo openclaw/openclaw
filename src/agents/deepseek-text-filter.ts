@@ -1,3 +1,8 @@
+/**
+ * DeepSeek DSML streaming text filter.
+ * Removes provider-emitted DSML tool markup while buffering split tag prefixes
+ * across streamed chunks.
+ */
 const DSML_KINDS = ["tool_use_error", "tool_calls", "tool_call", "function_calls"] as const;
 const DSML_BARS = ["|", "｜"] as const;
 
@@ -11,10 +16,13 @@ const MAX_OPEN_TOKEN_LEN = Math.max(...DSML_OPEN_TOKENS.map((token) => token.len
 const MAX_CLOSE_TOKEN_LEN = Math.max(...DSML_CLOSE_TOKENS.map((token) => token.length));
 
 export interface DeepSeekTextFilter {
+  /** Push one streamed text chunk and receive any safe visible text segments. */
   push(chunk: string): string[];
+  /** Flush buffered text at stream end, dropping any unterminated DSML block. */
   flush(): string[];
 }
 
+/** Create an incremental text filter that strips DeepSeek DSML tool blocks. */
 export function createDeepSeekTextFilter(): DeepSeekTextFilter {
   let buffer = "";
   let insideDsml = false;
@@ -35,6 +43,8 @@ export function createDeepSeekTextFilter(): DeepSeekTextFilter {
           insideDsml = false;
           continue;
         }
+        // Keep a suffix that could still become a closing tag once the next
+        // streamed chunk arrives; on final flush, drop the unterminated block.
         const keep = final ? 0 : Math.min(buffer.length, MAX_CLOSE_TOKEN_LEN - 1);
         buffer = buffer.slice(buffer.length - keep);
         if (final) {
@@ -92,6 +102,8 @@ function findEarliestToken(text: string, tokens: readonly string[]) {
 }
 
 function longestDsmlOpenPrefixSuffixLength(text: string) {
+  // Preserve only the longest suffix that could be the beginning of a future
+  // opening token, so ordinary text streams immediately.
   const maxLength = Math.min(text.length, MAX_OPEN_TOKEN_LEN - 1);
   for (let length = maxLength; length > 0; length--) {
     const suffix = text.slice(text.length - length);

@@ -1,3 +1,4 @@
+// Tests runtime-loaded fast-path command behavior for get-reply.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -34,7 +35,7 @@ describe("getReplyFromConfig fast-path runtime", () => {
   it("keeps old-style runtime tests fast with marked temp-home configs", async () => {
     await withTempHome(async (home) => {
       let seenPrompt: string | undefined;
-      agentMocks.runEmbeddedPiAgent.mockImplementation(async (params) => {
+      agentMocks.runEmbeddedAgent.mockImplementation(async (params) => {
         seenPrompt = params.prompt;
         return makeEmbeddedTextResult("ok");
       });
@@ -67,7 +68,7 @@ describe("getReplyFromConfig fast-path runtime", () => {
 
   it("routes structured native command turns through the target session before legacy sync", async () => {
     await withTempHome(async (home) => {
-      agentMocks.runEmbeddedPiAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
+      agentMocks.runEmbeddedAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
 
       await getReplyFromConfig(
         {
@@ -90,7 +91,7 @@ describe("getReplyFromConfig fast-path runtime", () => {
         makeReplyConfig(home) as OpenClawConfig,
       );
 
-      expect(agentMocks.runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect(agentMocks.runEmbeddedAgent).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionKey: "agent:main:telegram:direct:target",
         }),
@@ -100,7 +101,7 @@ describe("getReplyFromConfig fast-path runtime", () => {
 
   it("ignores stale native legacy source for structured normal turns before routing", async () => {
     await withTempHome(async (home) => {
-      agentMocks.runEmbeddedPiAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
+      agentMocks.runEmbeddedAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
 
       await getReplyFromConfig(
         {
@@ -124,7 +125,7 @@ describe("getReplyFromConfig fast-path runtime", () => {
         makeReplyConfig(home) as OpenClawConfig,
       );
 
-      expect(agentMocks.runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect(agentMocks.runEmbeddedAgent).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionKey: "agent:main:telegram:direct:source",
         }),

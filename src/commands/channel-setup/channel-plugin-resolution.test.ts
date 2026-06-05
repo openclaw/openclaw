@@ -1,3 +1,4 @@
+// Channel plugin resolution tests cover trusted catalog lookup, install prompts, and setup plugin snapshots.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
@@ -20,6 +21,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../../channels/plugins/catalog.js", () => ({
   listChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
+  listRawChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
   getChannelPluginCatalogEntry: mocks.getChannelPluginCatalogEntry,
 }));
 

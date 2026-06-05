@@ -1,6 +1,7 @@
+// SSRF policy helpers validate hostnames/IP literals, build pinned DNS lookups,
+// and create dispatcher policies for guarded network fetches.
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import type { Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
   isCloudMetadataIpAddress,
@@ -14,7 +15,9 @@ import {
   isLegacyIpv4Literal,
   parseCanonicalIpAddress,
   parseLooseIpAddress,
-} from "../../shared/net/ip.js";
+} from "@openclaw/net-policy/ip";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { Dispatcher } from "undici";
 import { normalizeHostname } from "./hostname.js";
 import {
   createHttp1Agent,
@@ -62,15 +65,16 @@ export type SsrFPolicy = {
 };
 
 function normalizeSsrFPolicyHostnames(values?: string[]): string[] {
-  if (!values || values.length === 0) {
-    return [];
-  }
-  return Array.from(
-    new Set(values.map((value) => normalizeHostname(value)).filter(Boolean)),
-  ).toSorted();
+  return normalizePolicyHostnames(values).toSorted();
+}
+
+function normalizePolicyHostnames(values?: string[]): string[] {
+  return normalizeUniqueStringEntries(values?.map((value) => normalizeHostname(value)));
 }
 
 function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
+  // Policy equality needs deterministic set ordering and normalized host/origin
+  // forms so equivalent operator config compares equal.
   if (!policy) {
     return null;
   }
@@ -211,23 +215,11 @@ const BLOCKED_HOSTNAMES = new Set([
 ]);
 
 function normalizeHostnameSet(values?: string[]): Set<string> {
-  if (!values || values.length === 0) {
-    return new Set<string>();
-  }
-  return new Set(values.map((value) => normalizeHostname(value)).filter(Boolean));
+  return new Set(normalizePolicyHostnames(values));
 }
 
 export function normalizeHostnameAllowlist(values?: string[]): string[] {
-  if (!values || values.length === 0) {
-    return [];
-  }
-  return Array.from(
-    new Set(
-      values
-        .map((value) => normalizeHostname(value))
-        .filter((value) => value !== "*" && value !== "*." && value.length > 0),
-    ),
-  );
+  return normalizePolicyHostnames(values).filter((value) => value !== "*" && value !== "*.");
 }
 
 export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
@@ -242,6 +234,8 @@ function shouldSkipPrivateNetworkChecks(hostname: string, policy?: SsrFPolicy): 
 }
 
 export function resolveSsrFPolicyForUrl(url: URL, policy?: SsrFPolicy): SsrFPolicy | undefined {
+  // allowedOrigins trust only the current request hostname for the matching
+  // origin; redirects must re-evaluate against their own URL.
   if (!policy?.allowedOrigins?.length) {
     return policy;
   }

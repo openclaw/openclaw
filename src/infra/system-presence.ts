@@ -1,10 +1,11 @@
+// Detects system command availability for setup and diagnostics.
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 

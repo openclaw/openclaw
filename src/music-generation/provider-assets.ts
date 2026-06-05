@@ -1,20 +1,28 @@
+// Validates and normalizes provider asset attachments for music generation.
+import { maxBytesForKind } from "@openclaw/media-core/constants";
+import { extensionForMime } from "@openclaw/media-core/mime";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { fetchProviderDownloadResponse } from "../media-understanding/shared.js";
-import { extensionForMime } from "../media/mime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { GeneratedMusicAsset } from "./types.js";
 
+/**
+ * Asset extraction and download helpers for music generation providers.
+ *
+ * Providers may return audio as URLs, file objects, or base64 payloads; these
+ * helpers normalize those shapes into bounded in-memory GeneratedMusicAsset values.
+ */
+/** Candidate audio file returned by a provider before download. */
 export type GeneratedMusicFileCandidate = {
   url: string;
   mimeType?: string;
   fileName?: string;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function normalizeSpecificAudioMimeType(value: unknown): string | undefined {
   const mimeType = normalizeOptionalString(value)?.split(";")[0]?.trim().toLowerCase();
+  // Generic binary types are less useful than known audio fallbacks for saved track names.
   if (!mimeType || mimeType === "application/octet-stream" || mimeType === "binary/octet-stream") {
     return undefined;
   }
@@ -50,6 +58,7 @@ function pushGeneratedMusicFileCandidate(
   });
 }
 
+/** Extract URL/file candidates from common provider response keys. */
 export function extractGeneratedMusicFileCandidates(
   payload: unknown,
   keys: readonly string[] = ["audio", "audio_file"],
@@ -64,6 +73,7 @@ export function extractGeneratedMusicFileCandidates(
   return candidates;
 }
 
+/** Convert a base64 provider payload into a generated music asset. */
 export function generatedMusicAssetFromBase64(params: {
   base64: string;
   mimeType: string;
@@ -78,6 +88,7 @@ export function generatedMusicAssetFromBase64(params: {
   };
 }
 
+/** Download a generated music URL with size limits and inferred audio metadata. */
 export async function downloadGeneratedMusicAsset(params: {
   candidate: GeneratedMusicFileCandidate;
   timeoutMs: number;
@@ -85,6 +96,7 @@ export async function downloadGeneratedMusicAsset(params: {
   provider: string;
   requestFailedMessage: string;
   index?: number;
+  maxBytes?: number;
 }): Promise<GeneratedMusicAsset> {
   const response = await fetchProviderDownloadResponse({
     url: params.candidate.url,
@@ -99,8 +111,12 @@ export async function downloadGeneratedMusicAsset(params: {
     normalizeSpecificAudioMimeType(params.candidate.mimeType) ??
     "audio/mpeg";
   const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
+  const maxBytes = params.maxBytes ?? maxBytesForKind("audio");
   return {
-    buffer: Buffer.from(await response.arrayBuffer()),
+    buffer: await readResponseWithLimit(response, maxBytes, {
+      onOverflow: ({ maxBytes: maxBytesLocal }) =>
+        new Error(`${params.provider} generated music download exceeds ${maxBytesLocal} bytes`),
+    }),
     mimeType,
     fileName: params.candidate.fileName ?? `track-${(params.index ?? 0) + 1}.${ext}`,
     metadata: {

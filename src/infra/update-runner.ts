@@ -1,6 +1,11 @@
+// Runs OpenClaw package update checks, package steps, and restart handoff.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -82,6 +87,14 @@ export type UpdateRunResult = {
           message: string;
           currentVersion?: string;
           nextVersion?: string;
+          channelFallback?: {
+            requestedSpec: string;
+            usedSpec: string;
+            requestedLabel: string;
+            usedLabel: string;
+            reason: "unavailable" | "failed";
+            message: string;
+          };
         }>;
       };
       integrityDrifts: Array<{
@@ -226,7 +239,7 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
       dirs.push(packageRoot);
     }
   }
-  let proc: string | null = null;
+  let proc: string | null;
   try {
     proc = normalizeDir(process.cwd());
   } catch {
@@ -235,7 +248,7 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   if (proc) {
     dirs.push(proc);
   }
-  return Array.from(new Set(dirs));
+  return uniqueStrings(dirs);
 }
 
 function resolvePreflightTempRootPrefix() {
@@ -302,10 +315,7 @@ async function listGitTags(
   if (!res || res.code !== 0) {
     return [];
   }
-  return res.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(res.stdout.split("\n"));
 }
 
 async function resolveChannelTag(
@@ -442,6 +452,11 @@ function looksLikeFullCommitSha(value: string): boolean {
   return /^[0-9a-f]{40}$/i.test(value.trim());
 }
 
+function resolveTagFetchRef(candidate: string): string | null {
+  const ref = candidate.endsWith("^{}") ? candidate.slice(0, -"^{}".length) : candidate;
+  return ref.startsWith("refs/tags/") ? ref : null;
+}
+
 function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
   const trimmed = devTargetRef.trim();
   const candidates: string[] = [];
@@ -573,7 +588,26 @@ function isSupersededInstallFailure(
 }
 
 function findBlockingGitFailure(steps: readonly UpdateStepResult[]): UpdateStepResult | undefined {
-  return steps.find((step) => step.exitCode !== 0 && !isSupersededInstallFailure(step, steps));
+  return steps.find(
+    (step, index) =>
+      step.exitCode !== 0 &&
+      !isSupersededInstallFailure(step, steps) &&
+      !isSupersededTargetRefFailure(step, steps.slice(index + 1)),
+  );
+}
+
+function isSupersededTargetRefFailure(
+  step: UpdateStepResult,
+  followingSteps: readonly UpdateStepResult[],
+): boolean {
+  const isTargetRefProbe = step.name.startsWith("git rev-parse ");
+  const isTargetTagFetch = step.name.startsWith("git fetch ") && step.name.includes(" refs/tags/");
+  if (!isTargetRefProbe && !isTargetTagFetch) {
+    return false;
+  }
+  return followingSteps.some(
+    (candidate) => candidate.name.startsWith("git rev-parse ") && candidate.exitCode === 0,
+  );
 }
 
 function mergeCommandEnvironments(
@@ -876,17 +910,43 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
       const fetchFailure = await runRequiredGitStep(
         "git fetch",
-        ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+        ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--no-tags"],
         "fetch-failed",
       );
       if (fetchFailure) {
         return fetchFailure;
       }
-      let preflightBaseSha: string | null = null;
-      let candidates: string[] = [];
+      let preflightBaseSha: string | null;
+      let candidatesLocal: string[];
       if (devTargetRef) {
         let targetSha: string | null = null;
         for (const targetRefCandidate of buildDevTargetRefResolutionCandidates(devTargetRef)) {
+          const tagFetchRef = resolveTagFetchRef(targetRefCandidate);
+          if (tagFetchRef) {
+            const remoteListStep = await runStep(
+              step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot),
+            );
+            steps.push(remoteListStep);
+            const remotes = normalizeStringEntries((remoteListStep.stdoutTail ?? "").split("\n"));
+            let fetchedTag = false;
+            for (const remote of remotes) {
+              const targetTagFetchStep = await runStep(
+                step(
+                  `git fetch ${remote} ${tagFetchRef}`,
+                  ["git", "-C", gitRoot, "fetch", remote, `+${tagFetchRef}:${tagFetchRef}`],
+                  gitRoot,
+                ),
+              );
+              steps.push(targetTagFetchStep);
+              if (targetTagFetchStep.exitCode === 0) {
+                fetchedTag = true;
+                break;
+              }
+            }
+            if (remotes.length > 0 && !fetchedTag) {
+              continue;
+            }
+          }
           const targetShaStep = await runStep(
             step(
               `git rev-parse ${targetRefCandidate}`,
@@ -913,7 +973,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           };
         }
         preflightBaseSha = targetSha;
-        candidates = [targetSha];
+        candidatesLocal = [targetSha];
       } else {
         const upstreamStep = await runStep(
           step(
@@ -984,11 +1044,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           };
         }
 
-        candidates = (revListStep.stdoutTail ?? "")
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean);
-        if (candidates.length === 0) {
+        candidatesLocal = normalizeStringEntries((revListStep.stdoutTail ?? "").split("\n"));
+        if (candidatesLocal.length === 0) {
           return {
             status: "error",
             mode: "git",
@@ -1056,7 +1113,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
       let selectedSha: string | null = null;
       try {
-        for (const sha of candidates) {
+        for (const sha of candidatesLocal) {
           const shortSha = sha.slice(0, 8);
           const checkoutStep = await runStep(
             step(

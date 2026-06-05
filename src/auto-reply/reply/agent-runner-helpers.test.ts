@@ -1,3 +1,4 @@
+// Tests agent runner helper decisions for payload and runtime preparation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -59,6 +60,9 @@ describe("agent runner helpers", () => {
     });
     expect(shouldEmitResult()).toBe(true);
     expect(shouldEmitOutput()).toBe(true);
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/store.json", {
+      clone: false,
+    });
   });
 
   it("caches session verbose reads briefly while still refreshing live changes", () => {

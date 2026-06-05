@@ -1,3 +1,4 @@
+// Telegram tests cover monitor plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type MonitorTelegramOpts = import("./monitor.js").MonitorTelegramOpts;
@@ -325,7 +326,7 @@ vi.mock("./bot.js", () => ({
     createTelegramBotCalls.push(opts);
     const nextError = createTelegramBotErrors.shift();
     if (nextError) {
-      throw nextError;
+      throw toLintErrorObject(nextError, "Non-Error thrown");
     }
     const stop = vi.fn<() => void>();
     createdBotStops.push(stop);
@@ -470,6 +471,46 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runOptions?.runner?.silent).toBe(true);
     expect(runOptions?.runner?.maxRetryTime).toBe(60 * 60 * 1000);
     expect(runOptions?.runner?.retryInterval).toBe("exponential");
+  });
+
+  it("logs polling startup diagnostics without using the error channel", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await monitorWithAutoAbort({ runtime });
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("polling cycle started"));
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("keeps polling restart warnings on the error channel", async () => {
+    const abort = new AbortController();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+    const secondCycle = mockRunOnceAndAbort(abort);
+
+    const monitor = monitorTelegramProvider(
+      withLegacyPolling({ token: "tok", abortSignal: abort.signal, runtime }),
+    );
+    await firstCycle.waitForTaskStart();
+
+    expect(emitUnhandledRejection(await makeTaggedPollingFetchError())).toBe(true);
+    await secondCycle.waitForRunStart();
+    await monitor;
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      "[telegram][diag] marking transport dirty after polling network failure",
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Restarting polling after unhandled network error"),
+    );
   });
 
   it("requires mention in groups by default", async () => {
@@ -1070,3 +1111,17 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runSpy).not.toHaveBeenCalled();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

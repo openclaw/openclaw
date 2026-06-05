@@ -1,9 +1,11 @@
-import type { Api, Context, Model } from "@earendil-works/pi-ai";
+// Transport message transform tests cover replay cleanup for provider-specific
+// tool-call/result sequencing before messages are sent back to transports.
+import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
-function makeModel(api: Api, provider: string, id: string): Model<Api> {
-  return { api, provider, id, input: [], output: [] } as unknown as Model<Api>;
+function makeModel(api: Api, provider: string, id: string): Model {
+  return { api, provider, id, input: [], output: [] } as unknown as Model;
 }
 
 type ToolResultMessage = Extract<Context["messages"][number], { role: "toolResult" }>;
@@ -139,6 +141,8 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
   });
 
   it("moves displaced OpenAI transport results before synthesizing missing siblings", () => {
+    // OpenAI requires tool results immediately after the assistant tool call;
+    // displaced results are moved back before any missing siblings are aborted.
     const messages: Context["messages"] = [
       {
         ...assistantToolCall("call_keep"),

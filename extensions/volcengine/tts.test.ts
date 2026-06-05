@@ -1,3 +1,4 @@
+// Volcengine tests cover tts plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildVolcengineSpeechProvider } from "./speech-provider.js";
 import { volcengineTTS } from "./tts.js";
@@ -130,6 +131,28 @@ describe("Volcengine speech provider", () => {
     });
   });
 
+  it("rejects non-decimal speedRatio directive values", () => {
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "0x1",
+        policy: {
+          enabled: true,
+          allowText: true,
+          allowProvider: true,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        },
+      }),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid Volcengine speedRatio "0x1"'],
+    });
+  });
+
   it("sends the documented Seed Speech API key payload and returns voice-note Opus metadata", async () => {
     const release = vi.fn();
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -187,6 +210,34 @@ describe("Volcengine speech provider", () => {
       auditContext: "volcengine.tts",
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops malformed speed ratios before synthesis", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          code: 0,
+          data: Buffer.from("voice-audio").toString("base64"),
+        }),
+      ),
+      release,
+    });
+
+    await provider.synthesize({
+      text: "hello",
+      cfg: {},
+      providerConfig: makeProviderConfig({ speedRatio: 4 }),
+      target: "audio-file",
+      providerOverrides: { speedRatio: -1 },
+      timeoutMs: 1234,
+    });
+
+    const call = requireFirstGuardedFetchCall() as { init: { body: string } };
+    const body = JSON.parse(call.init.body) as {
+      req_params?: { speed_ratio?: number };
+    };
+    expect(body.req_params).not.toHaveProperty("speed_ratio");
   });
 });
 

@@ -1,3 +1,4 @@
+// Run main exit tests cover process exit behavior for CLI failures.
 import process from "node:process";
 import { CommanderError } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -232,7 +233,7 @@ vi.mock("../plugins/manifest-command-aliases.runtime.js", () => ({
   resolveManifestToolOwner: resolveManifestToolOwnerMock,
 }));
 
-vi.mock("../terminal/restore.js", () => ({
+vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState: restoreTerminalStateMock,
 }));
 
@@ -380,6 +381,33 @@ describe("runCli exit behavior", () => {
       indeterminate: true,
       delayMs: 0,
     });
+    expect(progressDoneMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses startup progress for json output commands before full CLI parsing", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "sessions", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "sessions", "--json", "--limit", "all"]);
+
+    expect(createCliProgressMock).toHaveBeenCalledWith({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+      enabled: false,
+    });
+    expect(parseAsync).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "sessions",
+      "--json",
+      "--limit",
+      "all",
+    ]);
     expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
 
@@ -670,6 +698,26 @@ describe("runCli exit behavior", () => {
     expect(tryRouteCliMock).not.toHaveBeenCalled();
     expect(buildProgramMock).not.toHaveBeenCalled();
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unowned command roots even when --help is appended (regression for #81077)", async () => {
+    await expect(runCli(["node", "openclaw", "foo", "--help"])).rejects.toThrow(
+      'No built-in command or plugin CLI metadata owns "foo"',
+    );
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unowned command roots even when --version is appended", async () => {
+    await expect(runCli(["node", "openclaw", "foo", "--version"])).rejects.toThrow(
+      'No built-in command or plugin CLI metadata owns "foo"',
+    );
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
   });
 
   it("does not suggest plugins.allow for unknown command roots before proxy startup", async () => {

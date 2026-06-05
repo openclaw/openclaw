@@ -1,3 +1,6 @@
+/**
+ * Tests channel streaming helper lifecycle and event forwarding.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildChannelProgressDraftLine,
@@ -19,6 +22,7 @@ import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
   resolveChannelStreamingNativeTransport,
+  resolveChannelStreamingProgressCommentary,
   resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewChunk,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
@@ -94,6 +98,24 @@ describe("channel-streaming", () => {
           preview: { toolProgress: true },
           progress: { toolProgress: false },
         },
+      }),
+    ).toBe(false);
+  });
+
+  it("enables commentary progress only for progress-mode drafts", () => {
+    expect(
+      resolveChannelStreamingProgressCommentary({
+        streaming: { mode: "progress", progress: { commentary: true } },
+      }),
+    ).toBe(true);
+    expect(
+      resolveChannelStreamingProgressCommentary({
+        streaming: { mode: "partial", progress: { commentary: true } },
+      }),
+    ).toBe(false);
+    expect(
+      resolveChannelStreamingProgressCommentary({
+        streaming: { mode: "progress" },
       }),
     ).toBe(false);
   });
@@ -277,6 +299,19 @@ describe("channel-streaming", () => {
         lines: ["🛠️ Exec", "plain update"],
       }),
     ).toBe("🛠️ Exec\n• plain update");
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: false } } },
+        lines: [
+          {
+            kind: "item",
+            text: "_Checking source data before summarizing._",
+            label: "Commentary",
+            prefix: false,
+          },
+        ],
+      }),
+    ).toBe("_Checking source data before summarizing._");
   });
 
   it("renders progress labels as rolling lines", () => {
@@ -345,7 +380,7 @@ describe("channel-streaming", () => {
     });
 
     expect(text).toBe(
-      "Shelling\n\n🛠️ run node script…enclaw/some/really/deep/path/that/keeps/going/and/going/index…",
+      "Shelling\n\n🛠️ run node script…e…y/deep/path/that/keeps/going/and/going/index.ts --flag value",
     );
     expect(text.match(/`/g) ?? []).toHaveLength(0);
   });
@@ -503,6 +538,32 @@ describe("channel-streaming", () => {
     ).toBe("🛠️ Exec\n• Checking the app-server stream");
   });
 
+  it("preserves stable ids on named tool and command-output progress lines", () => {
+    const toolLine = buildChannelProgressDraftLine({
+      event: "tool",
+      itemId: "tool:item-1",
+      toolCallId: "call-1",
+      name: "bash",
+      phase: "start",
+    });
+    const commandLine = buildChannelProgressDraftLine({
+      event: "command-output",
+      itemId: "command:item-1",
+      toolCallId: "call-1",
+      name: "bash",
+      phase: "end",
+      exitCode: 0,
+    });
+
+    expect(toolLine).toMatchObject({ id: "tool:item-1", kind: "tool", toolName: "bash" });
+    expect(commandLine).toMatchObject({
+      id: "command:item-1",
+      kind: "command-output",
+      status: "completed",
+      toolName: "bash",
+    });
+  });
+
   it("starts progress drafts after five seconds or a second work event", async () => {
     vi.useFakeTimers();
     const onStart = vi.fn(async () => {});
@@ -530,6 +591,103 @@ describe("channel-streaming", () => {
     expect(onStart).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report started when delayed progress startup rejects", async () => {
+    vi.useFakeTimers();
+    const onStart = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("draft unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await expect(gate.noteWork()).resolves.toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(false);
+
+    await expect(gate.noteWork()).resolves.toBe(true);
+
+    expect(onStart).toHaveBeenCalledTimes(2);
+    expect(gate.hasStarted).toBe(true);
+  });
+
+  it("keeps concurrent progress startup single-flight until onStart resolves", async () => {
+    vi.useFakeTimers();
+    let resolveStart: (() => void) | undefined;
+    const onStart = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await gate.noteWork();
+    const firstStart = gate.noteWork();
+    const secondStart = gate.startNow();
+    await Promise.resolve();
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
+
+    resolveStart?.();
+    await expect(firstStart).resolves.toBe(true);
+    await expect(secondStart).resolves.toBeUndefined();
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
+  });
+
+  it("does not report active when cancel wins the startup race", async () => {
+    vi.useFakeTimers();
+    let resolveStart: (() => void) | undefined;
+    const onStart = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await gate.noteWork();
+    const startResult = gate.noteWork();
+    await Promise.resolve();
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    gate.cancel();
+
+    resolveStart?.();
+
+    await expect(startResult).resolves.toBe(false);
+    expect(gate.hasStarted).toBe(false);
+  });
+
+  it("joins explicit startup before applying the first-work delay", async () => {
+    vi.useFakeTimers();
+    let resolveStart: (() => void) | undefined;
+    const onStart = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    const explicitStart = gate.startNow();
+    await Promise.resolve();
+    const workDuringStart = gate.noteWork();
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
+
+    resolveStart?.();
+
+    await expect(explicitStart).resolves.toBeUndefined();
+    await expect(workDuringStart).resolves.toBe(true);
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
   });
 
   it("ignores message-like tools for progress draft work", () => {

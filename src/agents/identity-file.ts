@@ -1,8 +1,14 @@
+/**
+ * IDENTITY.md parsing and writing support.
+ * The parser accepts human-authored markdown, while the writer only updates
+ * stable rich identity fields.
+ */
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
 
+/** Parsed rich identity values from a workspace `IDENTITY.md` file. */
 export type AgentIdentityFile = {
   name?: string;
   emoji?: string;
@@ -30,8 +36,10 @@ const IDENTITY_PLACEHOLDER_VALUES = new Set([
 ]);
 
 function normalizeIdentityValue(value: string): string {
+  // Normalize markdown decoration and punctuation so generated template
+  // placeholders do not accidentally become real identity values.
   let normalized = value.trim();
-  normalized = normalized.replace(/^[*_]+|[*_]+$/g, "").trim();
+  normalized = normalized.replace(/^[*_`\s]+|[*_`\s]+$/g, "").trim();
   if (normalized.startsWith("(") && normalized.endsWith(")")) {
     normalized = normalized.slice(1, -1).trim();
   }
@@ -39,11 +47,16 @@ function normalizeIdentityValue(value: string): string {
   return normalizeLowercaseStringOrEmpty(normalized.replace(/\s+/g, " "));
 }
 
+function normalizeIdentityLabel(label: string): string {
+  return normalizeLowercaseStringOrEmpty(label.replace(/[*_`]/g, ""));
+}
+
 function isIdentityPlaceholder(value: string): boolean {
   const normalized = normalizeIdentityValue(value);
   return IDENTITY_PLACEHOLDER_VALUES.has(normalized);
 }
 
+/** Parse rich identity fields from human-authored markdown content. */
 export function parseIdentityMarkdown(content: string): AgentIdentityFile {
   const identity: AgentIdentityFile = {};
   const lines = content.split(/\r?\n/);
@@ -53,12 +66,10 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
     if (colonIndex === -1) {
       continue;
     }
-    const label = normalizeLowercaseStringOrEmpty(
-      cleaned.slice(0, colonIndex).replace(/[*_]/g, ""),
-    );
+    const label = normalizeIdentityLabel(cleaned.slice(0, colonIndex));
     const value = cleaned
       .slice(colonIndex + 1)
-      .replace(/^[*_]+|[*_]+$/g, "")
+      .replace(/^[*_`\s]+|[*_`\s]+$/g, "")
       .trim();
     if (!value) {
       continue;
@@ -88,6 +99,7 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
   return identity;
 }
 
+/** Return true when the parsed identity has any meaningful user-supplied value. */
 export function identityHasValues(identity: AgentIdentityFile): boolean {
   return Boolean(
     identity.name ||
@@ -104,8 +116,16 @@ function buildIdentityLine(label: string, value: string): string {
 }
 
 function matchesIdentityLabel(line: string, label: string): boolean {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^\\s*-\\s*(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*:`, "i").test(line.trim());
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("-")) {
+    return false;
+  }
+  const cleaned = trimmed.replace(/^\s*-\s*/, "");
+  const colonIndex = cleaned.indexOf(":");
+  if (colonIndex === -1) {
+    return false;
+  }
+  return normalizeIdentityLabel(cleaned.slice(0, colonIndex)) === normalizeIdentityLabel(label);
 }
 
 function normalizeIdentityContent(content: string | undefined): string[] {
@@ -116,6 +136,8 @@ function normalizeIdentityContent(content: string | undefined): string[] {
 }
 
 function resolveIdentityInsertIndex(lines: string[]): number {
+  // New fields stay grouped with existing rich identity fields; otherwise place
+  // them directly after the title block so legacy prose remains intact.
   let lastIdentityIndex = -1;
   for (const [index, line] of lines.entries()) {
     const cleaned = line.trim().replace(/^\s*-\s*/, "");
@@ -123,9 +145,7 @@ function resolveIdentityInsertIndex(lines: string[]): number {
     if (colonIndex === -1) {
       continue;
     }
-    const label = normalizeLowercaseStringOrEmpty(
-      cleaned.slice(0, colonIndex).replace(/[*_]/g, ""),
-    );
+    const label = normalizeIdentityLabel(cleaned.slice(0, colonIndex));
     if (RICH_IDENTITY_LABELS.has(label)) {
       lastIdentityIndex = index;
     }
@@ -145,6 +165,10 @@ function resolveIdentityInsertIndex(lines: string[]): number {
   return insertIndex;
 }
 
+/**
+ * Merge writable identity fields into existing IDENTITY.md content, replacing
+ * duplicate labels and preserving unrelated markdown.
+ */
 export function mergeIdentityMarkdownContent(
   content: string | undefined,
   identity: Pick<AgentIdentityFile, "name" | "theme" | "emoji" | "avatar">,
@@ -194,6 +218,7 @@ function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
   }
 }
 
+/** Load the workspace identity file when it exists and contains real values. */
 export function loadAgentIdentityFromWorkspace(workspace: string): AgentIdentityFile | null {
   const identityPath = path.join(workspace, DEFAULT_IDENTITY_FILENAME);
   return loadIdentityFromFile(identityPath);

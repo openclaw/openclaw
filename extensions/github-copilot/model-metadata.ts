@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements model metadata behavior.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -11,6 +12,29 @@ const COPILOT_CHAT_COMPLETIONS_COMPAT: ModelDefinitionConfig["compat"] = {
 };
 
 const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([
+  [
+    "claude-opus-4.6-1m",
+    {
+      name: "Claude Opus 4.6 (1M context)",
+      api: "anthropic-messages",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
+      compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+    },
+  ],
+  [
+    "claude-opus-4.7-1m-internal",
+    {
+      name: "Claude Opus 4.7 (1M context)",
+      api: "anthropic-messages",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
+      thinkingLevelMap: { xhigh: "xhigh" },
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+    },
+  ],
   [
     "gpt-5.5",
     {

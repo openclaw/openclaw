@@ -1,3 +1,4 @@
+// Vydra tests cover video generation provider plugin behavior.
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -70,6 +71,29 @@ describe("vydra video-generation provider", () => {
       videoUrl: "https://cdn.vydra.ai/generated/test.mp4",
       status: "completed",
     });
+  });
+
+  it("rejects generated video downloads that exceed the configured media cap", async () => {
+    stubVydraApiKey();
+    stubFetch(
+      jsonResponse({ jobId: "job-123", status: "processing" }),
+      jsonResponse({
+        jobId: "job-123",
+        status: "completed",
+        videoUrl: "https://cdn.vydra.ai/generated/test.mp4",
+      }),
+      binaryResponse("too-large", "video/mp4"),
+    );
+
+    const provider = buildVydraVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "vydra",
+        model: "veo3",
+        prompt: "tiny city at sunrise",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("Vydra video download exceeds 1 bytes");
   });
 
   it("requires a remote image url for kling", async () => {

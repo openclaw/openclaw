@@ -1,3 +1,4 @@
+// Googlechat tests cover targets plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
@@ -102,11 +103,14 @@ function stubSuccessfulSend(name: string) {
   return fetchMock;
 }
 
-async function expectDownloadToRejectForResponse(response: Response) {
+async function expectDownloadToRejectForResponse(
+  response: Response,
+  expected: string | RegExp = /max bytes/i,
+) {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
   await expect(
     downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
-  ).rejects.toThrow(/max bytes/i);
+  ).rejects.toThrow(expected);
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
@@ -184,6 +188,22 @@ describe("downloadGoogleChatMedia", () => {
       headers: { "content-length": "50", "content-type": "application/octet-stream" },
     });
     await expectDownloadToRejectForResponse(response);
+  });
+
+  it("rejects malformed content-length before reading media", async () => {
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
+    const response = {
+      ok: true,
+      status: 200,
+      headers: new Headers({
+        "content-length": "0x3",
+        "content-type": "application/octet-stream",
+      }),
+      arrayBuffer,
+    } as unknown as Response;
+
+    await expectDownloadToRejectForResponse(response, "invalid content-length header: 0x3");
+    expect(arrayBuffer).not.toHaveBeenCalled();
   });
 
   it("rejects when streamed payload exceeds max bytes", async () => {

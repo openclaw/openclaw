@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements query behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -13,7 +14,10 @@ import {
   createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
 } from "openclaw/plugin-sdk/session-visibility";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
@@ -81,6 +85,12 @@ const ROUTE_QUESTION_STOP_WORDS = new Set([
   "with",
   "would",
 ]);
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(1, Math.floor(value))
+    : fallback;
+}
 
 export const WIKI_SEARCH_MODES = [
   "auto",
@@ -959,7 +969,7 @@ function normalizeLookupKey(value: string): string {
 function buildLookupCandidates(lookup: string): string[] {
   const normalized = normalizeLookupKey(lookup);
   const withExtension = normalized.endsWith(".md") ? normalized : `${normalized}.md`;
-  return [...new Set([normalized, withExtension])];
+  return uniqueStrings([normalized, withExtension]);
 }
 
 function shouldEnforceSessionVisibility(params: {
@@ -1165,8 +1175,8 @@ function buildClaimResultMetadata(claim: WikiClaim | undefined): Partial<WikiSea
     ...(claim.id ? { matchedClaimId: claim.id } : {}),
     ...(claim.status ? { matchedClaimStatus: claim.status } : {}),
     ...(typeof claim.confidence === "number" ? { matchedClaimConfidence: claim.confidence } : {}),
-    evidenceKinds: [...new Set(claim.evidence.flatMap((evidence) => evidence.kind ?? []))],
-    evidenceSourceIds: [...new Set(claim.evidence.flatMap((evidence) => evidence.sourceId ?? []))],
+    evidenceKinds: uniqueStrings(claim.evidence.flatMap((evidence) => evidence.kind ?? [])),
+    evidenceSourceIds: uniqueStrings(claim.evidence.flatMap((evidence) => evidence.sourceId ?? [])),
   };
 }
 
@@ -1464,7 +1474,7 @@ export async function searchMemoryWiki(params: {
     operation: "wiki_search",
   });
   await initializeMemoryWikiVault(effectiveConfig);
-  const maxResults = Math.max(1, params.maxResults ?? 10);
+  const maxResults = normalizePositiveInteger(params.maxResults, 10);
   const mode = params.mode ?? "auto";
 
   const wikiResults = shouldSearchWiki(effectiveConfig)
@@ -1531,8 +1541,8 @@ export async function getMemoryWikiPage(params: {
     operation: "wiki_get",
   });
   await initializeMemoryWikiVault(effectiveConfig);
-  const fromLine = Math.max(1, params.fromLine ?? 1);
-  const lineCount = Math.max(1, params.lineCount ?? 200);
+  const fromLine = normalizePositiveInteger(params.fromLine, 1);
+  const lineCount = normalizePositiveInteger(params.lineCount, 200);
 
   if (shouldSearchWiki(effectiveConfig)) {
     const digest = await readQueryDigestBundle(effectiveConfig.vault.path);

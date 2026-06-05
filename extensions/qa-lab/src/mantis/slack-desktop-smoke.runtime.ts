@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements slack desktop smoke behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -1396,7 +1397,7 @@ export async function runMantisSlackDesktopSmoke(
       timer.updatePhaseStatus("crabbox.remote_run", "accepted");
     }
     if (remoteRunError && !gatewaySetupCompleted && !slackQaCompleted) {
-      throw remoteRunError;
+      throw toErrorObject(remoteRunError);
     }
     if (gatewaySetup && !gatewaySetupCompleted) {
       throw new Error("Slack desktop gateway setup did not report a live OpenClaw gateway.");
@@ -1510,4 +1511,8 @@ export async function runMantisSlackDesktopSmoke(
       });
     }
   }
+}
+
+function toErrorObject(error: unknown): Error {
+  return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }

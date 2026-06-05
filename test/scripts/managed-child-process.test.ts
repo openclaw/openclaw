@@ -1,3 +1,4 @@
+// Managed Child Process tests cover managed child process script behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   createManagedCommandSpawnSpec,
+  runManagedCommand,
   signalExitCode,
 } from "../../scripts/lib/managed-child-process.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -25,6 +27,7 @@ describe("managed-child-process", () => {
     expect(signalExitCode("SIGHUP")).toBe(129);
     expect(signalExitCode("SIGINT")).toBe(130);
     expect(signalExitCode("SIGTERM")).toBe(143);
+    expect(signalExitCode("SIGKILL")).toBe(137);
   });
 
   it("wraps Windows shell argv through cmd.exe without Node shell mode", () => {
@@ -84,6 +87,36 @@ describe("managed-child-process", () => {
     ).toThrow("unsafe Windows cmd.exe argument detected");
   });
 
+  it("shares process signal listeners across parallel managed commands", async () => {
+    const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
+    const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));
+    let readyCount = 0;
+    const commands = Array.from({ length: 12 }, () =>
+      runManagedCommand({
+        args: ["-e", "setTimeout(() => {}, 500)"],
+        bin: process.execPath,
+        shell: false,
+        stdio: "ignore",
+        onReady: () => {
+          readyCount += 1;
+        },
+      }),
+    );
+
+    try {
+      await waitFor(() => readyCount === commands.length);
+      for (const signal of signals) {
+        expect(process.listenerCount(signal)).toBe((baseline.get(signal) ?? 0) + 1);
+      }
+    } finally {
+      await Promise.all(commands);
+    }
+
+    for (const signal of signals) {
+      expect(process.listenerCount(signal)).toBe(baseline.get(signal) ?? 0);
+    }
+  });
+
   posixIt("kills the managed child process group when the runner is terminated", async () => {
     const dir = createTempDir("openclaw-managed-child-");
     const childPath = path.join(dir, "child.mjs");
@@ -138,7 +171,7 @@ process.exitCode = await runManagedCommand({
       const result = await waitForClose(runner);
 
       expect(result).toEqual({ code: 143, signal: null });
-      await waitFor(() => !isProcessAlive(childPid), 10_000);
+      await waitFor(() => !isProcessAlive(childPid), 1_500);
     } finally {
       if (isProcessAlive(runnerPid)) {
         process.kill(runnerPid, "SIGKILL");

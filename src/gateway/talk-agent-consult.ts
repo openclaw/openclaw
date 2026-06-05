@@ -1,7 +1,14 @@
+// Gateway Talk realtime agent-consult bridge.
+// Starts chat.send runs that answer realtime Talk tool calls.
 import { randomUUID } from "node:crypto";
+import {
+  ErrorCodes,
+  errorShape,
+  type ConnectParams,
+  type ErrorShape,
+} from "../../packages/gateway-protocol/src/index.js";
 import { normalizeTalkSection } from "../config/talk.js";
 import { buildRealtimeVoiceAgentConsultChatMessage } from "../talk/agent-consult-tool.js";
-import { ErrorCodes, errorShape, type ConnectParams, type ErrorShape } from "./protocol/index.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import type {
   GatewayClient,
@@ -11,6 +18,9 @@ import type {
 import { registerTalkRealtimeRelayAgentRun } from "./talk-realtime-relay.js";
 import { formatForLog } from "./ws-log.js";
 
+/**
+ * Starts the agent-consult chat run that backs realtime Talk tool calls.
+ */
 export async function startTalkRealtimeAgentConsult(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
@@ -85,6 +95,7 @@ export async function startTalkRealtimeAgentConsult(params: {
       connId: params.connId,
       sessionKey: params.sessionKey,
       runId,
+      callId: params.callId,
     });
   }
   return { ok: true, runId, idempotencyKey };

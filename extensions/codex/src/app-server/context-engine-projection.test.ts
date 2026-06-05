@@ -1,4 +1,5 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+// Codex tests cover context engine projection plugin behavior.
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
   projectContextEngineAssemblyForCodex,

@@ -1,7 +1,8 @@
+/** Platform service registry and shared gateway service start/repair logic. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { VERSION } from "../version.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
@@ -62,6 +63,7 @@ export type {
   GatewayServiceState,
 } from "./service-types.js";
 
+// Platform service adapter used by CLI commands across launchd, systemd, and schtasks.
 function ignoreServiceWriteResult<TArgs extends GatewayServiceInstallArgs>(
   write: (args: TArgs) => Promise<unknown>,
 ): (args: TArgs) => Promise<void> {
@@ -91,10 +93,23 @@ function mergeGatewayServiceEnv(
   if (!command?.environment) {
     return baseEnv;
   }
-  return {
+  const merged = {
     ...baseEnv,
     ...command.environment,
   };
+  for (const key of [
+    "OPENCLAW_LAUNCHD_LABEL",
+    "OPENCLAW_SYSTEMD_UNIT",
+    "OPENCLAW_WINDOWS_TASK_NAME",
+  ]) {
+    // Explicit caller env selects the target service identity; installed command
+    // env may come from a different profile or stale service file.
+    const value = baseEnv[key]?.trim();
+    if (value) {
+      merged[key] = value;
+    }
+  }
+  return merged;
 }
 
 const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
@@ -130,6 +145,8 @@ function collectGatewayServiceStartRepairIssues(
   const issues: GatewayServiceStartRepairIssue[] = [];
   const serviceVersion = command.environment?.OPENCLAW_SERVICE_VERSION?.trim();
   if (serviceVersion && serviceVersion !== VERSION) {
+    // Version drift often means the service points at old package paths; require
+    // reinstall/repair before pretending restart succeeded.
     issues.push({
       code: "version-mismatch",
       message: `service was installed by OpenClaw ${serviceVersion}, current CLI is ${VERSION}`,
@@ -293,6 +310,8 @@ function withFutureConfigGuard(service: GatewayService): GatewayService {
   return {
     ...service,
     stage: async (args) => {
+      // Service mutations rewrite durable launchd/systemd/schtasks files, so
+      // block them when config was produced by a newer OpenClaw.
       await assertFutureConfigActionAllowed("rewrite the gateway service");
       return await service.stage(args);
     },

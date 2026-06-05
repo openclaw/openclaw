@@ -1,3 +1,4 @@
+// Telegram plugin module implements doctor contract behavior.
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -13,6 +14,72 @@ import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
 function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
   return hasLegacyStreamingAliases(value, { includePreviewChunk: true });
+}
+
+function hasRetiredTelegramDmConfig(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  if (!entry) {
+    return false;
+  }
+  if (asObjectRecord(entry.dm)) {
+    return true;
+  }
+  return Object.values(asObjectRecord(entry.direct) ?? {}).some(
+    (direct) => asObjectRecord(direct)?.threadReplies !== undefined,
+  );
+}
+
+function hasRetiredTelegramAccountDmConfig(value: unknown): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => hasRetiredTelegramDmConfig(account));
+}
+
+function removeRetiredTelegramDmConfig(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  let updated = params.entry;
+  let changed = false;
+  const dm = asObjectRecord(updated.dm);
+  if (dm) {
+    const { dm: _ignored, ...rest } = updated;
+    updated = rest;
+    params.changes.push(
+      dm.threadReplies === undefined
+        ? `Removed ${params.pathPrefix}.dm.`
+        : `Removed ${params.pathPrefix}.dm.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.`,
+    );
+    changed = true;
+  }
+
+  const direct = asObjectRecord(updated.direct);
+  if (direct) {
+    let directChanged = false;
+    const nextDirect = { ...direct };
+    for (const [chatId, rawDirectConfig] of Object.entries(direct)) {
+      const directConfig = asObjectRecord(rawDirectConfig);
+      if (!directConfig || directConfig.threadReplies === undefined) {
+        continue;
+      }
+      const nextDirectConfig = { ...directConfig };
+      delete nextDirectConfig.threadReplies;
+      nextDirect[chatId] = nextDirectConfig;
+      params.changes.push(
+        `Removed ${params.pathPrefix}.direct.${chatId}.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.`,
+      );
+      directChanged = true;
+    }
+    if (directChanged) {
+      updated = { ...updated, direct: nextDirect };
+      changed = true;
+    }
+  }
+
+  return { entry: updated, changed };
 }
 
 function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
@@ -42,6 +109,18 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "telegram"],
     message:
+      'channels.telegram.dm and direct.<chatId>.threadReplies were removed; DM topic sessions now follow Telegram getMe.has_topics_enabled, so topics-enabled bots may use thread-scoped DM sessions. Run "openclaw doctor --fix".',
+    match: hasRetiredTelegramDmConfig,
+  },
+  {
+    path: ["channels", "telegram", "accounts"],
+    message:
+      'channels.telegram.accounts.<id>.dm and direct.<chatId>.threadReplies were removed; DM topic sessions now follow Telegram getMe.has_topics_enabled, so topics-enabled bots may use thread-scoped DM sessions. Run "openclaw doctor --fix".',
+    match: hasRetiredTelegramAccountDmConfig,
+  },
+  {
+    path: ["channels", "telegram"],
+    message:
       "channels.telegram.streamMode, channels.telegram.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
     match: hasLegacyTelegramStreamingAliases,
   },
@@ -66,6 +145,14 @@ export function normalizeCompatibilityConfig({
   const changes: string[] = [];
   let updated = rawEntry;
   let changed = false;
+
+  const removedThreadReplies = removeRetiredTelegramDmConfig({
+    entry: updated,
+    pathPrefix: "channels.telegram",
+    changes,
+  });
+  updated = removedThreadReplies.entry;
+  changed = changed || removedThreadReplies.changed;
 
   if (updated.groupMentionsOnly !== undefined) {
     const defaultGroupEntry = resolveCompatibleDefaultGroupEntry(updated);
@@ -104,6 +191,31 @@ export function normalizeCompatibilityConfig({
   });
   updated = aliases.entry;
   changed = changed || aliases.changed;
+
+  const accounts = asObjectRecord(updated.accounts);
+  if (accounts) {
+    let accountsChanged = false;
+    const nextAccounts = { ...accounts };
+    for (const [accountId, rawAccount] of Object.entries(accounts)) {
+      const account = asObjectRecord(rawAccount);
+      if (!account) {
+        continue;
+      }
+      const accountRemovedThreadReplies = removeRetiredTelegramDmConfig({
+        entry: account,
+        pathPrefix: `channels.telegram.accounts.${accountId}`,
+        changes,
+      });
+      if (accountRemovedThreadReplies.changed) {
+        nextAccounts[accountId] = accountRemovedThreadReplies.entry;
+        accountsChanged = true;
+      }
+    }
+    if (accountsChanged) {
+      updated = { ...updated, accounts: nextAccounts };
+      changed = true;
+    }
+  }
 
   if (!changed && changes.length === 0) {
     return { config: cfg, changes: [] };

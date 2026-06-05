@@ -1,4 +1,10 @@
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
+/**
+ * Normalizes and delivers agent command results to outbound channels.
+ */
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
@@ -11,7 +17,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  resolveAgentDeliveryPlan,
+  resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -26,16 +32,18 @@ import {
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
+import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { isNestedAgentLane } from "../lanes.js";
-import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
-import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
 import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
 
-type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
+type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatch>>;
 
+/** Per-payload durable delivery status. */
 export type AgentCommandDeliveryPayloadStatus = "sent" | "suppressed" | "failed";
 
+/** Delivery outcome for one normalized outbound payload. */
 export type AgentCommandDeliveryPayloadOutcome = {
   index: number;
   status: AgentCommandDeliveryPayloadStatus;
@@ -50,6 +58,7 @@ export type AgentCommandDeliveryPayloadOutcome = {
   };
 };
 
+/** Aggregate delivery status for an agent command result. */
 export type AgentCommandDeliveryStatus = {
   requested: true;
   attempted: boolean;
@@ -65,9 +74,10 @@ export type AgentCommandDeliveryStatus = {
   payloadOutcomes?: AgentCommandDeliveryPayloadOutcome[];
 };
 
+/** Agent command result after payload normalization and optional delivery. */
 export type AgentCommandDeliveryResult = {
   payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
-  meta: EmbeddedPiRunMeta & AgentCommandResultMetaOverrides;
+  meta: EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides;
   didSendViaMessagingTool?: boolean;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -152,9 +162,9 @@ function logNestedOutput(
 }
 
 function mergeResultMetaOverrides(
-  meta: EmbeddedPiRunMeta,
+  meta: EmbeddedAgentRunMeta,
   overrides: AgentCommandResultMetaOverrides | undefined,
-): EmbeddedPiRunMeta & AgentCommandResultMetaOverrides {
+): EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides {
   if (!overrides) {
     return meta;
   }
@@ -340,6 +350,7 @@ async function normalizeReplyMediaPathsForDelivery(params: {
   return result;
 }
 
+/** Normalizes reply payloads and media paths before delivery. */
 export function normalizeAgentCommandReplyPayloads(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
@@ -411,11 +422,19 @@ export function normalizeAgentCommandReplyPayloads(params: {
   return normalizedPayloads;
 }
 
+/** Delivers an agent command result or records why delivery was skipped. */
 export async function deliverAgentCommandResult(
   params: DeliverAgentCommandResultParams,
 ): Promise<AgentCommandDeliveryResult> {
   const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
+  const deliveryAgentId =
+    outboundSession?.agentId ??
+    resolveSessionAgentId({
+      sessionKey: effectiveSessionKey,
+      config: cfg,
+    }) ??
+    resolveDefaultAgentId(cfg);
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
   const turnSourceChannel = opts.runContext?.messageChannel ?? opts.messageChannel;
@@ -424,7 +443,10 @@ export async function deliverAgentCommandResult(
   const turnSourceThreadId = opts.runContext?.currentThreadTs ?? opts.threadId;
   const explicitChannelHint = (opts.replyChannel ?? opts.channel)?.trim();
   const resolveDeliveryRouting = async (candidateSessionEntry: SessionEntry | undefined) => {
-    const deliveryPlan = resolveAgentDeliveryPlan({
+    const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg,
+      agentId: deliveryAgentId,
+      currentSessionKey: effectiveSessionKey,
       sessionEntry: candidateSessionEntry,
       requestedChannel: opts.replyChannel ?? opts.channel,
       explicitTo: opts.replyTo ?? opts.to,
@@ -615,9 +637,9 @@ export async function deliverAgentCommandResult(
     applyChannelTransforms: deliver,
   });
   // Auto-reply-style media-path normalization must also run for the CLI
-  // `--deliver` path. Without it, relative `MEDIA:./out/photo.png` tokens
-  // reach the outbound loader unresolved and `assertLocalMediaAllowed` fails
-  // with "Local media path is not under an allowed directory". Mirrors the
+  // `--deliver` path. Without it, relative reply media paths reach the
+  // outbound loader unresolved and `assertLocalMediaAllowed` fails with
+  // "Local media path is not under an allowed directory". Mirrors the
   // normalizer wiring in `src/auto-reply/reply/agent-runner.ts`.
   const mediaNormalizedReplyPayloads =
     deliver && !deliveryStatus && !isInternalMessageChannel(deliveryChannel)
@@ -647,7 +669,7 @@ export async function deliverAgentCommandResult(
   };
   if (strictPreDeliveryError) {
     emitJsonEnvelope(deliveryStatus);
-    throw strictPreDeliveryError;
+    throw toLintErrorObject(strictPreDeliveryError, "Non-Error thrown");
   }
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
@@ -734,4 +756,18 @@ export async function deliverAgentCommandResult(
     deliverySucceeded,
     deliveryStatus,
   });
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -1,5 +1,7 @@
+// Provider auth runtime tests cover OAuth callback handling and provider auth flow helpers.
 import { createServer } from "node:net";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import * as providerAuthRuntime from "./provider-auth-runtime.js";
 
 async function getFreePort(): Promise<number> {
@@ -149,6 +151,35 @@ describe("plugin-sdk provider-auth-runtime", () => {
     const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
     expect(response.status).toBe(200);
     await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
+  });
+
+  it("clamps oversized OAuth callback timeouts before scheduling", async () => {
+    const port = await getFreePort();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      let callback!: Promise<providerAuthRuntime.OAuthCallbackResult>;
+      const listening = new Promise<void>((resolve) => {
+        callback = providerAuthRuntime.waitForLocalOAuthCallback({
+          expectedState: "state-1",
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+          port,
+          callbackPath: "/callback",
+          redirectUri: `http://127.0.0.1:${port}/callback`,
+          hostname: "127.0.0.1",
+          successTitle: "OAuth complete",
+          onProgress: () => resolve(),
+        });
+      });
+      await listening;
+
+      const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
+
+      expect(response.status).toBe(200);
+      await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 });
 

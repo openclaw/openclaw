@@ -1,3 +1,4 @@
+// Slack plugin module implements setup core behavior.
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   createAccountScopedAllowFromSection,
@@ -20,6 +21,7 @@ import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectSlackAccount } from "./account-inspect.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -63,7 +65,7 @@ function setSlackInteractiveReplies(
   const capabilities = resolveSlackAccount({ cfg, accountId }).config.capabilities;
   const nextCapabilities = Array.isArray(capabilities)
     ? interactiveReplies
-      ? [...new Set([...capabilities, "interactiveReplies"])]
+      ? uniqueStrings([...capabilities, "interactiveReplies"])
       : capabilities.filter(
           (entry) => normalizeLowercaseStringOrEmpty(entry) !== "interactivereplies",
         )

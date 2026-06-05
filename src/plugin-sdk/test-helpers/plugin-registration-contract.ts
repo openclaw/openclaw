@@ -1,3 +1,6 @@
+/**
+ * Contract suite for bundled plugin registration ownership and manifest auth metadata.
+ */
 import { describe, expect, it } from "vitest";
 import { loadPluginManifestRegistry, pluginRegistrationContractRegistry } from "../testing.js";
 
@@ -11,7 +14,7 @@ type PluginRegistrationContractParams = {
   realtimeTranscriptionProviderIds?: string[];
   realtimeVoiceProviderIds?: string[];
   mediaUnderstandingProviderIds?: string[];
-  meetingNotesSourceProviderIds?: string[];
+  transcriptSourceProviderIds?: string[];
   imageGenerationProviderIds?: string[];
   videoGenerationProviderIds?: string[];
   musicGenerationProviderIds?: string[];
@@ -40,6 +43,7 @@ function findRegistration(pluginId: string) {
   return entry;
 }
 
+/** Installs tests that pin a bundled plugin's registered provider/tool ownership. */
 export function describePluginRegistrationContract(params: PluginRegistrationContractParams) {
   describe(`${params.pluginId} plugin registration contract`, () => {
     if (params.cliBackendIds) {
@@ -102,10 +106,10 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
       });
     }
 
-    if (params.meetingNotesSourceProviderIds) {
-      it("keeps bundled meeting-notes source ownership explicit", () => {
-        expect(findRegistration(params.pluginId).meetingNotesSourceProviderIds).toEqual(
-          params.meetingNotesSourceProviderIds,
+    if (params.transcriptSourceProviderIds) {
+      it("keeps bundled transcripts source ownership explicit", () => {
+        expect(findRegistration(params.pluginId).transcriptSourceProviderIds).toEqual(
+          params.transcriptSourceProviderIds,
         );
       });
     }

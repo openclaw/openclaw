@@ -1,3 +1,5 @@
+// Discord tests cover api plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordApiError, fetchDiscord, requestDiscord } from "./api.js";
@@ -100,6 +102,61 @@ describe("fetchDiscord", () => {
     expect(message).not.toContain("<html");
   });
 
+  it.each([
+    ["hex", "0x10"],
+    ["fractional", "1.5"],
+    ["unsafe-ms", "9007199254741"],
+    ["unsafe-integer", "9007199254740993"],
+    ["overflow", `1${"0".repeat(309)}`],
+  ])("rejects invalid Retry-After header values: %s", async (_label, header) => {
+    const fetcher = withFetchPreconnect(
+      async () =>
+        new Response("<html><title>Error 1015</title><body>rate limited</body></html>", {
+          status: 429,
+          headers: { "content-type": "text/html", "retry-after": header },
+        }),
+    );
+
+    let error: unknown;
+    try {
+      await fetchDiscord("/oauth2/applications/@me", "test", fetcher, {
+        retry: { attempts: 1 },
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(DiscordApiError);
+    expect((error as DiscordApiError).retryAfter).toBe(60);
+  });
+
+  it("ignores unsafe retry_after body values and falls back to Retry-After", async () => {
+    const fetcher = withFetchPreconnect(
+      async () =>
+        new Response(
+          JSON.stringify({
+            message: "You are being rate limited.",
+            retry_after: 9_007_199_254_741,
+            global: false,
+          }),
+          { status: 429, headers: { "retry-after": "7" } },
+        ),
+    );
+
+    let error: unknown;
+    try {
+      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+        retry: { attempts: 1 },
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(DiscordApiError);
+    expect((error as DiscordApiError).retryAfter).toBe(7);
+    expect(String(error)).not.toContain("retry after");
+  });
+
   it("retries rate limits before succeeding", async () => {
     let calls = 0;
     const fetcher = withFetchPreconnect(async () => {
@@ -148,5 +205,24 @@ describe("fetchDiscord", () => {
     expect(request.method).toBe("POST");
     expect(request.body).toBe(JSON.stringify({ content: "hello" }));
     expect(new Headers(request.headers).get("content-type")).toBe("application/json");
+  });
+
+  it("caps oversized request timeouts before creating abort signals", async () => {
+    const timeoutController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    let request: RequestInit | undefined;
+    const fetcher = withFetchPreconnect(async (_url, init) => {
+      request = init;
+      return jsonResponse({ id: "42" }, 200);
+    });
+
+    await requestDiscord<{ id: string }>("/channels/c/messages", "test", {
+      fetcher,
+      retry: { attempts: 1 },
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+    expect(request?.signal).toBe(timeoutController.signal);
   });
 });

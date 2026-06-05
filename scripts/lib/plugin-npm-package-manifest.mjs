@@ -1,9 +1,11 @@
+// Augments plugin npm package manifests with generated runtime/package metadata.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
 import { packageJsonForShrinkwrap, readShrinkwrapOverrides } from "../generate-npm-shrinkwrap.mjs";
+import { resolveNpmRunner } from "../npm-runner.mjs";
 import {
   listPluginNpmRuntimeBuildOutputs,
   resolvePluginNpmRuntimeBuildPlan,
@@ -136,28 +138,27 @@ function listConfiguredBundledDependencyNames(packageJson) {
   return [];
 }
 
-function npmInvocation() {
-  if (process.platform !== "win32") {
-    return { args: [], command: "npm" };
-  }
-  const npmCliPath = path.join(
-    path.dirname(process.execPath),
-    "node_modules",
-    "npm",
-    "bin",
-    "npm-cli.js",
-  );
-  if (fs.existsSync(npmCliPath)) {
-    return { args: [npmCliPath], command: process.execPath };
-  }
-  return { args: [], command: "npm.cmd", shell: true };
+/** Resolve an npm command invocation for plugin package scripts. */
+export function resolvePluginNpmCommand(args, params = {}) {
+  return resolveNpmRunner({
+    comSpec: params.comSpec,
+    env: params.env,
+    execPath: params.execPath,
+    existsSync: params.existsSync,
+    npmArgs: args,
+    platform: params.platform,
+  });
 }
 
-function spawnNpmSync(args, options) {
-  const invocation = npmInvocation();
-  return spawnSync(invocation.command, [...invocation.args, ...args], {
+function spawnNpmSync(args, options = {}) {
+  const invocation = resolvePluginNpmCommand(args, { env: options.env ?? process.env });
+  return spawnSync(invocation.command, invocation.args, {
     ...options,
-    ...(invocation.shell ? { shell: invocation.shell } : {}),
+    ...(invocation.env ? { env: invocation.env } : {}),
+    ...(invocation.shell !== undefined ? { shell: invocation.shell } : {}),
+    ...(invocation.windowsVerbatimArguments !== undefined
+      ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
+      : {}),
   });
 }
 
@@ -294,7 +295,7 @@ function installMissingOptionalBundledDependencies(params) {
       {
         cwd: params.packageDir,
         env: process.env,
-        stdio: ["ignore", "ignore", "inherit"],
+        stdio: ["ignore", "inherit", "inherit"],
       },
     );
     if (result.error) {
@@ -353,22 +354,34 @@ function installPackageLocalBundledDependencies(params) {
 
   console.error(`[plugin-npm-publish] installing bundled dependencies for ${params.pluginDir}`);
   const packageJsonPath = resolvePackageJsonPath(params.packageDir);
-  const publishPackageJsonText = fs.readFileSync(packageJsonPath, "utf8");
+  const packedPackageJsonText = fs.readFileSync(packageJsonPath, "utf8");
+  const installPackageJsonBase = {
+    ...params.packageJson,
+  };
+  delete installPackageJsonBase.peerDependencies;
+  delete installPackageJsonBase.peerDependenciesMeta;
+  const installPackageJson = packageJsonForShrinkwrap(
+    installPackageJsonBase,
+    readShrinkwrapOverrides(),
+  );
+  const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;
+  if (installPackageJsonText !== packedPackageJsonText) {
+    // npm validates peer edges against the shrinkwrap during ci even when peers are omitted.
+    // The peer metadata belongs in the packed plugin, not in this temporary dependency install.
+    fs.writeFileSync(packageJsonPath, installPackageJsonText, "utf8");
+  }
   try {
-    const installPackageJson = packageJsonForShrinkwrap(packageJson, readShrinkwrapOverrides());
-    const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;
-    if (installPackageJsonText !== publishPackageJsonText) {
-      fs.writeFileSync(packageJsonPath, installPackageJsonText, "utf8");
-    }
     const result = spawnNpmSync(
       [
         "ci",
+        "--install-strategy=shallow",
         "--omit=dev",
         "--omit=peer",
         "--legacy-peer-deps",
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
+        "--workspaces=false",
         "--loglevel=error",
       ],
       {
@@ -387,13 +400,14 @@ function installPackageLocalBundledDependencies(params) {
     }
     installMissingOptionalBundledDependencies(params);
   } finally {
-    fs.writeFileSync(packageJsonPath, publishPackageJsonText, "utf8");
+    fs.writeFileSync(packageJsonPath, packedPackageJsonText, "utf8");
   }
   return () => {
     fs.rmSync(nodeModulesPath, { recursive: true, force: true });
   };
 }
 
+/** Build the package.json that should be used while packaging a plugin for npm. */
 export function resolveAugmentedPluginNpmPackageJson(params) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -451,6 +465,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
   };
 }
 
+/** Read generated bundled channel config metadata keyed by plugin id. */
 export function readGeneratedBundledChannelConfigs(repoRoot) {
   const metadataPath = path.join(repoRoot, GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH);
   if (!fs.existsSync(metadataPath)) {
@@ -517,6 +532,7 @@ function readGeneratedBundledChannelConfigEntries(source) {
   }
 }
 
+/** Merge generated channel config schemas into a plugin manifest without clobbering labels. */
 export function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) {
   if (!generatedChannelConfigs || Object.keys(generatedChannelConfigs).length === 0) {
     return manifest;
@@ -550,6 +566,7 @@ export function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) 
   };
 }
 
+/** Build the plugin manifest that should be used while packaging a plugin for npm. */
 export function resolveAugmentedPluginNpmManifest(params) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -579,6 +596,7 @@ export function resolveAugmentedPluginNpmManifest(params) {
   };
 }
 
+/** Temporarily write augmented manifest/package metadata while a packaging callback runs. */
 export function withAugmentedPluginNpmManifestForPackage(params, callback) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);

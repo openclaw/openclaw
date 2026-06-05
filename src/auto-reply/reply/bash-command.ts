@@ -1,3 +1,8 @@
+/** Handles /bash and ! shell command chat shortcuts. */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { getFinishedSession, getSession } from "../../agents/bash-process-registry.js";
 import { createExecTool } from "../../agents/bash-tools.js";
@@ -6,10 +11,6 @@ import { isCommandFlagEnabled } from "../../config/commands.flags.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { clampInt } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -66,7 +67,7 @@ function formatOutputBlock(text: string) {
 
 function parseBashRequest(raw: string): BashRequest | null {
   const trimmed = raw.trimStart();
-  let restSource = "";
+  let restSource;
   if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("/bash")) {
     const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);
     if (!match) {
@@ -181,6 +182,7 @@ function buildUsageReply(): ReplyPayload {
   };
 }
 
+/** Parses, authorizes, starts, polls, or stops chat-driven bash commands. */
 export async function handleBashChatCommand(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;

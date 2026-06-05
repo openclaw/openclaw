@@ -1,14 +1,16 @@
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
-import { parseSessionLabel } from "../sessions/session-label.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+// Gateway sessions.resolve implementation helper.
+// Resolves key/sessionId/label selectors into one canonical session key.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
   type SessionsResolveParams,
-} from "./protocol/index.js";
+} from "../../packages/gateway-protocol/src/index.js";
+import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
+import { parseSessionLabel } from "../sessions/session-label.js";
 import {
   filterAndSortSessionEntries,
   listSessionsFromStore,
@@ -119,6 +121,8 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasKey) {
+    // Key lookups may hit legacy store aliases. Migrate/prune before returning
+    // the canonical key so later calls operate on one store identity.
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const store = loadSessionStore(target.storePath);
     if (store[target.canonicalKey]) {
@@ -168,6 +172,8 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasSessionId) {
+    // sessionId can collide across stores; delegate selection so exact key
+    // matches and ambiguity rules stay shared with other session-id callers.
     const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
     const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId });
     const selection = resolveSessionIdMatchSelection(matches, sessionId);

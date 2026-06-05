@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for sandbox backends, SSH execution, and temp workspace helpers.
+ */
 export type {
   CreateSandboxBackendParams,
   RemoteShellSandboxHandle,
@@ -25,6 +28,7 @@ export {
   buildExecRemoteCommand,
   buildRemoteCommand,
   buildSshSandboxArgv,
+  buildValidatedExecRemoteCommand,
   createRemoteShellSandboxFsBridge,
   createWritableRenameTargetResolver,
   createSshSandboxSessionFromConfigText,

@@ -1,13 +1,20 @@
+// Delivery lookup recovers routable channel context from persisted session stores.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
 } from "../../gateway/session-store-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { requiresFoldedSessionKeyAliasProof } from "../../sessions/session-key-utils.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
-import { normalizeStoreSessionKey } from "./store-entry.js";
+import {
+  foldedSessionKeyAliasCandidates,
+  hasMismatchedCaseSensitiveDeliveryProof,
+  isConfirmedLowercasedLegacyAlias,
+  normalizeStoreSessionKey,
+} from "./store-entry.js";
 import { readSessionStoreSnapshot } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
@@ -28,6 +35,12 @@ function hasRoutableDeliveryContext(context?: {
   return Boolean(context?.channel && context?.to);
 }
 
+/**
+ * Extracts the routable delivery context and thread id for a persisted session key.
+ *
+ * Thread/topic keys first try their exact store entry, then fall back to the base session when
+ * the thread entry has no delivery route of its own.
+ */
 export function extractDeliveryInfo(
   sessionKey: string | undefined,
   options?: { cfg?: OpenClawConfig },
@@ -71,6 +84,8 @@ export function extractDeliveryInfo(
 function resolveDeliveryStorePaths(cfg: OpenClawConfig, agentId: string): string[] {
   const paths = new Set<string>();
   paths.add(resolveStorePath(cfg.session?.store, { agentId }));
+  // Delivery can be restored from any resolved agent target; store order keeps the configured
+  // primary path first while still covering per-agent stores.
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
     if (target.agentId === agentId) {
       paths.add(target.storePath);
@@ -91,7 +106,11 @@ function findSessionEntryInStore(
   let bestEntry: SessionEntry | undefined;
   let bestUpdatedAt = 0;
   let bestRoutable = false;
-  const acceptCandidate = (candidate: unknown) => {
+  let bestExact = false;
+  // Preference order: routable delivery context first; then Matrix/tail-preserved
+  // exact keys over folded aliases; then freshness. Ordinary lowercase-canonical
+  // channels keep the previous freshest-routable alias behavior.
+  const acceptCandidate = (candidate: unknown, isExact = false) => {
     if (!candidate) {
       return;
     }
@@ -101,45 +120,68 @@ function findSessionEntryInStore(
     if (
       !bestEntry ||
       (candidateRoutable && !bestRoutable) ||
-      (candidateRoutable === bestRoutable && candidateUpdatedAt > bestUpdatedAt)
+      (candidateRoutable === bestRoutable && isExact && !bestExact) ||
+      (candidateRoutable === bestRoutable &&
+        isExact === bestExact &&
+        candidateUpdatedAt > bestUpdatedAt)
     ) {
       bestEntry = entry;
       bestUpdatedAt = candidateUpdatedAt;
       bestRoutable = candidateRoutable;
+      bestExact = isExact;
     }
   };
   for (const key of keys) {
     const trimmed = key.trim();
     const normalized = normalizeStoreSessionKey(key);
-    const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
+    const foldedLegacyKeys = foldedSessionKeyAliasCandidates(normalized);
+    const exactKeyWins = requiresFoldedSessionKeyAliasProof(normalized);
     let foundRoutableCandidate = false;
-    if (Object.prototype.hasOwnProperty.call(store, normalized)) {
+    if (
+      Object.hasOwn(store, normalized) &&
+      !hasMismatchedCaseSensitiveDeliveryProof(asSessionEntry(store[normalized]), normalized)
+    ) {
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
         deliveryContextFromSession(asSessionEntry(store[normalized])),
       );
-      acceptCandidate(store[normalized]);
+      acceptCandidate(store[normalized], exactKeyWins);
+    }
+    for (const foldedLegacyKey of foldedLegacyKeys) {
+      if (
+        !Object.hasOwn(store, foldedLegacyKey) ||
+        !isConfirmedLowercasedLegacyAlias(asSessionEntry(store[foldedLegacyKey]), normalized)
+      ) {
+        continue;
+      }
+      const foldedLegacyEntry = asSessionEntry(store[foldedLegacyKey]);
+      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+        deliveryContextFromSession(foldedLegacyEntry),
+      );
+      acceptCandidate(foldedLegacyEntry);
     }
     if (
-      foldedLegacyKey !== normalized &&
-      Object.prototype.hasOwnProperty.call(store, foldedLegacyKey)
+      trimmed !== normalized &&
+      Object.hasOwn(store, trimmed) &&
+      !hasMismatchedCaseSensitiveDeliveryProof(asSessionEntry(store[trimmed]), normalized)
     ) {
-      foundRoutableCandidate ||= hasRoutableDeliveryContext(
-        deliveryContextFromSession(asSessionEntry(store[foldedLegacyKey])),
-      );
-      acceptCandidate(store[foldedLegacyKey]);
-    }
-    if (trimmed !== normalized && Object.prototype.hasOwnProperty.call(store, trimmed)) {
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
         deliveryContextFromSession(asSessionEntry(store[trimmed])),
       );
       acceptCandidate(store[trimmed]);
     }
     if (trimmed !== normalized || !foundRoutableCandidate) {
+      // Build the normalized index only after direct/exact probes fail; large session stores can
+      // stay on the cheap path when the queried key already has routable delivery context.
       normalizedIndex ??= buildFreshestSessionEntryIndex(store);
       const freshest = normalizedIndex.get(normalized);
-      acceptCandidate(freshest);
-      if (foldedLegacyKey !== normalized) {
-        acceptCandidate(normalizedIndex.get(foldedLegacyKey));
+      if (!hasMismatchedCaseSensitiveDeliveryProof(freshest, normalized)) {
+        acceptCandidate(freshest);
+      }
+      for (const foldedLegacyKey of foldedLegacyKeys) {
+        const foldedFreshest = normalizedIndex.get(foldedLegacyKey);
+        if (isConfirmedLowercasedLegacyAlias(foldedFreshest, normalized)) {
+          acceptCandidate(foldedFreshest);
+        }
       }
     }
   }
@@ -166,8 +208,10 @@ function buildFreshestSessionEntryIndex(
     ) {
       index.set(normalized, entry);
     }
+    // Lowercase aliases are only indexed when case folding is not proof-sensitive; Matrix-style
+    // opaque ids must keep exact-case delivery evidence.
     const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
-    if (foldedLegacyKey === normalized) {
+    if (foldedLegacyKey === normalized || requiresFoldedSessionKeyAliasProof(normalized)) {
       continue;
     }
     const foldedExisting = index.get(foldedLegacyKey);
@@ -216,6 +260,8 @@ function loadDeliverySessionEntry(params: {
       continue;
     }
     fallback ??= { entry, baseEntry };
+    // Prefer the first store that can actually route delivery; keep a non-routable fallback only
+    // so callers can still inspect thread ids when no target-bearing session exists.
     if (
       hasRoutableDeliveryContext(deliveryContextFromSession(entry)) ||
       hasRoutableDeliveryContext(deliveryContextFromSession(baseEntry))

@@ -1,3 +1,7 @@
+/**
+ * Implements sandboxed HTTP requests for Codex native tools by routing network
+ * access through the active OpenClaw sandbox backend.
+ */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
@@ -7,6 +11,10 @@ import { readHttpHeaders, requireNumber, requireObject, requireString } from "./
 import { requireBackend } from "./runtime.js";
 import type { HttpHeader, OpenClawExecServer } from "./types.js";
 
+/** Maximum JSON-line size accepted from the streaming HTTP helper process. */
+export const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
+
+/** Handles one sandbox HTTP JSON-RPC request, optionally streaming response body deltas. */
 export async function httpRequest(
   execServer: OpenClawExecServer,
   socket: WebSocket,
@@ -100,6 +108,12 @@ async function runStreamingSandboxHttpRequest(
   child.once("close", () => {
     socket.off("close", abortOnSocketClose);
   });
+  child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED") {
+      return;
+    }
+    embeddedAgentLog.warn("codex sandbox http/request stdin write failed", { error });
+  });
   child.stdin.end(JSON.stringify(params));
   return await readStreamingSandboxHttpResponse({
     child,
@@ -184,6 +198,13 @@ function readStreamingSandboxHttpResponse(params: {
           }
         }
         newline = stdoutBuffer.indexOf("\n");
+      }
+      if (stdoutBuffer.length > SANDBOX_HTTP_STREAM_LINE_MAX_CHARS) {
+        params.child.kill("SIGKILL");
+        fail(
+          `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
+          null,
+        );
       }
     });
     params.child.stderr.on("data", (chunk: Buffer) => {

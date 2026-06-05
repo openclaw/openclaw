@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
@@ -541,6 +542,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     id: "google",
     label: "Google",
     autoSelectOrder: 50,
+    defaultModel: DEFAULT_GOOGLE_TTS_MODEL,
     models: GOOGLE_TTS_MODELS,
     voices: GOOGLE_TTS_VOICES,
     resolveConfig: ({ rawConfig }) => normalizeGoogleTtsProviderConfig(rawConfig),

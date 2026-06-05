@@ -1,3 +1,5 @@
+// Device auth store helpers persist and normalize paired device auth records.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   type DeviceAuthEntry,
   type DeviceAuthStore,
@@ -6,14 +8,11 @@ import {
 } from "./device-auth.js";
 export type { DeviceAuthEntry, DeviceAuthStore } from "./device-auth.js";
 
+/** Storage seam used by shared device-auth helpers and filesystem-backed infra wrappers. */
 export type DeviceAuthStoreAdapter = {
   readStore: () => DeviceAuthStore | null;
   writeStore: (store: DeviceAuthStore) => void;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function coerceDeviceAuthEntry(role: string, value: unknown): DeviceAuthEntry | null {
   if (!isRecord(value) || typeof value.token !== "string") {
@@ -48,6 +47,22 @@ function copyCanonicalDeviceAuthTokens(
   return out;
 }
 
+/** Coerces raw persisted device-auth JSON into the current canonical store shape. */
+export function coerceDeviceAuthStore(value: unknown): DeviceAuthStore | null {
+  if (!isRecord(value) || value.version !== 1 || typeof value.deviceId !== "string") {
+    return null;
+  }
+  if (!isRecord(value.tokens)) {
+    return null;
+  }
+  return {
+    version: 1,
+    deviceId: value.deviceId,
+    tokens: copyCanonicalDeviceAuthTokens(value.tokens),
+  };
+}
+
+/** Load one normalized role token, ignoring stores bound to a different gateway device id. */
 export function loadDeviceAuthTokenFromStore(params: {
   adapter: DeviceAuthStoreAdapter;
   deviceId: string;
@@ -61,6 +76,7 @@ export function loadDeviceAuthTokenFromStore(params: {
   return coerceDeviceAuthEntry(role, store.tokens[role]);
 }
 
+/** Store one role token while preserving canonical tokens for the same gateway device id. */
 export function storeDeviceAuthTokenInStore(params: {
   adapter: DeviceAuthStoreAdapter;
   deviceId: string;
@@ -74,6 +90,8 @@ export function storeDeviceAuthTokenInStore(params: {
     version: 1,
     deviceId: params.deviceId,
     tokens:
+      // Device-auth stores are scoped to one gateway device id; never merge stale
+      // tokens copied from another gateway identity.
       existing && existing.deviceId === params.deviceId && existing.tokens
         ? copyCanonicalDeviceAuthTokens(existing.tokens)
         : {},
@@ -89,6 +107,7 @@ export function storeDeviceAuthTokenInStore(params: {
   return entry;
 }
 
+/** Clear one normalized role token without rewriting missing or wrong-device stores. */
 export function clearDeviceAuthTokenFromStore(params: {
   adapter: DeviceAuthStoreAdapter;
   deviceId: string;

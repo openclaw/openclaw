@@ -1,11 +1,12 @@
+// Telegram plugin module implements lane delivery text deliverer behavior.
 import {
   createPreviewMessageReceipt,
   type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   isPotentialTruncatedFinal,
   selectLongerFinalText,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -22,10 +23,12 @@ export type DraftLaneState = {
   lastPartialText: string;
   hasStreamedMessage: boolean;
   finalized: boolean;
+  activeChunkIndex: number;
 };
 
 type LanePreviewFinalizedDelivery = {
   content: string;
+  promptContextContent?: string;
   messageId: number;
   buttonsAttached?: boolean;
   receipt: MessageReceipt;
@@ -112,6 +115,15 @@ function compactChunks(chunks: readonly string[]): string[] {
     out[out.length - 1] = `${out[out.length - 1]}${whitespace}`;
   }
   return out;
+}
+
+function isDeliveredPrefix(params: { deliveredText: string | undefined; finalText: string }) {
+  if (!params.deliveredText || params.deliveredText.length === 0) {
+    return false;
+  }
+  return (
+    params.finalText === params.deliveredText || params.finalText.startsWith(params.deliveredText)
+  );
 }
 
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
@@ -265,22 +277,90 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       text.length > params.draftMaxChars
         ? compactChunks(params.splitFinalTextForStream?.(text) ?? [])
         : [text];
-    const [firstChunk, ...remainingChunks] = chunks;
-    if (!firstChunk || firstChunk.length > params.draftMaxChars) {
+
+    const clampActiveChunkIndex = () =>
+      Math.min(lane.activeChunkIndex, Math.max(0, chunks.length - 1));
+    const activeChunkIndex = clampActiveChunkIndex();
+    const activeChunk = chunks[activeChunkIndex];
+    const remainingChunks = chunks.slice(activeChunkIndex + 1);
+
+    if (!activeChunk || activeChunk.length > params.draftMaxChars) {
       return undefined;
     }
 
+    const activeFullText = chunks.slice(activeChunkIndex).join("");
+    const finalText = activeFullText.trimEnd();
+    const deliveredStreamTextBeforeUpdate = stream.lastDeliveredText?.();
+    const deliveredPrefixBeforeUpdate =
+      isFinal &&
+      deliveredStreamTextBeforeUpdate !== undefined &&
+      isDeliveredPrefix({
+        deliveredText: deliveredStreamTextBeforeUpdate,
+        finalText,
+      }) &&
+      deliveredStreamTextBeforeUpdate.length > activeChunk.trimEnd().length;
+
+    const finalizeDeliveredPrefix = async (
+      deliveredStreamText: string,
+      messageId: number,
+    ): Promise<LaneDeliveryResult> => {
+      lane.finalized = true;
+      params.markDelivered();
+      let buttonsAttached = false;
+      if (buttons) {
+        const deliveredChunks = compactChunks(
+          params.splitFinalTextForStream?.(deliveredStreamText) ?? [],
+        );
+        const currentChunk = deliveredChunks.at(-1);
+        if (currentChunk && currentChunk.length <= params.draftMaxChars) {
+          try {
+            await params.editStreamMessage({ laneName, messageId, text: currentChunk, buttons });
+            buttonsAttached = true;
+          } catch (err) {
+            params.log(`telegram: ${laneName} stream button edit failed: ${String(err)}`);
+          }
+        }
+      }
+      const suffix = activeFullText.slice(deliveredStreamText.length);
+      if (suffix.trim().length > 0) {
+        for (const chunk of compactChunks(params.splitFinalTextForStream?.(suffix) ?? [])) {
+          if (chunk.trim().length === 0) {
+            continue;
+          }
+          await params.sendPayload(followUpPayload(payload, chunk));
+        }
+      }
+      return result("preview-finalized", {
+        content: text,
+        promptContextContent: deliveredStreamText,
+        messageId,
+        buttonsAttached,
+      });
+    };
+
+    const candidateTexts = [stream.lastDeliveredText?.(), lane.lastPartialText];
+    if (isFinal && remainingChunks.length === 0 && isPotentialTruncatedFinal(activeFullText)) {
+      const resolvedFullCandidate = await params.resolveFinalTextCandidate?.({
+        finalText: text,
+        laneName,
+      });
+      if (resolvedFullCandidate) {
+        const resolvedChunks =
+          resolvedFullCandidate.length > params.draftMaxChars
+            ? compactChunks(params.splitFinalTextForStream?.(resolvedFullCandidate) ?? [])
+            : [resolvedFullCandidate];
+        candidateTexts.push(resolvedChunks.slice(activeChunkIndex).join(""));
+      }
+    }
+
     const retainedPreview =
-      isFinal && remainingChunks.length === 0 && isPotentialTruncatedFinal(text)
+      isFinal && remainingChunks.length === 0 && isPotentialTruncatedFinal(activeFullText)
         ? selectLongerFinalText({
-            finalText: text,
-            candidateTexts: [
-              await params.resolveFinalTextCandidate?.({ finalText: text, laneName }),
-              stream.lastDeliveredText?.(),
-              lane.lastPartialText,
-            ],
+            finalText: activeFullText,
+            candidateTexts,
           })
         : undefined;
+
     if (retainedPreview && (!buttons || retainedPreview.length <= params.draftMaxChars)) {
       const previewText = retainedPreview;
       lane.lastPartialText = previewText;
@@ -295,8 +375,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         }
         return undefined;
       }
-      const deliveredStreamText = stream.lastDeliveredText?.();
-      if (deliveredStreamText !== undefined && deliveredStreamText !== previewText) {
+      const deliveredStreamTextAfterStop = stream.lastDeliveredText?.();
+      if (
+        deliveredStreamTextAfterStop !== undefined &&
+        deliveredStreamTextAfterStop !== previewText
+      ) {
         return undefined;
       }
       let buttonsAttached = false;
@@ -316,18 +399,28 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       lane.finalized = true;
       params.markDelivered();
-      return result("preview-finalized", { content: previewText, messageId, buttonsAttached });
+      return result("preview-finalized", {
+        content: previewText,
+        promptContextContent: previewText,
+        messageId,
+        buttonsAttached,
+      });
     }
 
-    lane.lastPartialText = firstChunk;
-    lane.hasStreamedMessage = true;
-    lane.finalized = false;
-    stream.update(firstChunk);
+    if (!deliveredPrefixBeforeUpdate) {
+      lane.lastPartialText = activeChunk;
+      lane.hasStreamedMessage = true;
+      lane.finalized = false;
+      stream.update(activeChunk);
+    }
     if (isFinal) {
       await params.stopDraftLane(lane);
     } else {
       await params.flushDraftLane(lane);
     }
+    const activeChunkIndexAfterStop = isFinal ? clampActiveChunkIndex() : activeChunkIndex;
+    const activeChunkAfterStop = chunks[activeChunkIndexAfterStop] ?? activeChunk;
+    const remainingChunksAfterStop = chunks.slice(activeChunkIndexAfterStop + 1);
 
     const messageId = stream.messageId();
     if (typeof messageId !== "number") {
@@ -339,20 +432,40 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       return undefined;
     }
 
-    const deliveredStreamText = stream.lastDeliveredText?.();
+    const deliveredStreamTextAfterStop = stream.lastDeliveredText?.();
+    const activeChunkTextAfterStop = activeChunkAfterStop.trimEnd();
+    const retainedActiveChunkAfterStop =
+      activeChunkIndexAfterStop !== activeChunkIndex &&
+      deliveredStreamTextAfterStop === activeChunk.trimEnd();
     if (
       isFinal &&
-      deliveredStreamText !== undefined &&
-      deliveredStreamText !== firstChunk.trimEnd()
+      deliveredStreamTextAfterStop !== undefined &&
+      deliveredStreamTextAfterStop !== activeChunkTextAfterStop &&
+      !retainedActiveChunkAfterStop
     ) {
+      if (
+        isDeliveredPrefix({ deliveredText: deliveredStreamTextAfterStop, finalText }) &&
+        deliveredStreamTextAfterStop.length > activeChunkTextAfterStop.length
+      ) {
+        return await finalizeDeliveredPrefix(deliveredStreamTextAfterStop, messageId);
+      }
       return undefined;
+    }
+
+    if (deliveredPrefixBeforeUpdate && deliveredStreamTextAfterStop === undefined) {
+      return await finalizeDeliveredPrefix(deliveredStreamTextBeforeUpdate, messageId);
     }
 
     params.markDelivered();
     let buttonsAttached = false;
     if (buttons) {
       try {
-        await params.editStreamMessage({ laneName, messageId, text: firstChunk, buttons });
+        await params.editStreamMessage({
+          laneName,
+          messageId,
+          text: activeChunkAfterStop,
+          buttons,
+        });
         buttonsAttached = true;
       } catch (err) {
         params.log(`telegram: ${laneName} stream button edit failed: ${String(err)}`);
@@ -361,13 +474,18 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
 
     if (isFinal) {
       lane.finalized = true;
-      for (const chunk of remainingChunks) {
+      for (const chunk of remainingChunksAfterStop) {
         if (chunk.trim().length === 0) {
           continue;
         }
         await params.sendPayload(followUpPayload(payload, chunk));
       }
-      return result("preview-finalized", { content: text, messageId, buttonsAttached });
+      return result("preview-finalized", {
+        content: text,
+        promptContextContent: activeChunkAfterStop,
+        messageId,
+        buttonsAttached,
+      });
     }
 
     return result("preview-updated");

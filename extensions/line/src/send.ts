@@ -1,3 +1,4 @@
+// Line plugin module implements send behavior.
 import { messagingApi } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -224,7 +225,7 @@ async function pushLineMessages(
   });
 
   if (behavior.errorContext) {
-    await pushRequest.catch((err) => {
+    await pushRequest.catch((err: unknown) => {
       logLineHttpError(err, behavior.errorContext!);
       throw err;
     });
@@ -301,7 +302,6 @@ export async function sendMessageLine(
       case "audio":
         messages.push(createAudioMessage(mediaUrl, opts.durationMs ?? 60000));
         break;
-      case "image":
       default:
         // Backward compatibility: keep image as default when media kind is unspecified.
         {
