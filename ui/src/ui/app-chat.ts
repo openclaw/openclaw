@@ -1112,9 +1112,13 @@ async function sendQueuedChatMessage(
           ...createChatSessionsLoadOverrides(host),
           ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
         });
-      } else {
+      } else if (isNonTerminalAgentRunStatus(ack.status)) {
         host.refreshSessionsAfterChat.set(ack.runId, refreshTarget);
       }
+      // Terminal non-"ok" acks (timeout = abort, error) describe an already
+      // finished run, so the chat-state event that clears this deferred refresh
+      // never arrives; seeding it would leak a refreshSessionsAfterChat entry.
+      // Only live (non-terminal) runs defer the refresh. Issue #84176.
     }
     discardChatAttachmentDataUrls(excludeComposerAttachments(host, attachments));
     return "sent";

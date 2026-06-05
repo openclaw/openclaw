@@ -4715,6 +4715,65 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     rmSpy.mockRestore();
   });
 
+  it("ignores a stale chatAbortedRuns marker (per-run controller signal) so a fresh same-key run completes terminal-ok, not a false abort (#84176)", async () => {
+    createTranscriptFixture("openclaw-chat-send-stale-abort-ok-");
+    mockState.finalText = "fresh run output";
+    const respond = vi.fn();
+    const context = createChatContext();
+    // A prior aborted run reused this idempotencyKey and left a stale marker.
+    // Markers live ~60min but the chat: dedupe only ~5min, so once the dedupe
+    // expires a fresh same-key send registers while the old marker lingers. This
+    // run's own controller is never aborted, so its post-dispatch completion must
+    // be reported truthfully.
+    context.chatAbortedRuns.set("idem-stale-marker-ok", Date.now() - 1000);
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-stale-marker-ok",
+      waitFor: "none",
+    });
+
+    // The fresh run completed normally -> terminal "ok", NOT a stale-marker
+    // "timeout". The post-dispatch guard reads this run's controller signal, not
+    // the shared marker, so the stale marker no longer forces a false abort.
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-stale-marker-ok")?.payload).toEqual(
+        expect.objectContaining({ runId: "idem-stale-marker-ok", status: "ok" }),
+      );
+    });
+    // The shared marker is left untouched (the fix does not mutate it), so prior
+    // abort-tail suppression in server-chat stays intact.
+    expect(context.chatAbortedRuns.has("idem-stale-marker-ok")).toBe(true);
+  });
+
+  it("ignores a stale chatAbortedRuns marker (per-run controller signal) so a fresh same-key run that throws surfaces the error, not a swallowed timeout (#84176)", async () => {
+    createTranscriptFixture("openclaw-chat-send-stale-abort-throw-");
+    mockState.dispatchError = new Error("fresh run real failure");
+    const respond = vi.fn();
+    const context = createChatContext();
+    context.chatAbortedRuns.set("idem-stale-marker-throw", Date.now() - 1000);
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-stale-marker-throw",
+      waitFor: "none",
+    });
+
+    // This run's controller was never aborted (only a stale marker is present), so
+    // the .catch sees signal.aborted===false and writes the real error dedupe
+    // instead of swallowing it as a false abort timeout. status "error" (not a
+    // swallowed "timeout") proves the real failure was surfaced.
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-stale-marker-throw")?.payload).toEqual(
+        expect.objectContaining({ runId: "idem-stale-marker-throw", status: "error" }),
+      );
+    });
+    // Marker left untouched (fix does not mutate shared state).
+    expect(context.chatAbortedRuns.has("idem-stale-marker-throw")).toBe(true);
+  });
+
   it("logs chat.send attachment parse failures with stack details", async () => {
     createTranscriptFixture("openclaw-chat-send-attachment-parse-stack-");
     const respond = vi.fn();

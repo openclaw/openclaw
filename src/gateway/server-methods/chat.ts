@@ -3156,10 +3156,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       runId: clientRunId,
       status: "timeout" as const,
     });
-    // Record a terminal abort outcome for this chat run, mirroring the
-    // {status:"timeout", stopReason} shape sessions.abort and the pre-registered
-    // agent abort already use. Reusing the existing terminal shape (not a new
-    // "aborted" status) keeps agent.wait/dedupe consumers consistent. An
+    // Record a terminal abort outcome for this chat run, matching the
+    // {runId, sessionKey, status:"timeout", summary, stopReason, endedAt} core
+    // shared by the existing abort dedupe writes (the pre-registered agent abort
+    // path adds optional agentId/controlUiVisible; sessions.abort omits
+    // sessionKey/summary). Reusing this terminal shape (not a new "aborted" status)
+    // keeps agent.wait/dedupe consumers consistent. An
     // "rpc"/"stop" stopReason classifies as a sticky cancellation so a late
     // "started"/"in_flight" write cannot resurrect the run; a maintenance-driven
     // "timeout" stopReason is terminal but not sticky (benign today: no later
@@ -4348,7 +4350,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                   errorMessage: returnedAgentErrorMessage,
                 });
               }
-              if (!context.chatAbortedRuns.has(clientRunId)) {
+              // Detect abort via THIS run's own controller signal, not the shared
+              // chatAbortedRuns marker. The marker is keyed by clientRunId
+              // (=idempotencyKey) and is reused by any prior/concurrent same-key
+              // run, so a stale or cross-run marker would misclassify this run; the
+              // controller is per-registration and only this run's genuine abort
+              // sets it (abortChatRunById is the sole production setter). Mirrors
+              // the pre-dispatch abort checks above. Issue #84176.
+              if (!activeRunAbort.controller.signal.aborted) {
                 const returnedAgentError = shouldBroadcastAgentError
                   ? errorShape(
                       ErrorCodes.UNAVAILABLE,
@@ -4404,11 +4413,17 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
-          if (context.chatAbortedRuns.has(clientRunId)) {
-            // Dispatch threw while the run was already aborted. Record the terminal
-            // abort outcome (matching the .then completion guard) and skip the error
-            // dedupe + redundant chat error broadcast, since broadcastChatAborted
-            // already drove the lifecycle. Issue #84176.
+          if (activeRunAbort.controller.signal.aborted) {
+            // Dispatch threw while THIS run's controller was aborted (per-run
+            // signal, not the shared chatAbortedRuns marker a prior/concurrent
+            // same-key run could have set). Record the terminal abort outcome
+            // (matching the .then completion guard) and skip the error dedupe +
+            // redundant chat error broadcast, since broadcastChatAborted already
+            // drove the lifecycle. Still log the swallowed error so a real failure
+            // coinciding with the abort is not lost to diagnostics. #84176.
+            context.logGateway.warn(
+              `chat.send post-dispatch threw after abort for runId=${clientRunId}: ${formatForLog(err)}`,
+            );
             cacheChatSendAbortedDedupe(activeRunAbort.entry?.abortStopReason ?? "rpc");
             return;
           }

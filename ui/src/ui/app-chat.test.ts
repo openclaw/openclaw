@@ -1334,6 +1334,50 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("does not seed refreshSessionsAfterChat for a terminal timeout ack on a refreshing send (#84176)", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "timeout" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/reset",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    // /reset sets refreshSessions=true; a terminal timeout ack describes an
+    // already-finished run, so the chat-state event that would clear a deferred
+    // refresh never arrives. Seeding it would leak an entry, so it is skipped.
+    expect(host.refreshSessionsAfterChat.size).toBe(0);
+  });
+
+  it.each(["started", "in_flight"])(
+    "still seeds refreshSessionsAfterChat for a non-terminal %s ack on a refreshing send (#84176)",
+    async (status) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          return { status };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const host = makeHost({
+        client: { request } as unknown as ChatHost["client"],
+        chatMessage: "/reset",
+        sessionKey: "agent:main",
+      });
+
+      await handleSendChat(host);
+
+      // The gate must not over-skip: every live (non-terminal) status still defers
+      // the session refresh until the run completes.
+      expect(host.refreshSessionsAfterChat.size).toBe(1);
+    },
+  );
+
   it("records visible send timing phases for a normal chat send", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
