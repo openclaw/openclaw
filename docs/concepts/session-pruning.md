@@ -55,30 +55,42 @@ persist raw image blocks or prompt-hydration media markers in history.
 
 ## Smart defaults
 
-OpenClaw auto-enables pruning for Anthropic profiles:
+OpenClaw enables pruning by default for all providers with a 5-minute cache TTL.
+Anthropic profiles get an extended 1-hour TTL and automatic heartbeat configuration:
 
-| Profile type                                            | Pruning enabled | Heartbeat |
-| ------------------------------------------------------- | --------------- | --------- |
-| Anthropic OAuth/token auth (including Claude CLI reuse) | Yes             | 1 hour    |
-| API key                                                 | Yes             | 30 min    |
+| Profile type                                            | Pruning enabled | TTL    | Heartbeat |
+| ------------------------------------------------------- | --------------- | ------ | --------- |
+| All providers (default)                                 | Yes             | 5 min  | —         |
+| Anthropic OAuth/token auth (including Claude CLI reuse) | Yes             | 1 hour | 1 hour    |
+| Anthropic API key                                       | Yes             | 1 hour | 30 min    |
 
 If you set explicit values, OpenClaw does not override them.
 
 ## Enable or disable
 
-Pruning is off by default for non-Anthropic providers. To enable:
+Pruning is on by default. To disable:
 
 ```json5
 {
   agents: {
     defaults: {
-      contextPruning: { mode: "cache-ttl", ttl: "5m" },
+      contextPruning: { mode: "off" },
     },
   },
 }
 ```
 
-To disable: set `mode: "off"`.
+To customize the TTL or other settings:
+
+```json5
+{
+  agents: {
+    defaults: {
+      contextPruning: { mode: "cache-ttl", ttl: "10m" },
+    },
+  },
+}
+```
 
 ## Pruning vs compaction
 

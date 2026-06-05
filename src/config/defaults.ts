@@ -513,17 +513,39 @@ export function applyContextPruningDefaults(
   if (!cfg.agents?.defaults) {
     return cfg;
   }
-  if (!hasAnthropicDefaultSignal(cfg, process.env)) {
-    return cfg;
+
+  let next = cfg;
+
+  // Apply Anthropic-specific defaults (1h TTL, heartbeat) if Anthropic auth is present.
+  if (hasAnthropicDefaultSignal(cfg, process.env)) {
+    next =
+      applyProviderConfigDefaultsForConfig({
+        provider: "anthropic",
+        config: cfg,
+        env: process.env,
+        manifestRegistry: options.manifestRegistry,
+      }) ?? cfg;
   }
-  return (
-    applyProviderConfigDefaultsForConfig({
-      provider: "anthropic",
-      config: cfg,
-      env: process.env,
-      manifestRegistry: options.manifestRegistry,
-    }) ?? cfg
-  );
+
+  // Enable cache-TTL pruning by default for all providers when not explicitly configured.
+  if (next.agents?.defaults?.contextPruning?.mode === undefined) {
+    const nextDefaults = { ...next.agents.defaults };
+    const contextPruning = nextDefaults.contextPruning ?? {};
+    nextDefaults.contextPruning = {
+      ...contextPruning,
+      mode: "cache-ttl",
+      ttl: contextPruning.ttl ?? "5m",
+    };
+    next = {
+      ...next,
+      agents: {
+        ...next.agents,
+        defaults: nextDefaults,
+      },
+    };
+  }
+
+  return next;
 }
 
 export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {

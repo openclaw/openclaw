@@ -51,14 +51,19 @@ describe("config defaults", () => {
     expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
   });
 
-  it("skips provider defaults when agent defaults have no Anthropic auth signal", () => {
+  it("enables cache-ttl pruning by default when agent defaults have no Anthropic auth signal", () => {
     const cfg = {
       agents: {
         defaults: {},
       },
     };
 
-    expect(applyContextPruningDefaults(cfg as never)).toBe(cfg);
+    const next = applyContextPruningDefaults(cfg as never);
+    expect(next).not.toBe(cfg);
+    expect(next.agents?.defaults?.contextPruning).toEqual({
+      mode: "cache-ttl",
+      ttl: "5m",
+    });
     expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
   });
 
