@@ -2899,7 +2899,8 @@ function rewriteSessionModelPair(params: {
     return true;
   }
   if (model && isOpenAICodexModelRef(model)) {
-    const canonicalModel = toCanonicalOpenAIModelRef(model);
+    const canonicalModel =
+      provider === "openai" ? toOpenAIModelId(model) : toCanonicalOpenAIModelRef(model);
     if (canonicalModel) {
       params.entry[params.modelKey] = canonicalModel;
       changed = true;
