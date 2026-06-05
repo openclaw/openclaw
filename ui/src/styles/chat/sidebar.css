@@ -45,6 +45,34 @@
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
+.chat-workbench--rail-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-workspace-rail--collapsed {
+  min-width: 0;
+  width: 0;
+  overflow: hidden;
+  border-left: none;
+}
+
+.chat-workspace-rail--collapsed .chat-workspace-rail__header {
+  display: none;
+}
+
+.chat-workspace-rail__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-workspace-rail__toggle {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
 .chat-workspace-rail__header {
   display: flex;
   align-items: center;

@@ -3524,9 +3524,16 @@ export function renderApp(state: AppViewState) {
                         : null,
                     loading: chatWorkspaceFiles.loading,
                     error: chatWorkspaceFiles.error,
+                    collapsed: state.settings.workspaceCollapsed,
                     activeName: chatWorkspaceFiles.activeName,
                     onRefresh: refreshChatWorkspaceFiles,
                     onOpenFile: openChatWorkspaceFile,
+                    onCollapseToggle: () => {
+                      state.applySettings({
+                        ...state.settings,
+                        workspaceCollapsed: !state.settings.workspaceCollapsed,
+                      });
+                    },
                   },
                   autoExpandToolCalls: false,
                   onRefresh: () => {
