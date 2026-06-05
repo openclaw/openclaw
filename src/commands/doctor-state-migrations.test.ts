@@ -1690,6 +1690,49 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+  it("archives legacy plugin install index when SQLite has resolved npm artifact metadata", async () => {
+    const root = await makeTempRoot();
+    await writeExistingPluginInstallIndex(root, {
+      demo: {
+        source: "npm",
+        spec: "demo@latest",
+        version: "1.0.0",
+        resolvedName: "demo",
+        resolvedVersion: "1.0.0",
+        resolvedSpec: "demo@1.0.0",
+        integrity: "sha512-current",
+        shasum: "current",
+        installedAt: "2026-06-01T21:04:35.000Z",
+      },
+    });
+    const sourcePath = writeLegacyPluginInstallIndex(root, {
+      demo: {
+        source: "npm",
+        spec: "demo@beta",
+        version: "1.0.0",
+      },
+    });
+
+    const result = await runLegacyStateMigrationsForRoot(root);
+    const secondResult = await runLegacyStateMigrationsForRoot(root);
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    expect(secondResult.warnings).toStrictEqual([]);
+    expect(secondResult.changes).toStrictEqual([]);
+    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
+      installRecords: {
+        demo: {
+          source: "npm",
+          spec: "demo@latest",
+          resolvedVersion: "1.0.0",
+          integrity: "sha512-current",
+        },
+      },
+    });
+  });
+
   for (const fixture of [
     {
       label: "name different packages",
@@ -1793,22 +1836,18 @@ describe("doctor legacy state migrations", () => {
     current: InstalledPluginInstallRecordInfo;
     legacy: InstalledPluginInstallRecordInfo;
   }>) {
-    it(`archives legacy plugin install index when same-version npm records ${fixture.label}`, async () => {
+    it(`keeps legacy plugin install index when same-version npm records ${fixture.label}`, async () => {
       const root = await makeTempRoot();
       await writeExistingPluginInstallIndex(root, { demo: fixture.current });
       const sourcePath = writeLegacyPluginInstallIndex(root, { demo: fixture.legacy });
 
       const result = await runLegacyStateMigrationsForRoot(root);
-      const secondResult = await runLegacyStateMigrationsForRoot(root);
 
-      expect(result.warnings).toStrictEqual([]);
-      expect(result.changes).toContain(
-        "Kept shared SQLite plugin install metadata for conflicting legacy records: demo",
-      );
-      expect(fs.existsSync(sourcePath)).toBe(false);
-      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
-      expect(secondResult.warnings).toStrictEqual([]);
-      expect(secondResult.changes).toStrictEqual([]);
+      expect(result.warnings).toStrictEqual([
+        "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: demo",
+      ]);
+      expect(fs.existsSync(sourcePath)).toBe(true);
+      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
     });
   }
 

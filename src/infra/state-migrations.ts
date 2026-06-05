@@ -63,6 +63,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
+import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -452,10 +453,51 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   const currentResolvedSpec = readInstallRecordStringField(currentRecord, "resolvedSpec");
   const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
   if (legacySpec) {
-    return currentResolvedSpec === legacySpec;
+    return (
+      currentResolvedSpec === legacySpec ||
+      legacyInstallRecordNpmArtifactSupersededByCurrent({ currentRecord, legacyRecord })
+    );
   }
   const legacyResolvedSpec = readInstallRecordStringField(legacyRecord, "resolvedSpec");
   return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
+}
+
+function legacyInstallRecordNpmArtifactSupersededByCurrent(params: {
+  currentRecord: InstalledPluginIndex["installRecords"][string];
+  legacyRecord: InstalledPluginIndex["installRecords"][string];
+}): boolean {
+  const { currentRecord, legacyRecord } = params;
+  if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
+    return false;
+  }
+  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
+  const legacyVersion = readInstallRecordStringField(legacyRecord, "version");
+  const currentResolvedName = readInstallRecordStringField(currentRecord, "resolvedName");
+  const currentResolvedVersion = readInstallRecordStringField(currentRecord, "resolvedVersion");
+  const currentResolvedSpec = readInstallRecordStringField(currentRecord, "resolvedSpec");
+  if (!legacySpec || !legacyVersion || !currentResolvedName || !currentResolvedVersion) {
+    return false;
+  }
+  if (legacyVersion !== currentResolvedVersion) {
+    return false;
+  }
+  if (
+    !readInstallRecordStringField(currentRecord, "integrity") &&
+    !readInstallRecordStringField(currentRecord, "shasum") &&
+    !readInstallRecordStringField(currentRecord, "npmIntegrity") &&
+    !readInstallRecordStringField(currentRecord, "npmShasum")
+  ) {
+    return false;
+  }
+  const legacyParsed = parseRegistryNpmSpec(legacySpec);
+  const currentResolvedParsed = currentResolvedSpec ? parseRegistryNpmSpec(currentResolvedSpec) : null;
+  return Boolean(
+    legacyParsed &&
+      currentResolvedParsed?.selectorKind === "exact-version" &&
+      legacyParsed.name === currentResolvedName &&
+      currentResolvedParsed.name === currentResolvedName &&
+      currentResolvedParsed.selector === currentResolvedVersion,
+  );
 }
 
 function legacyInstallRecordCoveredByCurrent(
@@ -1554,9 +1596,12 @@ async function migrateLegacyInstalledPluginIndex(params: {
       }
     }
     if (merged.conflicts.length > 0) {
-      changes.push(
-        `Kept shared SQLite plugin install metadata for conflicting legacy records: ${merged.conflicts.join(", ")}`,
-      );
+      return {
+        changes,
+        warnings: [
+          `Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: ${merged.conflicts.join(", ")}`,
+        ],
+      };
     }
   }
 
