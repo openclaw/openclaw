@@ -43,9 +43,13 @@ function createContext() {
   };
 }
 
-function createClient(scopes: string[]) {
+function createClient(scopes: string[], deviceId?: string, opts?: { isDeviceTokenAuth?: boolean }) {
   return {
-    connect: { scopes },
+    ...(opts?.isDeviceTokenAuth !== undefined ? { isDeviceTokenAuth: opts.isDeviceTokenAuth } : {}),
+    connect: {
+      scopes,
+      ...(deviceId ? { device: { id: deviceId } } : {}),
+    },
   } as never;
 }
 
@@ -271,14 +275,46 @@ describe("nodeHandlers node.pair.remove", () => {
     expect(context.disconnectClientsForDevice).toHaveBeenCalledWith(nodeId, { role: "node" });
   });
 
-  it("rejects device-backed node removal from non-admin shared-auth sessions", async () => {
-    const state = await createState("node-remove-non-admin-shared-auth");
-    const nodeId = "non-admin-android-node-1";
-    await pairAndroidNodeDevice(state.stateDir, nodeId);
+  it("removes mixed-role device-backed node rows for shared-auth operator.pairing without admin", async () => {
+    // Aligns with device.pair.remove: shared-auth / CLI operators that hold
+    // operator.pairing (but not operator.admin) manage pairings on others'
+    // behalf and must be able to remove the node role from a mixed-role row.
+    const state = await createState("node-remove-mixed-role-shared-auth");
+    const nodeId = "shared-auth-mixed-role-android-node-1";
+    await pairMixedRoleAndroidDevice(state.stateDir, nodeId);
+
+    const before = await readPaired(state.stateDir, "devices");
+    expect((before[nodeId] as { roles?: string[] }).roles).toEqual(["operator", "node"]);
 
     const { context, opts } = createOptions(
       { nodeId },
       { client: createClient(["operator.pairing"]) },
+    );
+
+    await nodeHandlers["node.pair.remove"](opts);
+    await Promise.resolve();
+
+    expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
+    const after = await readPaired(state.stateDir, "devices");
+    expect((after[nodeId] as { roles?: string[] }).roles).toEqual(["operator"]);
+    expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
+      role: "node",
+      reason: "device-pair-removed",
+    });
+    expect(context.disconnectClientsForDevice).toHaveBeenCalledWith(nodeId, { role: "node" });
+  });
+
+  it("rejects mixed-role device-backed node removal from non-admin device-token self-service callers", async () => {
+    // Mirror device.pair.remove: a device-token self-service caller (proves
+    // ownership of its own device id, no operator.admin) cannot remove the node
+    // role from a mixed-role row it owns.
+    const state = await createState("node-remove-mixed-role-device-token");
+    const nodeId = "device-token-mixed-role-android-node-1";
+    await pairMixedRoleAndroidDevice(state.stateDir, nodeId);
+
+    const { context, opts } = createOptions(
+      { nodeId },
+      { client: createClient(["operator.pairing"], nodeId, { isDeviceTokenAuth: true }) },
     );
 
     await nodeHandlers["node.pair.remove"](opts);
