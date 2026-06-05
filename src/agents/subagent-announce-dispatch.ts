@@ -26,6 +26,10 @@ export type SubagentAnnounceDeliveryResult = {
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
   terminal?: boolean;
+  requesterWakeStatus?: "pending" | "delivered" | "failed";
+  visibleDeliveryRequired?: boolean;
+  visibleDeliveryStatus?: "not_required" | "pending" | "delivered" | "failed";
+  visibleDeliveryError?: string;
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 
@@ -39,6 +43,10 @@ type SubagentAnnounceDispatchPhaseResult = {
   enqueuedAt?: number;
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
+  requesterWakeStatus?: "pending" | "delivered" | "failed";
+  visibleDeliveryRequired?: boolean;
+  visibleDeliveryStatus?: "not_required" | "pending" | "delivered" | "failed";
+  visibleDeliveryError?: string;
 };
 
 /** Converts a steer outcome into the shared delivery result shape. */
@@ -79,6 +87,10 @@ export async function runSubagentAnnounceDispatch(params: {
       enqueuedAt: result.enqueuedAt,
       ...(result.reason ? { reason: result.reason } : {}),
       error: result.error,
+      requesterWakeStatus: result.requesterWakeStatus,
+      visibleDeliveryRequired: result.visibleDeliveryRequired,
+      visibleDeliveryStatus: result.visibleDeliveryStatus,
+      visibleDeliveryError: result.visibleDeliveryError,
     });
   };
   const withPhases = (result: SubagentAnnounceDeliveryResult): SubagentAnnounceDeliveryResult => ({

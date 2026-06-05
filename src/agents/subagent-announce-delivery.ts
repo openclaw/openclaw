@@ -72,6 +72,7 @@ import {
 import {
   runSubagentAnnounceDispatch,
   type SubagentAnnounceDeliveryResult,
+  type SubagentAnnounceDeliveryFailureReason,
 } from "./subagent-announce-dispatch.js";
 import type { DeliveryContext } from "./subagent-announce-origin.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
@@ -1191,6 +1192,23 @@ function stripNonDeliverableChannelForCompletionOrigin(
   return normalizeDeliveryContext(rest);
 }
 
+function buildRequesterWakeWithVisibleDeliveryFailure(params: {
+  reason?: SubagentAnnounceDeliveryFailureReason;
+  error: string;
+}): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: true,
+    path: "direct",
+    ...(params.reason ? { reason: params.reason } : {}),
+    terminal: true,
+    requesterWakeStatus: "delivered",
+    visibleDeliveryRequired: true,
+    visibleDeliveryStatus: "failed",
+    visibleDeliveryError: params.error,
+    error: params.error,
+  };
+}
+
 async function sendSubagentAnnounceDirectly(params: {
   requesterSessionKey: string;
   targetRequesterSessionKey: string;
@@ -1604,6 +1622,12 @@ async function sendSubagentAnnounceDirectly(params: {
         if (textDelivery) {
           return textDelivery;
         }
+      }
+      if (isSubagentCompletion && expectedMediaUrls.length === 0) {
+        return buildRequesterWakeWithVisibleDeliveryFailure({
+          reason: "message_tool_delivery_missing",
+          error: "completion agent did not use the message tool for message-tool-only delivery",
+        });
       }
       return {
         delivered: false,

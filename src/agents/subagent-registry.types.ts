@@ -58,6 +58,10 @@ export type SubagentCompletionDeliveryState = {
   enqueuedAt?: number;
   deliveredAt?: number;
   announcedAt?: number;
+  requesterWakeDeliveredAt?: number;
+  visibleRequired?: boolean;
+  visibleStatus?: "not_required" | "pending" | "delivered" | "failed";
+  visibleError?: string | null;
   lastAttemptAt?: number;
   attemptCount?: number;
   lastError?: string | null;

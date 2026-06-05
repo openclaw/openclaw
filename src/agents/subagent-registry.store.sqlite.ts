@@ -75,6 +75,13 @@ function createDeliveryFromTypedColumns(
       : row.pending_final_delivery
         ? "pending"
         : delivery?.status;
+  const announcedAt = normalizeFiniteNumber(row.completion_announced_at);
+  const announcedStatus =
+    status === "failed" ||
+    delivery?.visibleStatus === "failed" ||
+    row.last_announce_delivery_error !== null
+      ? "failed"
+      : "delivered";
   if (!status && row.completion_announced_at == null && row.last_announce_delivery_error == null) {
     return delivery;
   }
@@ -94,11 +101,11 @@ function createDeliveryFromTypedColumns(
     ...(row.pending_final_delivery_last_error !== null
       ? { lastError: row.pending_final_delivery_last_error }
       : {}),
-    ...(row.completion_announced_at !== null
+    ...(announcedAt !== undefined
       ? {
-          status: "delivered",
-          announcedAt: row.completion_announced_at,
-          deliveredAt: delivery?.deliveredAt ?? row.completion_announced_at,
+          status: announcedStatus,
+          announcedAt,
+          deliveredAt: delivery?.deliveredAt ?? announcedAt,
         }
       : {}),
   };
