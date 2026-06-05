@@ -216,6 +216,7 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hook-state.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|2",
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
