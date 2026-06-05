@@ -1,4 +1,3 @@
-// Covers session cost and usage summary loading.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -1103,6 +1102,101 @@ describe("session cost usage", () => {
       expect(summary.summary?.dailyBreakdown).toEqual([
         { date: "2026-02-05", tokens: 30, cost: 0.03 },
       ]);
+    });
+  });
+
+  it("includes only in-range timestamped usage for bounded ranged session summaries", async () => {
+    const root = await makeSessionCostRoot("cost-cache-session-ranged-in-window");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-session-ranged-in-window.jsonl");
+    const inRange = {
+      type: "message",
+      timestamp: "2026-02-05T12:00:00.000Z",
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        usage: {
+          input: 10,
+          output: 20,
+          totalTokens: 30,
+          cost: { total: 0.03 },
+        },
+      },
+    };
+    const outOfRange = {
+      ...inRange,
+      timestamp: "2026-01-01T12:00:00.000Z",
+    };
+    await fs.writeFile(
+      sessionFile,
+      `${transcriptText("sess-cache-session-ranged-in-window", inRange)}\n${transcriptText("sess-cache-session-ranged-in-window", outOfRange)}`,
+      "utf-8",
+    );
+
+    const startMs = Date.UTC(2026, 1, 5);
+    const endMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [sessionFile] });
+      const summary = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-cache-session-ranged-in-window",
+        sessionFile,
+        startMs,
+        endMs,
+        requestRefresh: false,
+      });
+
+      expect(summary.summary?.totalTokens).toBe(30);
+      expect(summary.summary?.dailyModelUsage).toEqual([
+        expect.objectContaining({ date: "2026-02-05", tokens: 30 }),
+      ]);
+    });
+  });
+
+  it("excludes untimestamped usage from bounded ranged session summaries", async () => {
+    const root = await makeSessionCostRoot("cost-cache-session-untimestamped-ranged");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-session-untimestamped-ranged.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.5",
+          usage: {
+            input: 10,
+            output: 20,
+            totalTokens: 30,
+            cost: { total: 0.03 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const startMs = Date.UTC(2026, 1, 5);
+    const endMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [sessionFile] });
+      const summary = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-cache-session-untimestamped-ranged",
+        sessionFile,
+        startMs,
+        endMs,
+        requestRefresh: false,
+      });
+
+      expect(summary.cacheStatus.status).toBe("fresh");
+      expect(summary.summary?.totalTokens ?? 0).toBe(0);
+      expect(summary.summary?.totalCost ?? 0).toBe(0);
+      expect(summary.summary?.modelUsage ?? []).toEqual([]);
+      expect(summary.summary?.dailyModelUsage ?? []).toEqual([]);
     });
   });
 

@@ -1,4 +1,3 @@
-// Persists and formats per-session cost and usage records.
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -550,11 +549,35 @@ function buildCostUsageSummaryFromCache(params: {
   };
 }
 
+/** Bounded dashboard/gateway queries use startMs > 0; all-time usage uses startMs = 0. */
+function isBoundedUsageRange(startMs: number): boolean {
+  return startMs > 0;
+}
+
+function shouldIncludeUsageEntryInRange(
+  timestampMs: number | undefined,
+  startMs: number | undefined,
+  endMs: number | undefined,
+): boolean {
+  if (startMs === undefined || endMs === undefined || !isBoundedUsageRange(startMs)) {
+    return true;
+  }
+  return timestampMs !== undefined;
+}
+
 function isSessionSummaryContainedInRange(
   summary: SessionCostSummary,
   startMs: number,
   endMs: number,
 ): boolean {
+  if (isBoundedUsageRange(startMs)) {
+    return (
+      summary.firstActivity !== undefined &&
+      summary.lastActivity !== undefined &&
+      summary.firstActivity >= startMs &&
+      summary.lastActivity <= endMs
+    );
+  }
   return (
     (summary.firstActivity === undefined || summary.firstActivity >= startMs) &&
     (summary.lastActivity === undefined || summary.lastActivity <= endMs)
@@ -598,6 +621,9 @@ function buildSessionCostSummaryFromCacheEntry(params: {
 
   for (const entry of params.entry.transcriptEntries) {
     const ts = entry.timestamp;
+    if (!shouldIncludeUsageEntryInRange(ts, params.startMs, params.endMs)) {
+      continue;
+    }
     if (ts !== undefined && ts < params.startMs) {
       continue;
     }
@@ -2019,6 +2045,10 @@ export async function loadSessionCostSummary(params: {
     resolveCost,
     onEntry: (entry) => {
       const ts = entry.timestamp?.getTime();
+
+      if (!shouldIncludeUsageEntryInRange(ts, params.startMs, params.endMs)) {
+        return;
+      }
 
       // Filter by date range if specified
       if (params.startMs !== undefined && ts !== undefined && ts < params.startMs) {
