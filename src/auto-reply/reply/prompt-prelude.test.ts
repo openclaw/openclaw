@@ -1,5 +1,6 @@
 // Tests prompt prelude construction for sender, routing, and context metadata.
 import { describe, expect, it } from "vitest";
+import { buildCurrentInboundPromptContextPrefix } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 
@@ -55,6 +56,94 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.currentInboundContext).toEqual({
       text: "Current message:\nchat_id=C123",
       promptJoiner: " ",
+    });
+  });
+
+  it("carries Telegram forum reply metadata in current-turn runtime context", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "Sean, answer this old reply",
+      BodyStripped: "Sean, answer this old reply",
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "group",
+      MessageSid: "34974",
+      MessageThreadId: 777,
+      ReplyToId: "34971",
+      ReplyToBody: "old target body",
+      ReplyToSender: "Alice",
+      ReplyChain: [
+        {
+          messageId: "34971",
+          threadId: "777",
+          sender: "Alice",
+          body: "old target body",
+        },
+      ],
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "Sean, answer this old reply",
+      prefixedBody: "Sean, answer this old reply",
+      hasUserBody: true,
+      inboundUserContext: "Conversation info (untrusted metadata):\nreply_to_id=34971",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    expect(envelope.currentInboundContext?.reply).toEqual({
+      currentMessageId: "34974",
+      threadId: "777",
+      replyToId: "34971",
+      replyTargetPresent: true,
+      quotePresent: false,
+      replyChainPresent: true,
+      replyChainMessageIds: ["34971"],
+    });
+
+    const runtimePrefix = buildCurrentInboundPromptContextPrefix(envelope.currentInboundContext);
+    expect(runtimePrefix).toContain("Current reply metadata (trusted OpenClaw runtime metadata):");
+    expect(runtimePrefix.indexOf("Current reply metadata")).toBeLessThan(
+      runtimePrefix.indexOf("Conversation info"),
+    );
+  });
+
+  it("marks selected quote presence separately from reply target presence", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "Sean, answer this quote",
+      BodyStripped: "Sean, answer this quote",
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "group",
+      MessageSid: "34974",
+      MessageThreadId: 777,
+      ReplyToId: "34971",
+      ReplyToBody: "whole replied-to message",
+      ReplyToQuoteText: "selected quoted slice",
+      ReplyToIsQuote: true,
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "Sean, answer this quote",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    expect(envelope.currentInboundContext?.text).toBe("");
+    expect(envelope.currentInboundContext?.reply).toMatchObject({
+      currentMessageId: "34974",
+      threadId: "777",
+      replyToId: "34971",
+      replyTargetPresent: true,
+      quotePresent: true,
+      replyChainPresent: false,
     });
   });
 

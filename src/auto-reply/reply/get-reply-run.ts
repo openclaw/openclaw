@@ -395,6 +395,56 @@ function hasReplyTargetContext(ctx: MsgContext | TemplateContext): boolean {
   return Array.isArray(replyChain) && replyChain.length > 0;
 }
 
+function stringifyTraceId(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return normalizeOptionalString(value);
+}
+
+function logInboundReplyRuntimeTrace(params: {
+  sessionCtx: TemplateContext;
+  currentInboundContext?: { reply?: Record<string, unknown> };
+}): void {
+  const replyMetadata = params.currentInboundContext?.reply;
+  const replyChainLength = Array.isArray(params.sessionCtx.ReplyChain)
+    ? params.sessionCtx.ReplyChain.length
+    : 0;
+  const replyTargetPresent = Boolean(
+    stringifyTraceId(params.sessionCtx.ReplyToId) ||
+    stringifyTraceId(params.sessionCtx.ReplyToIdFull) ||
+    stringifyTraceId(params.sessionCtx.ReplyToBody) ||
+    stringifyTraceId(params.sessionCtx.ReplyToQuoteText) ||
+    replyChainLength > 0,
+  );
+  if (!replyTargetPresent && !replyMetadata) {
+    return;
+  }
+  logVerbose(
+    [
+      "inbound reply trace:",
+      `currentMessageId=${
+        stringifyTraceId(params.sessionCtx.MessageSid) ??
+        stringifyTraceId(params.sessionCtx.MessageSidFull) ??
+        "none"
+      }`,
+      `threadId=${stringifyTraceId(params.sessionCtx.MessageThreadId) ?? "none"}`,
+      `replyToId=${stringifyTraceId(params.sessionCtx.ReplyToId) ?? "none"}`,
+      `replyTargetPresent=${replyTargetPresent ? "yes" : "no"}`,
+      `quotePresent=${
+        params.sessionCtx.ReplyToIsQuote === true ||
+        Boolean(stringifyTraceId(params.sessionCtx.ReplyToQuoteText))
+          ? "yes"
+          : "no"
+      }`,
+      `replyChainCount=${replyChainLength}`,
+      `contextReplyToId=${stringifyTraceId(replyMetadata?.replyToId) ? "yes" : "no"}`,
+      `contextReplyTarget=${replyMetadata?.replyTargetPresent === true ? "yes" : "no"}`,
+      `contextReplyChain=${replyMetadata?.replyChainPresent === true ? "yes" : "no"}`,
+    ].join(" "),
+  );
+}
+
 type RunPreparedReplyParams = {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
@@ -882,6 +932,7 @@ export async function runPreparedReply(
     transcriptCommandBody,
     currentInboundContext,
   } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
+  logInboundReplyRuntimeTrace({ sessionCtx, currentInboundContext });
   const isRoomEvent = inboundEventKind === "room_event";
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await traceRunPhase("reply.resolve_default_thinking", () =>

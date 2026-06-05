@@ -34,17 +34,47 @@ export type RuntimeContextCustomMessage = {
 
 type EmptyTranscriptMode = "model-prompt" | "runtime-event";
 
+function buildCurrentReplyMetadataBlock(context: CurrentInboundPromptContext | undefined): string {
+  if (!context?.reply) {
+    return "";
+  }
+  const replyEntries = Object.fromEntries(
+    Object.entries(context.reply).filter(([, value]) =>
+      Array.isArray(value) ? value.length > 0 : value !== undefined,
+    ),
+  );
+  if (Object.keys(replyEntries).length === 0) {
+    return "";
+  }
+  return [
+    "Current reply metadata (trusted OpenClaw runtime metadata):",
+    "```json",
+    JSON.stringify(replyEntries, null, 2),
+    "```",
+  ].join("\n");
+}
+
+/** Returns the visible or resumable inbound prompt prefix used before the user prompt. */
+export function buildCurrentInboundPromptContextPrefix(
+  context: CurrentInboundPromptContext | undefined,
+  options?: { preferResumableText?: boolean },
+): string {
+  const text =
+    options?.preferResumableText === true
+      ? (context?.resumableText ?? context?.text)
+      : context?.text;
+  return [buildCurrentReplyMetadataBlock(context), text?.trim() ?? ""].filter(Boolean).join("\n\n");
+}
+
 /** Combines inbound context and the current prompt using the channel-provided joiner. */
 export function buildCurrentInboundPrompt(params: {
   context: CurrentInboundPromptContext | undefined;
   prompt: string;
   preferResumableText?: boolean;
 }): string {
-  const contextText =
-    params.preferResumableText === true
-      ? (params.context?.resumableText ?? params.context?.text)
-      : params.context?.text;
-  const prefix = contextText?.trim() ?? "";
+  const prefix = buildCurrentInboundPromptContextPrefix(params.context, {
+    preferResumableText: params.preferResumableText,
+  });
   if (!prefix) {
     return params.prompt;
   }
@@ -76,6 +106,7 @@ export function resolveRuntimeContextPromptParts(params: {
   effectivePrompt: string;
   transcriptPrompt?: string;
   modelPrompt?: string;
+  currentInboundContext?: CurrentInboundPromptContext;
   emptyTranscriptMode?: EmptyTranscriptMode;
 }): RuntimeContextPromptParts {
   const transcriptPrompt = params.transcriptPrompt;
@@ -91,13 +122,20 @@ export function resolveRuntimeContextPromptParts(params: {
         : { text: params.modelPrompt };
   const modelPromptText = modelPrompt?.text ?? transcriptPrompt ?? extracted.text;
   const prompt = transcriptPrompt ?? extracted.text;
+  const currentInboundContextText = buildCurrentInboundPromptContextPrefix(
+    params.currentInboundContext,
+  );
   if (!prompt.trim() && params.emptyTranscriptMode === "model-prompt") {
+    const runtimeContext =
+      [currentInboundContextText, extracted.runtimeContext]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .join("\n\n") || undefined;
     return {
       prompt: extracted.text,
       ...(modelPromptText.trim() && modelPromptText !== extracted.text
         ? { modelPrompt: modelPromptText }
         : {}),
-      ...(extracted.runtimeContext ? { runtimeContext: extracted.runtimeContext } : {}),
+      ...(runtimeContext ? { runtimeContext } : {}),
     };
   }
   const hiddenRuntimeContext = modelPrompt
@@ -110,10 +148,17 @@ export function resolveRuntimeContextPromptParts(params: {
       : undefined;
   // The hidden context is whatever remains after removing the last visible
   // prompt occurrence, plus any explicit internal runtime-context block.
+  const runtimeContextParts = [
+    currentInboundContextText,
+    hiddenRuntimeContext,
+    extracted.runtimeContext,
+  ];
+  if (!prompt.trim()) {
+    runtimeContextParts.push(extracted.text);
+  }
   const runtimeContext =
-    [hiddenRuntimeContext, extracted.runtimeContext]
-      .filter((value): value is string => Boolean(value?.trim()))
-      .join("\n\n") || (!prompt.trim() ? extracted.text.trim() : undefined);
+    runtimeContextParts.filter((value): value is string => Boolean(value?.trim())).join("\n\n") ||
+    (!prompt.trim() ? extracted.text.trim() : undefined);
   if (!prompt.trim()) {
     return runtimeContext
       ? {

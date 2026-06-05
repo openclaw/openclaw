@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCurrentInboundPrompt,
+  buildCurrentInboundPromptContextPrefix,
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
@@ -281,6 +282,101 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("uses current-turn context as prompt-local text", () => {
+    expect(
+      buildCurrentInboundPromptContextPrefix({
+        text: "Conversation info (untrusted metadata):\n```json\n{}\n```",
+      }),
+    ).toBe("Conversation info (untrusted metadata):\n```json\n{}\n```");
+  });
+
+  it("renders current-turn reply metadata before untrusted context", () => {
+    expect(
+      buildCurrentInboundPromptContextPrefix({
+        text: "Conversation info (untrusted metadata):\nreply_to_id=34971",
+        reply: {
+          currentMessageId: "34974",
+          threadId: "777",
+          replyToId: "34971",
+          replyTargetPresent: true,
+          quotePresent: false,
+          replyChainPresent: true,
+          replyChainMessageIds: ["34971"],
+        },
+      }),
+    ).toBe(
+      [
+        "Current reply metadata (trusted OpenClaw runtime metadata):",
+        "```json",
+        JSON.stringify(
+          {
+            currentMessageId: "34974",
+            threadId: "777",
+            replyToId: "34971",
+            replyTargetPresent: true,
+            quotePresent: false,
+            replyChainPresent: true,
+            replyChainMessageIds: ["34971"],
+          },
+          null,
+          2,
+        ),
+        "```",
+        "",
+        "Conversation info (untrusted metadata):\nreply_to_id=34971",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps reply metadata when text context is empty", () => {
+    expect(
+      buildCurrentInboundPromptContextPrefix({
+        text: "",
+        reply: {
+          currentMessageId: "34974",
+          replyToId: "34971",
+          replyTargetPresent: true,
+          quotePresent: true,
+          replyChainPresent: false,
+        },
+      }),
+    ).toBe(
+      [
+        "Current reply metadata (trusted OpenClaw runtime metadata):",
+        "```json",
+        JSON.stringify(
+          {
+            currentMessageId: "34974",
+            replyToId: "34971",
+            replyTargetPresent: true,
+            quotePresent: true,
+            replyChainPresent: false,
+          },
+          null,
+          2,
+        ),
+        "```",
+      ].join("\n"),
+    );
+  });
+
+  it("can use compact current-turn context for resumable backends", () => {
+    expect(
+      buildCurrentInboundPromptContextPrefix(
+        {
+          text: "Room context:\nAlice: lunch?\n\nCurrent event:\nBob: yes",
+          resumableText: "Current event:\nBob: yes",
+        },
+        { preferResumableText: true },
+      ),
+    ).toBe("Current event:\nBob: yes");
+  });
+
+  it("omits empty current-turn context", () => {
+    expect(buildCurrentInboundPromptContextPrefix(undefined)).toBe("");
+    expect(buildCurrentInboundPromptContextPrefix({ text: "   " })).toBe("");
+  });
+
   it("joins current-turn context and prompt with the requested separator", () => {
     expect(
       buildCurrentInboundPrompt({
@@ -341,5 +437,89 @@ describe("runtime context prompt submission", () => {
     expect(parts.runtimeSystemContext).toContain("OpenClaw runtime event.");
     expect(parts.runtimeSystemContext).toContain("not user-authored");
     expect(parts.runtimeSystemContext).toContain("internal event");
+  });
+
+  it("keeps current inbound metadata out of the visible user prompt", () => {
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt: "visible ask",
+      transcriptPrompt: "visible ask",
+      currentInboundContext: {
+        text: 'Conversation info (untrusted metadata):\n```json\n{"message_id":"42"}\n```',
+      },
+    });
+    expect(parts.prompt).toBe("visible ask");
+    expect(parts.prompt).not.toContain("Conversation info");
+    expect(parts.runtimeContext).toContain("Conversation info (untrusted metadata):");
+    expect(parts.runtimeContext).toContain('"message_id":"42"');
+  });
+
+  it("keeps current reply metadata out of the visible user prompt", () => {
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt: "what is this referring to?",
+      transcriptPrompt: "what is this referring to?",
+      currentInboundContext: {
+        text: "Conversation info (untrusted metadata):\nreply_to_id=34971",
+        reply: {
+          currentMessageId: "34974",
+          replyToId: "34971",
+          replyTargetPresent: true,
+          quotePresent: false,
+          replyChainPresent: true,
+          replyChainMessageIds: ["34971"],
+        },
+      },
+    });
+    expect(parts.prompt).toBe("what is this referring to?");
+    expect(parts.prompt).not.toContain("Current reply metadata");
+    expect(parts.prompt).not.toContain("34971");
+    expect(parts.runtimeContext).toContain(
+      "Current reply metadata (trusted OpenClaw runtime metadata):",
+    );
+    expect(parts.runtimeContext).toContain('"replyToId": "34971"');
+    expect(parts.runtimeContext).toContain("Conversation info (untrusted metadata):");
+  });
+
+  it("keeps current inbound metadata out of the model prompt", () => {
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt: "hook context\n\nvisible ask\n\nhook tail",
+      transcriptPrompt: "visible ask",
+      modelPrompt: "hook context\n\nvisible ask\n\nhook tail",
+      currentInboundContext: {
+        text: 'Sender (untrusted metadata):\n```json\n{"id":"u1"}\n```',
+      },
+    });
+    const modelPrompt = parts.modelPrompt ?? parts.prompt;
+    expect(modelPrompt).toBe("hook context\n\nvisible ask\n\nhook tail");
+    expect(modelPrompt).not.toContain("Sender (untrusted metadata)");
+    expect(parts.runtimeContext).toContain("Sender (untrusted metadata):");
+  });
+
+  it("combines current inbound metadata with extracted hidden runtime context", () => {
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt:
+        "visible ask\n\n__openclaw_runtime_context__\ninternal block\n__/openclaw_runtime_context__",
+      transcriptPrompt: "visible ask",
+      currentInboundContext: {
+        text: "Conversation info (untrusted metadata):\n```json\n{}\n```",
+      },
+    });
+    expect(parts.prompt).toBe("visible ask");
+    expect(parts.runtimeContext).toContain("Conversation info (untrusted metadata):");
+    expect(parts.runtimeContext).toContain("internal block");
+  });
+
+  it("preserves current inbound metadata in the empty-transcript model-prompt branch", () => {
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt: "[OpenClaw room event]",
+      transcriptPrompt: "",
+      emptyTranscriptMode: "model-prompt",
+      currentInboundContext: {
+        text: "Room context:\nAlice: hi\n\nCurrent event:\nBob: hi",
+      },
+    });
+    expect(parts.prompt).toBe("[OpenClaw room event]");
+    expect(parts.prompt).not.toContain("Room context:");
+    expect(parts.runtimeContext).toContain("Room context:");
+    expect(parts.runtimeContext).toContain("Current event:\nBob: hi");
   });
 });
