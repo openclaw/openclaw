@@ -161,6 +161,7 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  allowGatewayDrainingContinuation?: boolean;
 };
 
 type ModelFallbackRuntimeContext = {
@@ -1222,6 +1223,7 @@ export async function runWithModelFallback<T>(
     onError?: ModelFallbackErrorHandler;
     onFallbackStep?: ModelFallbackStepHandler;
     classifyResult?: ModelFallbackResultClassifier<T>;
+    allowGatewayDrainingContinuation?: boolean;
     skipAuthProfileRuntime?: boolean;
     abortSignal?: AbortSignal;
   } & ModelManifestNormalizationContext,
@@ -1272,6 +1274,7 @@ export async function runWithModelFallback<T>(
 
   const hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates[0];
+  let liveSwitchRedirectContinuationPending = false;
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
@@ -1509,11 +1512,20 @@ export async function runWithModelFallback<T>(
       }
     }
 
+    const shouldAllowGatewayDrainingContinuation =
+      params.allowGatewayDrainingContinuation === true &&
+      i > 0 &&
+      (attempts.length > 0 || liveSwitchRedirectContinuationPending);
+    const attemptRunOptions: ModelFallbackRunOptions | undefined =
+      shouldAllowGatewayDrainingContinuation
+        ? { ...runOptions, allowGatewayDrainingContinuation: true }
+        : runOptions;
+    liveSwitchRedirectContinuationPending = false;
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
       attempts,
-      options: runOptions,
+      options: attemptRunOptions,
       classifyResult: params.classifyResult,
       attempt: i + 1,
       total: candidates.length,
@@ -1594,6 +1606,7 @@ export async function runWithModelFallback<T>(
           currentIndex: i,
         });
         if (liveSwitchTargetIndex !== null) {
+          liveSwitchRedirectContinuationPending = true;
           i = liveSwitchTargetIndex - 1;
           continue;
         }

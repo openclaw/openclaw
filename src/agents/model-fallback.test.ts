@@ -14,7 +14,13 @@ import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plug
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
+import {
+  CommandLaneTaskTimeoutError,
+  enqueueCommand,
+  getCommandLaneSnapshot,
+  markGatewayDraining,
+  resetCommandQueueStateForTest,
+} from "../process/command-queue.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -206,6 +212,7 @@ function resetModelFallbackTestState(): void {
   providerModelNormalizationMock.normalizeProviderModelIdWithRuntime
     .mockReset()
     .mockReturnValue(undefined);
+  resetCommandQueueStateForTest();
 }
 
 function setDefaultPluginMetadataSnapshot(): void {
@@ -281,6 +288,7 @@ afterEach(resetModelFallbackTestState);
 
 beforeEach(() => {
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
+  resetCommandQueueStateForTest();
 });
 
 afterEach(() => {
@@ -1216,6 +1224,123 @@ describe("runWithModelFallback", () => {
       status: 429,
       code: "RESOURCE_EXHAUSTED",
     });
+  });
+
+  it("continues fallback candidates when restart drain begins after an active failed attempt", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        markGatewayDraining();
+        throw new FailoverError("primary timed out", {
+          reason: "rate_limit",
+          provider: "openai",
+          model: "gpt-4.1-mini",
+        });
+      })
+      .mockResolvedValueOnce("fallback ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result).toMatchObject({
+      result: "fallback ok",
+      provider: "anthropic",
+      model: "claude-haiku-3-5",
+    });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
+  });
+
+  it("includes queue pressure on fallback step observations", async () => {
+    const cfg = makeCfg();
+    let releaseActive!: () => void;
+    const activeTask = enqueueCommand(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releaseActive = resolve;
+        }),
+    );
+    await vi.waitFor(() =>
+      expect(getCommandLaneSnapshot()).toMatchObject({ activeCount: 1, queuedCount: 0 }),
+    );
+    const queuedTask = enqueueCommand(async () => undefined);
+    await vi.waitFor(() =>
+      expect(getCommandLaneSnapshot()).toMatchObject({ activeCount: 1, queuedCount: 1 }),
+    );
+
+    const onFallbackStep = vi.fn();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("unsupported primary", {
+          reason: "model_not_found",
+          provider: "openai",
+          model: "gpt-4.1-mini",
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    try {
+      await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+        onFallbackStep,
+      });
+    } finally {
+      releaseActive();
+      await Promise.all([activeTask, queuedTask]);
+    }
+
+    expect(onFallbackStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fallbackStepFromModel: "openai/gpt-4.1-mini",
+        fallbackStepToModel: "anthropic/claude-haiku-3-5",
+        fallbackStepFromFailureReason: "model_not_found",
+        fallbackStepQueueActive: 1,
+        fallbackStepQueueQueued: 1,
+        fallbackStepQueueDraining: false,
+      }),
+    );
+  });
+
+  it("redacts reused fallback failure detail before success step observations", async () => {
+    const cfg = makeCfg();
+    const onFallbackStep = vi.fn();
+    const rawProviderError =
+      '{"type":"error","error":{"type":"rate_limit_error","message":"Quota exceeded for api_key=sk-secret1234567890abcd"},"request_id":"req_plaintext_123"}';
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error(rawProviderError))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+      onFallbackStep,
+    });
+
+    expect(result.result).toBe("ok");
+    const successStep = onFallbackStep.mock.calls
+      .map(
+        ([step]) =>
+          step as {
+            fallbackStepFinalOutcome?: string;
+            fallbackStepFromFailureDetail?: string;
+          },
+      )
+      .find((step) => step.fallbackStepFinalOutcome === "succeeded");
+    expect(successStep?.fallbackStepFromFailureDetail).toContain("Quota exceeded");
+    expect(successStep?.fallbackStepFromFailureDetail).not.toContain("sk-secret1234567890abcd");
+    expect(successStep?.fallbackStepFromFailureDetail).not.toContain("req_plaintext_123");
   });
 
   it("keeps raw provider schema errors in fallback summaries", async () => {

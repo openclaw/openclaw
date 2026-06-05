@@ -148,6 +148,7 @@ Details: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing),
 
 ## Related
 
+- [Production AI governance](/architecture/production-ai-governance) — lightweight adoption checklist for evaluation, replay, tracing, cost, and agent context governance
 - [Agent Loop](/concepts/agent-loop) — detailed agent execution cycle
 - [Gateway Protocol](/gateway/protocol) — WebSocket protocol contract
 - [Queue](/concepts/queue) — command queue and concurrency

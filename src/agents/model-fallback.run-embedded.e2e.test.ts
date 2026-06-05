@@ -4,10 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  GatewayDrainingError,
+  enqueueCommandInLane,
+  markGatewayDraining,
+  resetCommandQueueStateForTest,
+} from "../process/command-queue.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -68,6 +75,7 @@ beforeEach(() => {
   runEmbeddedAttemptMock.mockReset();
   computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
+  resetCommandQueueStateForTest();
 });
 
 const OVERLOADED_ERROR_PAYLOAD =
@@ -221,6 +229,7 @@ async function runEmbeddedFallback(params: {
   runId: string;
   abortSignal?: AbortSignal;
   config?: OpenClawConfig;
+  queueMode?: "default" | "immediate";
 }) {
   // Runs the same embedded-agent entrypoint that production fallback uses while
   // keeping provider/model attempts deterministic through mocks.
@@ -231,8 +240,9 @@ async function runEmbeddedFallback(params: {
     model: "mock-1",
     runId: params.runId,
     agentDir: params.agentDir,
-    run: (provider, model, options) =>
-      runEmbeddedAgent({
+    allowGatewayDrainingContinuation: params.queueMode === "default",
+    run: (provider, model, options) => {
+      const embeddedParams: Parameters<typeof runEmbeddedAgent>[0] = {
         sessionId: `session:${params.runId}`,
         sessionKey: params.sessionKey,
         sessionFile: path.join(params.workspaceDir, `${params.runId}.jsonl`),
@@ -244,11 +254,16 @@ async function runEmbeddedFallback(params: {
         model,
         authProfileIdSource: "auto",
         allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
+        allowGatewayDrainingContinuation: options?.allowGatewayDrainingContinuation === true,
         timeoutMs: 5_000,
         runId: params.runId,
         abortSignal: params.abortSignal,
-        enqueue: async (task) => await task(),
-      }),
+      };
+      if (params.queueMode !== "default") {
+        embeddedParams.enqueue = async (task) => await task();
+      }
+      return runEmbeddedAgent(embeddedParams);
+    },
   });
 }
 
@@ -478,6 +493,84 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expectOpenAiThenGroqAttemptOrder();
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps embedded fallback candidates admitted during gateway drain", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+        const attemptParams = params as EmbeddedAttemptParams;
+        if (attemptParams.provider === "openai") {
+          markGatewayDraining();
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: [],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "openai",
+              model: "mock-1",
+              stopReason: "error",
+              errorMessage: OVERLOADED_ERROR_PAYLOAD,
+            }),
+          });
+        }
+        if (attemptParams.provider === "groq") {
+          return makeFallbackSuccessAttempt();
+        }
+        throw new Error(`Unexpected provider ${attemptParams.provider}`);
+      });
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:embedded-drain-fallback",
+        runId: "run:embedded-drain-fallback",
+        queueMode: "default",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expectOpenAiThenGroqAttemptOrder();
+      await expect(
+        enqueueCommandInLane("new-task-after-drain", async () => "blocked"),
+      ).rejects.toBeInstanceOf(GatewayDrainingError);
+    });
+  });
+
+  it("keeps live-switch redirected embedded fallback candidates admitted during gateway drain", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+        const attemptParams = params as EmbeddedAttemptParams;
+        if (attemptParams.provider === "openai") {
+          markGatewayDraining();
+          throw new LiveSessionModelSwitchError({
+            provider: "groq",
+            model: "mock-2",
+          });
+        }
+        if (attemptParams.provider === "groq") {
+          return makeFallbackSuccessAttempt();
+        }
+        throw new Error(`Unexpected provider ${attemptParams.provider}`);
+      });
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:embedded-drain-live-switch-redirect",
+        runId: "run:embedded-drain-live-switch-redirect",
+        queueMode: "default",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts).toStrictEqual([]);
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expectOpenAiThenGroqAttemptOrder();
+      await expect(
+        enqueueCommandInLane("new-task-after-live-switch-drain", async () => "blocked"),
+      ).rejects.toBeInstanceOf(GatewayDrainingError);
     });
   });
 

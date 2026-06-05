@@ -486,6 +486,7 @@ export async function runEmbeddedAgent(
   const globalLane = resolveGlobalLane(params.lane);
   const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
+  const allowGatewayDrainingContinuation = params.allowGatewayDrainingContinuation === true;
   let laneTaskProgressAtMs = Date.now();
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
@@ -502,13 +503,18 @@ export async function runEmbeddedAgent(
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
       priority: sessionQueuePriority,
+      allowGatewayDrainingContinuation,
     };
     return params.enqueue
       ? params.enqueue(task, withLaneTimeout(globalOpts))
       : enqueueCommandInLane(globalLane, task, withLaneTimeout(globalOpts));
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
+    const sessionOpts: CommandQueueEnqueueOptions = {
+      ...opts,
+      priority: sessionQueuePriority,
+      allowGatewayDrainingContinuation,
+    };
     return params.enqueue
       ? params.enqueue(task, sessionOpts)
       : enqueueCommandInLane(sessionLane, task, sessionOpts);

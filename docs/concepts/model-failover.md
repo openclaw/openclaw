@@ -381,7 +381,9 @@ The persisted fallback override closes that window, and the narrow rollback keep
 - optional status/code
 - human-readable error summary
 
-Structured `model_fallback_decision` logs also include flat `fallbackStep*` fields when a candidate fails, is skipped, or a later fallback succeeds. These fields make the attempted transition explicit (`fallbackStepFromModel`, `fallbackStepToModel`, `fallbackStepFromFailureReason`, `fallbackStepFromFailureDetail`, `fallbackStepFinalOutcome`) so log and diagnostic exporters can reconstruct the primary failure even when the terminal fallback also fails.
+Structured `model_fallback_decision` logs also include flat `fallbackStep*` fields when a candidate fails, is skipped, or a later fallback succeeds. These fields make the attempted transition explicit (`fallbackStepFromModel`, `fallbackStepToModel`, `fallbackStepFromFailureReason`, `fallbackStepFromFailureDetail`, `fallbackStepFinalOutcome`) and include aggregate queue pressure (`fallbackStepQueueActive`, `fallbackStepQueueQueued`, `fallbackStepQueueDraining`) so log and diagnostic exporters can reconstruct the primary failure even when the terminal fallback also fails.
+
+Isolated cron agent runs mirror the same primary/fallback/queue chain into the cron task `progressSummary`, so `openclaw tasks show <task>` can identify the primary model, fallback target, failure reason, and queue/drain state without replaying gateway logs.
 
 When every candidate fails, OpenClaw throws `FallbackSummaryError`. The outer reply runner can use that to build a more specific message such as "all models are temporarily rate-limited" and include the soonest cooldown expiry when one is known.
 

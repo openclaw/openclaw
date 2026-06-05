@@ -1728,6 +1728,7 @@ async function agentCommandInternal(
               model: modelLocal,
               result: resultLocal,
             }),
+          allowGatewayDrainingContinuation: true,
           abortSignal: opts.abortSignal,
           run: async (providerOverride, modelOverride, runOptions) => {
             const isAutoFallbackPrimaryProbeCandidate =
@@ -1790,6 +1791,8 @@ async function agentCommandInternal(
               pluginsEnabled,
               ...(manifestMetadataSnapshot ? { metadataSnapshot: manifestMetadataSnapshot } : {}),
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+              allowGatewayDrainingContinuation:
+                runOptions?.allowGatewayDrainingContinuation === true,
               sessionHasHistory:
                 !isNewSession ||
                 (await attemptExecutionRuntime.sessionFileHasContent(attemptSessionFile)),
