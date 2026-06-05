@@ -1129,7 +1129,7 @@ export function createSubagentRegistryLifecycleController(params: {
     if (didAnnounce) {
       const delivery = ensureDeliveryState(entry);
       const visibleDeliveryError =
-        delivery.visibleStatus === "failed"
+        delivery.status === "failed" || delivery.visibleStatus === "failed"
           ? (delivery.visibleError ?? getDeliveryLastError(entry) ?? "visible delivery failed")
           : undefined;
       const shouldCreditDelivery =

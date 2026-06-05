@@ -104,6 +104,68 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
+  it("preserves failed visible delivery after requester wake across sqlite round trip", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun({
+        delivery: {
+          status: "failed",
+          announcedAt: 12_300,
+          deliveredAt: 12_300,
+          requesterWakeDeliveredAt: 12_300,
+          visibleRequired: true,
+          visibleStatus: "failed",
+          visibleError: "required message-tool delivery missing evidence",
+          lastError: "required message-tool delivery missing evidence",
+        },
+      });
+
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)?.delivery).toMatchObject({
+        status: "failed",
+        announcedAt: 12_300,
+        deliveredAt: 12_300,
+        requesterWakeDeliveredAt: 12_300,
+        visibleRequired: true,
+        visibleStatus: "failed",
+        visibleError: "required message-tool delivery missing evidence",
+        lastError: "required message-tool delivery missing evidence",
+      });
+    });
+  });
+
+  it("hydrates typed visible delivery errors as failed when payload delivery is absent", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun({
+        delivery: {
+          status: "failed",
+          announcedAt: 12_300,
+          deliveredAt: 12_300,
+          lastError: "required message-tool delivery missing evidence",
+        },
+      });
+
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      const db = openOpenClawStateDatabase().db;
+      const row = db
+        .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+        .get(run.runId) as { payload_json: string };
+      const payload = JSON.parse(row.payload_json) as SubagentRunRecord;
+      payload.delivery = undefined;
+      db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
+        JSON.stringify(payload),
+        run.runId,
+      );
+
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)?.delivery).toMatchObject({
+        status: "failed",
+        announcedAt: 12_300,
+        deliveredAt: 12_300,
+        lastError: "required message-tool delivery missing evidence",
+      });
+    });
+  });
+
   it("uses save calls as whole-registry snapshots", async () => {
     await withTempStateEnv(async () => {
       const first = createRun({ runId: "run-one", childSessionKey: "agent:main:subagent:one" });
