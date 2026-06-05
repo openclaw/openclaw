@@ -1198,11 +1198,20 @@ export function filterBootstrapFilesForSession(
   if (!sessionKey) {
     return files;
   }
+  // Hook-loaded extras whose basenames collide with the legacy allowlist
+  // (e.g. `packages/*/AGENTS.md` from the `bootstrap-extra-files` hook) would
+  // otherwise slip into subagent/cron sessions through the basename match
+  // alone. Apply the same `file.source !== "hook"` guard the explicit-tier
+  // path uses so the legacy/no-override result stays root-only.
   if (isSubagentSessionKey(sessionKey)) {
-    return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+    return files.filter(
+      (file) => file.source !== "hook" && SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name),
+    );
   }
   if (isCronSessionKey(sessionKey)) {
-    return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
+    return files.filter(
+      (file) => file.source !== "hook" && CRON_BOOTSTRAP_ALLOWLIST.has(file.name),
+    );
   }
   return files;
 }
