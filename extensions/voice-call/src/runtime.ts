@@ -571,6 +571,8 @@ export async function createVoiceCallRuntime(params: {
             config.realtime.tools,
           ),
           toolPolicy: config.realtime.toolPolicy,
+          // Self-echo guard (off by default); configurable via realtime config.
+          suppressInputDuringPlayback: config.realtime.suppressInputDuringPlayback,
           agentRuntime,
           voiceConfig: config,
           logger: log,
