@@ -3381,6 +3381,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             case "session.recovery.completed":
               recordSessionRecoveryCompleted(evt);
               return;
+            case "session.activity.evicted":
+              // Orphaned tool/model eviction is captured by stability records and
+              // the recovery counters; no dedicated OTel metric (parity with
+              // session.long_running / session.stalled).
+              return;
             case "run.attempt":
               recordRunAttempt(evt);
               return;
