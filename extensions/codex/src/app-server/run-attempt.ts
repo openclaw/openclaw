@@ -366,6 +366,9 @@ export async function runCodexAppServerAttempt(
     agentId: params.agentId,
   });
   const beforeToolCallPolicy = getBeforeToolCallPolicyDiagnosticState();
+  const beforeToolCallPolicyActive =
+    beforeToolCallPolicy.hasBeforeToolCallHook ||
+    beforeToolCallPolicy.trustedToolPolicies.length > 0;
   preDynamicStartupStages.mark("config");
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await ensureCodexWorkspaceDirOnce(resolvedWorkspace);
@@ -408,9 +411,7 @@ export async function runCodexAppServerAttempt(
     appServer: configuredAppServer,
     pluginConfig,
     env: process.env,
-    shouldPromote:
-      beforeToolCallPolicy.hasBeforeToolCallHook ||
-      beforeToolCallPolicy.trustedToolPolicies.length > 0,
+    shouldPromote: beforeToolCallPolicyActive,
     execPolicy,
     canUseUntrustedApprovalPolicy:
       configuredAppServer.start.transport !== "stdio" ||
@@ -525,6 +526,7 @@ export async function runCodexAppServerAttempt(
     agentId: sessionAgentId,
     runtimeSessionKey: sandboxSessionKey,
     sandboxExecServerEnabled,
+    beforeToolCallPolicyActive,
   });
   preDynamicStartupStages.mark("native-tool-surface");
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
@@ -564,6 +566,7 @@ export async function runCodexAppServerAttempt(
     sandboxSessionKey,
     sandbox,
     nativeToolSurfaceEnabled,
+    beforeToolCallPolicyActive,
     runAbortController,
     sessionAgentId,
     pluginConfig,
@@ -581,6 +584,7 @@ export async function runCodexAppServerAttempt(
     sandboxSessionKey,
     sandbox,
     nativeToolSurfaceEnabled,
+    beforeToolCallPolicyActive,
     runAbortController,
     sessionAgentId,
     pluginConfig,

@@ -400,6 +400,34 @@ describe("Codex app-server dynamic tool build", () => {
     expect(runtimePolicyTools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
   });
 
+  it("keeps OpenClaw shell tools when before_tool_call policy disables native Code Mode", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+      params,
+      undefined,
+      {
+        beforeToolCallPolicyActive: true,
+      },
+    );
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled,
+      beforeToolCallPolicyActive: true,
+    });
+
+    expect(nativeToolSurfaceEnabled).toBe(false);
+    expect(tools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
+  });
+
   it("exposes Docker sandbox shell tools when native Code Mode cannot honor sandbox paths", async () => {
     setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("exec"),
@@ -734,6 +762,18 @@ describe("Codex app-server dynamic tool build", () => {
 
     params.toolsAllow = ["message"];
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
+  it("disables Codex native tool surfaces when OpenClaw before_tool_call policy is active", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        beforeToolCallPolicyActive: true,
+      }),
+    ).toBe(false);
   });
 
   it("disables Codex native tool surfaces when the effective exec target is node", () => {

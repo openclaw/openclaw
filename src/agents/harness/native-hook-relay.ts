@@ -442,10 +442,6 @@ export function registerNativeHookRelay(
         relayId,
         generation: registration.generation,
         event,
-        preToolUseUnavailable:
-          event === "pre_tool_use" && !nativeHookRelayEventHasLocalWork(registration, event)
-            ? "noop"
-            : undefined,
         nice: params.command?.nice,
         timeoutMs: params.command?.timeoutMs,
         executable: params.command?.executable,
@@ -772,8 +768,8 @@ export function renderNativeHookRelayUnavailableResponse(params: {
   const message = params.message?.trim() || "Native hook relay unavailable";
   if (event === "pre_tool_use") {
     // The standalone CLI cannot reconstruct the originating registration after
-    // relay lookup fails, so unavailable PreToolUse must fail closed unless the
-    // generated command explicitly recorded that no before-tool policy existed.
+    // relay lookup fails, so unavailable PreToolUse must fail closed. The noop
+    // escape remains for older generated commands that carried it explicitly.
     if (params.preToolUseUnavailable === "noop") {
       return adapter.renderNoopResponse(event);
     }
@@ -966,9 +962,6 @@ function registerNativeHookRelayBridge(registration: ActiveNativeHookRelayRegist
     }
     writeNativeHookRelayBridgeRecordForRegistration(registration, bridge);
   });
-  if (relayBridges.get(registration.relayId) === bridge) {
-    writeNativeHookRelayBridgeRecordForRegistration(registration, bridge);
-  }
   server.unref();
 }
 

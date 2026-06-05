@@ -2725,9 +2725,17 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    const startParams = startRequest?.params as Record<string, unknown> | undefined;
+    const startParams = startRequest?.params as
+      | {
+          approvalPolicy?: string;
+          sandbox?: string;
+          config?: Record<string, unknown>;
+        }
+      | undefined;
     expect(startParams?.approvalPolicy).toBe("untrusted");
     expect(startParams?.sandbox).toBe("danger-full-access");
+    expect(startParams?.config?.["features.code_mode"]).toBe(false);
+    expect(startParams?.config?.["features.code_mode_only"]).toBe(false);
     expect(info).toHaveBeenCalledWith(
       "codex app-server approval policy promoted for OpenClaw tool policy",
       {
