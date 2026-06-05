@@ -1076,6 +1076,31 @@ function resolveAgentAccountId(value?: string): string | undefined {
   return normalizeAccountId(trimmed);
 }
 
+// Session-key pattern: `agent:<agentId>:<rest>` — generic detection without
+// hardcoding any specific channel IDs or session names.
+const SESSION_KEY_PATTERN = /\bagent:[a-z0-9_-]+:[^\s]+/i;
+
+/**
+ * Detects if a message.send call appears intended for session-to-session
+ * control. Returns a warning string if detected, undefined otherwise.
+ */
+function detectSessionControlIntent(
+  params: Record<string, unknown>,
+  action: string,
+): string | undefined {
+  if (action !== "send") {
+    return undefined;
+  }
+  const text = normalizeOptionalString(params.text) ?? normalizeOptionalString(params.message);
+  if (!text) {
+    return undefined;
+  }
+  if (SESSION_KEY_PATTERN.test(text)) {
+    return "This message references an OpenClaw session key. To communicate with another session, use sessions_send instead of message.send.";
+  }
+  return undefined;
+}
+
 function buildMessageToolDescription(options?: {
   config?: OpenClawConfig;
   currentChannel?: string;
@@ -1091,7 +1116,8 @@ function buildMessageToolDescription(options?: {
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 }): string {
-  const baseDescription = "Send/delete/manage channel messages.";
+  const baseDescription =
+    "Send/delete/manage channel messages. Do NOT use this to communicate with or control another OpenClaw session — use sessions_send instead.";
   const resolvedOptions = options ?? {};
   const messageToolDiscoveryParams = resolvedOptions.config
     ? {
@@ -1310,6 +1336,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
+      // Soft warning: detect session-control intent in outbound message text.
+      // If the text references a session key pattern, warn the model to use
+      // sessions_send instead. This is not a hard rejection — the message still
+      // sends — but the warning in the result steers future behavior.
+      const sessionControlWarning = detectSessionControlIntent(params, action);
+
       const rawConfig = options?.config ?? loadConfigForTool();
       const scope = resolveMessageSecretScope({
         channel: params.channel,
@@ -1436,9 +1468,19 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       const toolResult = getToolResult(result);
       if (toolResult) {
+        if (sessionControlWarning && toolResult.details && typeof toolResult.details === "object") {
+          (toolResult.details as Record<string, unknown>).warning = sessionControlWarning;
+        }
         return toolResult;
       }
-      return jsonResult(result.payload);
+      const payload = result.payload;
+      if (sessionControlWarning && payload && typeof payload === "object") {
+        return jsonResult({
+          ...(payload as Record<string, unknown>),
+          warning: sessionControlWarning,
+        });
+      }
+      return jsonResult(payload);
     },
   };
 }

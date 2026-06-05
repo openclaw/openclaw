@@ -2717,3 +2717,59 @@ describe("message tool sandbox passthrough", () => {
     expect(call?.requesterSenderId).toBe("1234567890");
   });
 });
+
+describe("message tool session-control warning", () => {
+  beforeEach(() => {
+    mocks.runMessageAction.mockReset();
+  });
+
+  it("includes warning when message text contains a session key pattern", async () => {
+    mockSendResult();
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    const result = await tool.execute("call-session-key", {
+      action: "send",
+      target: "discord:123",
+      text: "Please tell agent:main:discord:channel:999:heartbeat to do something",
+    });
+
+    const details = result.details as Record<string, unknown> | undefined;
+    expect(details?.warning).toContain("sessions_send");
+  });
+
+  it("does not include warning for normal messages without session keys", async () => {
+    mockSendResult();
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    const result = await tool.execute("call-normal", {
+      action: "send",
+      target: "discord:123",
+      text: "Hello world, how are you?",
+    });
+
+    const details = result.details as Record<string, unknown> | undefined;
+    expect(details?.warning).toBeUndefined();
+  });
+
+  it("does not include warning for non-send actions", async () => {
+    mocks.runMessageAction.mockResolvedValue({
+      payload: { status: "ok", action: "delete" },
+    } satisfies MessageActionRunResult);
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    const result = await tool.execute("call-delete", {
+      action: "delete",
+      messageId: "msg-1",
+      text: "agent:main:other-session does stuff",
+    });
+
+    const details = result.details as Record<string, unknown> | undefined;
+    expect(details?.warning).toBeUndefined();
+  });
+});

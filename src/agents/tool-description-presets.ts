@@ -16,6 +16,7 @@ export function describeSessionsListTool(): string {
   return [
     "List visible sessions; filter by kind, label, agentId, search, activity.",
     "Use before sessions_history or sessions_send target selection.",
+    "Search matches session keys, labels, display names, and channel IDs. Prefix # is stripped automatically.",
   ].join(" ");
 }
 
@@ -30,7 +31,8 @@ export function describeSessionsHistoryTool(): string {
 /** Describes the sessions_send tool for model-facing instructions. */
 export function describeSessionsSendTool(): string {
   return [
-    "Send message to visible session by sessionKey/label, or configured agent by agentId.",
+    "Send message to another OpenClaw session. Use this — not message.send — to communicate with or control another session.",
+    "Target by sessionKey (preferred when known), label, or agentId. Provide only one targeting field; sessionKey takes priority if set.",
     "Thread-scoped chats rejected; target parent channel session.",
     "Creates missing configured-agent main session; waits for reply when available.",
   ].join(" ");

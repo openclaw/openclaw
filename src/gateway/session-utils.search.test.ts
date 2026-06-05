@@ -408,6 +408,41 @@ describe("listSessionsFromStore search", () => {
     }
   });
 
+  test("strips leading # from search to match channel session keys", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:discord:channel:1478575794493198387:heartbeat": {
+        sessionId: "sess-heartbeat",
+        updatedAt: Date.now(),
+      } as SessionEntry,
+      "agent:main:slack:channel:general": {
+        sessionId: "sess-general",
+        updatedAt: Date.now() - 1000,
+        label: "general",
+      } as SessionEntry,
+    };
+    const cases = [
+      {
+        search: "#heartbeat",
+        expectedKey: "agent:main:discord:channel:1478575794493198387:heartbeat",
+      },
+      {
+        search: "heartbeat",
+        expectedKey: "agent:main:discord:channel:1478575794493198387:heartbeat",
+      },
+      { search: "#general", expectedKey: "agent:main:slack:channel:general" },
+      {
+        search: "1478575794493198387",
+        expectedKey: "agent:main:discord:channel:1478575794493198387:heartbeat",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const result = listSearchSessions({ opts: { search: testCase.search }, store });
+      expect(result.sessions, `search: ${testCase.search}`).toHaveLength(1);
+      expect(result.sessions[0].key).toBe(testCase.expectedKey);
+    }
+  });
+
   test("filters sessions by the displayed provider and model identity", () => {
     const now = Date.now();
     const cfg = createModelDefaultsConfig({

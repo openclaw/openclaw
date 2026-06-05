@@ -798,6 +798,40 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("ignores label/agentId when sessionKey is provided", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: MAIN_AGENT_SESSION_KEY,
+              agentId: "main",
+              spawnedBy: MAIN_AGENT_SESSION_KEY,
+            },
+          ],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-1" };
+      }
+      return {};
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-sessionkey-wins", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      label: "some-label",
+      agentId: "some-agent",
+      message: "hello",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    // Should succeed without "Provide either sessionKey or label" error
+    expect(details.status).not.toBe("error");
+  });
+
   it("returns an error when label resolution fails", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("No session found with label: nope"));
     const tool = createMainSessionsSendTool();

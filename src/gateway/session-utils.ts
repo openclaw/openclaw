@@ -2487,6 +2487,9 @@ function filterSessionEntries(params: {
   const label = normalizeOptionalString(opts.label) ?? "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
+  // Channel references often use a leading `#` (e.g. "#heartbeat") that does
+  // not appear in session keys. Provide a stripped alternate for matching.
+  const searchAlt = search.startsWith("#") ? search.slice(1) : "";
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
@@ -2571,19 +2574,26 @@ function filterSessionEntries(params: {
       if (matchesSessionListSearch(cheapFields, search)) {
         return true;
       }
+      if (searchAlt && matchesSessionListSearch(cheapFields, searchAlt)) {
+        return true;
+      }
       if (!shouldResolveDerivedSessionModelSearchFields(search)) {
         return false;
       }
       const searchRowContext = resolveSessionListRowContext(params);
-      return matchesSessionListSearch(
-        resolveSessionListSearchModelFields({
-          cfg,
-          key,
-          entry,
-          rowContext: searchRowContext,
-        }),
-        search,
-      );
+      const modelFields = resolveSessionListSearchModelFields({
+        cfg,
+        key,
+        entry,
+        rowContext: searchRowContext,
+      });
+      if (matchesSessionListSearch(modelFields, search)) {
+        return true;
+      }
+      if (searchAlt && matchesSessionListSearch(modelFields, searchAlt)) {
+        return true;
+      }
+      return false;
     });
   }
 

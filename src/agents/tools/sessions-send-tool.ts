@@ -340,14 +340,9 @@ export function createSessionsSendTool(opts?: {
       const sessionKeyParam = readStringParam(params, "sessionKey");
       const labelParam = normalizeOptionalString(readStringParam(params, "label"));
       const labelAgentIdParam = normalizeOptionalString(readStringParam(params, "agentId"));
-      if (sessionKeyParam && labelParam) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error: "Provide either sessionKey or label (not both).",
-        });
-      }
 
+      // sessionKey takes priority: if set, ignore label/agentId to avoid
+      // spurious conflicts when the model provides redundant targeting fields.
       let sessionKey = sessionKeyParam;
       if (!sessionKey && !labelParam && labelAgentIdParam) {
         const agentMainKey = resolveConfiguredAgentMainSessionKey({
