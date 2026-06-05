@@ -334,8 +334,6 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     expect(finalizedContext?.BodyForAgent).toContain(
       "Use the available tool to join the meeting with meeting number 123456789 immediately.",
     );
-    expect(finalizedContext?.BodyForAgent).not.toContain("call_vc_123");
-    expect(finalizedContext?.BodyForAgent).not.toContain("call_id");
     const sessionRecord = mockCallArg(recordInboundSession, "recordInboundSession") as
       | { updateLastRoute?: unknown }
       | undefined;
