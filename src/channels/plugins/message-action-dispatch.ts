@@ -6,25 +6,8 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import { getChannelPlugin, normalizeChannelId } from "./index.js";
-import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.public.js";
-
-const trustedRequesterChannelManagementActions = new Set<ChannelMessageActionName>([
-  "emoji-upload",
-  "sticker-upload",
-  "role-add",
-  "role-remove",
-  "channel-create",
-  "channel-edit",
-  "channel-delete",
-  "channel-move",
-  "category-create",
-  "category-edit",
-  "category-delete",
-  "event-create",
-  "timeout",
-  "kick",
-  "ban",
-]);
+import { isTrustedRequesterChannelManagementAction } from "./message-action-protected-actions.js";
+import type { ChannelMessageActionContext } from "./types.public.js";
 
 function normalizeMessageActionChannel(raw?: string | null): string | undefined {
   return normalizeChannelId(raw) ?? normalizeOptionalLowercaseString(raw) ?? undefined;
@@ -33,7 +16,7 @@ function normalizeMessageActionChannel(raw?: string | null): string | undefined 
 function resolveProtectedActionCurrentProvider(
   ctx: ChannelMessageActionContext,
 ): string | undefined {
-  if (!trustedRequesterChannelManagementActions.has(ctx.action)) {
+  if (!isTrustedRequesterChannelManagementAction(ctx.action)) {
     return undefined;
   }
   return normalizeMessageActionChannel(ctx.toolContext?.currentChannelProvider);

@@ -11,6 +11,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getChannelPlugin, getLoadedChannelPlugin, listChannelPlugins } from "./index.js";
+import { isTrustedRequesterChannelManagementAction } from "./message-action-protected-actions.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 import {
   resolveBundledChannelMessageToolDiscoveryAdapter,
@@ -309,7 +310,12 @@ export function listCrossChannelSchemaSupportedMessageActions(
       schemaBlockedActions.add(action);
     }
   }
-  return resolved.actions.filter((action) => !schemaBlockedActions.has(action));
+  // Cross-channel turns cannot prove the target channel's requester identity;
+  // omit protected actions here so schema discovery matches dispatcher policy.
+  return resolved.actions.filter(
+    (action) =>
+      !schemaBlockedActions.has(action) && !isTrustedRequesterChannelManagementAction(action),
+  );
 }
 
 /**

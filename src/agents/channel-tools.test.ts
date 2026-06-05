@@ -1,5 +1,6 @@
 /** Tests channel action discovery from plugin message-tool descriptors. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listCrossChannelSchemaSupportedMessageActions } from "../channels/plugins/message-action-discovery.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -140,5 +141,45 @@ describe("channel tools", () => {
 
     const cfg = {} as OpenClawConfig;
     expect(listChannelSupportedActions({ cfg, channel: "telegram" })).toEqual(["react"]);
+  });
+
+  it("omits protected management actions from cross-channel discovery", () => {
+    const plugin: ChannelPlugin = {
+      id: "discord",
+      meta: {
+        id: "discord",
+        label: "Discord",
+        selectionLabel: "Discord",
+        docsPath: "/channels/discord",
+        blurb: "discord plugin",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["send", "react", "kick", "channel-delete"],
+        }),
+      },
+    };
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const cfg = {} as OpenClawConfig;
+    expect(
+      listCrossChannelSchemaSupportedMessageActions({
+        cfg,
+        channel: "discord",
+        currentChannelProvider: "slack",
+      }),
+    ).toEqual(["send", "react"]);
+    expect(listChannelSupportedActions({ cfg, channel: "discord" })).toEqual([
+      "send",
+      "react",
+      "kick",
+      "channel-delete",
+    ]);
   });
 });
