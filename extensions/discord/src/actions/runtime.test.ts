@@ -25,6 +25,7 @@ type DiscordChannelInfoTest = {
   guild_id?: string;
   name?: string;
   parent_id?: string;
+  recipients?: Array<{ id?: string }>;
 };
 
 const discordSendMocks = {
@@ -873,6 +874,61 @@ describe("handleDiscordMessagingAction", () => {
       handleMessagingAction("listPins", { channelId: "444" }, enableAllActions, cfg),
     ).rejects.toThrow("Discord read target channel is not allowed.");
     expect(listPinsDiscord).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "123456789012345678",
+    "user:123456789012345678",
+    "discord:123456789012345678",
+    "<@123456789012345678>",
+    "<@!123456789012345678>",
+  ])("allows Discord DM reads when allowFrom includes the DM recipient (%s)", async (allowFrom) => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+      recipients: [{ id: "123456789012345678" }],
+    });
+    readMessagesDiscord.mockResolvedValueOnce([{ id: "M1" }]);
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          dmPolicy: "allowlist",
+          allowFrom: [allowFrom],
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "DM1" }, enableAllActions, cfg),
+    ).resolves.toMatchObject({
+      details: { messages: [{ id: "M1" }] },
+    });
+    expect(readMessagesDiscord).toHaveBeenCalled();
+  });
+
+  it("rejects Discord DM reads when allowFrom contains the DM channel id instead of the recipient", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "DM1",
+      type: ChannelType.DM,
+      recipients: [{ id: "123456789012345678" }],
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          dmPolicy: "allowlist",
+          allowFrom: ["DM1"],
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "DM1" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
   });
 
   it("adds normalized timestamps to searchMessages payloads", async () => {

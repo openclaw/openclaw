@@ -2,7 +2,9 @@ import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runti
 import { mergeDiscordAccountConfig, resolveDefaultDiscordAccountId } from "../accounts.js";
 import { createDiscordRuntimeAccountContext } from "../client.js";
 import {
+  allowListMatches,
   isDiscordGroupAllowedByPolicy,
+  normalizeDiscordAllowList,
   normalizeDiscordSlug,
   resolveDiscordChannelConfigWithFallback,
   type DiscordGuildEntryResolved,
@@ -100,11 +102,13 @@ function resolveDiscordActionGuildEntry(params: {
 type DiscordReadTargetContext = {
   channelId: string;
   guildId?: string;
+  channelType?: number;
   channelName?: string;
   channelSlug: string;
   parentId?: string;
   parentName?: string;
   parentSlug?: string;
+  recipientIds?: string[];
   scope?: "channel" | "thread";
 };
 
@@ -128,6 +132,19 @@ function readDiscordChannelType(value: unknown): number | undefined {
   }
   const type = (value as Record<string, unknown>).type;
   return typeof type === "number" ? type : undefined;
+}
+
+function readDiscordRecipientIds(value: unknown): string[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const recipients = (value as Record<string, unknown>).recipients;
+  if (!Array.isArray(recipients)) {
+    return [];
+  }
+  return recipients
+    .map((recipient) => readDiscordChannelStringField(recipient, "id"))
+    .filter((recipientId): recipientId is string => Boolean(recipientId));
 }
 
 function isDiscordThreadChannel(value: unknown): boolean {
@@ -201,6 +218,11 @@ export function createDiscordMessagingActionContext(params: {
   const withOpts = (extra?: Record<string, unknown>) =>
     createDiscordActionOptions({ cfg: params.cfg, accountId, extra });
   const resolvedReactionAccountId = accountId ?? resolveDefaultDiscordAccountId(params.cfg);
+  const dmAllowList = normalizeDiscordAllowList(accountConfig.allowFrom, [
+    "discord:",
+    "user:",
+    "pk:",
+  ]);
   const reactionRuntimeOptions = resolvedReactionAccountId
     ? createDiscordRuntimeAccountContext({
         cfg: params.cfg,
@@ -267,12 +289,20 @@ export function createDiscordMessagingActionContext(params: {
       channelId,
       channelSlug: channelName ? normalizeDiscordSlug(channelName) : fallback.channelSlug,
     };
+    const channelType = readDiscordChannelType(channelInfo);
+    if (channelType !== undefined) {
+      target.channelType = channelType;
+    }
     const targetGuildId = readDiscordChannelStringField(channelInfo, "guild_id", "guildId");
     if (targetGuildId) {
       target.guildId = targetGuildId;
     }
     if (channelName) {
       target.channelName = channelName;
+    }
+    const recipientIds = readDiscordRecipientIds(channelInfo);
+    if (recipientIds.length > 0) {
+      target.recipientIds = recipientIds;
     }
     if (!isDiscordThreadChannel(channelInfo)) {
       return target;
@@ -343,6 +373,14 @@ export function createDiscordMessagingActionContext(params: {
         ) {
           throw new Error("Discord read target channel is not allowed.");
         }
+        return;
+      }
+      if (
+        dmAllowList &&
+        target.channelType === 1 &&
+        target.recipientIds?.length === 1 &&
+        allowListMatches(dmAllowList, { id: target.recipientIds[0] })
+      ) {
         return;
       }
       const allowed = Object.values(guilds ?? {}).some((guildInfo) =>
