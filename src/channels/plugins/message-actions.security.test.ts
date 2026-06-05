@@ -32,11 +32,30 @@ const discordPlugin: ChannelPlugin = {
   },
 };
 
+const legacyModerationPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "legacy-chat",
+    label: "Legacy Chat",
+    capabilities: { chatTypes: ["direct", "group"] },
+    config: {
+      listAccountIds: () => ["default"],
+    },
+  }),
+  actions: {
+    describeMessageTool: () => ({ actions: ["kick"] }),
+    supportsAction: ({ action }) => action === "kick",
+    handleAction,
+  },
+};
+
 describe("dispatchChannelMessageAction trusted sender guard", () => {
   beforeEach(() => {
     handleAction.mockClear();
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
+      createTestRegistry([
+        { pluginId: "discord", source: "test", plugin: discordPlugin },
+        { pluginId: "legacy-chat", source: "test", plugin: legacyModerationPlugin },
+      ]),
     );
   });
 
@@ -79,5 +98,48 @@ describe("dispatchChannelMessageAction trusted sender guard", () => {
     });
 
     expect(handleAction).toHaveBeenCalledOnce();
+  });
+
+  it("rejects canonical moderation actions even when the plugin omits the hook", async () => {
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "legacy-chat",
+        action: "kick",
+        cfg: {} as OpenClawConfig,
+        params: { groupId: "g1", userId: "u1" },
+        toolContext: { currentChannelProvider: "legacy-chat" },
+      }),
+    ).rejects.toThrow("Trusted sender identity is required for legacy-chat:kick");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("allows canonical moderation actions with trusted sender when the plugin omits the hook", async () => {
+    await dispatchChannelMessageAction({
+      channel: "legacy-chat",
+      action: "kick",
+      cfg: {} as OpenClawConfig,
+      params: { groupId: "g1", userId: "u1" },
+      requesterSenderId: "trusted-user",
+      toolContext: { currentChannelProvider: "legacy-chat" },
+    });
+
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a different channel sender for canonical moderation actions", async () => {
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "legacy-chat",
+        action: "kick",
+        cfg: {} as OpenClawConfig,
+        params: { groupId: "g1", userId: "u1" },
+        requesterSenderId: "other-channel-user",
+        toolContext: { currentChannelProvider: "other-chat" },
+      }),
+    ).rejects.toThrow(
+      "Trusted sender identity for legacy-chat:kick must come from legacy-chat, not other-chat",
+    );
+
+    expect(handleAction).not.toHaveBeenCalled();
   });
 });
