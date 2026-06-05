@@ -126,6 +126,7 @@ describe("models.list", () => {
               id: "llama-secure",
               name: "Llama Secure",
               provider: "vllm",
+              available: false,
             },
           ],
         },
@@ -317,7 +318,7 @@ describe("models.list", () => {
     );
   });
 
-  it("keeps file SecretRef provider availability unknown instead of forcing unavailable", async () => {
+  it("marks file SecretRef provider unavailable when read-only auth cannot prove availability", async () => {
     const catalog = [{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }];
     const cfg = {
       agents: {
@@ -350,12 +351,14 @@ describe("models.list", () => {
 
     expect(respond).toHaveBeenCalledWith(
       true,
-      { models: [{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }] },
+      {
+        models: [{ id: "llama-secure", name: "Llama Secure", provider: "vllm", available: false }],
+      },
       undefined,
     );
   });
 
-  it("keeps managed SecretRef provider availability unknown instead of forcing unavailable", async () => {
+  it("marks managed SecretRef provider unavailable when read-only auth cannot prove availability", async () => {
     const catalog = [{ id: "llama-managed", name: "Llama Managed", provider: "vllm" }];
     const cfg = {
       agents: {
@@ -384,7 +387,11 @@ describe("models.list", () => {
 
     expect(respond).toHaveBeenCalledWith(
       true,
-      { models: [{ id: "llama-managed", name: "Llama Managed", provider: "vllm" }] },
+      {
+        models: [
+          { id: "llama-managed", name: "Llama Managed", provider: "vllm", available: false },
+        ],
+      },
       undefined,
     );
   });
@@ -532,6 +539,7 @@ describe("models.list", () => {
                 id: "demo-model",
                 name: "Demo Model",
                 provider: "demo-provider",
+                available: false,
               },
             ],
           },

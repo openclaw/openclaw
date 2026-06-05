@@ -239,7 +239,10 @@ async function buildPublicModelsListEntry(params: {
 }): Promise<ModelsListEntry> {
   const publicEntry = omitRuntimeModelParams(params.entry);
   if (modelCatalogEntryHasUnknownSecretRefAvailability(params.cfg, params.entry)) {
-    return publicEntry;
+    return {
+      ...publicEntry,
+      available: false,
+    };
   }
   if (!params.providerAuthChecker) {
     return publicEntry;
@@ -248,12 +251,9 @@ async function buildPublicModelsListEntry(params: {
     params.providerAuthChecker,
     params.entry,
   );
-  if (available === undefined) {
-    return publicEntry;
-  }
   return {
     ...publicEntry,
-    available,
+    available: available ?? false,
   };
 }
 
