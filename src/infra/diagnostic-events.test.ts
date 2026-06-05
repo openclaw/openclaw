@@ -763,6 +763,110 @@ describe("diagnostic-events", () => {
     });
   });
 
+  it("sanitizes uncloneable trusted private data before dispatching to trusted listeners", async () => {
+    const trustedEvents: Array<{
+      event: DiagnosticEventPayload;
+      privateData: unknown;
+    }> = [];
+    onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      trustedEvents.push({ event, privateData });
+    });
+    const toolDefinition = {
+      name: "unstable_tool",
+      callback: () => undefined,
+    };
+    Object.defineProperty(toolDefinition, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("schema unavailable");
+      },
+    });
+    Object.defineProperty(toolDefinition, "__proto__", {
+      enumerable: true,
+      value: { polluted: true },
+    });
+
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.completed",
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 5,
+      },
+      {
+        modelContent: {
+          toolDefinitions: [toolDefinition],
+        },
+      },
+    );
+
+    await waitForDiagnosticEventsDrained();
+
+    const sanitizedPrivateData = trustedEvents[0]?.privateData as
+      | { modelContent?: { toolDefinitions?: unknown[] } }
+      | undefined;
+    const sanitizedToolDefinition = sanitizedPrivateData?.modelContent?.toolDefinitions?.[0];
+    expect(sanitizedToolDefinition).toEqual({
+      name: "unstable_tool",
+      parameters: {
+        truncated: true,
+        reason: "unreadable_diagnostic_field",
+      },
+    });
+    expect(sanitizedToolDefinition).not.toHaveProperty("polluted");
+  });
+
+  it("bounds uncloneable trusted private data object walks before dispatching", async () => {
+    const trustedEvents: Array<{
+      event: DiagnosticEventPayload;
+      privateData: unknown;
+    }> = [];
+    onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      trustedEvents.push({ event, privateData });
+    });
+    const parameters: Record<string, unknown> = {};
+    for (let index = 0; index < 1005; index += 1) {
+      parameters[`field_${index}`] = { type: "string" };
+    }
+    const toolDefinition = {
+      name: "wide_tool",
+      callback: () => undefined,
+      parameters,
+    };
+
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.completed",
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 5,
+      },
+      {
+        modelContent: {
+          toolDefinitions: [toolDefinition],
+        },
+      },
+    );
+
+    await waitForDiagnosticEventsDrained();
+
+    const sanitizedPrivateData = trustedEvents[0]?.privateData as
+      | { modelContent?: { toolDefinitions?: Array<{ parameters?: Record<string, unknown> }> } }
+      | undefined;
+    const sanitizedToolParameters =
+      sanitizedPrivateData?.modelContent?.toolDefinitions?.[0]?.parameters;
+    expect(sanitizedToolParameters).toMatchObject({
+      field_0: { type: "string" },
+      truncated: true,
+      omittedFields: 5,
+    });
+    expect(sanitizedToolParameters).not.toHaveProperty("field_1000");
+  });
+
   it("skips event enrichment and subscribers when diagnostics are disabled", () => {
     const nowSpy = vi.spyOn(Date, "now");
     const seen: string[] = [];

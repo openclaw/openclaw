@@ -531,6 +531,66 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(events[1]?.privateData.modelContent?.outputMessages).toEqual([assistant]);
   });
 
+  it("keeps model-call events when captured tool definitions cannot be cloned", async () => {
+    async function* stream() {
+      yield { type: "text_delta", delta: "ok" };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        contentCapture: {
+          inputMessages: false,
+          outputMessages: false,
+          toolInputs: false,
+          toolOutputs: false,
+          systemPrompt: false,
+          toolDefinitions: true,
+          anyModelContent: true,
+        },
+        nextCallId: () => "call-hostile-tools",
+      },
+    );
+    const hostileTool: Record<string | symbol, unknown> = {
+      name: "unstable_tool",
+      callback: () => undefined,
+    };
+    Object.defineProperty(hostileTool, "toJSON", {
+      value() {
+        throw new Error("schema json unavailable");
+      },
+    });
+    Object.defineProperty(hostileTool, Symbol.toPrimitive, {
+      value() {
+        throw new Error("schema string unavailable");
+      },
+    });
+
+    const events = await collectTrustedModelCallEvents(async () => {
+      await drain(
+        wrapped(
+          {} as never,
+          {
+            tools: [hostileTool],
+          } as never,
+          {},
+        ) as unknown as AsyncIterable<unknown>,
+      );
+    });
+
+    expect(events.map((entry) => entry.event.type)).toEqual([
+      "model.call.started",
+      "model.call.completed",
+    ]);
+    expect(events[0]?.privateData.modelContent?.toolDefinitions).toEqual({
+      truncated: true,
+      reason: "unserializable_diagnostic_content",
+    });
+  });
+
   it("propagates the trusted model-call traceparent without mutating caller headers", async () => {
     async function* stream() {
       yield { type: "text", text: "ok" };

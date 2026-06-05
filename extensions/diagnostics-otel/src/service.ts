@@ -610,15 +610,24 @@ function truncateJsonArrayForOtelAttribute(
     return [{ truncated: true, reason: "circular_reference" }];
   }
   options.seen.add(value);
-  const nextOptions = { ...options, maxDepth: options.maxDepth - 1 };
-  const items = value
-    .slice(0, options.maxArrayItems)
-    .map((item) => truncateJsonValueForOtelAttribute(item, nextOptions));
-  if (value.length > items.length) {
-    items.push({ truncated: true, omittedItems: value.length - items.length });
+  try {
+    const nextOptions = { ...options, maxDepth: options.maxDepth - 1 };
+    const items = arrayPrefix(value, options.maxArrayItems).map((item) =>
+      truncateJsonValueForOtelAttribute(item, nextOptions),
+    );
+    try {
+      if (value.length > items.length) {
+        items.push({ truncated: true, omittedItems: value.length - items.length });
+      }
+    } catch {
+      items.push({ truncated: true, reason: "unreadable_array_length" });
+    }
+    return items;
+  } catch {
+    return [{ truncated: true, reason: "unreadable_array" }];
+  } finally {
+    options.seen.delete(value);
   }
-  options.seen.delete(value);
-  return items;
 }
 
 function truncateJsonObjectForOtelAttribute(
@@ -629,20 +638,27 @@ function truncateJsonObjectForOtelAttribute(
     return { truncated: true, reason: "circular_reference" };
   }
   options.seen.add(value);
-  const nextOptions = { ...options, maxDepth: options.maxDepth - 1 };
-  const result: Record<string, unknown> = {};
-  const entries = Object.entries(value).filter(
-    ([, field]) => field !== undefined && typeof field !== "function" && typeof field !== "symbol",
-  );
-  for (const [key, field] of entries.slice(0, options.maxObjectFields)) {
-    result[key] = truncateJsonValueForOtelAttribute(field, nextOptions);
+  try {
+    const nextOptions = { ...options, maxDepth: options.maxDepth - 1 };
+    const result: Record<string, unknown> = {};
+    const keys = Object.keys(value);
+    for (const key of keys.slice(0, options.maxObjectFields)) {
+      const field = readRecordValue(value, key);
+      if (field === undefined || typeof field === "function" || typeof field === "symbol") {
+        continue;
+      }
+      result[key] = truncateJsonValueForOtelAttribute(field, nextOptions);
+    }
+    if (keys.length > options.maxObjectFields) {
+      result.truncated = true;
+      result.omittedFields = keys.length - options.maxObjectFields;
+    }
+    return result;
+  } catch {
+    return { truncated: true, reason: "unreadable_object" };
+  } finally {
+    options.seen.delete(value);
   }
-  if (entries.length > options.maxObjectFields) {
-    result.truncated = true;
-    result.omittedFields = entries.length - options.maxObjectFields;
-  }
-  options.seen.delete(value);
-  return result;
 }
 
 function truncateJsonTextForOtelAttribute(value: string, maxChars: number): string {
@@ -671,15 +687,51 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function readRecordValue(value: Record<string, unknown>, key: string): unknown {
+  try {
+    return value[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readRecordString(value: Record<string, unknown>, key: string): string | undefined {
+  const field = readRecordValue(value, key);
+  return typeof field === "string" ? field : undefined;
+}
+
+function arrayPrefix(value: readonly unknown[], maxItems: number): unknown[] {
+  try {
+    return value.slice(0, maxItems);
+  } catch {
+    return [];
+  }
+}
+
+function arrayItems(value: readonly unknown[]): unknown[] {
+  try {
+    return value.slice();
+  } catch {
+    return [];
+  }
+}
+
 function textPart(content: string): Record<string, unknown> {
   return { type: "text", content };
 }
 
 function toolCallResponsePart(part: Record<string, unknown>): Record<string, unknown> {
+  const id = readRecordValue(part, "id");
+  const result =
+    readRecordValue(part, "result") ??
+    readRecordValue(part, "response") ??
+    readRecordValue(part, "content") ??
+    readRecordValue(part, "details") ??
+    "";
   return {
     type: "tool_call_response",
-    ...(typeof part.id === "string" ? { id: part.id } : {}),
-    result: part.result ?? part.response ?? part.content ?? part.details ?? "",
+    ...(typeof id === "string" ? { id } : {}),
+    result,
   };
 }
 
@@ -698,7 +750,7 @@ function contentParts(value: unknown): Record<string, unknown>[] {
     return json ? [textPart(json)] : [];
   }
   const parts: Record<string, unknown>[] = [];
-  for (const part of value) {
+  for (const part of arrayItems(value)) {
     if (typeof part === "string") {
       if (part.length > 0) {
         parts.push(textPart(part));
@@ -708,35 +760,44 @@ function contentParts(value: unknown): Record<string, unknown>[] {
     if (!isRecord(part)) {
       continue;
     }
-    if (part.type === "text" && typeof part.text === "string") {
-      parts.push(textPart(part.text));
-    } else if (part.type === "text" && typeof part.content === "string") {
-      parts.push(textPart(part.content));
-    } else if (part.type === "thinking" && typeof part.thinking === "string") {
-      parts.push({ type: "reasoning", content: part.thinking });
-    } else if (part.type === "toolCall" && typeof part.name === "string") {
+    const type = readRecordValue(part, "type");
+    const text = readRecordString(part, "text");
+    const content = readRecordString(part, "content");
+    const thinking = readRecordString(part, "thinking");
+    const name = readRecordString(part, "name");
+    const id = readRecordValue(part, "id");
+    const args = readRecordValue(part, "arguments");
+    if (type === "text" && text !== undefined) {
+      parts.push(textPart(text));
+    } else if (type === "text" && content !== undefined) {
+      parts.push(textPart(content));
+    } else if (type === "thinking" && thinking !== undefined) {
+      parts.push({ type: "reasoning", content: thinking });
+    } else if (type === "toolCall" && name !== undefined) {
       parts.push({
         type: "tool_call",
-        name: part.name,
-        ...(typeof part.id === "string" ? { id: part.id } : {}),
-        ...(part.arguments !== undefined ? { arguments: part.arguments } : {}),
+        name,
+        ...(typeof id === "string" ? { id } : {}),
+        ...(args !== undefined ? { arguments: args } : {}),
       });
-    } else if (part.type === "tool_call" && typeof part.name === "string") {
+    } else if (type === "tool_call" && name !== undefined) {
       parts.push({
         type: "tool_call",
-        name: part.name,
-        ...(typeof part.id === "string" ? { id: part.id } : {}),
-        ...(part.arguments !== undefined ? { arguments: part.arguments } : {}),
+        name,
+        ...(typeof id === "string" ? { id } : {}),
+        ...(args !== undefined ? { arguments: args } : {}),
       });
-    } else if (part.type === "tool_call_response") {
+    } else if (type === "tool_call_response") {
       parts.push(toolCallResponsePart(part));
-    } else if (part.type === "image") {
-      const data = typeof part.data === "string" ? part.data : undefined;
+    } else if (type === "image") {
+      const data = readRecordString(part, "data");
+      const mimeType = readRecordString(part, "mimeType");
+      const mimeTypeSnake = readRecordString(part, "mime_type");
       parts.push({
         type: "blob",
         modality: "image",
-        ...(typeof part.mimeType === "string" ? { mime_type: part.mimeType } : {}),
-        ...(typeof part.mime_type === "string" ? { mime_type: part.mime_type } : {}),
+        ...(mimeType !== undefined ? { mime_type: mimeType } : {}),
+        ...(mimeTypeSnake !== undefined ? { mime_type: mimeTypeSnake } : {}),
         ...(data ? { content: data } : {}),
       });
     }
@@ -754,39 +815,42 @@ function normalizeGenAiMessage(
   if (!isRecord(value)) {
     return undefined;
   }
-  const rawRole = typeof value.role === "string" ? value.role : fallbackRole;
+  const rawRole = readRecordString(value, "role") ?? fallbackRole;
   const role = rawRole === "toolResult" ? "tool" : rawRole;
   let parts: Record<string, unknown>[];
   if (role === "tool") {
-    const explicitParts = contentParts(value.parts);
+    const explicitParts = contentParts(readRecordValue(value, "parts"));
     parts =
       explicitParts.length > 0
         ? explicitParts
         : [
             toolCallResponsePart({
-              id: value.toolCallId,
-              result: value.content ?? value.details ?? "",
+              id: readRecordValue(value, "toolCallId"),
+              result: readRecordValue(value, "content") ?? readRecordValue(value, "details") ?? "",
             }),
           ];
   } else {
-    parts = contentParts(value.parts ?? value.content);
+    parts = contentParts(readRecordValue(value, "parts") ?? readRecordValue(value, "content"));
   }
   if (parts.length === 0) {
     return undefined;
   }
+  const name = readRecordString(value, "name");
+  const finishReason = readRecordString(value, "finish_reason");
+  const stopReason = readRecordString(value, "stopReason");
   return {
     role,
     parts,
-    ...(typeof value.name === "string" ? { name: value.name } : {}),
-    ...(typeof value.finish_reason === "string" ? { finish_reason: value.finish_reason } : {}),
-    ...(typeof value.stopReason === "string" ? { finish_reason: value.stopReason } : {}),
+    ...(name !== undefined ? { name } : {}),
+    ...(finishReason !== undefined ? { finish_reason: finishReason } : {}),
+    ...(stopReason !== undefined ? { finish_reason: stopReason } : {}),
   };
 }
 
 function normalizeGenAiMessages(value: unknown, fallbackRole: "user" | "assistant") {
   const source = Array.isArray(value) ? value : value === undefined ? [] : [value];
   const messages: Record<string, unknown>[] = [];
-  for (const item of source.slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS)) {
+  for (const item of arrayPrefix(source, MAX_OTEL_CONTENT_ARRAY_ITEMS)) {
     const message = normalizeGenAiMessage(item, fallbackRole);
     if (message) {
       messages.push(message);
@@ -796,14 +860,21 @@ function normalizeGenAiMessages(value: unknown, fallbackRole: "user" | "assistan
 }
 
 function normalizeGenAiToolDefinition(value: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(value) || typeof value.name !== "string" || value.name.trim().length === 0) {
+  if (!isRecord(value)) {
     return undefined;
   }
+  const name = readRecordString(value, "name");
+  if (!name || name.trim().length === 0) {
+    return undefined;
+  }
+  const type = readRecordString(value, "type") ?? "function";
+  const description = readRecordString(value, "description");
+  const parameters = readRecordValue(value, "parameters");
   return {
-    type: typeof value.type === "string" ? value.type : "function",
-    name: value.name,
-    ...(typeof value.description === "string" ? { description: value.description } : {}),
-    ...(value.parameters !== undefined ? { parameters: value.parameters } : {}),
+    type,
+    name,
+    ...(description !== undefined ? { description } : {}),
+    ...(parameters !== undefined ? { parameters } : {}),
   };
 }
 
@@ -812,7 +883,7 @@ function normalizeGenAiToolDefinitions(value: unknown) {
     return [];
   }
   const definitions: Record<string, unknown>[] = [];
-  for (const item of value.slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS)) {
+  for (const item of arrayPrefix(value, MAX_OTEL_CONTENT_ARRAY_ITEMS)) {
     const definition = normalizeGenAiToolDefinition(item);
     if (definition) {
       definitions.push(definition);

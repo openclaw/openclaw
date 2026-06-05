@@ -138,7 +138,11 @@ function cloneDiagnosticContentValue(value: unknown): unknown {
       const serialized = JSON.stringify(value);
       return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
     } catch {
-      return String(value);
+      try {
+        return String(value);
+      } catch {
+        return { truncated: true, reason: "unserializable_diagnostic_content" };
+      }
     }
   }
 }
