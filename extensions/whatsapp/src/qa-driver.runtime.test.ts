@@ -1,3 +1,4 @@
+// Whatsapp tests cover qa driver plugin behavior.
 import { EventEmitter } from "node:events";
 import type { WAMessage } from "baileys";
 import { afterEach, describe, expect, it, vi } from "vitest";

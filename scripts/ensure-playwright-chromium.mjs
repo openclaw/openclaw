@@ -7,14 +7,7 @@ import { chromium } from "playwright";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const playwrightInstallArgs = [
-  "--dir",
-  "ui",
-  "exec",
-  "playwright",
-  "install",
-  "chromium",
-];
+const playwrightInstallArgs = ["--dir", "ui", "exec", "playwright", "install", "chromium"];
 const playwrightInstallWithDepsArgs = [
   "--dir",
   "ui",
@@ -123,10 +116,7 @@ export function ensurePlaywrightChromium(options = {}) {
 
   const systemExecutablePath =
     options.systemExecutablePath ?? resolveSystemChromiumExecutablePath(existsSync, spawnSync);
-  if (
-    systemExecutablePath &&
-    canRunChromiumExecutable(systemExecutablePath, spawnSync)
-  ) {
+  if (systemExecutablePath && canRunChromiumExecutable(systemExecutablePath, spawnSync)) {
     log(`[ui-e2e] Using system Chromium at ${systemExecutablePath}.`);
     return 0;
   }
@@ -157,11 +147,13 @@ export function ensurePlaywrightChromium(options = {}) {
   }
 
   if (!existsSync(executablePath) || !canRunChromiumExecutable(executablePath, spawnSync)) {
-    if (shouldInstallPlaywrightSystemDependencies({
-      env,
-      getuid: options.getuid,
-      platform: options.platform,
-    })) {
+    if (
+      shouldInstallPlaywrightSystemDependencies({
+        env,
+        getuid: options.getuid,
+        platform: options.platform,
+      })
+    ) {
       log(
         `[ui-e2e] Chromium is installed but still cannot start; installing Linux system dependencies.`,
       );
