@@ -868,6 +868,49 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:webchat:room-1"]?.status).toBe("failed");
   });
 
+  it("persists the WebChat recovery notice to <sessionId>.jsonl when sessionFile is a stale in-dir transcript the reconnect read path skips (#87808)", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const staleSessionFile = "22222222-2222-4222-8222-222222222222.jsonl";
+    // sessionFile belongs to a *different* generated session id but still
+    // resolves cleanly inside the sessions dir, so the old resolver would have
+    // appended the notice to it. The reconnect read path
+    // (resolveSessionTranscriptCandidates) classifies that as stale and reads
+    // <sessionId>.jsonl first, so the write path must target <sessionId>.jsonl
+    // too or the reconnecting WebChat client never sees the notice.
+    await writeStore(sessionsDir, {
+      "agent:main:webchat:room-1": {
+        sessionId,
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        sessionFile: staleSessionFile,
+        lastChannel: "webchat",
+        lastTo: "webchat:room-1",
+        lastAccountId: "default",
+      },
+    });
+    await writeTranscript(sessionsDir, sessionId, [
+      { role: "user", content: "do the thing" },
+      { role: "assistant", content: "partial answer" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    const issuedMessageAction = vi
+      .mocked(callGateway)
+      .mock.calls.some((c) => (c[0] as { method?: string })?.method === "message.action");
+    expect(issuedMessageAction).toBe(false);
+    // The notice lands on the read-path preferred candidate (<sessionId>.jsonl)...
+    const transcript = await fs.readFile(path.join(sessionsDir, `${sessionId}.jsonl`), "utf8");
+    expect(transcript).toContain("couldn't safely resume");
+    // ...and never on the stale in-dir sessionFile the reconnect read path skips.
+    await expect(fs.access(path.join(sessionsDir, staleSessionFile))).rejects.toThrow();
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:webchat:room-1"]?.status).toBe("failed");
+  });
+
   it("reports a not-ok WebChat transcript append as a failed notice (#87808)", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {

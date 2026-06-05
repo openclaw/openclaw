@@ -19,7 +19,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { appendInjectedAssistantMessageToTranscript } from "../gateway/server-methods/chat-transcript-inject.js";
-import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
+import {
+  readSessionMessagesAsync,
+  resolveSessionTranscriptCandidates,
+} from "../gateway/session-utils.fs.js";
 import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
@@ -291,20 +294,37 @@ async function markSessionFailed(params: {
 
 /**
  * Resolve the transcript path the reconnecting client (e.g. WebChat) actually
- * reads, using the same session transcript resolver as the read path
- * (`resolveSessionTranscriptCandidates` prefers `resolveSessionFilePath`). This
- * keeps the recovery-notice append target inside the agent sessions directory
- * and matches `<sessionId>.jsonl` even when `entry.sessionFile` is missing or a
- * stale/out-of-dir value, instead of appending to a raw persisted path.
+ * reads, using the exact same candidate ordering as the read path
+ * (`resolveSessionTranscriptCandidates`). The first candidate is the file the
+ * reconnect read path resolves first, so appending the recovery notice there
+ * guarantees a reconnecting WebChat client sees it. Crucially this matches the
+ * read path's stale handling: when `entry.sessionFile` is missing or points at
+ * a stale/out-of-dir transcript, the read path prefers `<sessionId>.jsonl`
+ * inside the sessions dir, so the notice must land there too (not on the raw
+ * persisted `sessionFile`, which reconnect would never read).
  */
 function resolveRecoveryNoticeTranscriptPath(params: {
   entry: SessionEntry;
   storePath: string;
 }): string | undefined {
+  const candidates = resolveSessionTranscriptCandidates(
+    params.entry.sessionId,
+    params.storePath,
+    params.entry.sessionFile,
+    // SessionEntry has no agentId; storePath already anchors candidates to the
+    // sessions dir, so the resolver handles the missing agentId on its own.
+    undefined,
+  );
+  if (candidates[0]) {
+    return candidates[0];
+  }
+  // Fall back to the prior behavior so a notice is never silently dropped when
+  // the resolver yields no candidates (e.g. an invalid session id/metadata).
   try {
-    return resolveSessionFilePath(params.entry.sessionId, params.entry, {
-      sessionsDir: path.dirname(params.storePath),
-    });
+    return resolveSessionTranscriptPathInDir(
+      params.entry.sessionId,
+      path.dirname(params.storePath),
+    );
   } catch {
     // Keep restart recovery best-effort when session id/metadata is invalid.
     return undefined;
