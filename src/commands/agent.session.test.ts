@@ -189,6 +189,15 @@ describe("agent session resolution", () => {
             lastInteractionAt: registryUpdatedAt - 30_000,
             startedAt: registryUpdatedAt - 1_000,
             endedAt: registryUpdatedAt - 100,
+            cliSessionBindings: {
+              "claude-cli": { sessionId: "old-claude-cli-session" },
+              "codex-cli": { sessionId: "old-codex-cli-session" },
+            },
+            cliSessionIds: {
+              "claude-cli": "old-claude-cli-session",
+              "codex-cli": "old-codex-cli-session",
+            },
+            claudeCliSessionId: "old-claude-cli-session",
           },
         });
         const cfg = mockConfig(home, store);
@@ -205,6 +214,9 @@ describe("agent session resolution", () => {
         expect(resolution.sessionEntry?.runtimeMs).toBeUndefined();
         expect(resolution.sessionEntry?.sessionStartedAt).toBeUndefined();
         expect(resolution.sessionEntry?.lastInteractionAt).toBeUndefined();
+        expect(resolution.sessionEntry?.cliSessionBindings).toBeUndefined();
+        expect(resolution.sessionEntry?.cliSessionIds).toBeUndefined();
+        expect(resolution.sessionEntry?.claudeCliSessionId).toBeUndefined();
 
         const sessionStore = {
           [scenario.sessionKey]: resolution.sessionEntry!,
@@ -245,6 +257,9 @@ describe("agent session resolution", () => {
         expect(persisted?.startedAt).toBeUndefined();
         expect(persisted?.endedAt).toBeUndefined();
         expect(persisted?.runtimeMs).toBeUndefined();
+        expect(persisted?.cliSessionBindings).toBeUndefined();
+        expect(persisted?.cliSessionIds).toBeUndefined();
+        expect(persisted?.claudeCliSessionId).toBeUndefined();
         expect(persisted?.sessionStartedAt).toBeGreaterThan(registryUpdatedAt);
         expect(persisted?.lastInteractionAt).toBeGreaterThan(registryUpdatedAt);
       });

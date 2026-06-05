@@ -760,6 +760,15 @@ describe("gateway agent handler", () => {
               startedAt: now - 20_000,
               endedAt: now - 15_000,
               runtimeMs: 5_000,
+              cliSessionBindings: {
+                "claude-cli": { sessionId: "old-claude-cli-session" },
+                "codex-cli": { sessionId: "old-codex-cli-session" },
+              },
+              cliSessionIds: {
+                "claude-cli": "old-claude-cli-session",
+                "codex-cli": "old-codex-cli-session",
+              },
+              claudeCliSessionId: "old-claude-cli-session",
             },
             canonicalKey: "agent:main:main",
           });
@@ -776,10 +785,79 @@ describe("gateway agent handler", () => {
           expect(capturedEntry?.endedAt).toBeUndefined();
           expect(capturedEntry?.runtimeMs).toBeUndefined();
           expect(capturedEntry?.sessionFile).toBeUndefined();
+          expect(capturedEntry?.cliSessionBindings).toBeUndefined();
+          expect(capturedEntry?.cliSessionIds).toBeUndefined();
+          expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
         },
       );
     },
   );
+
+  it("reuses terminal main sessions when the fresh store row has the transcript marker", async () => {
+    const now = Date.parse("2026-05-18T09:47:30.000Z");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    dateOnlyFakeClockActive = true;
+    vi.setSystemTime(now);
+
+    await withTempDir({ prefix: "openclaw-gateway-terminal-main-fresh-marker-" }, async (root) => {
+      const sessionsDir = `${root}/sessions`;
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const sessionFile = "terminal-main-session.jsonl";
+      const transcriptPath = `${sessionsDir}/${sessionFile}`;
+      await fs.writeFile(
+        transcriptPath,
+        `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
+        "utf8",
+      );
+      await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+      const staleEntry = {
+        sessionId: "terminal-main-session",
+        sessionFile,
+        status: "done",
+        updatedAt: now - 10_000,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "existing-claude-cli-session" },
+        },
+        cliSessionIds: {
+          "claude-cli": "existing-claude-cli-session",
+        },
+        claudeCliSessionId: "existing-claude-cli-session",
+      };
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: `${sessionsDir}/sessions.json`,
+        entry: staleEntry,
+        canonicalKey: "agent:main:main",
+      });
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store = {
+          "agent:main:main": {
+            ...staleEntry,
+            updatedAt: now,
+          },
+        };
+        const result = await updater(store);
+        capturedEntry = result as Record<string, unknown>;
+        return result;
+      });
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await runMainAgent("hi", "test-idem-terminal-main-fresh-marker");
+
+      const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+      expect(call.sessionId).toBe("terminal-main-session");
+      expect(capturedEntry?.sessionId).toBe("terminal-main-session");
+      expect(capturedEntry?.sessionFile).toBe(sessionFile);
+      expect(capturedEntry?.cliSessionIds).toEqual({
+        "claude-cli": "existing-claude-cli-session",
+      });
+      expect(capturedEntry?.claudeCliSessionId).toBe("existing-claude-cli-session");
+    });
+  });
 
   it("honors explicit gateway session-id resumes for terminal main rows", async () => {
     const now = Date.parse("2026-05-18T09:48:00.000Z");

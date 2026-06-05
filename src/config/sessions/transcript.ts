@@ -302,7 +302,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   let transcriptMarkerUpdatedAt: number | undefined;
   const result = await runWithOwnedSessionTranscriptWriteLock<SessionTranscriptAppendResult>(
     { sessionFile, sessionKey: resolved.normalizedKey },
-    async () => {
+    async (): Promise<SessionTranscriptAppendResult> => {
       const explicitIdempotencyKey =
         params.idempotencyKey ??
         ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);

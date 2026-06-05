@@ -37,6 +37,7 @@ import {
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
+import { clearAllCliSessions } from "../cli-session.js";
 
 /** Resolved command session identity plus backing store metadata. */
 export type SessionResolution = {
@@ -62,7 +63,7 @@ function clearRotatedTerminalMainSessionMetadata(
   if (!entry) {
     return undefined;
   }
-  return {
+  const next = {
     ...entry,
     sessionFile: undefined,
     status: undefined,
@@ -73,6 +74,8 @@ function clearRotatedTerminalMainSessionMetadata(
     sessionStartedAt: undefined,
     lastInteractionAt: undefined,
   };
+  clearAllCliSessions(next);
+  return next;
 }
 
 type SessionIdMatchSet = {

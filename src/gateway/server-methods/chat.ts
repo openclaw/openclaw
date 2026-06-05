@@ -1643,16 +1643,32 @@ async function appendAssistantTranscriptMessage(params: {
     ttsSupplement: params.ttsSupplement,
     config: params.cfg,
   });
-  if (appended.ok && params.storePath) {
-    const transcriptMarkerUpdatedAt = Date.now();
-    await updateSessionStoreEntry({
+  if (appended.ok) {
+    await advanceSessionTranscriptMarker({
       storePath: params.storePath,
       sessionKey: params.sessionKey,
-      update: (current) =>
-        current.sessionId === params.sessionId ? { updatedAt: transcriptMarkerUpdatedAt } : null,
+      sessionId: params.sessionId,
     });
   }
   return appended;
+}
+
+async function advanceSessionTranscriptMarker(params: {
+  storePath: string | undefined;
+  sessionKey: string;
+  sessionId: string;
+}): Promise<void> {
+  if (!params.storePath) {
+    return;
+  }
+
+  const transcriptMarkerUpdatedAt = Date.now();
+  await updateSessionStoreEntry({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    update: (current) =>
+      current.sessionId === params.sessionId ? { updatedAt: transcriptMarkerUpdatedAt } : null,
+  });
 }
 
 function collectSessionAbortPartials(params: {
@@ -4114,6 +4130,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                             },
                           });
                           if (result.changed) {
+                            await advanceSessionTranscriptMarker({
+                              storePath: latestStorePath,
+                              sessionKey,
+                              sessionId,
+                            });
                             for (const target of rewriteTargets) {
                               const rewritten =
                                 await findSourceReplyTranscriptMirrorByIdempotencyKey(
