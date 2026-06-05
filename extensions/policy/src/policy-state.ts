@@ -531,14 +531,20 @@ function execApprovalAgentFromParts(
   sourceAgentId: string,
   value: Record<string, unknown>,
 ): NormalizedExecApprovalAgent {
+  const allowlistEntries = execApprovalAllowlistEntries(value.allowlist).map(
+    (entry): NormalizedExecApprovalAllowlistEntry => ({
+      index: entry.index,
+      pattern: entry.pattern,
+      argPattern: entry.argPattern,
+      entrySource: entry.entrySource,
+      sourceAgentId,
+    }),
+  );
   return {
     agentId,
     sourceAgentId,
     value,
-    allowlistEntries: execApprovalAllowlistEntries(value.allowlist).map((entry) => ({
-      ...entry,
-      sourceAgentId,
-    })),
+    allowlistEntries,
   };
 }
 
@@ -561,11 +567,16 @@ function mergedExecApprovalAllowlist(
   current: unknown,
   legacy: unknown,
 ): readonly unknown[] | undefined {
-  const entries = mergedExecApprovalAllowlistEntries(current, legacy).map((entry) => ({
-    pattern: entry.pattern,
-    ...(entry.argPattern === undefined ? {} : { argPattern: entry.argPattern }),
-    ...(entry.entrySource === undefined ? {} : { source: entry.entrySource }),
-  }));
+  const entries = mergedExecApprovalAllowlistEntries(current, legacy).map((entry) => {
+    const allowlistEntry: Record<string, unknown> = { pattern: entry.pattern };
+    if (entry.argPattern !== undefined) {
+      allowlistEntry.argPattern = entry.argPattern;
+    }
+    if (entry.entrySource !== undefined) {
+      allowlistEntry.source = entry.entrySource;
+    }
+    return allowlistEntry;
+  });
   return entries.length === 0 ? undefined : entries;
 }
 
@@ -575,24 +586,34 @@ function mergedExecApprovalAllowlistEntries(
 ): readonly NormalizedExecApprovalAllowlistEntry[] {
   const entries: NormalizedExecApprovalAllowlistEntry[] = [];
   const seen = new Set<string>();
-  for (const entry of [
-    ...execApprovalAllowlistEntries(current).map((entry) => ({
-      ...entry,
-      sourceAgentId: DEFAULT_EXEC_APPROVAL_AGENT_ID,
-    })),
-    ...execApprovalAllowlistEntries(legacy).map((entry) => ({
-      ...entry,
-      sourceAgentId: "default",
-    })),
-  ]) {
-    const key = `${entry.pattern.toLowerCase()}\x00${entry.argPattern ?? ""}`;
-    if (seen.has(key)) {
-      continue;
+  const appendEntries = (sourceEntries: readonly NormalizedExecApprovalAllowlistEntry[]) => {
+    for (const sourceEntry of sourceEntries) {
+      const key = `${sourceEntry.pattern.toLowerCase()}\x00${sourceEntry.argPattern ?? ""}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      entries.push(sourceEntry);
     }
-    seen.add(key);
-    entries.push(entry);
-  }
+  };
+  appendEntries(withExecApprovalAllowlistSource(current, DEFAULT_EXEC_APPROVAL_AGENT_ID));
+  appendEntries(withExecApprovalAllowlistSource(legacy, "default"));
   return entries;
+}
+
+function withExecApprovalAllowlistSource(
+  value: unknown,
+  sourceAgentId: string,
+): readonly NormalizedExecApprovalAllowlistEntry[] {
+  return execApprovalAllowlistEntries(value).map(
+    (entry): NormalizedExecApprovalAllowlistEntry => ({
+      index: entry.index,
+      pattern: entry.pattern,
+      argPattern: entry.argPattern,
+      entrySource: entry.entrySource,
+      sourceAgentId,
+    }),
+  );
 }
 
 function readExecApprovalAllowlistEntrySource(value: unknown): "allow-always" | undefined {
