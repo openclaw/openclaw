@@ -17,6 +17,7 @@ import {
   type ResolvedSignalAccount,
 } from "./accounts.js";
 import { SignalChannelConfigSchema } from "./config-schema.js";
+import { normalizeSignalUuidForCompare } from "./normalize.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 const SIGNAL_CHANNEL = "signal" as const;
@@ -46,6 +47,25 @@ type SignalConfigSection = {
   accounts?: Record<string, Record<string, unknown> | undefined>;
 };
 
+function normalizeSignalAllowlistEntry(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed === "*") {
+    return "*";
+  }
+  const stripped = trimmed.replace(/^signal:/i, "").trim();
+  const normalizedUuid = normalizeSignalUuidForCompare(stripped);
+  if (normalizedUuid) {
+    return `uuid:${stripped
+      .replace(/^uuid:/i, "")
+      .trim()
+      .toLowerCase()}`;
+  }
+  return normalizeE164(stripped);
+}
+
 async function loadSignalChannelRuntime() {
   return await import("./channel.runtime.js");
 }
@@ -73,8 +93,8 @@ const baseSignalConfigAdapter = createScopedChannelConfigAdapter<ResolvedSignalA
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     normalizeStringifiedEntries(allowFrom)
-      .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
-      .filter(Boolean),
+      .map((entry) => normalizeSignalAllowlistEntry(entry))
+      .filter((entry): entry is string => Boolean(entry)),
   resolveDefaultTo: (account: ResolvedSignalAccount) => account.config.defaultTo,
 });
 
@@ -169,7 +189,7 @@ export const signalSecurityAdapter = createRestrictSendersChannelSecurity<Resolv
   groupAllowFromPath: "channels.signal.groupAllowFrom",
   mentionGated: false,
   policyPathSuffix: "dmPolicy",
-  normalizeDmEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
+  normalizeDmEntry: (raw) => normalizeSignalAllowlistEntry(raw) ?? "",
 });
 
 export function createSignalPluginBase(params: {
