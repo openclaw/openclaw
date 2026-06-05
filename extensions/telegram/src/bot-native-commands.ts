@@ -51,7 +51,13 @@ import {
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { normalizeDmAllowFromWithStore, resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
+import {
+  firstDefined,
+  isSenderAllowed,
+  normalizeDmAllowFromWithStore,
+  type NormalizedAllowFrom,
+  resolveTelegramEffectiveDmPolicy,
+} from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
@@ -136,6 +142,7 @@ type TelegramCommandAuthResult = {
   topicConfig?: TelegramTopicConfig;
   commandAuthorized: boolean;
   senderIsOwner: boolean;
+  statusNotes?: string[];
 };
 
 type TelegramNativeCommandThreadContext = {
@@ -269,6 +276,81 @@ function resolveTelegramCommandMenuModelContext(params: {
   } catch {
     return {};
   }
+}
+
+function formatTelegramNormalIngressStatusNote(params: {
+  isGroup: boolean;
+  chatId: string | number;
+  cfg: OpenClawConfig;
+  telegramCfg: TelegramAccountConfig;
+  topicConfig?: TelegramTopicConfig;
+  groupConfig?: TelegramGroupConfig;
+  effectiveGroupAllow: NormalizedAllowFrom;
+  senderId: string;
+  senderUsername: string;
+  resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
+  useAccessGroups: boolean;
+}): string | undefined {
+  if (!params.isGroup || !params.useAccessGroups) {
+    return undefined;
+  }
+  const policyAccess = evaluateTelegramGroupPolicyAccess({
+    isGroup: params.isGroup,
+    chatId: params.chatId,
+    cfg: params.cfg,
+    telegramCfg: params.telegramCfg,
+    topicConfig: params.topicConfig,
+    groupConfig: params.groupConfig,
+    effectiveGroupAllow: params.effectiveGroupAllow,
+    senderId: params.senderId,
+    senderUsername: params.senderUsername,
+    resolveGroupPolicy: params.resolveGroupPolicy,
+    enforcePolicy: true,
+    useTopicAndGroupOverrides: true,
+    enforceAllowlistAuthorization: true,
+    allowEmptyAllowlistEntries: false,
+    requireSenderForAllowlistAuthorization: true,
+    checkChatAllowlist: true,
+  });
+  if (policyAccess.allowed) {
+    return undefined;
+  }
+
+  const chatPolicy = params.resolveGroupPolicy(params.chatId);
+  const requireMention = firstDefined(
+    params.topicConfig?.requireMention,
+    params.groupConfig?.requireMention,
+    chatPolicy.groupConfig?.requireMention,
+    chatPolicy.defaultConfig?.requireMention,
+  );
+  const senderAllowed = isSenderAllowed({
+    allow: params.effectiveGroupAllow,
+    senderId: params.senderId,
+    senderUsername: params.senderUsername,
+  });
+  const reason = (() => {
+    if (policyAccess.reason === "group-policy-allowlist-empty") {
+      return "no effective allowFrom entries";
+    }
+    if (policyAccess.reason === "group-policy-allowlist-unauthorized") {
+      return "sender does not match allowFrom";
+    }
+    if (policyAccess.reason === "group-policy-allowlist-no-sender") {
+      return "message has no sender id";
+    }
+    if (policyAccess.reason === "group-chat-not-allowed") {
+      return "chat is not allowed by groups";
+    }
+    return "group messages are disabled";
+  })();
+
+  return [
+    `Telegram commands are authorized, but normal group messages are blocked by groupPolicy=${policyAccess.groupPolicy}: ${reason}.`,
+    `groups allowed=${chatPolicy.allowed}`,
+    `requireMention=${requireMention ?? "default"}`,
+    `allowFrom configured=${params.effectiveGroupAllow.hasEntries}`,
+    `sender allowed=${senderAllowed}`,
+  ].join(" ");
 }
 
 async function resolveTelegramDefaultThinkingLevel(params: {
@@ -685,6 +767,19 @@ async function resolveTelegramCommandAuth(params: {
   if (requireAuth && !commandAuthorized) {
     return await rejectNotAuthorized();
   }
+  const normalIngressStatusNote = formatTelegramNormalIngressStatusNote({
+    isGroup,
+    chatId,
+    cfg,
+    telegramCfg,
+    topicConfig,
+    groupConfig,
+    effectiveGroupAllow,
+    senderId,
+    senderUsername,
+    resolveGroupPolicy,
+    useAccessGroups,
+  });
 
   return {
     chatId,
@@ -697,6 +792,7 @@ async function resolveTelegramCommandAuth(params: {
     topicConfig,
     commandAuthorized,
     senderIsOwner: ownerAccess.senderIsOwner,
+    statusNotes: normalIngressStatusNote ? [normalIngressStatusNote] : undefined,
   };
 }
 
@@ -1081,6 +1177,7 @@ export const registerTelegramNativeCommands = ({
         const executionCfg = getRuntimeConfigSnapshot() ?? cfg;
 
         const commandDefinition = findCommandByNativeName(command.name, "telegram");
+        const statusNotes = commandDefinition?.key === "status" ? auth.statusNotes : undefined;
         const rawText = ctx.match?.trim() ?? "";
         const commandArgs = commandDefinition
           ? parseCommandArgs(commandDefinition, rawText)
@@ -1246,6 +1343,7 @@ export const registerTelegramNativeCommands = ({
           Timestamp: msg.date ? msg.date * 1000 : undefined,
           WasMentioned: true,
           CommandAuthorized: commandAuthorized,
+          ...(statusNotes ? { StatusNotes: statusNotes } : {}),
           CommandTurn: {
             kind: "native" as const,
             source: "native" as const,
