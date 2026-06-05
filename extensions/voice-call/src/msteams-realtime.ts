@@ -86,6 +86,16 @@ const MSTEAMS_ASYNC_TASK_ACK = {
 };
 
 /**
+ * Returned to the model when a background task is requested but the caller has no
+ * AAD object id — there is no Teams chat to deliver the result to, so the task is
+ * refused rather than acknowledging a delivery that cannot happen. The model
+ * should offer to answer on the call instead.
+ */
+const MSTEAMS_ASYNC_TASK_NO_TARGET = {
+  text: "I can't run that in the background — I don't have a Teams chat to send the result to. I can work on it right now on the call instead.",
+};
+
+/**
  * Returned to the model when the agent is asked to act but recording is not yet
  * active. The agent must not process/persist call audio before Graph
  * `updateRecordingStatus` (Media Access API), so consult + task are refused.
@@ -387,6 +397,15 @@ export function createMsteamsRealtimeCall(params: {
     if (recordingGateBlocks()) {
       logger?.debug?.(`MsteamsRealtime: task refused for ${callId} — recording not active`);
       rtSession.submitToolResult(event.callId, MSTEAMS_RECORDING_BLOCKED);
+      return;
+    }
+    // A background task's only delivery channel is the caller's Teams chat
+    // (message tool -> user:<aadId>). Without an aadId there is nowhere to
+    // deliver, so refuse the task instead of acking a delivery we can't fulfill
+    // and silently dropping the result.
+    if (!session.caller.aadId) {
+      logger?.warn(`MsteamsRealtime: task refused for ${callId} — no caller.aadId delivery target`);
+      rtSession.submitToolResult(event.callId, MSTEAMS_ASYNC_TASK_NO_TARGET);
       return;
     }
     const task = readArgString(event.args, "task") ?? readArgString(event.args, "question");
