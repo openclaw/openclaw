@@ -2,8 +2,9 @@
 import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
+import { OpenClawStdioClientTransport, toStdioTransportError } from "./mcp-stdio-transport.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const killProcessTreeMock = vi.hoisted(() => vi.fn());
@@ -203,5 +204,67 @@ describe("OpenClawStdioClientTransport", () => {
     await expect(transport.send({ jsonrpc: "2.0", id: 3, method: "ping" })).rejects.toThrow(
       "write after end",
     );
+  });
+
+  it("rejects send() safely when stdin.write reports a hostile value", async () => {
+    const child = new MockChildProcess();
+    const brokenStdin = new PassThrough();
+    const hostileError = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("property denied");
+        },
+        getPrototypeOf() {
+          throw new Error("prototype denied");
+        },
+      },
+    );
+    brokenStdin.write = (_chunk: unknown, cbOrEncoding?: unknown, cb?: unknown) => {
+      const callback =
+        typeof cbOrEncoding === "function" ? cbOrEncoding : typeof cb === "function" ? cb : null;
+      if (callback) {
+        (callback as (err: Error) => void)(hostileError as Error);
+      }
+      return false;
+    };
+    child.stdin = brokenStdin;
+    spawnMock.mockReturnValue(child);
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    await expect(transport.send({ jsonrpc: "2.0", id: 4, method: "ping" })).rejects.toThrow(
+      "MCP stdio transport error",
+    );
+  });
+});
+
+describe("toStdioTransportError", () => {
+  it("normalizes hostile stdio transport errors without throwing", () => {
+    const hostileError = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("property denied");
+        },
+        getPrototypeOf() {
+          throw new Error("prototype denied");
+        },
+      },
+    );
+    const readableError = {};
+    Object.defineProperty(readableError, "message", {
+      get() {
+        return "read failed";
+      },
+    });
+
+    const normalizedHostileError = toStdioTransportError(hostileError);
+    expect(normalizedHostileError.message).toBe("MCP stdio transport error");
+    expect(inspect(normalizedHostileError)).toContain("MCP stdio transport error");
+    expect(toStdioTransportError(readableError).message).toBe("read failed");
   });
 });

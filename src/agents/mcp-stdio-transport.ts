@@ -28,6 +28,41 @@ function delay(ms: number) {
   });
 }
 
+function readStdioTransportErrorField(error: unknown, key: string): unknown {
+  try {
+    return error && (typeof error === "object" || typeof error === "function")
+      ? (error as Record<string, unknown>)[key]
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function toStdioTransportError(
+  value: unknown,
+  fallbackMessage = "MCP stdio transport error",
+): Error {
+  const message = readStdioTransportErrorField(value, "message");
+  if (typeof message === "string" && message.trim()) {
+    return new Error(message);
+  }
+  const name = readStdioTransportErrorField(value, "name");
+  if (typeof name === "string" && name.trim()) {
+    return new Error(name);
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  try {
+    if (value instanceof Error) {
+      return new Error(value.message || value.name || fallbackMessage);
+    }
+  } catch {
+    return new Error(fallbackMessage);
+  }
+  return new Error(fallbackMessage);
+}
+
 export class OpenClawStdioClientTransport implements Transport {
   onclose?: () => void;
   onerror?: (error: Error) => void;
@@ -108,7 +143,7 @@ export class OpenClawStdioClientTransport implements Transport {
         }
         this.onmessage?.(message);
       } catch (error) {
-        this.onerror?.(error instanceof Error ? error : new Error(String(error)));
+        this.onerror?.(toStdioTransportError(error));
       }
     }
   }
@@ -151,7 +186,7 @@ export class OpenClawStdioClientTransport implements Transport {
       try {
         const flushed = stdin.write(json, (err) => {
           if (err) {
-            reject(err);
+            reject(toStdioTransportError(err));
           } else {
             resolve();
           }
@@ -162,7 +197,7 @@ export class OpenClawStdioClientTransport implements Transport {
           stdin.once("drain", () => {});
         }
       } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
+        reject(toStdioTransportError(err));
       }
     });
   }
