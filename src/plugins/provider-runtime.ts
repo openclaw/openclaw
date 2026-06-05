@@ -35,6 +35,7 @@ import {
   resolveProviderHookPlugin,
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePlugin,
+  resolveProviderToolSchemaNormalizeHookIdentity,
   wrapProviderSimpleCompletionStreamFn,
   type ProviderRuntimePluginHandle,
   wrapProviderStreamFn,
@@ -166,6 +167,7 @@ export {
   resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
   resolveProviderRuntimePlugin,
+  resolveProviderToolSchemaNormalizeHookIdentity,
   wrapProviderSimpleCompletionStreamFn,
   wrapProviderStreamFn,
 };
