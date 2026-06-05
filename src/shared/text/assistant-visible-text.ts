@@ -8,6 +8,7 @@ import {
   type ReasoningTagMode,
   type ReasoningTagTrim,
 } from "./reasoning-tags.js";
+import { applyRtlIsolation } from "./rtl-isolation.js";
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
@@ -815,6 +816,14 @@ type AssistantVisibleTextPipelineOptions = {
   reasoningMode: ReasoningTagMode;
   reasoningTrim: ReasoningTagTrim;
   stageOrder: "reasoning-first" | "reasoning-last";
+  /**
+   * Apply Unicode bidi isolation to RTL-script lines as the final stage so
+   * trailing LTR punctuation renders on the correct side on Discord/Slack/
+   * Telegram/WhatsApp. Only enabled for the delivery profile because history
+   * and internal-scaffolding pipelines feed transcript storage and runtime
+   * inspection paths that should stay byte-for-byte with the model output.
+   */
+  applyRtlIsolation?: boolean;
 };
 
 const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
@@ -827,6 +836,7 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     reasoningMode: "strict",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",
+    applyRtlIsolation: true,
   },
   history: {
     finalTrim: "none",
@@ -896,11 +906,12 @@ function applyAssistantVisibleTextStagePipeline(
     return cleaned;
   };
 
-  if (options.stageOrder === "reasoning-first") {
-    return applyFinalTrim(stripNonReasoningStages(stripReasoning(text)));
-  }
+  const trimmed =
+    options.stageOrder === "reasoning-first"
+      ? applyFinalTrim(stripNonReasoningStages(stripReasoning(text)))
+      : applyFinalTrim(stripReasoning(stripNonReasoningStages(text)));
 
-  return applyFinalTrim(stripReasoning(stripNonReasoningStages(text)));
+  return options.applyRtlIsolation ? applyRtlIsolation(trimmed) : trimmed;
 }
 
 export function sanitizeAssistantVisibleTextWithProfile(
