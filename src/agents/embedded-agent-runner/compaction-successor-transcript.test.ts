@@ -92,6 +92,7 @@ function createCompactedSession(sessionDir: string): {
   sessionFile: string;
   firstKeptId: string;
   oldUserId: string;
+  oldAssistantId: string;
 } {
   // Fixture includes pre-compaction history, preserved branch metadata, and
   // post-compaction turns so rotation can prove exactly which entries survive.
@@ -101,7 +102,7 @@ function createCompactedSession(sessionDir: string): {
   manager.appendCustomEntry("test-extension", { cursor: "before-compaction" });
   const oldUserId = manager.appendMessage({ role: "user", content: "old user", timestamp: 1 });
   manager.appendLabelChange(oldUserId, "old bookmark");
-  manager.appendMessage(makeAssistant("old assistant", 2));
+  const oldAssistantId = manager.appendMessage(makeAssistant("old assistant", 2));
   const firstKeptId = manager.appendMessage({ role: "user", content: "kept user", timestamp: 3 });
   manager.appendLabelChange(firstKeptId, "kept bookmark");
   manager.appendMessage(makeAssistant("kept assistant", 4));
@@ -113,6 +114,7 @@ function createCompactedSession(sessionDir: string): {
     sessionFile: requireString(manager.getSessionFile(), "compacted session file"),
     firstKeptId,
     oldUserId,
+    oldAssistantId,
   };
 }
 
@@ -164,6 +166,11 @@ describe("rotateTranscriptAfterCompaction", () => {
         summary: "Summary of old user and old assistant.",
         tokensBefore: 5000,
       },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "old assistant" }],
+        timestamp: 2,
+      },
       { role: "user", content: "kept user", timestamp: 3 },
       {
         role: "assistant",
@@ -177,6 +184,42 @@ describe("rotateTranscriptAfterCompaction", () => {
         timestamp: 6,
       },
     ]);
+  });
+
+  it("preserves the summarized assistant reply before a surviving user message", async () => {
+    const dir = await createTmpDir();
+    const { manager, sessionFile, oldUserId, oldAssistantId } = createCompactedSession(dir);
+
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile,
+      now: () => new Date("2026-04-27T12:02:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
+    expect(successor.getEntries().find((entry) => entry.id === oldUserId)).toBeUndefined();
+    const oldAssistant = requireEntryByIdAndType(
+      successor.getEntries(),
+      oldAssistantId,
+      "message",
+      "preserved summarized assistant",
+    );
+    expect(oldAssistant.message.role).toBe("assistant");
+    expect(JSON.stringify(oldAssistant.message)).toContain("old assistant");
+    const successorCompaction = requireEntryByType(
+      successor.getEntries(),
+      "compaction",
+      "successor compaction",
+    );
+    expect(successorCompaction.firstKeptEntryId).toBe(oldAssistantId);
+    const contextMessages = successor.buildSessionContext().messages;
+    expect(JSON.stringify(contextMessages)).toContain("old assistant");
+    expect(
+      contextMessages.some((message) => message.role === "user" && message.content === "old user"),
+    ).toBe(false);
   });
 
   it("creates a compacted successor transcript and leaves the archive untouched", async () => {
@@ -215,6 +258,7 @@ describe("rotateTranscriptAfterCompaction", () => {
     const context = successor.buildSessionContext();
     const contextText = JSON.stringify(context.messages);
     expect(contextText).toContain("Summary of old user and old assistant.");
+    expect(contextText).toContain("old assistant");
     expect(contextText).toContain("kept user");
     expect(contextText).toContain("post assistant");
     expect(
@@ -571,16 +615,19 @@ describe("rotateTranscriptAfterCompaction — thinking signature stripping", () 
       return undefined;
     }
 
+    // Preserved summarized assistant (timestamp 2): signature stripped
+    expect(getThinkingSignatureForTimestamp(2)).toBeUndefined();
     // Pre-compaction kept message (timestamp 4): signature stripped
     expect(getThinkingSignatureForTimestamp(4)).toBeUndefined();
     // Post-compaction message (timestamp 6): signature preserved intact
     expect(getThinkingSignatureForTimestamp(6)).toBe("fresh_sig");
 
-    // Old summarized messages should not appear
+    // Old summarized user should not appear
     expect(entries.find((e) => e.id === oldUserId)).toBeUndefined();
 
     // Context should remain coherent: compaction summary + kept + post-compaction
     const contextText = JSON.stringify(successor.buildSessionContext().messages);
+    expect(contextText).toContain("old answer");
     expect(contextText).toContain("kept question");
     expect(contextText).toContain("kept answer");
     expect(contextText).toContain("post answer");

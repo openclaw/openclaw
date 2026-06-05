@@ -144,9 +144,17 @@ function buildSuccessorEntries(params: {
 
   const removedIds = new Set<string>();
   const duplicateUserMessageIds = collectDuplicateUserMessageEntryIdsForCompaction(branch);
+  const assistantBoundaryMessageIds = collectAssistantBoundaryMessageIds({
+    branch,
+    latestCompactionIndex,
+    preCompactionKeptBranchIds,
+    summarizedBranchIds,
+  });
   for (const entry of allEntries) {
     if (
-      (summarizedBranchIds.has(entry.id) && entry.type === "message") ||
+      (summarizedBranchIds.has(entry.id) &&
+        entry.type === "message" &&
+        !assistantBoundaryMessageIds.has(entry.id)) ||
       staleStateEntryIds.has(entry.id) ||
       duplicateUserMessageIds.has(entry.id)
     ) {
@@ -183,14 +191,27 @@ function buildSuccessorEntries(params: {
 
     const reparented =
       parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
+    const reanchored =
+      reparented.type === "compaction"
+        ? ({
+            ...reparented,
+            firstKeptEntryId: resolveSuccessorCompactionFirstKeptEntryId({
+              compaction: reparented,
+              assistantBoundaryMessageIds,
+              originalIndexById,
+            }),
+          } as SessionEntry)
+        : reparented;
     // Strip thinking signatures only from pre-compaction kept entries. Pre-compaction
     // signatures are bound to the original context prefix; the successor file has a different
     // prefix so those signatures would cause Anthropic "Invalid signature in thinking block".
     // Post-compaction entries were generated in the new context and have valid signatures.
     const transformed =
-      reparented.type === "message" && preCompactionKeptBranchIds.has(reparented.id)
-        ? { ...reparented, message: stripThinkingSignaturesFromMessage(reparented.message) }
-        : reparented;
+      reanchored.type === "message" &&
+      (preCompactionKeptBranchIds.has(reanchored.id) ||
+        assistantBoundaryMessageIds.has(reanchored.id))
+        ? { ...reanchored, message: stripThinkingSignaturesFromMessage(reanchored.message) }
+        : reanchored;
     keptEntries.push(transformed);
   }
 
@@ -199,6 +220,54 @@ function buildSuccessorEntries(params: {
     activeBranchIds,
     originalIndexById,
   });
+}
+
+function resolveSuccessorCompactionFirstKeptEntryId(params: {
+  compaction: CompactionEntry;
+  assistantBoundaryMessageIds: Set<string>;
+  originalIndexById: Map<string, number>;
+}): string {
+  let firstKeptEntryId = params.compaction.firstKeptEntryId;
+  let firstKeptIndex = params.originalIndexById.get(firstKeptEntryId) ?? Number.MAX_SAFE_INTEGER;
+  for (const id of params.assistantBoundaryMessageIds) {
+    const index = params.originalIndexById.get(id) ?? Number.MAX_SAFE_INTEGER;
+    if (index < firstKeptIndex) {
+      firstKeptEntryId = id;
+      firstKeptIndex = index;
+    }
+  }
+  return firstKeptEntryId;
+}
+
+function collectAssistantBoundaryMessageIds(params: {
+  branch: SessionEntry[];
+  latestCompactionIndex: number;
+  preCompactionKeptBranchIds: Set<string>;
+  summarizedBranchIds: Set<string>;
+}): Set<string> {
+  const ids = new Set<string>();
+  const { branch, latestCompactionIndex, preCompactionKeptBranchIds, summarizedBranchIds } = params;
+  for (let index = 0; index < latestCompactionIndex; index += 1) {
+    const entry = branch[index];
+    if (
+      entry?.type !== "message" ||
+      entry.message.role !== "user" ||
+      !preCompactionKeptBranchIds.has(entry.id)
+    ) {
+      continue;
+    }
+    for (let candidateIndex = index - 1; candidateIndex >= 0; candidateIndex -= 1) {
+      const candidate = branch[candidateIndex];
+      if (candidate?.type !== "message") {
+        continue;
+      }
+      if (candidate.message.role === "assistant" && summarizedBranchIds.has(candidate.id)) {
+        ids.add(candidate.id);
+      }
+      break;
+    }
+  }
+  return ids;
 }
 
 function collectLatestStateEntryIds(entries: SessionEntry[]): Set<string> {
