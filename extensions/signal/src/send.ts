@@ -365,10 +365,32 @@ export async function sendMessageSignal(
     messageFromPlaceholder || (attachmentEchoMetadata && !message.trim())
       ? uniqueEchoTexts([attachmentEchoText, attachmentFallbackEchoText])
       : uniqueEchoTexts([message]);
+  const selfEchoAccountIdentities = uniqueEchoTexts([accountUuid ?? undefined, account]);
+  const rememberSelfEcho = async (params: {
+    messageId: string;
+    timestamp?: number;
+    text?: string;
+    persist?: boolean;
+  }) => {
+    for (const accountIdentity of selfEchoAccountIdentities) {
+      await rememberSignalSelfReplyEcho({
+        accountId: accountInfo.accountId,
+        accountIdentity,
+        ...params,
+      });
+    }
+  };
+  const forgetSelfEcho = (params: { messageId: string; text?: string }) => {
+    for (const accountIdentity of selfEchoAccountIdentities) {
+      forgetSignalSelfReplyEcho({
+        accountId: accountInfo.accountId,
+        accountIdentity,
+        ...params,
+      });
+    }
+  };
   for (const fallbackEchoText of shouldRememberSelfEcho ? fallbackEchoTexts : []) {
-    await rememberSignalSelfReplyEcho({
-      accountId: accountInfo.accountId,
-      accountIdentity: accountUuid ?? account,
+    await rememberSelfEcho({
       messageId: "unknown",
       text: fallbackEchoText,
       persist: false,
@@ -385,9 +407,7 @@ export async function sendMessageSignal(
   } catch (err) {
     if (shouldRememberSelfEcho && isDefiniteSignalSendFailure(err)) {
       for (const fallbackEchoText of fallbackEchoTexts) {
-        forgetSignalSelfReplyEcho({
-          accountId: accountInfo.accountId,
-          accountIdentity: accountUuid ?? account,
+        forgetSelfEcho({
           messageId: "unknown",
           text: fallbackEchoText,
         });
@@ -408,25 +428,19 @@ export async function sendMessageSignal(
   });
   if (shouldRememberSelfEcho && timestamp != null) {
     for (const fallbackEchoText of fallbackEchoTexts) {
-      forgetSignalSelfReplyEcho({
-        accountId: accountInfo.accountId,
-        accountIdentity: accountUuid ?? account,
+      forgetSelfEcho({
         messageId: "unknown",
         text: fallbackEchoText,
       });
     }
-    await rememberSignalSelfReplyEcho({
-      accountId: accountInfo.accountId,
-      accountIdentity: accountUuid ?? account,
+    await rememberSelfEcho({
       messageId,
       timestamp,
       text: fallbackEchoTexts[0] ?? message,
     });
   } else if (shouldRememberSelfEcho) {
     for (const fallbackEchoText of fallbackEchoTexts) {
-      await rememberSignalSelfReplyEcho({
-        accountId: accountInfo.accountId,
-        accountIdentity: accountUuid ?? account,
+      await rememberSelfEcho({
         messageId: "unknown",
         text: fallbackEchoText,
         persist: false,

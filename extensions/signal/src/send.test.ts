@@ -573,6 +573,13 @@ describe("sendMessageSignal receipts", () => {
         text: "hello discovered self",
       }),
     );
+    expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountIdentity: "+15550001111",
+        messageId: "1234567897",
+        text: "hello discovered self",
+      }),
+    );
   });
 
   it("does not discover the account UUID for external phone recipients", async () => {
