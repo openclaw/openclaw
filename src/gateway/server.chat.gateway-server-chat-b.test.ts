@@ -410,11 +410,47 @@ describe("gateway server chat", () => {
       );
       await fs.writeFile(
         path.join(sessionDir, currentSessionId + ".jsonl"),
+        [
+          JSON.stringify({
+            timestamp: "2026-01-18T04:30:00.000Z",
+            message: {
+              role: "user",
+              content: [
+                "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+                "stale active announce payload",
+              ].join("\n"),
+              provenance: {
+                kind: "inter_session",
+                sourceSessionKey: "agent:main:subagent:child",
+                sourceTool: "subagent_announce",
+              },
+            },
+          }),
+          JSON.stringify({
+            timestamp: "2026-01-18T04:30:01.000Z",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "stale active announce reply" }],
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "current thread context" }],
+              timestamp: startedAt + 60_000,
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await fs.writeFile(
+        path.join(sessionDir, ancestorSessionId + ".jsonl"),
         JSON.stringify({
           message: {
             role: "user",
-            content: [{ type: "text", text: "current thread context" }],
-            timestamp: startedAt + 60_000,
+            content: [{ type: "text", text: "ancestor active context" }],
+            timestamp: startedAt - 30_000,
           },
         }) + "\n",
         "utf-8",
@@ -426,7 +462,9 @@ describe("gateway server chat", () => {
 
       const familyHistory = JSON.stringify(await fetchHistoryMessages(ws, { includeFamily: true }));
       expect(familyHistory).toContain("ancestor thread context");
+      expect(familyHistory).toContain("ancestor active context");
       expect(familyHistory).toContain("current thread context");
+      expect(familyHistory).not.toContain("stale active announce reply");
     });
   });
 
