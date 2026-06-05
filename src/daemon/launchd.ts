@@ -178,6 +178,36 @@ exec "$@"
 `;
 }
 
+async function resolveLaunchAgentEnvironmentWrapperOverwriteWarnings(params: {
+  wrapperPath: string;
+  generatedWrapper: string;
+}): Promise<string[]> {
+  const existingWrapper = await fs.readFile(params.wrapperPath, "utf8").catch(() => null);
+  if (existingWrapper === null || existingWrapper === params.generatedWrapper) {
+    return [];
+  }
+  return [
+    `Existing generated LaunchAgent env wrapper at ${params.wrapperPath} contains custom behavior and will be overwritten; move custom behavior to openclaw gateway install --wrapper <path> or OPENCLAW_WRAPPER.`,
+  ];
+}
+
+function writeLaunchAgentOverwriteWarnings(
+  stdout: NodeJS.WritableStream | undefined,
+  warn: ((message: string) => void) | undefined,
+  warnings: readonly string[],
+): void {
+  for (const warning of warnings) {
+    if (warn) {
+      warn(warning);
+      continue;
+    }
+    if (!stdout) {
+      continue;
+    }
+    stdout.write(`${formatLine("Warning", warning)}\n`);
+  }
+}
+
 function isLaunchAgentEnvironmentWrapperArgs(params: {
   programArguments: string[];
   envFilePath: string;
@@ -194,7 +224,12 @@ async function prepareLaunchAgentProgramArguments(params: {
   label: string;
   programArguments: string[];
   environment: GatewayServiceEnv | undefined;
-}): Promise<{ programArguments: string[]; inlineEnvironment?: GatewayServiceEnv }> {
+  stdout?: NodeJS.WritableStream;
+  warn?: (message: string) => void;
+}): Promise<{
+  programArguments: string[];
+  inlineEnvironment?: GatewayServiceEnv;
+}> {
   const entries = collectLaunchAgentEnvironmentEntries(params.environment);
   if (entries.length === 0) {
     return { programArguments: params.programArguments };
@@ -205,13 +240,19 @@ async function prepareLaunchAgentProgramArguments(params: {
   const envDir = resolveLaunchAgentEnvDir(params.env);
   const envFilePath = resolveLaunchAgentEnvFilePath(params.env, params.label);
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
+  const generatedWrapper = buildLaunchAgentEnvironmentWrapper();
   await ensureSecureDirectory(envDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
   await fs.writeFile(envFilePath, buildLaunchAgentEnvironmentFile(entries), {
     encoding: "utf8",
     mode: LAUNCH_AGENT_ENV_FILE_MODE,
   });
   await fs.chmod(envFilePath, LAUNCH_AGENT_ENV_FILE_MODE).catch(() => undefined);
-  await fs.writeFile(wrapperPath, buildLaunchAgentEnvironmentWrapper(), {
+  const overwriteWarnings = await resolveLaunchAgentEnvironmentWrapperOverwriteWarnings({
+    wrapperPath,
+    generatedWrapper,
+  });
+  writeLaunchAgentOverwriteWarnings(params.stdout, params.warn, overwriteWarnings);
+  await fs.writeFile(wrapperPath, generatedWrapper, {
     encoding: "utf8",
     mode: LAUNCH_AGENT_ENV_WRAPPER_MODE,
   });
@@ -868,7 +909,9 @@ async function writeLaunchAgentPlist({
   workingDirectory,
   environment,
   description,
-}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ plistPath: string; stdoutPath: string }> {
+  stdout,
+  warn,
+}: GatewayServiceInstallArgs): Promise<{ plistPath: string; stdoutPath: string }> {
   const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
   await ensureSecureDirectory(logDir);
 
@@ -897,6 +940,8 @@ async function writeLaunchAgentPlist({
     label,
     programArguments,
     environment,
+    stdout,
+    warn,
   });
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
@@ -918,7 +963,7 @@ export async function stageLaunchAgent({
   stdout,
   ...args
 }: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
-  const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
+  const { plistPath, stdoutPath } = await writeLaunchAgentPlist({ ...args, stdout });
   writeFormattedLines(
     stdout,
     [
