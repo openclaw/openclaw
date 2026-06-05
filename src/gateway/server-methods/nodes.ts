@@ -351,7 +351,11 @@ async function removePairedDeviceBackedNode(params: {
     );
     return { status: "denied", message: "node pairing removal denied" };
   }
-  if (!authz.isAdminCaller && pairedDeviceHasNonOperatorRole(paired)) {
+  // Mirror device.pair.remove: the admin requirement for mixed-role rows only
+  // applies to device-token self-service callers (callerDeviceId set). Shared-auth
+  // / CLI operators holding operator.pairing manage pairings on others' behalf and
+  // are allowed to remove non-operator (e.g. node) rows without operator.admin.
+  if (authz.callerDeviceId && !authz.isAdminCaller && pairedDeviceHasNonOperatorRole(paired)) {
     params.context.logGateway.warn(
       `node pairing removal denied node=${nodeId} reason=role-management-requires-admin`,
     );
