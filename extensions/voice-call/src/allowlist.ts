@@ -21,3 +21,28 @@ export function isAllowlistedCaller(
     return normalizedAllow !== "" && normalizedAllow === normalizedFrom;
   });
 }
+
+/**
+ * Inbound-policy decision. Mirrors the switch in `manager/events.ts`
+ * `shouldAcceptInbound` so paths that do not route through the CallManager
+ * (e.g. the msteams realtime bridge) accept/reject callers identically.
+ * `from` is the caller id — a phone number, or a Teams `aadId` for msteams
+ * (which will not match a phone allowlist).
+ */
+export function isInboundCallAllowed(
+  inboundPolicy: "disabled" | "allowlist" | "pairing" | "open" | undefined,
+  allowFrom: string[] | undefined,
+  from: string | undefined,
+): boolean {
+  switch (inboundPolicy) {
+    case "open":
+      return true;
+    case "allowlist":
+    case "pairing":
+      return isAllowlistedCaller(normalizePhoneNumber(from), allowFrom);
+    default:
+      // "disabled" or unset → reject (config validation already blocks
+      // realtime + "disabled"; this is defensive).
+      return false;
+  }
+}
