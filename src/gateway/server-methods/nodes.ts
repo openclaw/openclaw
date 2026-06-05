@@ -942,6 +942,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(true, rejected, undefined);
     });
   },
+  // Remove a node pairing (CLI: `openclaw nodes remove`). For a device-backed
+  // node this revokes the device's `node` role in devices/paired.json and
+  // disconnects its node-role sessions: a mixed-role device keeps its row and
+  // only loses the `node` role, a node-only device row is deleted. Any matching
+  // legacy gateway-owned node pairing entry is also cleared. Authz mirrors
+  // device.pair.remove: operator.pairing may remove non-operator node rows; a
+  // device-token caller revoking its own node role on a mixed-role device
+  // additionally needs operator.admin (see removePairedDeviceBackedNode).
   "node.pair.remove": async ({ params, respond, context, client }) => {
     if (!validateNodePairRemoveParams(params)) {
       respondInvalidParams({

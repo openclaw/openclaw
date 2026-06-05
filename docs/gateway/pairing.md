@@ -58,7 +58,14 @@ Methods:
 - `node.pair.list` - list pending + paired nodes (`operator.pairing`).
 - `node.pair.approve` - approve a pending request (issues token).
 - `node.pair.reject` - reject a pending request.
-- `node.pair.remove` - remove a stale paired node entry.
+- `node.pair.remove` - remove a paired node. For device-backed pairings this
+  revokes the device's `node` role: it mutates `devices/paired.json` and
+  invalidates/disconnects that device's node-role sessions. A **mixed-role**
+  device (e.g. it also holds `operator`) keeps its row and only loses the `node`
+  role; a node-only device row is deleted. It also removes any matching legacy
+  gateway-owned node pairing entry. Authz: `operator.pairing` may remove
+  non-operator node rows; a device-token caller revoking its **own** node role on
+  a mixed-role device additionally needs `operator.admin`.
 - `node.pair.verify` - verify `{ nodeId, token }`.
 
 Notes:
