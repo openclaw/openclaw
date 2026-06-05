@@ -24,6 +24,7 @@ import {
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createEmbeddingProvider,
+  resolveEmbeddingProviderFallbackModel,
   type EmbeddingProvider,
   type EmbeddingProviderId,
   type EmbeddingProviderRequest,
@@ -428,7 +429,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         ? null
         : this.providerInitialized
           ? this.provider
-            ? { id: this.provider.id, model: this.provider.model }
+            ? {
+                id: this.provider.id,
+                model:
+                  this.provider.model ||
+                  resolveEmbeddingProviderFallbackModel(
+                    this.settings.provider,
+                    this.settings.model,
+                    this.cfg,
+                  ),
+              }
             : null
           : undefined;
     const state = this.resolveCurrentIndexIdentityState({

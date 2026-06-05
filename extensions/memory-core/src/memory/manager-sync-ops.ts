@@ -40,6 +40,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterId,
+  resolveEmbeddingProviderFallbackModel,
   type EmbeddingProvider,
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
@@ -299,6 +300,14 @@ export abstract class MemoryManagerSyncOps {
     hasIndexedChunks?: boolean;
   }): MemoryIndexIdentityState {
     const hasProviderOverride = params && "provider" in params;
+    const configuredProviderModel =
+      this.settings.model && this.settings.model.trim()
+        ? this.settings.model.trim()
+        : resolveEmbeddingProviderFallbackModel(
+            this.settings.provider,
+            this.settings.model,
+            this.cfg,
+          );
     const configuredProvider =
       this.settings.provider === "none"
         ? null
@@ -306,7 +315,7 @@ export abstract class MemoryManagerSyncOps {
             id:
               resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
               this.settings.provider,
-            model: this.settings.model,
+            model: configuredProviderModel,
           };
     const provider = hasProviderOverride
       ? params.provider!
