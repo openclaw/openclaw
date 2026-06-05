@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   text: vi.fn(),
+  password: vi.fn(),
   select: vi.fn(),
   confirm: vi.fn(),
   resolveGatewayPort: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("../config/config.js", async (importActual) => {
 
 vi.mock("./configure.shared.js", () => ({
   text: mocks.text,
+  password: mocks.password,
   select: mocks.select,
   confirm: mocks.confirm,
 }));
@@ -76,6 +78,7 @@ async function runGatewayPrompt(params: {
     return input.initialValue ?? input.options[0]?.value;
   });
   mocks.text.mockImplementation(async () => params.textQueue.shift());
+  mocks.password.mockImplementation(async () => params.textQueue.shift());
   mocks.randomToken.mockReturnValue(params.randomToken ?? "generated-token");
   mocks.confirm.mockResolvedValue(params.confirmResult ?? true);
   mocks.buildGatewayAuthConfig.mockImplementation((input) =>
