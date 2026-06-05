@@ -346,6 +346,9 @@ What they do:
 - `wiki_apply`: narrow synthesis/metadata mutations without freeform page surgery
 - `wiki_lint`: structural checks, provenance gaps, contradictions, open questions
 
+`wiki_apply` accepts the CLI-style `op` values `synthesis` and `metadata`, plus
+the canonical internal values `create_synthesis` and `update_metadata`.
+
 The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory
 plugin supports corpus selection.

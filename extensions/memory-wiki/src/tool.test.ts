@@ -41,6 +41,22 @@ describe("memory-wiki tools", () => {
     expect(evidenceProperties.confidence).toEqual({ type: "number", minimum: 0, maximum: 1 });
   });
 
+  it("accepts CLI-style wiki_apply operation aliases", () => {
+    const tool = createWikiApplyTool({} as ResolvedMemoryWikiConfig);
+    const applyProperties = asSchemaObject(asSchemaObject(tool.parameters).properties);
+    const opSchema = asSchemaObject(applyProperties.op);
+    const variants = (opSchema.anyOf as Array<Record<string, unknown>>).map((variant) =>
+      variant.const,
+    );
+
+    expect(variants).toEqual([
+      "create_synthesis",
+      "update_metadata",
+      "synthesis",
+      "metadata",
+    ]);
+  });
+
   it("returns tool-safe relative report paths from wiki_lint", async () => {
     const { rootDir, config } = await harness.createVault({ initialize: true });
     await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });

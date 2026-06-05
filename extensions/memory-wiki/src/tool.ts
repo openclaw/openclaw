@@ -80,9 +80,15 @@ const WikiClaimSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+const WikiApplyOperationSchema = Type.Union([
+  Type.Literal("create_synthesis"),
+  Type.Literal("update_metadata"),
+  Type.Literal("synthesis"),
+  Type.Literal("metadata"),
+]);
 const WikiApplySchema = Type.Object(
   {
-    op: Type.Union([Type.Literal("create_synthesis"), Type.Literal("update_metadata")]),
+    op: WikiApplyOperationSchema,
     title: Type.Optional(Type.String({ minLength: 1 })),
     body: Type.Optional(Type.String({ minLength: 1 })),
     lookup: Type.Optional(Type.String({ minLength: 1 })),

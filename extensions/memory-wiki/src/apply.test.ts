@@ -29,6 +29,25 @@ describe("applyMemoryWikiMutation", () => {
     ).toMatchObject({ confidence: 0.4 });
   });
 
+  it("normalizes CLI-style wiki apply operation aliases", () => {
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "synthesis",
+        title: "Alpha Synthesis",
+        body: "Alpha summary body.",
+        sourceIds: ["source.alpha"],
+      }),
+    ).toMatchObject({ op: "create_synthesis" });
+
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "metadata",
+        lookup: "entity.alpha",
+        status: "review",
+      }),
+    ).toMatchObject({ op: "update_metadata" });
+  });
+
   it("rejects out-of-range string confidence in wiki mutations", () => {
     expect(() =>
       normalizeMemoryWikiMutationInput({
