@@ -291,6 +291,15 @@ function openSpeakeasyStateStore(): SpeakeasyVoiceStateStore {
   return store;
 }
 
+function requireSpeakeasyStateUpdate(
+  store: SpeakeasyVoiceStateStore,
+): NonNullable<SpeakeasyVoiceStateStore["update"]> {
+  if (typeof store.update !== "function") {
+    throw new Error("Telegram Speakeasy state store does not support atomic updates");
+  }
+  return store.update.bind(store);
+}
+
 export function shouldAllowSpeakeasyVoiceGeneration(params: {
   cache: SpeakeasyVoiceCache;
   chatId: string;
@@ -399,7 +408,7 @@ export function reserveSpeakeasyVoiceGeneration(params: {
     date: today,
   });
   let limited = false;
-  store.update?.(
+  const updated = requireSpeakeasyStateUpdate(store)(
     generationStoreKey,
     (current) => {
       if (
@@ -418,6 +427,9 @@ export function reserveSpeakeasyVoiceGeneration(params: {
     },
     { ttlMs: SPEAKEASY_GENERATION_COUNTER_TTL_MS },
   );
+  if (!updated) {
+    throw new Error("Telegram Speakeasy state store did not reserve generation quota");
+  }
   if (limited) {
     return { ok: false, reason: "limit" };
   }
@@ -449,7 +461,7 @@ export function releaseSpeakeasyVoiceGenerationReservation(params: {
     store.delete(generationStoreKey);
     return;
   }
-  store.update?.(
+  requireSpeakeasyStateUpdate(store)(
     generationStoreKey,
     (latest) => {
       if (

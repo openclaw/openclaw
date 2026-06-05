@@ -423,6 +423,52 @@ describe("speakeasy voice button", () => {
     });
   });
 
+  it("requires atomic plugin-state updates before reserving generation quota", async () => {
+    await withSpeakeasyWorkspace(async ({ cfg }) => {
+      const entries = new Map<string, SpeakeasyVoiceStateRecord>();
+      setSpeakeasyVoiceStateStoreForTest({
+        register: (key, value) => {
+          entries.set(key, value);
+        },
+        registerIfAbsent: (key, value) => {
+          if (entries.has(key)) {
+            return false;
+          }
+          entries.set(key, value);
+          return true;
+        },
+        lookup: (key) => entries.get(key),
+        consume: (key) => {
+          const value = entries.get(key);
+          entries.delete(key);
+          return value;
+        },
+        delete: (key) => entries.delete(key),
+        entries: () =>
+          Array.from(entries, ([key, value]) => ({
+            key,
+            value,
+            createdAt: Date.now(),
+          })),
+        clear: () => {
+          entries.clear();
+        },
+      });
+      const reply = withSpeakeasyVoiceButton({
+        reply: { text: "This reply is long enough to qualify for on-demand voice playback." },
+        cfg,
+        chatId: "123",
+      }) as {
+        channelData?: { telegram?: { buttons?: Array<Array<{ callback_data: string }>> } };
+      };
+      const callbackData = reply.channelData?.telegram?.buttons?.[0]?.[0]?.callback_data ?? "";
+
+      expect(() =>
+        reserveSpeakeasyVoiceGeneration({ cfg, data: callbackData, chatId: "123" }),
+      ).toThrow("does not support atomic updates");
+    });
+  });
+
   it("prunes generation records from prior days", async () => {
     await withSpeakeasyWorkspace(async ({ cfg }) => {
       const cache = loadSpeakeasyCache(cfg);
