@@ -160,7 +160,7 @@ describe("googlechat monitor bot loop protection", () => {
 });
 
 describe("googlechat monitor direct messages", () => {
-  it("does not create typing messages by default", async () => {
+  it("creates typing messages by default", async () => {
     const runTurn = vi.fn();
     const buildContext = vi.fn((payload: unknown) => payload);
     const core = {
@@ -220,7 +220,12 @@ describe("googlechat monitor direct messages", () => {
       mediaMaxMb: 10,
     });
 
-    expect(apiMocks.sendGoogleChatMessage).not.toHaveBeenCalled();
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/DM",
+      text: "_OpenClaw is typing..._",
+      thread: undefined,
+    });
     expect(runTurn).toHaveBeenCalledOnce();
   });
 

@@ -345,13 +345,13 @@ async function processMessageWithPipeline(params: {
 
   // Typing indicator setup
   // Note: Reaction mode requires user OAuth, not available with service account auth.
-  // If reaction is configured, we fall back to no indicator with a warning.
-  let typingIndicator = account.config.typingIndicator ?? "none";
+  // If reaction is configured, we fall back to message mode with a warning.
+  let typingIndicator = account.config.typingIndicator ?? "message";
   if (typingIndicator === "reaction") {
     runtime.error?.(
-      `[${account.accountId}] typingIndicator="reaction" requires user OAuth (not supported with service account). Falling back to "none".`,
+      `[${account.accountId}] typingIndicator="reaction" requires user OAuth (not supported with service account). Falling back to "message" mode.`,
     );
-    typingIndicator = "none";
+    typingIndicator = "message";
   }
   let typingMessageName: string | undefined;
 

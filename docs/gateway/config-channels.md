@@ -393,7 +393,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         "spaces/AAAA": { allow: true, requireMention: true },
       },
       actions: { reactions: true },
-      typingIndicator: "none",
+      typingIndicator: "message",
       mediaMaxMb: 20,
     },
   },
