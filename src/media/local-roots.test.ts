@@ -1,3 +1,4 @@
+// Local media root tests cover allowed root normalization and matching.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";

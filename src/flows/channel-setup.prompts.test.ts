@@ -1,3 +1,4 @@
+// Channel setup prompt tests cover prompt choices and validation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetupDmPolicy } from "../commands/channel-setup/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

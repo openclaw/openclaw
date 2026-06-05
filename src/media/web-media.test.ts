@@ -1,3 +1,4 @@
+// Web media tests cover loading media for web UI and browser surfaces.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

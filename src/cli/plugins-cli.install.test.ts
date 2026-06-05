@@ -1,3 +1,4 @@
+// Plugins CLI install tests cover plugin install command selection and output.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

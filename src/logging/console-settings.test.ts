@@ -1,3 +1,4 @@
+// Console settings tests cover console logger configuration behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureConsoleSnapshot, type ConsoleSnapshot } from "./test-helpers/console-snapshot.js";
 

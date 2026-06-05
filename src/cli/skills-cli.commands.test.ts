@@ -1,3 +1,4 @@
+// Skills CLI command tests cover skill command registration and subcommand behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSkillsCli } from "./skills-cli.js";

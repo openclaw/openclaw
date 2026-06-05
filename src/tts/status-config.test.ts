@@ -1,3 +1,4 @@
+// TTS status config tests cover status file path and config resolution.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Plugin install persist tests cover saving installed plugin records after install.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

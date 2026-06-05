@@ -1,3 +1,4 @@
+// Host hook contract tests cover plugin host hook registration and runtime behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {

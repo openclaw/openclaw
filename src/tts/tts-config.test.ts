@@ -1,3 +1,4 @@
+// TTS config tests cover text-to-speech config loading and overrides.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

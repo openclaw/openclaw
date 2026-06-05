@@ -1,3 +1,4 @@
+// OpenAI-compatible auth tests cover API key and base URL normalization.
 import { afterEach, describe, expect, it } from "vitest";
 import type { Context, Model } from "../types.js";
 import { streamOpenAICompletions } from "./openai-completions.js";

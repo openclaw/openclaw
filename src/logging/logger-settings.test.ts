@@ -1,3 +1,4 @@
+// Logger settings tests cover file-backed logger settings behavior.
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 

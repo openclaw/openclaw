@@ -1,3 +1,4 @@
+// Tool plugin contracts describe plugin-provided tools, schemas, and invocation hooks.
 import { Type, type Static, type TSchema } from "typebox";
 import type { AgentToolResult, AgentToolUpdateCallback } from "../agents/runtime/index.js";
 import { jsonResult, textResult } from "../agents/tools/common.js";

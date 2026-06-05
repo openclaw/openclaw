@@ -1,3 +1,4 @@
+// Session entry projection contract tests cover plugin session entry projection behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
