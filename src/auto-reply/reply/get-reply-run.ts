@@ -1202,6 +1202,12 @@ export async function runPreparedReply(
                 mediaOnlyText: "[User sent media without caption]",
               }
             : {}),
+          ...(sessionCtx.SenderId || sessionCtx.SenderName
+            ? {
+                senderId: normalizeOptionalString(sessionCtx.SenderId),
+                senderName: normalizeOptionalString(sessionCtx.SenderName),
+              }
+            : {}),
         }
       : undefined;
   const userTurnTranscriptRecorder =

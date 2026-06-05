@@ -44,6 +44,8 @@ export type UserTurnInput = {
   idempotencyKey?: string;
   provenance?: InputProvenance;
   mediaOnlyText?: string;
+  senderId?: string;
+  senderName?: string;
 };
 
 type UserTurnTranscriptUpdateMode = "inline" | "none";
@@ -298,12 +300,20 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
   const hasMedia = Boolean(mediaFields.MediaPath);
   const text = normalizeTranscriptText(params.text);
   const content = text || (hasMedia ? (params.mediaOnlyText ?? "") : "");
+  const senderMeta: Record<string, unknown> | undefined =
+    params.senderId || params.senderName
+      ? {
+          ...(params.senderId ? { senderId: params.senderId } : {}),
+          ...(params.senderName ? { senderName: params.senderName } : {}),
+        }
+      : undefined;
   const message = {
     role: "user",
     content,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...mediaFields,
+    ...(senderMeta ? { __openclaw: senderMeta } : {}),
   } as PersistedUserTurnMessage;
   return applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage;
 }

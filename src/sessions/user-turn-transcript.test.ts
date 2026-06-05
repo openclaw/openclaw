@@ -286,6 +286,93 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
+    it("attaches sender metadata to group chat user turns", async () => {
+      const dir = createTempDir("openclaw-user-turn-sender-meta-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello group",
+          timestamp: 123,
+          senderId: "user-42",
+          senderName: "Alice",
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).toMatchObject({
+        role: "user",
+        content: "hello group",
+        __openclaw: { senderId: "user-42", senderName: "Alice" },
+      });
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "hello group",
+          __openclaw: { senderId: "user-42", senderName: "Alice" },
+        }),
+      ]);
+    });
+
+    it("attaches sender metadata when only senderId is present", async () => {
+      const dir = createTempDir("openclaw-user-turn-sender-id-only-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello from anon",
+          senderId: "user-99",
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).toMatchObject({
+        role: "user",
+        content: "hello from anon",
+        __openclaw: { senderId: "user-99" },
+      });
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "hello from anon",
+          __openclaw: { senderId: "user-99" },
+        }),
+      ]);
+    });
+
+    it("does not attach __openclaw when no sender metadata is present", async () => {
+      const dir = createTempDir("openclaw-user-turn-no-sender-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "direct message",
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).toMatchObject({
+        role: "user",
+        content: "direct message",
+      });
+      expect(appended?.message).not.toHaveProperty("__openclaw");
+      const transcriptMessages = readTranscriptMessages(transcriptPath);
+      expect(transcriptMessages).toHaveLength(1);
+      expect(transcriptMessages[0]).not.toHaveProperty("__openclaw");
+    });
+
     it("returns the existing user turn when the idempotency key was already persisted", async () => {
       const dir = createTempDir("openclaw-user-turn-append-idempotent-");
       const transcriptPath = path.join(dir, "session.jsonl");
