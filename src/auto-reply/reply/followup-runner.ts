@@ -787,6 +787,7 @@ export function createFollowupRunner(params: {
           },
           classifyResult: ({ result, provider, model }) =>
             outcomePlan.classifyRunResult({ result, provider, model }),
+          exposeNextCandidateToRun: true,
           run: async (provider, model, runOptions) => {
             const suppressQueuedUserPersistenceForCandidate =
               (run.suppressNextUserMessagePersistence ?? false) ||
@@ -991,6 +992,7 @@ export function createFollowupRunner(params: {
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
                 transcriptPrompt: queued.transcriptPrompt,
+                nextModelFallbackCandidate: runOptions?.nextCandidate,
                 userTurnTranscriptRecorder,
                 currentInboundEventKind: queued.currentInboundEventKind,
                 currentInboundAudio: queued.currentInboundAudio,
