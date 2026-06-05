@@ -1,3 +1,4 @@
+// Memory Host SDK module implements query expansion behavior.
 import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
 /**
@@ -632,6 +633,7 @@ const STOP_WORDS_ZH = new Set([
   "告诉",
 ]);
 
+/** Returns true for low-value conversational tokens that should not drive FTS matching. */
 export function isQueryStopWordToken(token: string): boolean {
   return (
     STOP_WORDS_EN.has(token) ||

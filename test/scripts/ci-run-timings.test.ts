@@ -1,3 +1,4 @@
+// Ci Run Timings tests cover ci run timings script behavior.
 import { describe, expect, it } from "vitest";
 import {
   collectRunJobsFromPages,
@@ -226,5 +227,27 @@ describe("scripts/ci-run-timings.mjs", () => {
       recentLimit: null,
       useLatestMain: true,
     });
+  });
+
+  it("parses strict positive integer monitor limits", () => {
+    expect(parseRunTimingArgs(["123456", "--limit=7", "--recent", "4"])).toEqual({
+      explicitRunId: "123456",
+      limit: 7,
+      recentLimit: 4,
+      useLatestMain: false,
+    });
+  });
+
+  it("rejects malformed monitor limits instead of falling back", () => {
+    for (const args of [
+      ["--limit", "3jobs"],
+      ["--limit", "0"],
+      ["--limit=1e3"],
+      ["--recent", "recent"],
+      ["--recent", "0"],
+      ["--recent"],
+    ]) {
+      expect(() => parseRunTimingArgs(args)).toThrow("must be a positive integer");
+    }
   });
 });

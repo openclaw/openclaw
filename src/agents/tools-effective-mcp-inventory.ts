@@ -1,3 +1,8 @@
+/**
+ * Builds the operator-facing effective inventory for bundle MCP tools. Runtime
+ * schema policy quarantines incompatible tools and emits notices instead of
+ * silently hiding them.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -42,6 +47,8 @@ function summarizeToolDescription(tool: AnyAgentTool): string {
   });
 }
 
+// Runtime schema diagnostics become operator-facing notices on the effective
+// inventory screen instead of silently hiding quarantined MCP tools.
 function buildMcpUnsupportedToolSchemaNotice(
   diagnostic: RuntimeToolSchemaDiagnostic,
 ): EffectiveToolInventoryNotice {
@@ -52,6 +59,8 @@ function buildMcpUnsupportedToolSchemaNotice(
   };
 }
 
+// Duplicate labels are ambiguous in inventory UIs; add the plugin/id only where
+// needed so unique entries keep their concise display names.
 function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveToolInventoryEntry[] {
   const counts = new Map<string, number>();
   for (const entry of entries) {
@@ -85,6 +94,7 @@ function buildMcpToolInventoryEntries(
   );
 }
 
+/** Builds the runtime-compatible MCP tool inventory and quarantine notices. */
 export function buildRuntimeCompatibleMcpToolInventory(params: {
   tools: readonly AnyAgentTool[];
   cfg: OpenClawConfig;

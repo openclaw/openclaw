@@ -1,3 +1,4 @@
+// Main update implementation for source checkouts, package installs, finalization, and restart handoff.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -558,6 +559,20 @@ function createGuidedPostUpdatePluginOutcome(outcome: PluginUpdateOutcome): {
     },
     warning,
   };
+}
+
+function collectPluginChannelFallbackMessages(outcomes: readonly PluginUpdateOutcome[]): string[] {
+  const seen = new Set<string>();
+  const messages: string[] = [];
+  for (const outcome of outcomes) {
+    const message = outcome.channelFallback?.message;
+    if (!message || seen.has(message)) {
+      continue;
+    }
+    seen.add(message);
+    messages.push(message);
+  }
+  return messages;
 }
 
 function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
@@ -1855,6 +1870,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       reason: "source-changed",
       workspaceDir: params.root,
       installRecords: nextInstallRecords,
+      invalidateRuntimeCache: false,
       logger: pluginLogger,
     });
   }
@@ -1921,6 +1937,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
       parts.push(`${skipped} skipped`);
     }
     defaultRuntime.log(theme.muted(`npm plugins: ${parts.join(", ")}.`));
+  }
+
+  for (const message of collectPluginChannelFallbackMessages(pluginUpdateOutcomes)) {
+    defaultRuntime.log(theme.warn(message));
   }
 
   for (const outcome of pluginUpdateOutcomes) {
