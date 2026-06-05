@@ -12,7 +12,6 @@ import {
   formatDefaultGiveUpError,
   resolveAnnounceRetryDelayMs,
   MAX_ANNOUNCE_RETRY_COUNT,
-  MAX_ANNOUNCE_RETRY_DELAY_MS,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -71,7 +70,7 @@ describe("PR #90561 - Retry Delay Jitter", () => {
     expect(delays[4]).toBeLessThanOrEqual(16000);
   });
 
-  it("should cap delays at MAX_ANNOUNCE_RETRY_DELAY_MS", () => {
+  it("should cap delays at maximum retry delay", () => {
     // Test with high retry count (e.g., 10)
     for (let i = 0; i < 10; i++) {
       const delay = resolveAnnounceRetryDelayMs(10);

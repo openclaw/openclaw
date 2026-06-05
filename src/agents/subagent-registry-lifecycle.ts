@@ -580,12 +580,15 @@ export function createSubagentRegistryLifecycleController(params: {
 
   /** Emits delivery failure event for observability (#44925) */
   const emitDeliveryFailedEvent = (entry: SubagentRunRecord, deliveryError: string) => {
+    // Use sanitized displayName to avoid exposing raw error details to session subscribers.
+    // The full deliveryError is still available via task records and logs.
+    const displayName = entry.label ?? "Subagent delivery failed";
     emitSessionLifecycleEvent({
       sessionKey: entry.childSessionKey,
       reason: "subagent-delivery-failed",
       parentSessionKey: entry.requesterSessionKey,
       label: entry.label,
-      displayName: deliveryError,
+      displayName,
     });
   };
 
