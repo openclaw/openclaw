@@ -206,8 +206,9 @@ function resolveRuntimeOutboundPluginFromRuntimeRegistries(
 // hot send path, so setup-only/non-send shells are skipped before delivery.
 function channelPluginCanSend(plugin: ChannelPlugin | undefined): boolean {
   const outbound = plugin?.outbound;
-  // Gateway-delivered channels send through callMessageGateway and carry no
-  // local send adapter, so gateway delivery alone makes them deliverable.
+  // Gateway-mode plugins deliver through callMessageGateway and carry no local
+  // send methods; the send-capability gate only guards direct delivery and
+  // recovery, so a declared gateway plugin is deliverable on its own.
   if (outbound?.deliveryMode === "gateway") {
     return true;
   }
