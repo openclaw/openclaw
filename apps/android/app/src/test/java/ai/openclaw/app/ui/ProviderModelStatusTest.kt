@@ -89,6 +89,20 @@ class ProviderModelStatusTest {
   }
 
   @Test
+  fun providerCommandSubtitleSurfacesExpiringBeforeReadyModels() {
+    val providers =
+      listOf(
+        GatewayModelProviderSummary(id = "openai", displayName = "OpenAI", status = "expiring", profileCount = 1),
+      )
+    val models =
+      listOf(
+        model(provider = "openai", available = true),
+      )
+
+    assertEquals("1 providers expiring", providerCommandSubtitle(isConnected = true, providers = providers, models = models))
+  }
+
+  @Test
   fun readyModelProviderCountDoesNotTreatUnavailableModelsAsReadyWhenAuthProviderNeedsSetup() {
     val providers =
       listOf(

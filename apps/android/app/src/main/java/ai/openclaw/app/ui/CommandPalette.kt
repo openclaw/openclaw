@@ -297,17 +297,16 @@ private fun CommandSectionLabel(title: String) {
   }
 }
 
-/** Builds provider quick-action metadata from current gateway/catalog state. */
-private fun providerCommandSubtitle(
+internal fun providerCommandSubtitle(
   isConnected: Boolean,
   providers: List<GatewayModelProviderSummary>,
   models: List<GatewayModelSummary>,
 ): String {
   if (!isConnected) return "Connect Gateway to load models"
-  val readyProviderCount = readyModelProviderCount(providers, models)
-  if (readyProviderCount > 0) return "$readyProviderCount providers ready"
   val expiringProviderCount = expiringModelProviderCount(providers)
   if (expiringProviderCount > 0) return "$expiringProviderCount providers expiring"
+  val readyProviderCount = readyModelProviderCount(providers, models)
+  if (readyProviderCount > 0) return "$readyProviderCount providers ready"
   if (models.isNotEmpty()) return "${models.size} models available"
   return "Configure model access"
 }
