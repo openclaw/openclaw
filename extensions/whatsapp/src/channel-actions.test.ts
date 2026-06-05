@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   describeWhatsAppMessageActions,
+  requiresWhatsAppTrustedRequesterSender,
   resolveWhatsAppAgentReactionGuidance,
 } from "./channel-actions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -133,6 +134,28 @@ describe("whatsapp channel action helpers", () => {
       "poll",
       "upload-file",
     ]);
+  });
+
+  it("requires requester identity for same-source reactions only", () => {
+    expect(
+      requiresWhatsAppTrustedRequesterSender({
+        action: "react",
+        toolContext: { currentChannelProvider: "whatsapp" },
+      }),
+    ).toBe(true);
+    expect(
+      requiresWhatsAppTrustedRequesterSender({
+        action: "upload-file",
+        toolContext: { currentChannelProvider: "whatsapp" },
+      }),
+    ).toBe(false);
+    expect(
+      requiresWhatsAppTrustedRequesterSender({
+        action: "react",
+        toolContext: { currentChannelProvider: "telegram" },
+      }),
+    ).toBe(false);
+    expect(requiresWhatsAppTrustedRequesterSender({ action: "react" })).toBe(false);
   });
 
   it("returns null when WhatsApp is not configured", () => {

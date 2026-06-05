@@ -59,6 +59,13 @@ export function resolveWhatsAppAgentReactionGuidance(params: {
   return resolved.agentReactionGuidance;
 }
 
+export function requiresWhatsAppTrustedRequesterSender(params: {
+  action: ChannelMessageActionName;
+  toolContext?: { currentChannelProvider?: string | null };
+}): boolean {
+  return params.action === "react" && params.toolContext?.currentChannelProvider === "whatsapp";
+}
+
 export function describeWhatsAppMessageActions(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
