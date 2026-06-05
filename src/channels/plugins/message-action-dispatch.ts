@@ -30,31 +30,38 @@ export async function dispatchChannelMessageAction(
     return null;
   }
 
-  // Canonical channel-management actions mutate guild/channel state. Require
-  // a matching provider context so bare sender ids cannot be reused as proof.
+  // Canonical channel-management actions mutate guild/channel state. Channel
+  // turns need matching provider context; CLI/operator calls prove ownership.
   const isProtectedAction = isTrustedRequesterChannelManagementAction(ctx.action);
+  const hasTrustedOwnerOperator = ctx.senderIsOwner === true;
   const protectedActionCurrentProvider = isProtectedAction
     ? resolveProtectedActionCurrentProvider(ctx)
     : undefined;
   if (isProtectedAction) {
-    if (!protectedActionCurrentProvider) {
+    if (!protectedActionCurrentProvider && !hasTrustedOwnerOperator) {
       throw new Error(
         `Current channel provider context is required for ${ctx.channel}:${ctx.action} before trusted sender identity can be accepted.`,
       );
     }
-    if (protectedActionCurrentProvider !== normalizeMessageActionChannel(ctx.channel)) {
+    if (
+      protectedActionCurrentProvider &&
+      protectedActionCurrentProvider !== normalizeMessageActionChannel(ctx.channel)
+    ) {
       throw new Error(
         `Trusted sender identity for ${ctx.channel}:${ctx.action} must come from ${ctx.channel}, not ${protectedActionCurrentProvider}.`,
       );
     }
   }
-  const pluginRequiresTrustedSender = Boolean(
-    plugin.actions.requiresTrustedRequesterSender?.({
-      action: ctx.action,
-      toolContext: ctx.toolContext,
-    }),
-  );
-  const requiresTrustedSender = pluginRequiresTrustedSender || isProtectedAction;
+  const pluginRequiresTrustedSender =
+    !hasTrustedOwnerOperator &&
+    Boolean(
+      plugin.actions.requiresTrustedRequesterSender?.({
+        action: ctx.action,
+        toolContext: ctx.toolContext,
+      }),
+    );
+  const requiresTrustedSender =
+    !hasTrustedOwnerOperator && (pluginRequiresTrustedSender || isProtectedAction);
   // Some plugin actions depend on the sender identity to enforce channel-local
   // trust. Reject tool-driven calls before invoking the plugin without it.
   if (requiresTrustedSender && !ctx.requesterSenderId?.trim()) {

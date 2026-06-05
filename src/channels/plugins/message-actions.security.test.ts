@@ -94,7 +94,7 @@ describe("dispatchChannelMessageAction trusted sender guard", () => {
     expect(handleAction).toHaveBeenCalledOnce();
   });
 
-  it("rejects protected actions without current provider context", async () => {
+  it("rejects non-owner protected actions without current provider context", async () => {
     await expect(
       dispatchChannelMessageAction({
         channel: "discord",
@@ -118,6 +118,18 @@ describe("dispatchChannelMessageAction trusted sender guard", () => {
     );
 
     expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("allows owner/operator protected actions without current provider context", async () => {
+    await dispatchChannelMessageAction({
+      channel: "discord",
+      action: "kick",
+      cfg: {} as OpenClawConfig,
+      params: { guildId: "g1", userId: "u1" },
+      senderIsOwner: true,
+    });
+
+    expect(handleAction).toHaveBeenCalledOnce();
   });
 
   it("rejects canonical protected actions even when the plugin omits the hook", async () => {
