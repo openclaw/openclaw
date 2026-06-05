@@ -62,6 +62,7 @@ export type DynamicToolBuildParams = {
   sandboxSessionKey: string;
   sandbox: OpenClawSandboxContext;
   nativeToolSurfaceEnabled?: boolean;
+  beforeToolCallPolicyActive?: boolean;
   runAbortController: AbortController;
   sessionAgentId: string;
   pluginConfig: CodexPluginConfig;
@@ -391,9 +392,13 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     agentId?: string;
     runtimeSessionKey?: string;
     sandboxExecServerEnabled?: boolean;
+    beforeToolCallPolicyActive?: boolean;
   } = {},
 ): boolean {
   if (isCodexMemoryFlushRun(params)) {
+    return false;
+  }
+  if (options.beforeToolCallPolicyActive === true) {
     return false;
   }
   if (
@@ -637,14 +642,7 @@ function addNodeShellDynamicToolsIfNeeded(
   allTools: OpenClawDynamicTool[],
   input: DynamicToolBuildParams,
 ): OpenClawDynamicTool[] {
-  if (
-    isCodexMemoryFlushRun(input.params) ||
-    !isCodexNativeExecutionBlockedByNodeExecHost(input.params, {
-      agentId: input.sessionAgentId,
-      runtimeSessionKey: input.sandboxSessionKey,
-      sandbox: input.sandbox,
-    })
-  ) {
+  if (!shouldExposeOpenClawNodeShellDynamicTools(input)) {
     return filteredTools;
   }
   let next = filteredTools;
@@ -667,6 +665,26 @@ function addNodeShellDynamicToolsIfNeeded(
     next.push(tool);
   }
   return next;
+}
+
+function shouldExposeOpenClawNodeShellDynamicTools(input: DynamicToolBuildParams): boolean {
+  if (isCodexMemoryFlushRun(input.params)) {
+    return false;
+  }
+  if (
+    isCodexNativeExecutionBlockedByNodeExecHost(input.params, {
+      agentId: input.sessionAgentId,
+      runtimeSessionKey: input.sandboxSessionKey,
+      sandbox: input.sandbox,
+    })
+  ) {
+    return true;
+  }
+  return (
+    input.beforeToolCallPolicyActive === true &&
+    input.nativeToolSurfaceEnabled === false &&
+    input.sandbox?.enabled !== true
+  );
 }
 
 /** Applies a normalized tool allowlist while preserving sandbox shell aliases for exec/process. */

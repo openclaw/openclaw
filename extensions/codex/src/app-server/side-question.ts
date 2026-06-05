@@ -3,6 +3,7 @@ import {
   buildAgentHookContextChannelFields,
   embeddedAgentLog,
   formatErrorMessage,
+  getBeforeToolCallPolicyDiagnosticState,
   resolveAgentDir,
   resolveAttemptSpawnWorkspaceDir,
   resolveModelAuthMode,
@@ -144,6 +145,15 @@ export async function runCodexAppServerSideQuestion(
   });
   if (nativeExecutionBlock) {
     throw new Error(nativeExecutionBlock);
+  }
+  const beforeToolCallPolicy = getBeforeToolCallPolicyDiagnosticState();
+  if (
+    beforeToolCallPolicy.hasBeforeToolCallHook ||
+    beforeToolCallPolicy.trustedToolPolicies.length > 0
+  ) {
+    throw new Error(
+      "Codex /btw is disabled while OpenClaw before_tool_call or trusted tool policy is active because side threads cannot safely expose Codex native tools.",
+    );
   }
 
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);

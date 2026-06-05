@@ -247,10 +247,10 @@ export function buildCodexNativeHookRelayConfig(params: {
     const codexEvent = CODEX_HOOK_EVENT_BY_NATIVE_EVENT[event];
     const selected = selectedEvents.has(event);
     const shouldRelay = params.relay.shouldRelayEvent(event);
-    // Keep no-policy PreToolUse commands installed with an explicit no-op marker;
-    // otherwise a stale relay fallback cannot distinguish no policy from unknown policy.
-    const selectedNoopPreToolUse = selected && event === "pre_tool_use" && !shouldRelay;
-    if (!selected || (!shouldRelay && !selectedNoopPreToolUse)) {
+    // Keep selected PreToolUse commands installed even before hook-only plugins
+    // have loaded; unavailable PreToolUse must still fail closed.
+    const selectedPreToolUse = selected && event === "pre_tool_use";
+    if (!selected || (!shouldRelay && !selectedPreToolUse)) {
       if (selected || params.clearOmittedEvents) {
         config[`hooks.${codexEvent}`] = [] satisfies JsonValue;
       }

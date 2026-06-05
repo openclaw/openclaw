@@ -186,7 +186,7 @@ describe("Codex native hook relay config", () => {
     });
   });
 
-  it("keeps selected no-policy PreToolUse installed with an unavailable no-op marker", () => {
+  it("keeps selected no-policy PreToolUse installed without an unavailable no-op marker", () => {
     expect(
       buildCodexNativeHookRelayConfig({
         relay: createRelay({ inactiveEvents: ["pre_tool_use"] }),
@@ -200,7 +200,7 @@ describe("Codex native hook relay config", () => {
             {
               type: "command",
               command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop",
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use",
               timeout: 5,
               async: false,
               statusMessage: "OpenClaw native hook relay",
@@ -312,11 +312,7 @@ function createRelay(options?: {
     expiresAtMs: Date.now() + 1000,
     shouldRelayEvent: (event) => !inactiveEvents.has(event),
     commandForEvent: (event) =>
-      `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}${
-        event === "pre_tool_use" && inactiveEvents.has(event)
-          ? " --pre-tool-use-unavailable noop"
-          : ""
-      }`,
+      `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}`,
     renew: () => undefined,
     unregister: () => undefined,
   };

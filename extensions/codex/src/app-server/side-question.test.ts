@@ -1041,48 +1041,12 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
   });
 
-  it("normalizes hook channel ids for side-thread dynamic tool requests", async () => {
-    const beforeToolCall = vi.fn((...args: unknown[]) => {
-      const context = args[1] as { channelId?: string };
-      expect(context.channelId).toBe("voice-room");
-      return undefined;
-    });
+  it("rejects side threads while OpenClaw before_tool_call policy is active", async () => {
+    const beforeToolCall = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
     );
     const client = createFakeClient();
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "thread/fork") {
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        setTimeout(() => {
-          void (async () => {
-            await client.handleRequest({
-              id: 42,
-              method: "item/tool/call",
-              params: {
-                threadId: "side-thread",
-                turnId: "turn-1",
-                callId: "tool-1",
-                tool: "wiki_status",
-                arguments: { topic: "AGENTS.md" },
-              },
-            });
-            client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
-            client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
-          })();
-        }, 0);
-        return turnStartResult("turn-1");
-      }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     await expect(
@@ -1093,13 +1057,13 @@ describe("runCodexAppServerSideQuestion", () => {
           currentChannelId: "discord:voice-room",
         }),
       ),
-    ).resolves.toEqual({ text: "Tool answer." });
+    ).rejects.toThrow("Codex /btw is disabled while OpenClaw before_tool_call");
 
-    expect(beforeToolCall).toHaveBeenCalledTimes(1);
-    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ hookChannelId: "voice-room" }),
-    );
-    expect(toolExecuteMock).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall).not.toHaveBeenCalled();
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
+    expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
+    expect(toolExecuteMock).not.toHaveBeenCalled();
   });
 
   it("returns an empty response for side-thread user input requests", async () => {

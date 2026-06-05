@@ -366,6 +366,9 @@ export async function runCodexAppServerAttempt(
     agentId: params.agentId,
   });
   const beforeToolCallPolicy = getBeforeToolCallPolicyDiagnosticState();
+  const beforeToolCallPolicyActive =
+    beforeToolCallPolicy.hasBeforeToolCallHook ||
+    beforeToolCallPolicy.trustedToolPolicies.length > 0;
   preDynamicStartupStages.mark("config");
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await ensureCodexWorkspaceDirOnce(resolvedWorkspace);
@@ -408,9 +411,7 @@ export async function runCodexAppServerAttempt(
     appServer: configuredAppServer,
     pluginConfig,
     env: process.env,
-    shouldPromote:
-      beforeToolCallPolicy.hasBeforeToolCallHook ||
-      beforeToolCallPolicy.trustedToolPolicies.length > 0,
+    shouldPromote: beforeToolCallPolicyActive,
     execPolicy,
     canUseUntrustedApprovalPolicy:
       configuredAppServer.start.transport !== "stdio" ||
@@ -512,21 +513,26 @@ export async function runCodexAppServerAttempt(
     sandbox,
   });
   preDynamicStartupStages.mark("native-exec-policy");
-  const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
-    workspaceDir: effectiveWorkspace,
-    cfg: params.config,
-    toolsEnabled: supportsModelTools(params.model),
-    disableTools: params.disableTools,
-    toolsAllow: nodeExecBlocksNativeExecution ? [] : params.toolsAllow,
-  });
-  preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox, {
     agentId: sessionAgentId,
     runtimeSessionKey: sandboxSessionKey,
     sandboxExecServerEnabled,
+    beforeToolCallPolicyActive,
   });
   preDynamicStartupStages.mark("native-tool-surface");
+  const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
+    workspaceDir: effectiveWorkspace,
+    cfg: params.config,
+    toolsEnabled: supportsModelTools(params.model),
+    disableTools: params.disableTools,
+    toolsAllow: resolveCodexBundleMcpToolsAllow({
+      nodeExecBlocksNativeExecution,
+      policyDisablesNativeToolSurface: beforeToolCallPolicyActive && !nativeToolSurfaceEnabled,
+      toolsAllow: params.toolsAllow,
+    }),
+  });
+  preDynamicStartupStages.mark("bundle-mcp");
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
@@ -564,6 +570,7 @@ export async function runCodexAppServerAttempt(
     sandboxSessionKey,
     sandbox,
     nativeToolSurfaceEnabled,
+    beforeToolCallPolicyActive,
     runAbortController,
     sessionAgentId,
     pluginConfig,
@@ -581,6 +588,7 @@ export async function runCodexAppServerAttempt(
     sandboxSessionKey,
     sandbox,
     nativeToolSurfaceEnabled,
+    beforeToolCallPolicyActive,
     runAbortController,
     sessionAgentId,
     pluginConfig,
@@ -607,6 +615,8 @@ export async function runCodexAppServerAttempt(
       channelId: hookChannelId,
     },
   });
+  const preserveNativeDisabledBinding =
+    beforeToolCallPolicyActive && !nativeToolSurfaceEnabled && toolBridge.specs.length > 0;
   const hadSessionFile = await pathExists(activeSessionFile);
   let historyMessages = (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? [];
   const hookContextWindowFields = {
@@ -778,7 +788,11 @@ export async function runCodexAppServerAttempt(
   if (activeContextEngine) {
     try {
       await applyActiveContextEngineProjection(
-        !nativeToolSurfaceEnabled ? undefined : startupBinding,
+        resolveContextEngineDecisionStartupBinding({
+          nativeToolSurfaceEnabled,
+          preserveNativeDisabledBinding,
+          startupBinding,
+        }),
       );
     } catch (assembleErr) {
       embeddedAgentLog.warn("context engine assemble failed; using Codex baseline prompt", {
@@ -1079,6 +1093,7 @@ export async function runCodexAppServerAttempt(
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled,
+      preserveBindingWhenNativeCodeModeDisabled: preserveNativeDisabledBinding,
       sandboxExecServerEnabled,
       sandbox,
       contextEngineProjection,
@@ -2644,6 +2659,26 @@ function waitForCodexNotificationDispatchTurn(): Promise<void> {
   });
 }
 
+function resolveCodexBundleMcpToolsAllow(params: {
+  nodeExecBlocksNativeExecution: boolean;
+  policyDisablesNativeToolSurface: boolean;
+  toolsAllow?: string[];
+}): string[] | undefined {
+  return params.nodeExecBlocksNativeExecution || params.policyDisablesNativeToolSurface
+    ? []
+    : params.toolsAllow;
+}
+
+function resolveContextEngineDecisionStartupBinding(params: {
+  nativeToolSurfaceEnabled: boolean;
+  preserveNativeDisabledBinding: boolean;
+  startupBinding?: CodexAppServerThreadBinding;
+}): CodexAppServerThreadBinding | undefined {
+  return !params.nativeToolSurfaceEnabled && !params.preserveNativeDisabledBinding
+    ? undefined
+    : params.startupBinding;
+}
+
 function handleApprovalRequest(params: {
   method: string;
   params: JsonValue | undefined;
@@ -2677,6 +2712,8 @@ export const testing = {
   resolveCodexAppServerHookChannelId,
   buildCodexAppServerPromptTimeoutOutcome,
   resolveOpenClawCodingToolsSessionKeys,
+  resolveCodexBundleMcpToolsAllow,
+  resolveContextEngineDecisionStartupBinding,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
   hasPendingDynamicToolTerminalDiagnostic,
