@@ -109,6 +109,7 @@ export function isAllowedParsedChatSender(params: {
   return isAllowedParsedChatSenderShared(params);
 }
 
+/** Serializable allowlist resolution record used by setup/status UI surfaces. */
 export type BasicAllowlistResolutionEntry = {
   /** Original allowlist input. */
   input: string;
