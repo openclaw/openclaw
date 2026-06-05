@@ -8,12 +8,16 @@ import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 
 type DiscordMentionAliasesConfig = Record<string, string>;
 
-const MARKDOWN_CODE_SEGMENT_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
 const MENTION_CANDIDATE_PATTERN = /(^|[\s([{"'.,;:!?])@([a-z0-9_.-]{2,32}(?:#[0-9]{4})?)/gi;
 const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
 const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
 const DISCORD_TARGETED_MENTION_PATTERN = /<@!?\d+>|<@&\d+>/;
 const DISCORD_BROADCAST_MENTION_PATTERN = /@(everyone|here)\b/;
+
+type MarkdownCodeSegment = {
+  end: number;
+  start: number;
+};
 
 function normalizeSnowflake(value: string | number | bigint): string | null {
   const text = normalizeOptionalStringifiedId(value) ?? "";
@@ -126,6 +130,130 @@ function rewritePlainTextMentions(
   });
 }
 
+function findLineEnd(text: string, start: number): number {
+  const lineFeed = text.indexOf("\n", start);
+  return lineFeed === -1 ? text.length : lineFeed + 1;
+}
+
+function stripLineBreak(line: string): string {
+  return line.replace(/\r?\n$/, "");
+}
+
+function findClosingFenceEnd(params: {
+  markerLength: number;
+  start: number;
+  text: string;
+}): number {
+  let lineStart = params.start;
+  while (lineStart < params.text.length) {
+    const lineEnd = findLineEnd(params.text, lineStart);
+    const line = stripLineBreak(params.text.slice(lineStart, lineEnd));
+    const closing = /^( {0,3})(`{3,})/.exec(line);
+    if (closing?.[2] && closing[2].length >= params.markerLength) {
+      return lineStart + closing[1].length + closing[2].length;
+    }
+    lineStart = lineEnd;
+  }
+  return params.text.length;
+}
+
+function findFencedCodeSegments(text: string): MarkdownCodeSegment[] {
+  const segments: MarkdownCodeSegment[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const opening = /`{3,}/.exec(text.slice(cursor));
+    if (!opening) {
+      break;
+    }
+    const start = cursor + opening.index;
+    const marker = opening[0];
+    const lineEnd = findLineEnd(text, start);
+    const lineTail = stripLineBreak(text.slice(start + marker.length, lineEnd));
+    if (lineEnd === text.length && text[lineEnd - 1] !== "\n") {
+      cursor = start + marker.length;
+      continue;
+    }
+    if (lineTail.includes("`")) {
+      cursor = lineEnd;
+      continue;
+    }
+    const end = findClosingFenceEnd({
+      markerLength: marker.length,
+      start: lineEnd,
+      text,
+    });
+    segments.push({ start, end });
+    cursor = end;
+  }
+  return segments;
+}
+
+function findContainingSegment(
+  segments: readonly MarkdownCodeSegment[],
+  index: number,
+): MarkdownCodeSegment | undefined {
+  return segments.find((segment) => index >= segment.start && index < segment.end);
+}
+
+function findInlineCodeSegments(
+  text: string,
+  fencedSegments: readonly MarkdownCodeSegment[],
+): MarkdownCodeSegment[] {
+  const segments: MarkdownCodeSegment[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const fenced = findContainingSegment(fencedSegments, index);
+    if (fenced) {
+      index = fenced.end;
+      continue;
+    }
+    if (text[index] !== "`") {
+      index += 1;
+      continue;
+    }
+    const start = index;
+    let runLength = 0;
+    while (index < text.length && text[index] === "`") {
+      runLength += 1;
+      index += 1;
+    }
+    let cursor = index;
+    while (cursor < text.length) {
+      const nextFence = findContainingSegment(fencedSegments, cursor);
+      if (nextFence) {
+        cursor = nextFence.end;
+        continue;
+      }
+      if (text[cursor] !== "`") {
+        cursor += 1;
+        continue;
+      }
+      const closeStart = cursor;
+      let closeLength = 0;
+      while (cursor < text.length && text[cursor] === "`") {
+        closeLength += 1;
+        cursor += 1;
+      }
+      if (closeLength === runLength) {
+        segments.push({ start, end: cursor });
+        break;
+      }
+      cursor = closeStart + Math.max(1, closeLength);
+    }
+    index = segments.at(-1)?.start === start ? (segments.at(-1)?.end ?? index) : index;
+  }
+  return segments;
+}
+
+function findMarkdownCodeSegments(text: string): MarkdownCodeSegment[] {
+  // Discord mention aliases must ignore code without adding plugin dependencies;
+  // keep this scanner scoped to Discord-rendered backtick code segments.
+  const fencedSegments = findFencedCodeSegments(text);
+  return [...fencedSegments, ...findInlineCodeSegments(text, fencedSegments)].toSorted(
+    (a, b) => a.start - b.start || a.end - b.end,
+  );
+}
+
 export function rewriteDiscordKnownMentions(
   text: string,
   params: {
@@ -138,12 +266,10 @@ export function rewriteDiscordKnownMentions(
   }
   let rewritten = "";
   let offset = 0;
-  MARKDOWN_CODE_SEGMENT_PATTERN.lastIndex = 0;
-  for (const match of text.matchAll(MARKDOWN_CODE_SEGMENT_PATTERN)) {
-    const matchIndex = match.index ?? 0;
-    rewritten += rewritePlainTextMentions(text.slice(offset, matchIndex), params);
-    rewritten += match[0];
-    offset = matchIndex + match[0].length;
+  for (const segment of findMarkdownCodeSegments(text)) {
+    rewritten += rewritePlainTextMentions(text.slice(offset, segment.start), params);
+    rewritten += text.slice(segment.start, segment.end);
+    offset = segment.end;
   }
   rewritten += rewritePlainTextMentions(text.slice(offset), params);
   return rewritten;
