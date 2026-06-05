@@ -325,6 +325,8 @@ when the provider did not handle usage auth.
 implements `resolveToolSchemaCacheKey`. The key must be stable,
 JSON-compatible, and include every context field the normalizer reads. Return
 `null`, `undefined`, or `false` to bypass caching for a call.
+Operators can disable this cache with `OPENCLAW_TOOL_SCHEMA_CACHE=0` while
+investigating provider-specific schema behavior.
 
 ### Provider example
 
