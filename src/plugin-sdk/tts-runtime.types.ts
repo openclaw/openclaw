@@ -200,7 +200,11 @@ export type TtsStreamResult = {
   release?: () => Promise<void>;
 };
 
-/** Backward-compatible alias for stream synthesis results. */
+/**
+ * Backward-compatible alias for stream synthesis results.
+ *
+ * @deprecated Use TtsStreamResult.
+ */
 export type TtsSynthesisStreamResult = TtsStreamResult;
 
 /** Telephony synthesis result with provider voice/model and sample-rate metadata. */
