@@ -975,7 +975,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const chatLog = {
       ...createMockChatLog(),
       countPendingUsers: () => pendingUsers.size,
-      render: () => Array.from(pendingUsers.values()),
+      render: (_width: number) => Array.from(pendingUsers.values()),
     };
     const { state, noteLocalRunId, handleChatEvent } = createHandlersHarness({
       chatLog: chatLog as unknown as HandlerChatLog,
