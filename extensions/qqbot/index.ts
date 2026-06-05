@@ -6,8 +6,19 @@ import {
 } from "openclaw/plugin-sdk/channel-entry-contract";
 
 function registerQQBotFull(api: OpenClawPluginApi): void {
+  if (api.registrationMode === "tool-discovery") {
+    const registerTools = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(
+      import.meta.url,
+      {
+        specifier: "./src/bridge/tools/index.js",
+        exportName: "registerQQBotTools",
+      },
+    );
+    registerTools(api);
+    return;
+  }
   const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
+    specifier: "./src/bridge/channel-entry.js",
     exportName: "registerQQBotFull",
   });
   register(api);
