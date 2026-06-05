@@ -237,11 +237,7 @@ const vcEvent = {
 describe("resolveVcMeetingInvitedTurn", () => {
   it("builds a deterministic synthetic turn from the real event fields", () => {
     expect(resolveVcMeetingInvitedTurn(vcEvent)).toEqual({
-      eventType: "vc.bot.meeting_invited_v1",
-      eventId: "evt_vc_123",
       messageId: "vc-invited:event:evt_vc_123",
-      callId: "call_vc_123",
-      meetingId: "6911188411934433028",
       meetingNo: "123456789",
       topic: "Weekly sync",
       inviteTime: "1712345678",
@@ -293,7 +289,6 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
         },
       }),
       accountId: "default",
-      chatHistories: new Map(),
       fireAndForget: false,
     });
 
@@ -369,7 +364,6 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
         },
       }),
       accountId: "default",
-      chatHistories: new Map(),
       fireAndForget: false,
     });
 
@@ -406,7 +400,6 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
         },
       }),
       accountId: "default",
-      chatHistories: new Map(),
       fireAndForget: false,
     });
 

@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { createChannelPairingController } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
@@ -23,21 +23,11 @@ type FeishuVcIdentity = {
 };
 
 export type FeishuVcMeetingInvitedEvent = {
-  app_id?: string;
   event_id?: string;
   call_id?: string;
   meeting?: {
-    id?: string;
     meeting_no?: string;
     topic?: string;
-    host_user?: {
-      id?: FeishuVcIdentity;
-      user_name?: string;
-    };
-  };
-  bot?: {
-    id?: FeishuVcIdentity;
-    user_name?: string;
   };
   inviter?: {
     id?: FeishuVcIdentity;
@@ -55,12 +45,8 @@ type ResolvedVcInviter = {
 };
 
 type VcMeetingInvitedTurn = {
-  eventType: "vc.bot.meeting_invited_v1";
-  eventId?: string;
   messageId: string;
-  meetingId?: string;
   meetingNo: string;
-  callId?: string;
   topic?: string;
   inviteTime?: string;
   inviter: ResolvedVcInviter;
@@ -110,7 +96,6 @@ export function resolveVcMeetingInvitedTurn(
   const eventId = pickString(event.event_id);
   const inviteTime = pickString(event.invite_time);
   const callId = pickString(event.call_id);
-  const meetingId = pickString(event.meeting?.id);
   const topic = pickString(event.meeting?.topic);
   const messageId = eventId
     ? `vc-invited:event:${eventId}`
@@ -118,14 +103,10 @@ export function resolveVcMeetingInvitedTurn(
   const prompt = buildJoinPrompt({ meetingNo, callId });
 
   return {
-    eventType: "vc.bot.meeting_invited_v1",
     messageId,
     meetingNo,
     inviter,
     prompt,
-    ...(eventId ? { eventId } : {}),
-    ...(callId ? { callId } : {}),
-    ...(meetingId ? { meetingId } : {}),
     ...(topic ? { topic } : {}),
     ...(inviteTime ? { inviteTime } : {}),
   };
@@ -295,6 +276,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
   }
 
   const bodyForAgent = `[message_id: ${params.turn.messageId}]\n${params.turn.inviter.name ?? params.turn.inviter.senderId}: ${params.turn.prompt}`;
+  const timestamp = parseInviteTimestamp(params.turn.inviteTime);
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: bodyForAgent,
     BodyForAgent: bodyForAgent,
@@ -313,7 +295,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
     Provider: "feishu",
     Surface: "feishu-vc-meeting-invited",
     MessageSid: params.turn.messageId,
-    Timestamp: parseInviteTimestamp(params.turn.inviteTime),
+    Timestamp: timestamp,
     WasMentioned: true,
     CommandAuthorized: false,
     OriginatingChannel: "feishu",
@@ -334,7 +316,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
     adapter: {
       ingest: () => ({
         id: params.turn.messageId,
-        timestamp: parseInviteTimestamp(params.turn.inviteTime),
+        timestamp,
         rawText: params.turn.prompt,
         textForAgent: bodyForAgent,
         textForCommands: params.turn.prompt,
@@ -374,7 +356,6 @@ export function createFeishuVcMeetingInvitedHandler(params: {
   accountId: string;
   runtime?: RuntimeEnv;
   channelRuntime?: PluginRuntime["channel"];
-  chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
 }): (data: unknown) => Promise<void> {
   const { cfg, accountId, runtime, fireAndForget } = params;

@@ -338,7 +338,6 @@ function registerEventHandlers(
       cfg,
       accountId,
       runtime,
-      chatHistories,
       fireAndForget,
       channelRuntime,
     }),
