@@ -16,8 +16,27 @@ export type SignalEnvelope = {
   timestamp?: number | null;
   dataMessage?: SignalDataMessage | null;
   editMessage?: { dataMessage?: SignalDataMessage | null } | null;
-  syncMessage?: unknown;
+  syncMessage?: SignalSyncMessage | null;
   reactionMessage?: SignalReactionMessage | null;
+};
+
+export type SignalSentSyncMessage = {
+  destination?: string | null;
+  destinationNumber?: string | null;
+  destinationUuid?: string | null;
+  timestamp?: number | null;
+  message?: SignalDataMessage | string | null;
+  dataMessage?: SignalDataMessage | null;
+  editMessage?: { dataMessage?: SignalDataMessage | null } | null;
+  attachments?: Array<SignalAttachment>;
+  mentions?: Array<SignalMention> | null;
+  groupInfo?: SignalDataMessage["groupInfo"];
+  quote?: SignalDataMessage["quote"];
+  reaction?: SignalReactionMessage | null;
+};
+
+export type SignalSyncMessage = {
+  sentMessage?: SignalSentSyncMessage | null;
 };
 
 export type SignalMention = {
@@ -81,6 +100,7 @@ export type SignalEventHandlerDeps = {
   baseUrl: string;
   account?: string;
   accountUuid?: string;
+  ingressMode?: "standard" | "note-to-self";
   accountId: string;
   blockStreaming?: boolean;
   historyLimit: number;
@@ -110,6 +130,7 @@ export type SignalEventHandlerDeps = {
     target: string;
     baseUrl: string;
     account?: string;
+    accountUuid?: string | null;
     accountId?: string;
     runtime: RuntimeEnv;
     maxBytes: number;
@@ -122,6 +143,7 @@ export type SignalEventHandlerDeps = {
   shouldEmitSignalReactionNotification: (params: {
     mode?: SignalReactionNotificationMode;
     account?: string | null;
+    accountUuid?: string | null;
     targets?: SignalReactionTarget[];
     sender?: SignalSender | null;
     allowlist?: string[];

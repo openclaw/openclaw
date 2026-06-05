@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSignalAccount } from "./accounts.js";
-import { normalizeSignalMessagingTarget } from "./normalize.js";
+import { normalizeSignalMessagingTarget, normalizeSignalUuidForCompare } from "./normalize.js";
 import { looksLikeUuid } from "./uuid.js";
 
 function normalizeSignalApproverId(value: string | number): string | undefined {
@@ -13,7 +13,7 @@ function normalizeSignalApproverId(value: string | number): string | undefined {
     return undefined;
   }
   if (looksLikeUuid(normalized)) {
-    return `uuid:${normalized}`;
+    return `uuid:${normalizeSignalUuidForCompare(normalized)}`;
   }
   const e164 = normalizeE164(normalized);
   return e164.length > 1 ? e164 : undefined;

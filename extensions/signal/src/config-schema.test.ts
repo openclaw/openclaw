@@ -69,6 +69,69 @@ describe("signal groups schema", () => {
     expectValidSignalConfig({
       accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     });
+    const compact = SignalConfigSchema.safeParse({
+      accountUuid: "a1b2c3d4e5f67890abcdef1234567890",
+    });
+
+    expect(compact.success).toBe(true);
+    if (compact.success) {
+      expect(compact.data.accountUuid).toBe("a1b2c3d4e5f67890abcdef1234567890");
+    }
+  });
+
+  it("rejects non-canonical accountUuid values", () => {
+    expectInvalidSignalConfig({ accountUuid: "uuid:a1b2c3d4-e5f6-7890-abcd-ef1234567890" });
+    expectInvalidSignalConfig({ accountUuid: " a1b2c3d4-e5f6-7890-abcd-ef1234567890 " });
+  });
+
+  it("accepts note-to-self ingress mode", () => {
+    expectValidSignalConfig({
+      ingressMode: "note-to-self",
+      account: "+15550001111",
+    });
+  });
+
+  it("rejects note-to-self ingress mode without a self identifier", () => {
+    const issues = expectInvalidSignalConfig({
+      ingressMode: "note-to-self",
+    });
+
+    expect(issues[0]?.path.join(".")).toBe("ingressMode");
+
+    const emptyAccountsIssues = expectInvalidSignalConfig({
+      ingressMode: "note-to-self",
+      accounts: {},
+    });
+    expect(emptyAccountsIssues[0]?.path.join(".")).toBe("ingressMode");
+
+    const blankIssues = expectInvalidSignalConfig({
+      ingressMode: "note-to-self",
+      account: "   ",
+    });
+    expect(blankIssues[0]?.path.join(".")).toBe("ingressMode");
+  });
+
+  it("accepts note-to-self accounts that inherit the root transport account", () => {
+    expectValidSignalConfig({
+      account: "+15550001111",
+      accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      accounts: {
+        work: {
+          ingressMode: "note-to-self",
+        },
+      },
+    });
+  });
+
+  it("accepts note-to-self accounts with an explicit account", () => {
+    expectValidSignalConfig({
+      ingressMode: "note-to-self",
+      accounts: {
+        work: {
+          account: "+15550001111",
+        },
+      },
+    });
   });
 
   it("accepts channel apiMode", () => {

@@ -1115,6 +1115,13 @@ const SignalGroupEntrySchema = z
 
 const SignalGroupsSchema = z.record(z.string(), SignalGroupEntrySchema.optional()).optional();
 
+const SignalAccountUuidSchema = z
+  .string()
+  .regex(
+    /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32})$/,
+    'Signal accountUuid must be a bare UUID such as "123e4567-e89b-12d3-a456-426614174000"',
+  );
+
 export const SignalAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -1123,7 +1130,8 @@ export const SignalAccountSchemaBase = z
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
     account: z.string().optional(),
-    accountUuid: z.string().optional(),
+    accountUuid: SignalAccountUuidSchema.optional(),
+    ingressMode: z.enum(["standard", "note-to-self"]).optional(),
     configPath: z.string().optional(),
     httpUrl: z.string().optional(),
     httpHost: z.string().optional(),
@@ -1175,6 +1183,15 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
   accounts: z.record(z.string(), SignalAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
+  const hasConfiguredAccount = Boolean(normalizeOptionalString(value.account));
+  const hasAccounts = Boolean(value.accounts && Object.keys(value.accounts).length > 0);
+  if (value.ingressMode === "note-to-self" && !hasAccounts && !hasConfiguredAccount) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["ingressMode"],
+      message: 'channels.signal.ingressMode="note-to-self" requires channels.signal.account',
+    });
+  }
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
@@ -1197,6 +1214,17 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
   for (const [accountId, account] of Object.entries(value.accounts)) {
     if (!account) {
       continue;
+    }
+    const effectiveIngressMode = account.ingressMode ?? value.ingressMode;
+    const accountValue =
+      normalizeOptionalString(account.account) ?? normalizeOptionalString(value.account);
+    if (effectiveIngressMode === "note-to-self" && !accountValue) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["accounts", accountId, "ingressMode"],
+        message:
+          'channels.signal.accounts.*.ingressMode="note-to-self" requires channels.signal.accounts.*.account or channels.signal.account',
+      });
     }
     const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
     const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
