@@ -1,4 +1,5 @@
 // Memory Core plugin module implements manager behavior.
+import { statSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -7,6 +8,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
+  resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -70,6 +72,12 @@ const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCa
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
 type MemoryIndexManagerPurpose = "default" | "status" | "cli";
+type MemoryDatabaseIdentity = {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+};
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
   resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
@@ -81,6 +89,21 @@ type EmbeddingProbeCacheEntry = {
 };
 
 const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
+
+function memoryDatabaseIdentityEquals(
+  left: MemoryDatabaseIdentity | null,
+  right: MemoryDatabaseIdentity | null,
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs
+  );
+}
 
 export async function closeAllMemoryIndexManagers(): Promise<void> {
   EMBEDDING_PROBE_CACHE.clear();
@@ -205,6 +228,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonlyRecoverySuccesses = 0;
   private readonlyRecoveryFailures = 0;
   private readonlyRecoveryLastError?: string;
+  private dbIdentity: MemoryDatabaseIdentity | null = null;
   private indexIdentityState: MemoryIndexIdentityState = {
     status: "missing",
     reason: "index metadata is missing",
@@ -285,6 +309,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     };
     this.fts = { enabled: effectiveSettings.query.hybrid.enabled, available: false };
     this.ensureSchema();
+    this.dbIdentity = this.resolveDatabaseIdentity();
     this.vector = {
       enabled: effectiveSettings.store.vector.enabled,
       available: null,
@@ -422,7 +447,62 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  private resolveDatabaseIdentity(): MemoryDatabaseIdentity | null {
+    try {
+      const stats = statSync(resolveUserPath(this.settings.store.path));
+      return {
+        dev: stats.dev,
+        ino: stats.ino,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private refreshDatabaseHandleIfPathChanged(): boolean {
+    if (this.closed || this.syncing !== null) {
+      return false;
+    }
+    const currentIdentity = this.resolveDatabaseIdentity();
+    if (!currentIdentity) {
+      return false;
+    }
+    if (memoryDatabaseIdentityEquals(this.dbIdentity, currentIdentity)) {
+      return false;
+    }
+
+    const previousDb = this.db;
+    const previousIdentity = this.dbIdentity;
+    let nextDb: DatabaseSync | null = null;
+    try {
+      nextDb = this.openDatabase();
+      this.db = nextDb;
+      this.dbIdentity = this.resolveDatabaseIdentity();
+      this.resetVectorState();
+      this.fts.available = false;
+      this.fts.loadError = undefined;
+      this.ensureSchema();
+      const meta = this.readMeta();
+      this.vector.dims = meta?.vectorDims;
+      closeMemoryDatabase(previousDb);
+      return true;
+    } catch (err) {
+      this.db = previousDb;
+      this.dbIdentity = previousIdentity;
+      try {
+        if (nextDb) {
+          closeMemoryDatabase(nextDb);
+        }
+      } catch {}
+      log.warn(`memory index refresh reopen failed: ${formatErrorMessage(err)}`);
+      return false;
+    }
+  }
+
   private refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
+    this.refreshDatabaseHandleIfPathChanged();
     const provider =
       this.settings.provider === "none"
         ? null
@@ -455,6 +535,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     },
   ): Promise<MemorySearchResult[]> {
     opts?.onDebug?.({ backend: "builtin" });
+    this.refreshDatabaseHandleIfPathChanged();
     let hasIndexedContent = this.hasIndexedContent();
     if (!hasIndexedContent) {
       try {
@@ -475,16 +556,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return [];
     }
     const cleaned = preflight.normalizedQuery;
-    void this.warmSession(opts?.sessionKey);
-    startAsyncSearchSync({
-      enabled: this.settings.sync.onSearch,
-      dirty: this.dirty,
-      sessionsDirty: this.sessionsDirty,
-      sync: async (params) => await this.sync(params),
-      onError: (err) => {
-        log.warn(`memory sync failed (search): ${String(err)}`);
-      },
-    });
     if (preflight.shouldInitializeProvider) {
       await this.ensureProviderInitialized();
     }
@@ -509,6 +580,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (indexIdentity.status !== "valid") {
       return [];
     }
+    void this.warmSession(opts?.sessionKey);
+    startAsyncSearchSync({
+      enabled: this.settings.sync.onSearch,
+      dirty: this.dirty,
+      sessionsDirty: this.sessionsDirty,
+      sync: async (params) => await this.sync(params),
+      onError: (err) => {
+        log.warn(`memory sync failed (search): ${String(err)}`);
+      },
+    });
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const searchSources =
@@ -823,8 +904,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return this.syncing;
     }
     this.syncing = (async () => {
-      await this.ensureProviderInitialized();
-      await this.runSyncWithReadonlyRecovery(params);
+      try {
+        this.refreshDatabaseHandleIfPathChanged();
+        await this.ensureProviderInitialized();
+        await this.runSyncWithReadonlyRecovery(params);
+      } finally {
+        this.dbIdentity = this.resolveDatabaseIdentity();
+      }
     })().finally(() => {
       this.syncing = null;
     });
@@ -857,6 +943,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const getDb = () => this.db;
     const setDb = (value: DatabaseSync) => {
       this.db = value;
+      this.dbIdentity = this.resolveDatabaseIdentity();
     };
     const getReadonlyRecoveryAttempts = () => this.readonlyRecoveryAttempts;
     const setReadonlyRecoveryAttempts = (value: number) => {

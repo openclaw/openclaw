@@ -2034,6 +2034,7 @@ export abstract class MemoryManagerSyncOps {
       vectorDims: this.vector.dims,
       vectorDegradedWriteWarningShown: this.vectorDegradedWriteWarningShown,
       vectorReady: this.vectorReady,
+      lastMetaSerialized: this.lastMetaSerialized,
     };
 
     const restoreOriginalState = () => {
@@ -2049,9 +2050,11 @@ export abstract class MemoryManagerSyncOps {
       this.vector.dims = originalState.vectorDims;
       this.vectorDegradedWriteWarningShown = originalState.vectorDegradedWriteWarningShown;
       this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
+      this.lastMetaSerialized = originalState.lastMetaSerialized;
     };
 
     this.db = tempDb;
+    this.lastMetaSerialized = null;
     this.resetVectorState();
     this.fts.available = false;
     this.fts.loadError = undefined;
