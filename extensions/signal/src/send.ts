@@ -361,9 +361,10 @@ export async function sendMessageSignal(
   const attachmentFallbackEchoText = attachmentEchoMetadata
     ? resolveGenericMediaEchoText(attachmentEchoMetadata.contentType)
     : undefined;
-  const fallbackEchoTexts = messageFromPlaceholder
-    ? uniqueEchoTexts([attachmentEchoText, attachmentFallbackEchoText])
-    : uniqueEchoTexts([message]);
+  const fallbackEchoTexts =
+    messageFromPlaceholder || (attachmentEchoMetadata && !message.trim())
+      ? uniqueEchoTexts([attachmentEchoText, attachmentFallbackEchoText])
+      : uniqueEchoTexts([message]);
   for (const fallbackEchoText of shouldRememberSelfEcho ? fallbackEchoTexts : []) {
     await rememberSignalSelfReplyEcho({
       accountId: accountInfo.accountId,
