@@ -1,3 +1,4 @@
+// Whatsapp tests cover config accessors plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {

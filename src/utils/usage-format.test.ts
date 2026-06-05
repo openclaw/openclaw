@@ -1,3 +1,4 @@
+// Usage format tests cover display formatting for token and cost usage.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

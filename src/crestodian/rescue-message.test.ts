@@ -1,3 +1,4 @@
+// Crestodian rescue message tests cover generated rescue message content.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

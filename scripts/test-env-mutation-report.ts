@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Test Env Mutation Report script supports OpenClaw repository automation.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";

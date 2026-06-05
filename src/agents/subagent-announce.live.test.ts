@@ -625,14 +625,23 @@ describeLive("subagent announce live", () => {
       });
 
       const completedDispatch = await waitFor(
-        "in-process subagent completion agent dispatch",
+        "in-process subagent completion agent dispatch with parent token",
         () => {
           if (initialError) {
             throw toLintErrorObject(initialError, "Non-Error thrown");
           }
-          return inProcessAgentDispatches.find((entry) => entry.phase === "completed");
+          return inProcessAgentDispatches.find(
+            (entry) => entry.phase === "completed" && entry.resultText.includes(parentToken),
+          );
         },
-      );
+      ).catch((error: unknown) => {
+        throw new Error(
+          `timed out waiting for parent token in completion dispatch; dispatches=${JSON.stringify(
+            inProcessAgentDispatches,
+          )}`,
+          { cause: error },
+        );
+      });
       expect(completedDispatch.resultText).toContain(parentToken);
       expect(
         inProcessAgentDispatches.some((entry) => {

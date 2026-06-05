@@ -1,3 +1,5 @@
+// Telegram plugin module implements allow from behavior.
+
 export const TELEGRAM_ALLOW_FROM_GROUPS = [
   "trusted",
   "partner",

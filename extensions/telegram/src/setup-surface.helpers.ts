@@ -1,3 +1,4 @@
+// Telegram helper module supports setup surface.helpers behavior.
 import {
   applySetupAccountConfigPatch,
   type ChannelSetupDmPolicy,

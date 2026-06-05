@@ -11,6 +11,7 @@ const OPENCODE_SHARED_WIZARD_GROUP = {
   groupHint: OPENCODE_SHARED_HINT,
 } as const;
 
+/** Build a shared OpenCode API-key auth method for one OpenCode-compatible catalog. */
 export function createOpencodeCatalogApiKeyAuthMethod(params: {
   /** Provider id for the catalog being configured, such as `opencode` or `opencode-go`. */
   providerId: string;

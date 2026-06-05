@@ -1,3 +1,4 @@
+// Whatsapp tests cover access control plugin behavior.
 import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {

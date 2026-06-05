@@ -1,3 +1,4 @@
+// Whatsapp helper module supports setup test helpers behavior.
 import { expect } from "vitest";
 import type { WhatsAppAllowFromEntry } from "./allow-from-groups.js";
 

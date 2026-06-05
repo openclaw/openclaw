@@ -1,3 +1,4 @@
+// Telegram type declarations define plugin contracts.
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramAllowFromEntry } from "./allow-from.js";

@@ -1,3 +1,4 @@
+// Whatsapp helper module supports config accessors behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { normalizeWhatsAppAllowFromEntryNumbers } from "./allow-from-groups.js";

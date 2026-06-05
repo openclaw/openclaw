@@ -1,3 +1,4 @@
+// Telegram plugin module implements shared behavior.
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {

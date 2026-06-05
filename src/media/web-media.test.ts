@@ -10,6 +10,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { resizeToJpeg } from "./media-services.js";
 import { encodePngRgba, fillPixel } from "./png-encode.js";
 
@@ -585,17 +586,14 @@ describe("loadWebMedia", () => {
   });
 
   it("resolves home-relative local media paths through allowed local roots", async () => {
-    vi.stubEnv("OPENCLAW_HOME", fixtureRoot);
-    try {
+    await withEnvAsync({ OPENCLAW_HOME: fixtureRoot }, async () => {
       const result = await loadWebMedia("~/workspace/chart.png", {
         maxBytes: 1024 * 1024,
         localRoots: [workspaceDir],
       });
       expect(result.kind).toBe("image");
       expect(result.buffer.length).toBeGreaterThan(0);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    });
   });
 
   it("allows validated host-read TXT files", async () => {

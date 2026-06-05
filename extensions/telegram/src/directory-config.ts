@@ -1,3 +1,4 @@
+// Telegram helper module supports directory config behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-core";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createResolvedDirectoryEntriesLister } from "openclaw/plugin-sdk/directory-config-runtime";
