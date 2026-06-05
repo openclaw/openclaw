@@ -766,6 +766,26 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("thinking");
   });
 
+  it("does not add DeepSeek V4 thinking params on Foundry alias providers (e.g. microsoft-foundry-9433)", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "microsoft-foundry-9433",
+      applyModelId: "deepseek-v4-pro",
+      thinkingLevel: "high",
+      model: {
+        api: "openai-completions",
+        provider: "microsoft-foundry-9433",
+        id: "deepseek-v4-pro",
+      } as Model<"openai-completions">,
+      payload: {
+        reasoning_effort: "high",
+        messages: [{ role: "user", content: "hello" }],
+      },
+    });
+
+    expect(payload.reasoning_effort).toBe("high");
+    expect(payload).not.toHaveProperty("thinking");
+  });
+
   it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "opencode",
