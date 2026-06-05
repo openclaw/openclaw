@@ -85,6 +85,8 @@ const GENERIC_USER_SUMMARY_TARGET_RE =
 const SUMMARY_PROMPT_META_RE =
   /\b(?:summari[sz]e|summary|key points?|important information|original tone|tone and style|approximately|characters?|concise|audio|text to summarize)\b/i;
 const PROMPT_ECHO_SEPARATOR_RE = /\s*(?::|—|–|\s-\s)\s*/;
+const BARE_USER_SUMMARY_PROMPT_ECHO_RE =
+  /^the user (?:wants|asks|asked|requested) me to summarize$/i;
 
 function findFirstSentenceEnd(text: string): { index: number; found: boolean } {
   const match = /^(.*?(?:[.!?](?=\s|$)|\r?\n+))/s.exec(text);
@@ -119,9 +121,7 @@ function isLeadingSummaryPromptEchoSentence(sentence: string): boolean {
 
 function isSeparatedSummaryPromptEchoPrefix(prefix: string): boolean {
   return (
-    USER_SUMMARY_PROMPT_ECHO_RE.test(prefix) ||
-    (SELF_SUMMARY_PROMPT_ECHO_RE.test(prefix) && SUMMARY_PROMPT_META_RE.test(prefix)) ||
-    (CRAFT_SUMMARY_PROMPT_ECHO_RE.test(prefix) && SUMMARY_PROMPT_META_RE.test(prefix))
+    BARE_USER_SUMMARY_PROMPT_ECHO_RE.test(prefix) || isLeadingSummaryPromptEchoSentence(prefix)
   );
 }
 

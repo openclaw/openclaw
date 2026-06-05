@@ -219,6 +219,31 @@ describe("TTS core", () => {
     expect(result.outputLength).toBe(result.summary.length);
   });
 
+  it("preserves valid user-summary prose before separators", async () => {
+    const { config, deps } = createSummarizeTextFixture([
+      {
+        type: "text",
+        text: "The user asked me to summarize the deployment plan: release moves to Friday.",
+      },
+    ]);
+
+    const result = await summarizeText(
+      {
+        text: "Long text that should be summarized for speech.",
+        targetLength: 120,
+        cfg: {},
+        config,
+        timeoutMs: 10_000,
+      },
+      deps,
+    );
+
+    expect(result.summary).toBe(
+      "The user asked me to summarize the deployment plan: release moves to Friday.",
+    );
+    expect(result.outputLength).toBe(result.summary.length);
+  });
+
   it("preserves summary content after colon-style prompt echoes", async () => {
     const { config, deps } = createSummarizeTextFixture([
       {
