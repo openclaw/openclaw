@@ -1577,24 +1577,57 @@ describe("runCodexAppServerAttempt", () => {
     expect(
       testing.resolveCodexBundleMcpToolsAllow({
         nodeExecBlocksNativeExecution: false,
-        nativeToolSurfaceEnabled: false,
+        policyDisablesNativeToolSurface: true,
         toolsAllow: ["web_search"],
       }),
     ).toEqual([]);
     expect(
       testing.resolveCodexBundleMcpToolsAllow({
         nodeExecBlocksNativeExecution: true,
-        nativeToolSurfaceEnabled: true,
+        policyDisablesNativeToolSurface: false,
         toolsAllow: ["web_search"],
       }),
     ).toEqual([]);
     expect(
       testing.resolveCodexBundleMcpToolsAllow({
         nodeExecBlocksNativeExecution: false,
-        nativeToolSurfaceEnabled: true,
+        policyDisablesNativeToolSurface: false,
+        toolsAllow: ["bundle-mcp"],
+      }),
+    ).toEqual(["bundle-mcp"]);
+    expect(
+      testing.resolveCodexBundleMcpToolsAllow({
+        nodeExecBlocksNativeExecution: false,
+        policyDisablesNativeToolSurface: false,
         toolsAllow: ["web_search"],
       }),
     ).toEqual(["web_search"]);
+  });
+
+  it("keeps context-engine startup binding visible for policy-disabled resume turns", () => {
+    const startupBinding = { threadId: "thread-bootstrapped" } as never;
+
+    expect(
+      testing.resolveContextEngineDecisionStartupBinding({
+        nativeToolSurfaceEnabled: false,
+        preserveNativeDisabledBinding: true,
+        startupBinding,
+      }),
+    ).toBe(startupBinding);
+    expect(
+      testing.resolveContextEngineDecisionStartupBinding({
+        nativeToolSurfaceEnabled: false,
+        preserveNativeDisabledBinding: false,
+        startupBinding,
+      }),
+    ).toBeUndefined();
+    expect(
+      testing.resolveContextEngineDecisionStartupBinding({
+        nativeToolSurfaceEnabled: true,
+        preserveNativeDisabledBinding: false,
+        startupBinding,
+      }),
+    ).toBe(startupBinding);
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {

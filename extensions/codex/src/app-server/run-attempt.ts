@@ -528,7 +528,7 @@ export async function runCodexAppServerAttempt(
     disableTools: params.disableTools,
     toolsAllow: resolveCodexBundleMcpToolsAllow({
       nodeExecBlocksNativeExecution,
-      nativeToolSurfaceEnabled,
+      policyDisablesNativeToolSurface: beforeToolCallPolicyActive && !nativeToolSurfaceEnabled,
       toolsAllow: params.toolsAllow,
     }),
   });
@@ -615,6 +615,8 @@ export async function runCodexAppServerAttempt(
       channelId: hookChannelId,
     },
   });
+  const preserveNativeDisabledBinding =
+    beforeToolCallPolicyActive && !nativeToolSurfaceEnabled && toolBridge.specs.length > 0;
   const hadSessionFile = await pathExists(activeSessionFile);
   let historyMessages = (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? [];
   const hookContextWindowFields = {
@@ -786,7 +788,11 @@ export async function runCodexAppServerAttempt(
   if (activeContextEngine) {
     try {
       await applyActiveContextEngineProjection(
-        !nativeToolSurfaceEnabled ? undefined : startupBinding,
+        resolveContextEngineDecisionStartupBinding({
+          nativeToolSurfaceEnabled,
+          preserveNativeDisabledBinding,
+          startupBinding,
+        }),
       );
     } catch (assembleErr) {
       embeddedAgentLog.warn("context engine assemble failed; using Codex baseline prompt", {
@@ -1087,7 +1093,7 @@ export async function runCodexAppServerAttempt(
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled,
-      preserveBindingWhenNativeCodeModeDisabled: beforeToolCallPolicyActive,
+      preserveBindingWhenNativeCodeModeDisabled: preserveNativeDisabledBinding,
       sandboxExecServerEnabled,
       sandbox,
       contextEngineProjection,
@@ -2655,12 +2661,22 @@ function waitForCodexNotificationDispatchTurn(): Promise<void> {
 
 function resolveCodexBundleMcpToolsAllow(params: {
   nodeExecBlocksNativeExecution: boolean;
-  nativeToolSurfaceEnabled: boolean;
+  policyDisablesNativeToolSurface: boolean;
   toolsAllow?: string[];
 }): string[] | undefined {
-  return params.nodeExecBlocksNativeExecution || !params.nativeToolSurfaceEnabled
+  return params.nodeExecBlocksNativeExecution || params.policyDisablesNativeToolSurface
     ? []
     : params.toolsAllow;
+}
+
+function resolveContextEngineDecisionStartupBinding(params: {
+  nativeToolSurfaceEnabled: boolean;
+  preserveNativeDisabledBinding: boolean;
+  startupBinding?: CodexAppServerThreadBinding;
+}): CodexAppServerThreadBinding | undefined {
+  return !params.nativeToolSurfaceEnabled && !params.preserveNativeDisabledBinding
+    ? undefined
+    : params.startupBinding;
 }
 
 function handleApprovalRequest(params: {
@@ -2697,6 +2713,7 @@ export const testing = {
   buildCodexAppServerPromptTimeoutOutcome,
   resolveOpenClawCodingToolsSessionKeys,
   resolveCodexBundleMcpToolsAllow,
+  resolveContextEngineDecisionStartupBinding,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
   hasPendingDynamicToolTerminalDiagnostic,

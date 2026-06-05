@@ -361,6 +361,12 @@ export async function startOrResumeThread(params: {
     params.nativeCodeModeEnabled === false &&
     params.preserveBindingWhenNativeCodeModeDisabled === true &&
     params.dynamicTools.length > 0;
+  if (binding?.threadId && preserveNativeDisabledBinding && params.pluginThreadConfig?.enabled) {
+    prebuiltPluginThreadConfig = await lifecycleTiming.measure(
+      "plugin-config-native-disabled-preserve",
+      () => params.pluginThreadConfig!.build(),
+    );
+  }
   if (
     binding?.threadId &&
     params.nativeCodeModeEnabled === false &&
@@ -399,7 +405,11 @@ export async function startOrResumeThread(params: {
       rotatedContextEngineBinding = true;
     }
   }
-  if (binding?.threadId && binding.userMcpServersFingerprint !== userMcpServersFingerprint) {
+  if (
+    binding?.threadId &&
+    binding.userMcpServersFingerprint !== userMcpServersFingerprint &&
+    !preserveNativeDisabledBinding
+  ) {
     embeddedAgentLog.debug("codex app-server user MCP config changed; starting a new thread", {
       threadId: binding.threadId,
     });
@@ -422,7 +432,8 @@ export async function startOrResumeThread(params: {
   if (
     binding?.threadId &&
     params.mcpServersFingerprintEvaluated === true &&
-    binding.mcpServersFingerprint !== params.mcpServersFingerprint
+    binding.mcpServersFingerprint !== params.mcpServersFingerprint &&
+    !preserveNativeDisabledBinding
   ) {
     embeddedAgentLog.debug("codex app-server MCP config changed; starting a new thread", {
       threadId: binding.threadId,
@@ -458,6 +469,15 @@ export async function startOrResumeThread(params: {
         });
       }
     }
+    if (pluginBindingStale && preserveNativeDisabledBinding) {
+      embeddedAgentLog.debug(
+        "codex app-server native tool surface disabled persistently; resuming thread with restricted plugin app config",
+        {
+          threadId: binding.threadId,
+        },
+      );
+      pluginBindingStale = false;
+    }
     if (pluginBindingStale) {
       embeddedAgentLog.debug("codex app-server plugin app config changed; starting a new thread", {
         threadId: binding.threadId,
@@ -469,7 +489,8 @@ export async function startOrResumeThread(params: {
   if (
     binding?.threadId &&
     params.mcpServersFingerprintEvaluated === true &&
-    binding.mcpServersFingerprint !== params.mcpServersFingerprint
+    binding.mcpServersFingerprint !== params.mcpServersFingerprint &&
+    !preserveNativeDisabledBinding
   ) {
     embeddedAgentLog.debug("codex app-server MCP config changed; starting a new thread", {
       threadId: binding.threadId,
@@ -552,11 +573,15 @@ export async function startOrResumeThread(params: {
           },
         );
       }
+      const resumePluginThreadConfig = preserveNativeDisabledBinding
+        ? prebuiltPluginThreadConfig
+        : undefined;
       try {
         const authProfileId = params.params.authProfileId ?? resumeBinding.authProfileId;
         const resumeConfig = mergeCodexThreadConfigs(
           params.config,
           userMcpServersConfigPatch,
+          resumePluginThreadConfig?.configPatch,
           finalConfigPatch.configPatch,
         );
         const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
@@ -605,9 +630,13 @@ export async function startOrResumeThread(params: {
               nativeHookRelayGeneration:
                 finalConfigPatch.nativeHookRelayGeneration ??
                 resumeBinding.nativeHookRelayGeneration,
-              pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
-              pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
-              pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
+              pluginAppsFingerprint:
+                resumePluginThreadConfig?.fingerprint ?? resumeBinding.pluginAppsFingerprint,
+              pluginAppsInputFingerprint:
+                resumePluginThreadConfig?.inputFingerprint ??
+                resumeBinding.pluginAppsInputFingerprint,
+              pluginAppPolicyContext:
+                resumePluginThreadConfig?.policyContext ?? resumeBinding.pluginAppPolicyContext,
               contextEngine: contextEngineBinding,
               environmentSelectionFingerprint,
               createdAt: resumeBinding.createdAt,
@@ -651,9 +680,12 @@ export async function startOrResumeThread(params: {
           mcpServersFingerprint: nextMcpServersFingerprint,
           nativeHookRelayGeneration:
             finalConfigPatch.nativeHookRelayGeneration ?? resumeBinding.nativeHookRelayGeneration,
-          pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
-          pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
-          pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
+          pluginAppsFingerprint:
+            resumePluginThreadConfig?.fingerprint ?? resumeBinding.pluginAppsFingerprint,
+          pluginAppsInputFingerprint:
+            resumePluginThreadConfig?.inputFingerprint ?? resumeBinding.pluginAppsInputFingerprint,
+          pluginAppPolicyContext:
+            resumePluginThreadConfig?.policyContext ?? resumeBinding.pluginAppPolicyContext,
           contextEngine: contextEngineBinding,
           environmentSelectionFingerprint,
           lifecycle: { action: "resumed" },
