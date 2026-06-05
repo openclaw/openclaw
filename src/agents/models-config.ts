@@ -729,6 +729,11 @@ export async function ensureOpenClawModelsJson(
       // are available to provider discovery without mutating process.env.
       const env = createConfigRuntimeEnv(cfg);
       const existingModelsFile = await readExistingModelsFile(targetPath);
+      const existingParsedForMerge = await mergeGeneratedPluginCatalogProvidersIntoExistingParsed({
+        agentDir,
+        existingParsed: existingModelsFile.parsed,
+        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+      });
       const plan = await planOpenClawModelsJson({
         cfg,
         sourceConfigForSecrets: resolved.sourceConfigForSecrets,
@@ -736,7 +741,7 @@ export async function ensureOpenClawModelsJson(
         env,
         ...(workspaceDir ? { workspaceDir } : {}),
         existingRaw: existingModelsFile.raw,
-        existingParsed: existingModelsFile.parsed,
+        existingParsed: existingParsedForMerge,
         ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
         ...(options.providerDiscoveryProviderIds
           ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
@@ -752,27 +757,39 @@ export async function ensureOpenClawModelsJson(
       if (plan.action === "skip") {
         // No write performed; capture whatever's currently on disk so the
         // cache can detect external edits between now and the next call.
+        const wrotePluginCatalog = await writePluginCatalogsForModelsJson({
+          agentDir,
+          pluginCatalogWrites: plan.pluginCatalogWrites,
+        });
         const modelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
         return {
           fingerprint: fingerprintForEntry,
           modelsJsonOutcome,
-          result: { agentDir, wrote: false },
+          result: { agentDir, wrote: wrotePluginCatalog },
         };
       }
 
       if (plan.action === "noop") {
+        const wrotePluginCatalog = await writePluginCatalogsForModelsJson({
+          agentDir,
+          pluginCatalogWrites: plan.pluginCatalogWrites,
+        });
         await ensureModelsFileModeForModelsJson(targetPath);
         const modelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
         return {
           fingerprint: fingerprintForEntry,
           modelsJsonOutcome,
-          result: { agentDir, wrote: false },
+          result: { agentDir, wrote: wrotePluginCatalog },
         };
       }
 
       await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
       await writeModelsFileAtomicForModelsJson(targetPath, plan.contents);
       await ensureModelsFileModeForModelsJson(targetPath);
+      await writePluginCatalogsForModelsJson({
+        agentDir,
+        pluginCatalogWrites: plan.pluginCatalogWrites,
+      });
       // Capture the post-write outcome so subsequent cache checks can
       // detect any external edit / corruption that happens after this
       // point.
