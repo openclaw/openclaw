@@ -672,8 +672,10 @@ function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
   return SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE.test(path.basename(absolutePath));
 }
 
+// Aligns with the canonical ARCHIVE_TIMESTAMP_RE: milliseconds are optional
+// per the session archive artifact contract.
 const SESSION_ARCHIVE_TRANSCRIPT_FILENAME_RE =
-  /\.jsonl\.(?:reset|deleted)\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/;
+  /\.jsonl\.(?:reset|deleted)\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
 
 function isSessionArchiveTranscriptPath(absolutePath: string): boolean {
   return SESSION_ARCHIVE_TRANSCRIPT_FILENAME_RE.test(path.basename(absolutePath));
