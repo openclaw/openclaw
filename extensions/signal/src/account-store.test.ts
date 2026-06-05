@@ -151,6 +151,39 @@ describe("signal-cli account store", () => {
     );
   });
 
+  it("falls back to the default signal-cli store when configured dataDir is stale", async () => {
+    process.env.SIGNAL_CLI_CONFIG = "/tmp/signal-cli-config.json";
+    const defaultStore = resolveSignalCliAccountsPath();
+    const readFile = vi.fn(async (filePath: string | URL) => {
+      if (String(filePath) === "/tmp/signal-cli-config.json") {
+        return JSON.stringify({ dataDir: "/tmp/missing-signal-cli-data" });
+      }
+      if (String(filePath) === defaultStore) {
+        return JSON.stringify({
+          accounts: [
+            {
+              number: "+15550001111",
+              uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            },
+          ],
+        });
+      }
+      throw new Error(`missing ${String(filePath)}`);
+    });
+
+    await expect(
+      discoverSignalAccountUuid({
+        account: "+15550001111",
+        readFile: readFile as typeof import("node:fs/promises").readFile,
+      }),
+    ).resolves.toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    expect(readFile).toHaveBeenCalledWith(
+      path.join("/tmp/missing-signal-cli-data", "data", "accounts.json"),
+      "utf8",
+    );
+    expect(readFile).toHaveBeenCalledWith(defaultStore, "utf8");
+  });
+
   it("does not choose an ambiguous UUID when multiple account rows match", async () => {
     const readFile = vi.fn(async () =>
       JSON.stringify({

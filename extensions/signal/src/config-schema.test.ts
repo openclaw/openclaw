@@ -138,6 +138,34 @@ describe("signal groups schema", () => {
     expectValidSignalConfig(updated?.channels?.signal);
   });
 
+  it("does not copy the default UUID onto explicit accounts with a different number", () => {
+    const updated = signalConfigAdapter.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            configPath: "/tmp/signal-cli",
+            ingressMode: "note-to-self",
+            accounts: {
+              work: {
+                account: "+15555550999",
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(updated?.channels?.signal?.accounts?.work).toMatchObject({
+      account: "+15555550999",
+      configPath: "/tmp/signal-cli",
+      ingressMode: "note-to-self",
+    });
+    expect(updated?.channels?.signal?.accounts?.work?.accountUuid).toBeUndefined();
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const issues = expectInvalidSignalConfig({
       dmPolicy: "open",

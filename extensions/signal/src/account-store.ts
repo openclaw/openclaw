@@ -107,31 +107,49 @@ export async function discoverSignalAccountUuid(params: {
     return undefined;
   }
   const readFile = params.readFile ?? fs.readFile;
-  try {
-    const configuredDataDir = params.configPath
-      ? undefined
-      : await resolveSignalCliConfiguredDataDir({ readFile });
-    const raw = await readFile(
-      configuredDataDir
-        ? path.join(configuredDataDir, "data", "accounts.json")
-        : resolveSignalCliAccountsPath(params.configPath),
-      "utf8",
-    );
-    const parsed = JSON.parse(raw) as SignalCliAccountStore;
-    const normalizedAccount = normalizeE164(account);
-    const matchingUuids = new Set<string>();
-    for (const entry of parsed.accounts ?? []) {
-      const number = entry?.number?.trim();
-      if (!number || normalizeE164(number) !== normalizedAccount) {
-        continue;
+  const readAccountStore = async (
+    accountsPath: string,
+  ): Promise<"ambiguous" | string | undefined> => {
+    try {
+      const raw = await readFile(accountsPath, "utf8");
+      const parsed = JSON.parse(raw) as SignalCliAccountStore;
+      const normalizedAccount = normalizeE164(account);
+      const matchingUuids = new Set<string>();
+      for (const entry of parsed.accounts ?? []) {
+        const number = entry?.number?.trim();
+        if (!number || normalizeE164(number) !== normalizedAccount) {
+          continue;
+        }
+        const uuid = entry?.uuid?.trim();
+        if (uuid && normalizeSignalUuidForCompare(uuid)) {
+          matchingUuids.add(uuid);
+        }
       }
-      const uuid = entry?.uuid?.trim();
-      if (uuid && normalizeSignalUuidForCompare(uuid)) {
-        matchingUuids.add(uuid);
+      if (matchingUuids.size > 1) {
+        return "ambiguous";
       }
+      return matchingUuids.size === 1 ? [...matchingUuids][0] : undefined;
+    } catch {
+      return undefined;
     }
-    return matchingUuids.size === 1 ? [...matchingUuids][0] : undefined;
-  } catch {
-    return undefined;
+  };
+  const configuredDataDir = params.configPath
+    ? undefined
+    : await resolveSignalCliConfiguredDataDir({ readFile });
+  const candidatePaths = params.configPath
+    ? [resolveSignalCliAccountsPath(params.configPath)]
+    : [
+        ...(configuredDataDir ? [path.join(configuredDataDir, "data", "accounts.json")] : []),
+        resolveSignalCliAccountsPath(),
+      ];
+  for (const accountsPath of candidatePaths) {
+    const uuid = await readAccountStore(accountsPath);
+    if (uuid === "ambiguous") {
+      return undefined;
+    }
+    if (uuid) {
+      return uuid;
+    }
   }
+  return undefined;
 }
