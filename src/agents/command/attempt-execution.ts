@@ -1,3 +1,6 @@
+/**
+ * Orchestrates one agent attempt across embedded, CLI, and ACP runtimes.
+ */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
@@ -590,6 +593,9 @@ export function runAgentAttempt(params: {
         messageChannel: params.messageChannel,
         streamParams: params.opts.streamParams,
         messageProvider: params.opts.messageProvider ?? params.messageChannel,
+        currentChannelId: params.runContext.currentChannelId,
+        currentThreadTs: params.runContext.currentThreadTs,
+        currentInboundAudio: params.runContext.currentInboundAudio,
         agentAccountId: params.runContext.accountId,
         senderIsOwner: params.opts.senderIsOwner,
         toolsAllow: params.opts.toolsAllow,
@@ -657,6 +663,7 @@ export function runAgentAttempt(params: {
     spawnedBy: params.spawnedBy,
     currentChannelId: params.runContext.currentChannelId,
     currentThreadTs: params.runContext.currentThreadTs,
+    currentInboundAudio: params.runContext.currentInboundAudio,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
     senderIsOwner: params.opts.senderIsOwner,

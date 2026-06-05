@@ -1,3 +1,5 @@
+// MCP loopback HTTP request helpers.
+// Authenticates local MCP POST requests and extracts scoped Gateway context.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
@@ -34,6 +36,7 @@ type McpRequestContext = {
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | undefined;
+  currentInboundAudio: boolean | undefined;
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
@@ -55,6 +58,11 @@ function normalizeMcpSourceReplyDeliveryMode(
 ): SourceReplyDeliveryMode | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
+}
+
+function normalizeMcpCurrentInboundAudio(value: string | undefined): boolean | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed ? isTruthyEnvValue(trimmed) : undefined;
 }
 
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
@@ -170,6 +178,8 @@ export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
     const chunks: Buffer[] = [];
     let received = 0;
     let settled = false;
+    // Remove listeners on every terminal path; oversized bodies keep the error
+    // listener briefly so Node can deliver the pause/error safely.
     const cleanup = (options?: { keepErrorListener?: boolean }) => {
       req.off("data", onData);
       req.off("end", onEnd);
@@ -217,9 +227,7 @@ function createMcpHttpBodyTooLargeError(): Error & { code: string } {
   });
 }
 
-export function isMcpHttpBodyTooLargeError(
-  error: unknown,
-): error is Error & { code: string } {
+export function isMcpHttpBodyTooLargeError(error: unknown): error is Error & { code: string } {
   return (
     typeof error === "object" &&
     error !== null &&
@@ -239,6 +247,9 @@ export function resolveMcpRequestContext(
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
+    currentInboundAudio: normalizeMcpCurrentInboundAudio(
+      getHeader(req, "x-openclaw-current-inbound-audio"),
+    ),
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
     inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
     sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(

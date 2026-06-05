@@ -1,3 +1,7 @@
+/**
+ * Prepares CLI backend run context: backend config, prompts, bootstrap context,
+ * MCP, auth epoch, and reusable session metadata.
+ */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -113,10 +117,12 @@ function resolveClaudeCliContextModelId(modelId: string): string {
   return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[lower] ?? trimmed;
 }
 
+/** Overrides preparation dependencies for CLI runner tests. */
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
 }
 
+/** Returns whether profile-owned prepared execution should skip local CLI epoch hashing. */
 export function shouldSkipLocalCliCredentialEpoch(params: {
   authEpochMode?: CliBackendAuthEpochMode;
   authProfileId?: string;
@@ -131,6 +137,7 @@ export function shouldSkipLocalCliCredentialEpoch(params: {
   );
 }
 
+/** Builds the complete context required to execute a CLI-backed agent run. */
 export async function prepareCliRunContext(
   params: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
@@ -287,6 +294,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
           OPENCLAW_MCP_CURRENT_MESSAGE_ID:
             params.currentMessageId != null ? String(params.currentMessageId) : "",
+          OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: params.currentInboundAudio === true ? "true" : "",
           OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
           OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
         }
@@ -364,6 +372,7 @@ export async function prepareCliRunContext(
           currentChannelId: params.currentChannelId,
           currentThreadTs: params.currentThreadTs,
           currentMessageId: params.currentMessageId,
+          currentInboundAudio: params.currentInboundAudio,
           accountId: params.agentAccountId,
           inboundEventKind: params.currentInboundEventKind,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

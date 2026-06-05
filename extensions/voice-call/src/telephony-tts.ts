@@ -1,3 +1,4 @@
+// Voice Call plugin module implements telephony tts behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   parseTtsDirectives,
@@ -10,6 +11,9 @@ import type { CoreConfig } from "./core-bridge.js";
 import { deepMergeDefined } from "./deep-merge.js";
 import { convertPcmToMulaw8k } from "./telephony-audio.js";
 
+// Telephony TTS adapter that applies voice-call overrides and emits 8kHz mulaw audio.
+
+/** Core runtime TTS API used by the telephony adapter. */
 export type TelephonyTtsRuntime = {
   textToSpeechTelephony: (params: {
     text: string;
@@ -27,13 +31,16 @@ export type TelephonyTtsRuntime = {
   }>;
 };
 
+/** Provider facade used by Twilio/webhook code for telephony synthesis. */
 export type TelephonyTtsProvider = {
   synthesisTimeoutMs: number;
   synthesizeForTelephony: (text: string) => Promise<Buffer>;
 };
 
+/** Default timeout for one telephony synthesis request. */
 export const TELEPHONY_DEFAULT_TTS_TIMEOUT_MS = 8000;
 
+/** Voice-call override policy for inline TTS model directives. */
 type TelephonyModelOverrideConfig = {
   enabled?: boolean;
   allowText?: boolean;
@@ -45,6 +52,7 @@ type TelephonyModelOverrideConfig = {
   allowSeed?: boolean;
 };
 
+/** Create a TTS provider that honors voice-call overrides and converts PCM to mulaw. */
 export function createTelephonyTtsProvider(params: {
   coreConfig: CoreConfig;
   ttsOverride?: VoiceCallTtsConfig;
@@ -107,6 +115,7 @@ export function createTelephonyTtsProvider(params: {
   };
 }
 
+/** Apply voice-call TTS overrides to core config without mutating the original object. */
 function applyTtsOverride(coreConfig: CoreConfig, override?: VoiceCallTtsConfig): CoreConfig {
   if (!override) {
     return coreConfig;
@@ -127,6 +136,7 @@ function applyTtsOverride(coreConfig: CoreConfig, override?: VoiceCallTtsConfig)
   };
 }
 
+/** Merge core and voice-call TTS config, keeping undefined override fields out. */
 function mergeTtsConfig(
   base?: VoiceCallTtsConfig,
   override?: VoiceCallTtsConfig,
@@ -143,6 +153,7 @@ function mergeTtsConfig(
   return deepMergeDefined(base, override) as VoiceCallTtsConfig;
 }
 
+/** Resolve directive override policy for telephony synthesis. */
 function resolveTelephonyModelOverridePolicy(
   overrides: TelephonyModelOverrideConfig | undefined,
 ): SpeechModelOverridePolicy {
@@ -172,6 +183,7 @@ function resolveTelephonyModelOverridePolicy(
   };
 }
 
+/** Read model override policy from TTS config when present. */
 function readTelephonyModelOverrides(
   ttsConfig: VoiceCallTtsConfig | undefined,
 ): TelephonyModelOverrideConfig | undefined {
@@ -181,16 +193,19 @@ function readTelephonyModelOverrides(
     : undefined;
 }
 
+/** Normalize provider ids for config lookup. */
 function normalizeProviderId(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined;
 }
 
+/** Coerce provider config objects while rejecting arrays and primitives. */
 function asProviderConfig(value: unknown): SpeechProviderConfig {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as SpeechProviderConfig)
     : {};
 }
 
+/** Collect named provider configs from canonical and legacy TTS config shapes. */
 function collectTelephonyProviderConfigs(
   ttsConfig: VoiceCallTtsConfig | undefined,
 ): Record<string, SpeechProviderConfig> {

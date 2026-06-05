@@ -1,3 +1,4 @@
+// Stuck session recovery runtime tests cover recovery inspection and event output.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -383,6 +384,42 @@ describe("stuck session recovery", () => {
       "stuck session recovery: sessionId=queued-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=0",
       "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=true drained=true forceCleared=false released=0",
     ]);
+  });
+
+  it("releases the session lane when abort+drain succeeds but queued messages remain (ghost run + queued messages)", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("ghost-run-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+    mocks.resetCommandLane.mockReturnValue(1);
+    // Bug scenario: ghost run aborted+drained successfully, but user sent messages during the stall
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:ghost:ghost",
+      queuedCount: 1,
+      activeCount: 1,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "ghost-run-session",
+      sessionKey: "agent:ghost:ghost",
+      ageMs: 720_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("ghost-run-session");
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:ghost:ghost");
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+      released: 1,
+      queuedCount: 1,
+    });
   });
 
   it("reports queued lane work when aborting active work releases a lane", async () => {

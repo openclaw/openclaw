@@ -1,3 +1,4 @@
+// Control UI chat module implements grouped render behavior.
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
@@ -442,7 +443,7 @@ export function renderMessageGroup(
     normalizedRole === "user"
       ? (userLabel ?? resolvedUserName)
       : normalizedRole === "assistant"
-        ? assistantName
+        ? (userLabel ?? assistantName)
         : normalizedRole === "tool"
           ? "Tool"
           : normalizedRole;

@@ -1,3 +1,4 @@
+// Tests media-only get-reply runs and sandboxed media attachment handling.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1939,6 +1940,7 @@ describe("runPreparedReply media-only handling", () => {
           Surface: "telegram",
           ChatType: "group",
           InboundEventKind: "room_event",
+          MediaType: "audio/ogg",
           MessageSid: "35676",
           SenderName: "Keśava",
         },
@@ -1951,6 +1953,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toBe("[OpenClaw room event]");
     expect(call?.followupRun.transcriptPrompt).toBe("");
     expect(call?.followupRun.currentInboundEventKind).toBe("room_event");
+    expect(call?.followupRun.currentInboundAudio).toBe(true);
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call?.followupRun.run.suppressNextUserMessagePersistence).toBe(true);
     expect(call?.followupRun.currentInboundContext?.text).toContain(

@@ -1,3 +1,5 @@
+// Gateway method registry aggregator wires core and plugin RPC descriptors to
+// lazy-loaded handler families, role checks, scopes, and control-plane budgets.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -280,6 +282,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     methods: [
       "chat.history",
       "chat.startup",
+      "chat.metadata",
       "chat.message.get",
       "chat.abort",
       "chat.send",
@@ -451,6 +454,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.proposals.create",
       "skills.proposals.update",
       "skills.proposals.revise",
+      "skills.proposals.requestRevision",
       "skills.proposals.apply",
       "skills.proposals.reject",
       "skills.proposals.quarantine",

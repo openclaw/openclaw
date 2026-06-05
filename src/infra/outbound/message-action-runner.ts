@@ -1,3 +1,5 @@
+// Message-action runner normalizes tool params, resolves channel/target/media,
+// applies policies, and dispatches send/poll/plugin actions.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -104,6 +106,8 @@ let messageActionGatewayRuntimePromise: Promise<
 > | null = null;
 
 function loadMessageActionGatewayRuntime() {
+  // Gateway runtime is only needed for remote message action dispatch or
+  // idempotency keys; keep normal in-process actions import-light.
   messageActionGatewayRuntimePromise ??= import("./message.gateway.runtime.js");
   return messageActionGatewayRuntimePromise;
 }
@@ -129,6 +133,7 @@ export type RunMessageActionParams = {
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   inboundEventKind?: InboundEventKind;
+  inboundAudio?: boolean;
   abortSignal?: AbortSignal;
 };
 
@@ -1122,6 +1127,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     agentId,
     sessionKey: input.sessionKey,
+    inboundAudio: input.inboundAudio,
     dryRun,
   });
   if (ttsPayload !== sendPayload.payload) {

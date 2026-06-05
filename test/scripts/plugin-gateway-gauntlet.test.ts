@@ -1,3 +1,4 @@
+// Plugin Gateway Gauntlet tests cover plugin gateway gauntlet script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -173,6 +174,7 @@ describe("plugin gateway gauntlet helpers", () => {
     ]);
     expect(buildGauntletPrebuildEnv({}, { buildIds: [matrix[0].buildId] })).toEqual({
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "kimi-coding",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
   });
 
@@ -381,6 +383,7 @@ describe("plugin gateway gauntlet helpers", () => {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "qa-channel,qa-lab,qa-matrix",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
     const env = { EXISTING: "1" };
     expect(buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
@@ -399,6 +402,7 @@ describe("plugin gateway gauntlet helpers", () => {
       EXISTING: "1",
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx",
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
   });
 
@@ -416,6 +420,18 @@ describe("plugin gateway gauntlet helpers", () => {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx,active-memory,qa-channel,qa-lab,qa-matrix",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+    });
+  });
+
+  it("preserves caller pnpm dependency verification overrides in gauntlet prebuilds", () => {
+    expect(
+      buildGauntletPrebuildEnv(
+        { EXISTING: "1", PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "true" },
+        { includePrivateQa: true },
+      ),
+    ).toMatchObject({
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "true",
     });
   });
 
@@ -546,6 +562,28 @@ setInterval(() => {}, 1000);
     expect(row.status).toBe(0);
     await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stdout");
     await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stderr");
+  });
+
+  it("returns a failed row when measured command log writing fails", async () => {
+    const logDir = path.join(repoRoot, "not-a-directory");
+    await fs.writeFile(logDir, "blocks log directory creation", "utf8");
+
+    const row = await runMeasuredCommandLive({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: ["-e", "console.log('live stdout')"],
+      label: "live-log-failure",
+      phase: "probe",
+      timeoutMs: 1000,
+      timeMode: "none",
+    });
+
+    expect(row.status).toBe(1);
+    expect(row.diagnosticFailure).toBe("command-log-write-failure");
+    expect(row.logPath).toBeNull();
+    expect(row.logWriteError).toMatch(/EEXIST|ENOTDIR|not a directory/u);
   });
 
   it("cleans parent signal handlers after live measured commands settle", async () => {
@@ -743,6 +781,168 @@ setInterval(() => {}, 1000);
     expect(summary.guardFailures).toEqual([]);
     expect(summary.isolatedRunRootPreserved).toBe(false);
     await expect(fs.stat(summary.isolatedRunRoot)).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it("probes plugin-owned slash help while the plugin is installed", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    await writeManifest(
+      "workboard",
+      "openclaw.plugin.json",
+      JSON.stringify({
+        id: "workboard",
+        commandAliases: [
+          {
+            name: "workboard",
+            kind: "runtime-slash",
+            cliCommand: "workboard",
+          },
+        ],
+      }),
+    );
+    await fs.writeFile(path.join(repoRoot, "extensions", "workboard", "index.ts"), "export {};\n");
+    await fs.mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "dist", "entry.js"),
+      [
+        'const fs = require("node:fs");',
+        'const path = require("node:path");',
+        "const stateDir = process.env.OPENCLAW_STATE_DIR ?? process.cwd();",
+        'const marker = path.join(stateDir, "workboard-enabled");',
+        "const args = process.argv.slice(2);",
+        'if (args[0] === "plugins") {',
+        '  if (args[1] === "install" || args[1] === "enable") fs.writeFileSync(marker, "1");',
+        '  if (args[1] === "disable" || args[1] === "uninstall") fs.rmSync(marker, { force: true });',
+        '  if (args[1] === "inspect") console.log("{}");',
+        "  process.exit(0);",
+        "}",
+        'if (args[0] === "workboard" && args[1] === "--help") {',
+        "  if (fs.existsSync(marker)) {",
+        '    console.log("Usage: openclaw workboard");',
+        "    process.exit(0);",
+        "  }",
+        '  console.error("workboard help was probed after uninstall");',
+        "  process.exit(1);",
+        "}",
+        "process.exit(0);",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-qa",
+        "--plugin",
+        "workboard",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.failures).toEqual([]);
+    const slashHelpRow = summary.rows.find(
+      (row: { label?: string; logPath?: string }) => row.label === "workboard-slash-help:workboard",
+    );
+    expect(summary.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "workboard-slash-help:workboard",
+          phase: "slash:help",
+          pluginId: "workboard",
+          status: 0,
+        }),
+      ]),
+    );
+    const slashHelpLogPath = slashHelpRow?.logPath;
+    expect(slashHelpLogPath).toEqual(expect.any(String));
+    await expect(fs.readFile(slashHelpLogPath as string, "utf8")).resolves.toContain(
+      "Usage: openclaw workboard",
+    );
+
+    const skipOutputDir = path.join(repoRoot, "artifacts-skip");
+    const skipResult = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        skipOutputDir,
+        "--skip-prebuild",
+        "--skip-qa",
+        "--skip-slash-help",
+        "--plugin",
+        "workboard",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(skipResult.status, skipResult.stderr).toBe(0);
+    const skipSummary = JSON.parse(
+      await fs.readFile(path.join(skipOutputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(skipSummary.failures).toEqual([]);
+    expect(skipSummary.rows).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "slash:help",
+          pluginId: "workboard",
+        }),
+      ]),
+    );
+
+    const slashOnlyOutputDir = path.join(repoRoot, "artifacts-slash-only");
+    const slashOnlyResult = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        slashOnlyOutputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-qa",
+        "--plugin",
+        "workboard",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(slashOnlyResult.status, slashOnlyResult.stderr).toBe(1);
+    const slashOnlySummary = JSON.parse(
+      await fs.readFile(
+        path.join(slashOnlyOutputDir, "plugin-gateway-gauntlet-summary.json"),
+        "utf8",
+      ),
+    );
+    expect(slashOnlySummary.guardFailures).toEqual([]);
+    expect(slashOnlySummary.failures).toEqual([
+      expect.objectContaining({
+        label: "workboard-slash-workboard",
+        phase: "slash:help",
+        pluginId: "workboard",
+        status: 1,
+      }),
+    ]);
   });
 
   it("carries bounded build ids into QA run-node chunks", async () => {

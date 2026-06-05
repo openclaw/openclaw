@@ -1,3 +1,8 @@
+/**
+ * Shared built-in tool contracts and helpers.
+ *
+ * Defines erased tool types, parameter readers, JSON results, progress blocks, and media sanitization.
+ */
 import { detectMime } from "@openclaw/media-core/mime";
 import {
   asPositiveSafeInteger,
@@ -22,6 +27,11 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TResult
 > & {
   displaySummary?: string;
+  prepareBeforeToolCallParams?: (
+    params: unknown,
+    ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
+  ) => unknown;
+  finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
 };
 
 type ErasedAgentToolExecute = {
@@ -37,6 +47,14 @@ type ErasedAgentToolExecute = {
 export type AnyAgentTool = Omit<AgentTool, "execute"> &
   ErasedAgentToolExecute & {
     displaySummary?: string;
+    prepareBeforeToolCallParams?: AgentToolWithMeta<
+      TSchema,
+      unknown
+    >["prepareBeforeToolCallParams"];
+    finalizeBeforeToolCallParams?: AgentToolWithMeta<
+      TSchema,
+      unknown
+    >["finalizeBeforeToolCallParams"];
   };
 
 export function asToolParamsRecord(params: unknown): Record<string, unknown> {

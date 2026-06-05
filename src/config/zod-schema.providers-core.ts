@@ -1,3 +1,4 @@
+// Defines core provider schema fragments for config parsing.
 import { isValidInboundPathRootPattern } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
@@ -101,11 +102,9 @@ const ChannelStreamingProgressSchema = z
     render: z.enum(["text", "rich"]).optional(),
     toolProgress: z.boolean().optional(),
     commandText: z.enum(["raw", "status"]).optional(),
+    commentary: z.boolean().optional(),
   })
   .strict();
-const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
-  commentary: z.boolean().optional(),
-}).strict();
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   nativeTaskCards: z.boolean().optional(),
 }).strict();
@@ -121,9 +120,7 @@ const ChannelPreviewStreamingConfigSchema = z
 const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   preview: TelegramStreamingPreviewSchema.optional(),
 }).strict();
-const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
-  progress: DiscordStreamingProgressSchema.optional(),
-}).strict();
+const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema;
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),
   progress: SlackStreamingProgressSchema.optional(),

@@ -1,3 +1,4 @@
+/** macOS LaunchAgent installer, runtime inspection, and lifecycle controls. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -16,14 +17,12 @@ import {
   resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
+import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import {
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
-import {
-  isCurrentProcessLaunchdServiceLabel,
-  scheduleDetachedLaunchdRestartHandoff,
-} from "./launchd-restart-handoff.js";
+import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
@@ -63,6 +62,8 @@ function normalizeOpenClawUpdateLaunchdLabel(label: unknown): string | null {
   if (trimmed.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX)) {
     return trimmed;
   }
+  // Manual update jobs include a timestamp-like suffix and should be cleaned up
+  // without matching arbitrary ai.openclaw labels.
   return OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed) ? trimmed : null;
 }
 
@@ -202,6 +203,8 @@ async function prepareLaunchAgentProgramArguments(params: {
     return { programArguments: params.programArguments };
   }
 
+  // Environment values with secrets live in an owner-only env file instead of
+  // inline plist XML, which can be harder to rotate and audit.
   const envDir = resolveLaunchAgentEnvDir(params.env);
   const envFilePath = resolveLaunchAgentEnvFilePath(params.env, params.label);
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
@@ -329,6 +332,8 @@ export async function findStaleOpenClawUpdateLaunchdJobs(
   if (result.code !== 0) {
     return [];
   }
+  // Never report the active gateway label as stale even when a wrapper exposes
+  // update-like launchd metadata through the current environment.
   return parseLaunchctlListOpenClawUpdateJobs(result.stdout).filter(
     (job) => !isCurrentGatewayLaunchdLabel(job.label, env),
   );
@@ -789,6 +794,14 @@ export async function stopLaunchAgent({
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const serviceTarget = `${domain}/${label}`;
+
+  if (
+    isCurrentProcessLaunchdServiceLabel(label, process.env, { allowConfiguredLabelFallback: false })
+  ) {
+    throw new Error(
+      `Refusing to stop LaunchAgent ${label} from inside the same launchd service; run this command from an external shell.`,
+    );
+  }
 
   if (!persistDisable) {
     // Default: bootout only. Removes the job from the current launchd domain without
