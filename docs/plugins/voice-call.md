@@ -659,12 +659,12 @@ auto-ending the call:
 
 The `msteams` provider connects OpenClaw to **Microsoft Teams 1:1 voice
 calls**. Unlike the carrier providers, Teams calls do **not** arrive on the
-webhook/media-stream plane: an **external Windows worker** (not part of this
-repo) owns the Microsoft Graph Calling notification endpoint and the
-`Microsoft.Skype.Bots.Media` audio socket — those SDKs are Windows-only — and
-relays PCM audio to OpenClaw over a **per-call WebSocket**, authenticated with
-HMAC-SHA256 and bound to loopback by default. The provider is **inbound-first**
-(it does not place outbound PSTN calls).
+webhook/media-stream plane: a **Windows-side bridge worker** owns the Microsoft
+Graph Calling notification endpoint and the `Microsoft.Skype.Bots.Media` audio
+socket — those SDKs are Windows-only — and relays PCM audio to OpenClaw over a
+**per-call WebSocket**, authenticated with HMAC-SHA256 and bound to loopback by
+default. The provider is **inbound-first** (it does not place outbound PSTN
+calls).
 
 ```json5
 {
