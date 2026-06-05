@@ -899,7 +899,7 @@ function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTimi
   return Object.keys(timing).length > 0 ? timing : undefined;
 }
 
-function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSendAck {
+export function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSendAck {
   if (!payload || typeof payload !== "object") {
     return { runId: fallbackRunId, status: "started" };
   }

@@ -9,6 +9,7 @@ import {
   abortChatRun,
   handleChatEvent,
   loadChatHistory,
+  normalizeChatSendAck,
   requestChatSend,
   requestSkillWorkshopRevisionChatSend,
   sendChatMessage,
@@ -1933,6 +1934,30 @@ describe("sendChatMessage", () => {
       runId: "gateway-complete-run",
       sessionKey: "main",
     });
+  });
+
+  it("does not adopt a run when the send acks a terminal timeout (#84176)", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "gateway-aborted-run", status: "timeout" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await sendChatMessage(state, "aborted before dispatch");
+
+    // Terminal ack must NOT be adopted as an active run: broadcastChatAborted
+    // already drove the lifecycle, so re-adopting would resurrect a finished run.
+    expect(state.chatRunId).not.toBe("gateway-aborted-run");
+  });
+
+  it("normalizeChatSendAck preserves terminal statuses and coerces unknown ones (#84176)", () => {
+    for (const status of ["started", "in_flight", "ok", "timeout", "error"]) {
+      expect(normalizeChatSendAck({ runId: "r", status }, "fallback").status).toBe(status);
+    }
+    expect(normalizeChatSendAck({ runId: "r", status: "bogus" }, "fallback").status).toBe(
+      "started",
+    );
+    expect(normalizeChatSendAck({ runId: "r" }, "fallback").status).toBe("started");
   });
 
   it("serializes non-image chat attachments as files", async () => {

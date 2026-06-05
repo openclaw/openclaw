@@ -4404,6 +4404,14 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
+          if (context.chatAbortedRuns.has(clientRunId)) {
+            // Dispatch threw while the run was already aborted. Record the terminal
+            // abort outcome (matching the .then completion guard) and skip the error
+            // dedupe + redundant chat error broadcast, since broadcastChatAborted
+            // already drove the lifecycle. Issue #84176.
+            cacheChatSendAbortedDedupe(activeRunAbort.entry?.abortStopReason ?? "rpc");
+            return;
+          }
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
