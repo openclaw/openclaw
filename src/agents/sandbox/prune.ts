@@ -1,3 +1,8 @@
+/**
+ * Sandbox registry pruning.
+ *
+ * Removes stale runtime containers and browser bridges on a best-effort schedule.
+ */
 import { getRuntimeConfig } from "../../config/config.js";
 import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -39,6 +44,7 @@ function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: Pruneab
   );
 }
 
+/** Removes expired registry entries and their backing runtime resources. */
 async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(params: {
   cfg: SandboxConfig;
   read: () => Promise<{ entries: TEntry[] }>;
@@ -73,6 +79,7 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
   }
 }
 
+/** Prunes ordinary sandbox runtime containers from the configured backend manager. */
 async function pruneSandboxContainers(cfg: SandboxConfig) {
   const config = getRuntimeConfig();
   await pruneSandboxRegistryEntries<SandboxRegistryEntry>({
@@ -89,6 +96,7 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
   });
 }
 
+/** Prunes browser bridge containers and closes matching in-process bridge servers. */
 async function pruneSandboxBrowsers(cfg: SandboxConfig) {
   const config = getRuntimeConfig();
   await pruneSandboxRegistryEntries<
@@ -122,6 +130,7 @@ async function pruneSandboxBrowsers(cfg: SandboxConfig) {
   });
 }
 
+/** Runs sandbox pruning at most once per throttle window. */
 export async function maybePruneSandboxes(cfg: SandboxConfig) {
   const now = Date.now();
   if (now - lastPruneAtMs < 5 * 60 * 1000) {

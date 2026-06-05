@@ -1,3 +1,7 @@
+/**
+ * Persists and normalizes the Codex app-server thread binding associated with
+ * an OpenClaw session file.
+ */
 import fs from "node:fs/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -7,7 +11,7 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  isCodexPluginsMarketplaceName,
+  CODEX_PLUGINS_MARKETPLACE_NAME,
   normalizeCodexServiceTier,
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
@@ -21,6 +25,7 @@ const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
 type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
 type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
 
+/** Inputs needed to resolve whether a binding's auth profile is native Codex/OpenAI auth. */
 export type CodexAppServerAuthProfileLookup = {
   authProfileId?: string;
   authProfileStore?: AuthProfileStore;
@@ -28,6 +33,7 @@ export type CodexAppServerAuthProfileLookup = {
   config?: ProviderAuthAliasConfig;
 };
 
+/** Durable sidecar binding connecting an OpenClaw session file to a Codex thread. */
 export type CodexAppServerThreadBinding = {
   schemaVersion: 1;
   threadId: string;
@@ -53,6 +59,7 @@ export type CodexAppServerThreadBinding = {
   updatedAt: string;
 };
 
+/** Context-engine state persisted with a Codex app-server thread binding. */
 export type CodexAppServerContextEngineBinding = {
   schemaVersion: 1;
   engineId: string;
@@ -60,6 +67,7 @@ export type CodexAppServerContextEngineBinding = {
   projection?: CodexAppServerContextEngineProjectionBinding;
 };
 
+/** Context-engine projection metadata used to guard resumed native threads. */
 export type CodexAppServerContextEngineProjectionBinding = {
   schemaVersion: 1;
   mode: "thread_bootstrap";
@@ -67,10 +75,12 @@ export type CodexAppServerContextEngineProjectionBinding = {
   fingerprint?: string;
 };
 
+/** Returns the JSON sidecar path for the Codex app-server binding beside a session file. */
 export function resolveCodexAppServerBindingPath(sessionFile: string): string {
   return `${sessionFile}.codex-app-server.json`;
 }
 
+/** Reads and normalizes a Codex app-server binding sidecar, returning undefined on stale data. */
 export async function readCodexAppServerBinding(
   sessionFile: string,
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
@@ -148,6 +158,7 @@ export async function readCodexAppServerBinding(
   }
 }
 
+/** Writes the Codex app-server binding sidecar with normalized provider/auth metadata. */
 export async function writeCodexAppServerBinding(
   sessionFile: string,
   binding: Omit<
@@ -257,8 +268,7 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
     if (
       "appId" in entry ||
       typeof entry.configKey !== "string" ||
-      typeof entry.marketplaceName !== "string" ||
-      !isCodexPluginsMarketplaceName(entry.marketplaceName) ||
+      entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
       !Array.isArray(entry.mcpServerNames) ||
@@ -294,6 +304,7 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
   };
 }
 
+/** Removes the Codex app-server binding sidecar if present. */
 export async function clearCodexAppServerBinding(
   sessionFile: string,
   _lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
@@ -307,6 +318,7 @@ export async function clearCodexAppServerBinding(
   }
 }
 
+/** Clears a binding only when it still points at the expected Codex thread id. */
 export async function clearCodexAppServerBindingForThread(
   sessionFile: string,
   threadId: string,
@@ -332,6 +344,7 @@ function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }
 
+/** Returns true when an auth profile uses native Codex/OpenAI app-server auth. */
 export function isCodexAppServerNativeAuthProfile(
   lookup: CodexAppServerAuthProfileLookup,
 ): boolean {
@@ -357,6 +370,7 @@ export function isCodexAppServerNativeAuthProfile(
   }
 }
 
+/** Hides redundant OpenAI provider attribution for native Codex auth bindings. */
 export function normalizeCodexAppServerBindingModelProvider(params: {
   authProfileId?: string;
   modelProvider?: string;

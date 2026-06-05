@@ -1,8 +1,13 @@
+// Gateway HTTP test helpers build minimal request/response doubles and collect
+// client response bodies.
 import type { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
 import { vi } from "vitest";
 
+/**
+ * Minimal HTTP response mock used by gateway handler tests.
+ */
 export function makeMockHttpResponse(): {
   res: ServerResponse;
   setHeader: ReturnType<typeof vi.fn>;

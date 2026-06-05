@@ -1,3 +1,8 @@
+/**
+ * Bundled channel plugin contract loader.
+ *
+ * Loads public plugin surfaces and directory contract artifacts without reaching into private sources.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,7 +19,10 @@ type ChannelDirectoryContractModule = Record<string, unknown>;
 
 const channelPluginCache = new Map<ChannelId, ChannelPlugin | null>();
 const channelPluginPromiseCache = new Map<ChannelId, Promise<ChannelPlugin | null>>();
-const channelDirectoryPluginCache = new Map<ChannelId, Pick<ChannelPlugin, "id" | "directory"> | null>();
+const channelDirectoryPluginCache = new Map<
+  ChannelId,
+  Pick<ChannelPlugin, "id" | "directory"> | null
+>();
 const channelDirectoryPluginPromiseCache = new Map<
   ChannelId,
   Promise<Pick<ChannelPlugin, "id" | "directory"> | null>
@@ -170,7 +178,8 @@ async function importBundledChannelDirectoryContractSourceSurface(
 function isMissingBundledDirectoryContractArtifact(error: unknown, id: ChannelId): boolean {
   return (
     error instanceof Error &&
-    error.message === `Unable to resolve bundled plugin public surface ${id}/directory-contract-api.js`
+    error.message ===
+      `Unable to resolve bundled plugin public surface ${id}/directory-contract-api.js`
   );
 }
 
@@ -212,6 +221,7 @@ export function listBundledChannelPluginIds(): readonly ChannelId[] {
   return listCatalogBundledChannelPluginIds() as ChannelId[];
 }
 
+/** Returns a bundled channel plugin from its generated public API artifact. */
 export async function getBundledChannelPluginAsync(
   id: ChannelId,
 ): Promise<ChannelPlugin | undefined> {
@@ -224,6 +234,8 @@ export async function getBundledChannelPluginAsync(
     return (await cachedPromise) ?? undefined;
   }
 
+  // Cache both resolved plugins and in-flight loads so sharded contract suites
+  // do not repeatedly import the same generated plugin artifact.
   const loading = loadBundledPluginPublicSurface<ChannelPluginApiModule>({
     pluginId: id,
     artifactBasename: "channel-plugin-api.js",

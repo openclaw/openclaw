@@ -1,3 +1,5 @@
+// Shared server-method tests cover helpers and cross-method behavior that spans
+// chat, exec approvals, logs, timestamps, attachments, and history projection.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -23,19 +25,19 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
-import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { waitForAgentJob } from "./agent-job.js";
-import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
-import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
+  projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
-  sanitizeChatSendMessageInput,
-} from "./chat.js";
+} from "../chat-display-projection.js";
+import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
+import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { waitForAgentJob } from "./agent-job.js";
+import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { logsHandlers } from "./logs.js";
 

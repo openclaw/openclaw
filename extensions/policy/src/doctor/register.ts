@@ -1,3 +1,4 @@
+// Policy plugin module implements register behavior.
 import os from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";

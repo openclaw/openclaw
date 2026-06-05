@@ -1,5 +1,8 @@
+// Gateway wizard session tracker.
+// Tracks active setup/onboarding wizard sessions and purges completed ones.
 import type { WizardSession } from "../wizard/session.js";
 
+/** Creates the in-memory tracker used for active Gateway wizard sessions. */
 export function createWizardSessionTracker() {
   const wizardSessions = new Map<string, WizardSession>();
 

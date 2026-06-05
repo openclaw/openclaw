@@ -1,3 +1,4 @@
+// Cron service ops tests cover high-level service operations and state transitions.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -5,6 +6,7 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
@@ -16,19 +18,17 @@ const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
 });
 
-function withStateDirForStorePath(storePath: string) {
+async function withStateDirForStorePath<T>(
+  storePath: string,
+  runWithStateDir: () => Promise<T>,
+): Promise<T> {
   const stateRoot = path.dirname(path.dirname(storePath));
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = stateRoot;
   resetTaskRegistryForTests();
-  return () => {
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
+  try {
+    return await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, runWithStateDir);
+  } finally {
     resetTaskRegistryForTests();
-  };
+  }
 }
 
 function createTimedOutIsolatedCronState(params: { storePath: string; now: number }) {
@@ -415,9 +415,8 @@ describe("cron service ops seam coverage", () => {
   it("keeps manual acknowledgement IDs separate from recoverable task run IDs", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const restoreStateDir = withStateDirForStorePath(storePath);
 
-    try {
+    await withStateDirForStorePath(storePath, async () => {
       await writeDueIsolatedJobSnapshot(storePath, now);
 
       const state = createOkIsolatedCronState({ storePath, now, summary: "done" });
@@ -438,33 +437,30 @@ describe("cron service ops seam coverage", () => {
         progressSummary: "Running cron job.",
       });
       expect(findTaskByRunId(manualRunId)).toBeUndefined();
-    } finally {
-      restoreStateDir();
-    }
+    });
   });
 
   it("records timed out manual runs as timed_out in the shared task registry", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const restoreStateDir = withStateDirForStorePath(storePath);
 
-    await writeDueIsolatedJobSnapshot(storePath, now);
+    await withStateDirForStorePath(storePath, async () => {
+      await writeDueIsolatedJobSnapshot(storePath, now);
 
-    const state = createTimedOutIsolatedCronState({
-      storePath,
-      now,
+      const state = createTimedOutIsolatedCronState({
+        storePath,
+        now,
+      });
+
+      await run(state, "isolated-timeout");
+
+      expectTaskRun({
+        runId: `cron:isolated-timeout:${now}`,
+        runtime: "cron",
+        status: "timed_out",
+        sourceId: "isolated-timeout",
+      });
     });
-
-    await run(state, "isolated-timeout");
-
-    expectTaskRun({
-      runId: `cron:isolated-timeout:${now}`,
-      runtime: "cron",
-      status: "timed_out",
-      sourceId: "isolated-timeout",
-    });
-
-    restoreStateDir();
   });
 
   it("keeps manual cron runs progressing when task ledger creation fails", async () => {
@@ -494,34 +490,28 @@ describe("cron service ops seam coverage", () => {
 
   it("keeps manual cron cleanup progressing when task ledger updates fail", async () => {
     const { storePath } = await makeStorePath();
-    const stateRoot = path.dirname(path.dirname(storePath));
     const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateRoot;
-    resetTaskRegistryForTests();
 
-    await writeDueIsolatedJobSnapshot(storePath, now);
+    await withStateDirForStorePath(storePath, async () => {
+      await writeDueIsolatedJobSnapshot(storePath, now);
 
-    const updateTaskRecordSpy = vi
-      .spyOn(detachedTaskRuntime, "completeTaskRunByRunId")
-      .mockImplementation(() => {
-        throw new Error("disk full");
-      });
+      const updateTaskRecordSpy = vi
+        .spyOn(detachedTaskRuntime, "completeTaskRunByRunId")
+        .mockImplementation(() => {
+          throw new Error("disk full");
+        });
 
-    await expectDueIsolatedManualRunProgresses(storePath, now);
-    expectWarnedJob({
-      field: "jobStatus",
-      value: "ok",
-      message: "cron: failed to update task ledger record",
+      try {
+        await expectDueIsolatedManualRunProgresses(storePath, now);
+        expectWarnedJob({
+          field: "jobStatus",
+          value: "ok",
+          message: "cron: failed to update task ledger record",
+        });
+      } finally {
+        updateTaskRecordSpy.mockRestore();
+      }
     });
-
-    updateTaskRecordSpy.mockRestore();
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
-    resetTaskRegistryForTests();
   });
 
   it("non-schedule edit preserves nextRunAtMs (#63499)", async () => {
@@ -589,9 +579,8 @@ describe("cron service ops seam coverage", () => {
   it("records startup catch-up timeouts as timed_out in the shared task registry", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const restoreStateDir = withStateDirForStorePath(storePath);
 
-    try {
+    await withStateDirForStorePath(storePath, async () => {
       await writeCronStoreSnapshot({
         storePath,
         jobs: [createMissedIsolatedJob(now)],
@@ -611,17 +600,14 @@ describe("cron service ops seam coverage", () => {
         sourceId: "startup-timeout",
         progressSummary: "Running cron job.",
       });
-    } finally {
-      restoreStateDir();
-    }
+    });
   });
 
   it("seeds active manual cron task progress for status surfaces", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const restoreStateDir = withStateDirForStorePath(storePath);
 
-    try {
+    await withStateDirForStorePath(storePath, async () => {
       await writeDueIsolatedJobSnapshot(storePath, now);
       let resolveRun: ((value: { status: "ok"; summary: string }) => void) | undefined;
       const state = createCronServiceState({
@@ -654,8 +640,6 @@ describe("cron service ops seam coverage", () => {
 
       resolveRun?.({ status: "ok", summary: "done" });
       await manualRun;
-    } finally {
-      restoreStateDir();
-    }
+    });
   });
 });
