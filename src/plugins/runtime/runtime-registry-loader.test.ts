@@ -375,6 +375,29 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(loadOptions().onlyPluginIds).toEqual(["demo"]);
   });
 
+  it("force reload bypasses an active scoped registry that already contains the plugin id", () => {
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.plugins.push({
+      id: "codex",
+      source: "/tmp/codex.js",
+      origin: "bundled",
+      enabled: true,
+      status: "loaded",
+    } as never);
+    mocks.getActivePluginRegistry.mockReturnValue(activeRegistry);
+    mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue("/resolved-workspace");
+
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      config: { plugins: { entries: { codex: { enabled: true } } } } as never,
+      onlyPluginIds: ["codex"],
+      forceReload: true,
+    });
+
+    expect(loadOptions().onlyPluginIds).toEqual(["codex"]);
+    expect(loadOptions().cache).toBe(false);
+  });
+
   it("preserves empty all-scope loads instead of widening to all discovered plugins", () => {
     mocks.resolveEffectivePluginIds.mockReturnValue([]);
 

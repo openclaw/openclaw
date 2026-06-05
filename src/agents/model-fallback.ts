@@ -158,6 +158,7 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  agentHarnessRuntimeOverride?: string;
 };
 
 type ModelFallbackRuntimeContext = {
@@ -441,7 +442,7 @@ function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | un
 
 async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   params: ModelFallbackRuntimeContext & ModelCandidate,
-): Promise<{ skipsProviderAuthCooldown: boolean }> {
+): Promise<{ agentHarnessRuntimeOverride?: string; skipsProviderAuthCooldown: boolean }> {
   if (!params.cfg) {
     return { skipsProviderAuthCooldown: false };
   }
@@ -468,14 +469,26 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
       ? "model"
       : harnessPolicy.runtimeSource;
+  const resolvedAgentHarnessRuntimeOverride =
+    agentRuntime !== "auto" &&
+    agentRuntime !== "openclaw" &&
+    !(agentRuntime === "codex" && agentRuntimeSource === "implicit")
+      ? agentRuntime
+      : undefined;
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
-    return { skipsProviderAuthCooldown: false };
+    return {
+      agentHarnessRuntimeOverride: resolvedAgentHarnessRuntimeOverride,
+      skipsProviderAuthCooldown: false,
+    };
   }
   if (agentRuntime === "openclaw") {
     return { skipsProviderAuthCooldown: false };
   }
   if (agentRuntime === "auto" || (agentRuntime === "codex" && agentRuntimeSource === "implicit")) {
-    return { skipsProviderAuthCooldown: false };
+    return {
+      agentHarnessRuntimeOverride: resolvedAgentHarnessRuntimeOverride,
+      skipsProviderAuthCooldown: false,
+    };
   }
   await params.prepareAgentHarnessRuntime?.({
     provider: params.provider,
@@ -487,7 +500,10 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   }
   // Explicit non-Codex plugin harnesses own transport/auth; stale OpenClaw
   // provider cooldowns must not block the harness before it starts.
-  return { skipsProviderAuthCooldown: agentRuntime !== "codex" };
+  return {
+    agentHarnessRuntimeOverride: resolvedAgentHarnessRuntimeOverride,
+    skipsProviderAuthCooldown: agentRuntime !== "codex",
+  };
 }
 
 function resolveCandidateAttemptError(
@@ -1479,7 +1495,10 @@ export async function runWithModelFallback<T>(
             });
             continue;
           }
-          runOptions = { allowTransientCooldownProbe: true };
+          runOptions = {
+            ...runOptions,
+            allowTransientCooldownProbe: true,
+          };
           if (isTransientCooldownReason) {
             transientProbeProviderForAttempt = candidate.provider;
           }
@@ -1506,11 +1525,20 @@ export async function runWithModelFallback<T>(
       }
     }
 
+    const candidateRunOptions =
+      runOptions || candidateHarnessAuth.agentHarnessRuntimeOverride
+        ? {
+            ...runOptions,
+            ...(candidateHarnessAuth.agentHarnessRuntimeOverride
+              ? { agentHarnessRuntimeOverride: candidateHarnessAuth.agentHarnessRuntimeOverride }
+              : {}),
+          }
+        : undefined;
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
       attempts,
-      options: runOptions,
+      options: candidateRunOptions,
       classifyResult: params.classifyResult,
       attempt: i + 1,
       total: candidates.length,

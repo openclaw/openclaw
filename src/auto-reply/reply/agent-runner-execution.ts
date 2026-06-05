@@ -2236,13 +2236,18 @@ export async function runAgentTurnWithFallback(params: {
               });
             const agentHarnessPolicy = sessionRuntimeOverride
               ? ({ runtime: sessionRuntimeOverride, runtimeSource: "model" } as const)
-              : resolveAgentHarnessPolicy({
-                  provider,
-                  modelId: model,
-                  config: runtimeConfig,
-                  agentId: params.followupRun.run.agentId,
-                  sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
-                });
+              : runOptions?.agentHarnessRuntimeOverride
+                ? ({
+                    runtime: runOptions.agentHarnessRuntimeOverride,
+                    runtimeSource: "model",
+                  } as const)
+                : resolveAgentHarnessPolicy({
+                    provider,
+                    modelId: model,
+                    config: runtimeConfig,
+                    agentId: params.followupRun.run.agentId,
+                    sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+                  });
             const embeddedRunProvider = resolveOpenAIRuntimeProvider({
               provider,
               harnessRuntime: agentHarnessPolicy.runtime,
@@ -2253,8 +2258,10 @@ export async function runAgentTurnWithFallback(params: {
             });
             const embeddedRunHarnessOverride =
               sessionRuntimeOverride ??
-              (agentHarnessPolicy.runtime === "openclaw" && embeddedRunProvider !== provider
-                ? "openclaw"
+              (agentHarnessPolicy.runtime !== "auto" &&
+              (agentHarnessPolicy.runtime !== "openclaw" ||
+                agentHarnessPolicy.runtimeSource !== "implicit")
+                ? agentHarnessPolicy.runtime
                 : undefined);
             return (async () => {
               let attemptCompactionCount = 0;

@@ -299,6 +299,32 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("does not select legacy openai-codex OAuth profiles for implicit app-server auth", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-123",
+        },
+      });
+
+      expect(
+        resolveCodexAppServerAuthProfileId({
+          store: loadAuthProfileStoreForSecretsRuntime(agentDir),
+        }),
+      ).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears an inherited OpenAI API key for an explicit Codex OAuth profile", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions({ clearEnv: ["FOO"] });
@@ -1301,6 +1327,38 @@ describe("bridgeCodexAppServerStartOptions", () => {
         client: { request } as never,
         agentDir,
         authProfileId: "openai:work",
+      });
+
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "legacy-access-token",
+        chatgptAccountId: "legacy-codex@example.test",
+        chatgptPlanType: null,
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts legacy openai-codex auth-provider profiles for app-server login", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "token",
+          provider: "openai-codex",
+          token: "legacy-access-token",
+          email: "legacy-codex@example.test",
+        },
+      });
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: "openai-codex:work",
       });
 
       expect(request).toHaveBeenCalledWith("account/login/start", {

@@ -669,4 +669,78 @@ describe("hooks mapping", () => {
       });
     });
   });
+  it("passes sessionMode from mapping to agent action", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        {
+          id: "persistent-session-mode",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+          sessionKey: "hook:gmail:stable",
+          sessionMode: "persistent",
+        },
+      ],
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionMode).toBe("persistent");
+    }
+  });
+
+  it("defaults mapping sessionMode to undefined", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        {
+          id: "default-session-mode",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+        },
+      ],
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionMode).toBeUndefined();
+    }
+  });
+
+  it("allows transforms to override sessionMode", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-mode-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(transformsRoot, "transform.mjs"),
+      'export default () => ({ sessionMode: "persistent" });',
+    );
+
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionMode: "isolated",
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionMode).toBe("persistent");
+    }
+  });
 });

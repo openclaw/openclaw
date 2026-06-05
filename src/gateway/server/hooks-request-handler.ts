@@ -13,6 +13,7 @@ import {
   extractHookToken,
   getHookAgentPolicyError,
   getHookChannelError,
+  getHookPersistentSessionKeyPolicyError,
   getHookSessionKeyPrefixError,
   type HookAgentDispatchPayload,
   type HooksConfigResolved,
@@ -287,6 +288,10 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
         return true;
       }
+      if (normalized.value.sessionMode === "persistent" && !normalized.value.sessionKey) {
+        sendJson(res, 400, { ok: false, error: getHookPersistentSessionKeyPolicyError() });
+        return true;
+      }
       const sessionKey = resolveHookSessionKey({
         hooksConfig,
         source: "request",
@@ -318,6 +323,7 @@ export function createHooksRequestHandler(
           model: normalized.value.model ?? null,
           thinking: normalized.value.thinking ?? null,
           timeoutSeconds: normalized.value.timeoutSeconds ?? null,
+          sessionMode: normalized.value.sessionMode ?? null,
         },
       });
       const cachedRunId = resolveCachedHookRunId(replayKey, now);
@@ -419,6 +425,7 @@ export function createHooksRequestHandler(
               model: mapped.action.model ?? null,
               thinking: mapped.action.thinking ?? null,
               timeoutSeconds: mapped.action.timeoutSeconds ?? null,
+              sessionMode: mapped.action.sessionMode ?? null,
             },
           });
           const cachedRunId = resolveCachedHookRunId(replayKey, now);
@@ -433,6 +440,7 @@ export function createHooksRequestHandler(
             agentId: targetAgentId,
             wakeMode: mapped.action.wakeMode,
             sessionKey: dispatchSessionKey,
+            sessionMode: mapped.action.sessionMode,
             sourcePath: `${basePath}/${subPath}`,
             deliver: resolveHookDeliver(mapped.action.deliver),
             channel,

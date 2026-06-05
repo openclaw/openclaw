@@ -393,6 +393,7 @@ export async function persistCliTurnTranscript(params: {
 export function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
+  agentHarnessRuntimeOverride?: string;
   originalProvider: string;
   cfg: OpenClawConfig;
   sessionEntry: SessionEntry | undefined;
@@ -514,8 +515,10 @@ export function runAgentAttempt(params: {
   });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
-    (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
-      ? "openclaw"
+    params.agentHarnessRuntimeOverride ??
+    (agentHarnessPolicy.runtime !== "auto" &&
+    (agentHarnessPolicy.runtime !== "openclaw" || agentHarnessPolicy.runtimeSource !== "implicit")
+      ? agentHarnessPolicy.runtime
       : undefined);
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
@@ -669,7 +672,7 @@ export function runAgentAttempt(params: {
     cwd: params.cwd,
     config: params.cfg,
     agentHarnessId: embeddedAgentHarnessOverride,
-    agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
+    agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,

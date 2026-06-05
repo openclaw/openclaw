@@ -806,6 +806,51 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("passes explicit plugin harness runtime policies to candidate attempts", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    });
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: ({ provider }) =>
+          provider === "openai" ? { supported: true } : { supported: false },
+        runAttempt: vi.fn<AgentHarness["runAttempt"]>(async () => {
+          throw new Error("fallback test should not invoke the harness runtime");
+        }),
+      },
+      { ownerPluginId: "codex-test" },
+    );
+    const prepareAgentHarnessRuntime = vi.fn();
+    const run = vi.fn().mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.5",
+      prepareAgentHarnessRuntime,
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(prepareAgentHarnessRuntime).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-5.5",
+      agentHarnessRuntimeOverride: undefined,
+    });
+    expect(run).toHaveBeenCalledWith("openai", "gpt-5.5", {
+      agentHarnessRuntimeOverride: "codex",
+    });
+  });
+
   it("fails closed when a strict plugin harness is missing", async () => {
     const cfg = makeCfg({
       agents: {
@@ -1032,7 +1077,11 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("external cli ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
+    expect(run.mock.calls[0]).toEqual([
+      "anthropic",
+      "claude-sonnet-4-6",
+      { agentHarnessRuntimeOverride: "claude-tmux" },
+    ]);
     expect(result.attempts).toStrictEqual([]);
   });
 
@@ -1060,7 +1109,11 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("cli ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
+    expect(run.mock.calls[0]).toEqual([
+      "anthropic",
+      "claude-sonnet-4-6",
+      { agentHarnessRuntimeOverride: "claude-cli" },
+    ]);
   });
 
   it("does not treat command-lane watchdog timeouts as model fallback failures", async () => {
