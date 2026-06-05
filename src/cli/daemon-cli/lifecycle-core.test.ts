@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayService } from "../../daemon/service.js";
+import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,
@@ -443,6 +444,25 @@ describe("runServiceRestart token drift", () => {
     });
     expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
     expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("captures service restart warnings in json restart output", async () => {
+    service.restart.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+      args?.warn?.(
+        "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+      );
+      return { outcome: "completed" };
+    });
+
+    await runServiceRestart(createServiceRunArgs());
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toContain(
+      "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+    );
+    expect(service.restart).toHaveBeenCalledWith(
+      expect.objectContaining({ warn: expect.any(Function) }),
+    );
   });
 
   it("writes restart force and wait options into the service-manager intent", async () => {
