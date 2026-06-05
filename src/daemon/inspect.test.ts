@@ -359,8 +359,14 @@ describe("findExtraGatewayServices (win32)", () => {
     execSchtasksMock.mockResolvedValueOnce({
       code: 0,
       stdout: [
-        "TaskName: OpenClaw Gateway",
+        "TaskName: \\OpenClaw Gateway",
         "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        "",
+        "TaskName: \\OpenClaw Gateway (work)",
+        "Task To Run: C:\\work\\openclaw.exe gateway",
+        "",
+        "TaskName: \\OpenClaw Gateway Copy",
+        "Task To Run: C:\\custom\\openclaw.exe gateway",
         "",
         "TaskName: Clawdbot Legacy",
         "Task To Run: C:\\clawdbot\\clawdbot.exe run",
@@ -374,6 +380,14 @@ describe("findExtraGatewayServices (win32)", () => {
 
     const result = await findExtraGatewayServices({}, { deep: true });
     expect(result).toEqual([
+      {
+        platform: "win32",
+        label: "\\OpenClaw Gateway Copy",
+        detail: "task: \\OpenClaw Gateway Copy, run: C:\\custom\\openclaw.exe gateway",
+        scope: "system",
+        marker: "openclaw",
+        legacy: false,
+      },
       {
         platform: "win32",
         label: "Clawdbot Legacy",

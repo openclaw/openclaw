@@ -198,13 +198,27 @@ function isOpenClawGatewaySystemdService(name: string, contents: string): boolea
   return normalizeLowercaseStringOrEmpty(contents).includes("gateway");
 }
 
+function normalizeWindowsScheduledTaskName(name: string): string {
+  // schtasks reports root-folder tasks as \Name; compare against the durable task name.
+  return normalizeLowercaseStringOrEmpty(name.trim().replace(/^[\\/]+/u, ""));
+}
+
+function isProfiledOpenClawGatewayTaskName(name: string, defaultName: string): boolean {
+  const prefix = `${defaultName} (`;
+  if (!name.startsWith(prefix) || !name.endsWith(")")) {
+    return false;
+  }
+  const profile = name.slice(prefix.length, -1).trim();
+  return profile.length > 0 && !/[\\/]/u.test(profile);
+}
+
 function isOpenClawGatewayTaskName(name: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(name);
+  const normalized = normalizeWindowsScheduledTaskName(name);
   if (!normalized) {
     return false;
   }
   const defaultName = normalizeLowercaseStringOrEmpty(resolveGatewayWindowsTaskName());
-  return normalized === defaultName || normalized.startsWith("openclaw gateway");
+  return normalized === defaultName || isProfiledOpenClawGatewayTaskName(normalized, defaultName);
 }
 
 function tryExtractPlistLabel(contents: string): string | null {
