@@ -104,6 +104,10 @@ function isSignalSelfReactionTarget(params: {
   return Boolean(recipientPhone && accountPhone && recipientPhone === accountPhone);
 }
 
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
 async function sendReactionSignalCore(params: {
   recipient: string;
   targetTimestamp: number;
@@ -177,7 +181,7 @@ async function sendReactionSignalCore(params: {
   if (accountInfo.config.ingressMode === "note-to-self" && !groupId) {
     await discoverAccountUuid();
   }
-  const selfReactionEchoText =
+  const selfReactionEchoTexts =
     accountInfo.config.ingressMode === "note-to-self" &&
     !groupId &&
     isSignalSelfReactionTarget({
@@ -185,14 +189,25 @@ async function sendReactionSignalCore(params: {
       account,
       accountUuid,
     })
-      ? resolveSignalSelfReplyReactionEchoText({
-          emoji: normalizedEmoji,
-          remove: params.remove,
-          targetTimestamp: params.targetTimestamp,
-          targetAuthor: targetAuthorParams.targetAuthor,
-          targetAuthorUuid: params.opts.targetAuthorUuid,
-        })
-      : undefined;
+      ? uniqueStrings([
+          resolveSignalSelfReplyReactionEchoText({
+            emoji: normalizedEmoji,
+            remove: params.remove,
+            targetTimestamp: params.targetTimestamp,
+            targetAuthor: targetAuthorParams.targetAuthor,
+            targetAuthorUuid: params.opts.targetAuthorUuid,
+          }),
+          accountUuid
+            ? resolveSignalSelfReplyReactionEchoText({
+                emoji: normalizedEmoji,
+                remove: params.remove,
+                targetTimestamp: params.targetTimestamp,
+                targetAuthor: targetAuthorParams.targetAuthor,
+                targetAuthorUuid: params.opts.targetAuthorUuid ?? accountUuid,
+              })
+            : undefined,
+        ])
+      : [];
   const echoIdentities = [
     ...new Set(
       [accountUuid ?? undefined, account].filter((value): value is string => Boolean(value)),
@@ -221,7 +236,7 @@ async function sendReactionSignalCore(params: {
       });
     }
   };
-  if (selfReactionEchoText) {
+  for (const selfReactionEchoText of selfReactionEchoTexts) {
     await rememberSelfReactionEcho({
       messageId: "unknown",
       text: selfReactionEchoText,
@@ -237,15 +252,17 @@ async function sendReactionSignalCore(params: {
       apiMode,
     });
   } catch (err) {
-    if (selfReactionEchoText && isDefiniteSignalReactionFailure(err)) {
-      forgetSelfReactionEcho({
-        messageId: "unknown",
-        text: selfReactionEchoText,
-      });
+    if (isDefiniteSignalReactionFailure(err)) {
+      for (const selfReactionEchoText of selfReactionEchoTexts) {
+        forgetSelfReactionEcho({
+          messageId: "unknown",
+          text: selfReactionEchoText,
+        });
+      }
     }
     throw err;
   }
-  if (selfReactionEchoText) {
+  for (const selfReactionEchoText of selfReactionEchoTexts) {
     if (result?.timestamp != null) {
       forgetSelfReactionEcho({
         messageId: "unknown",
