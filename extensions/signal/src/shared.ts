@@ -20,9 +20,25 @@ import { SignalChannelConfigSchema } from "./config-schema.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 const SIGNAL_CHANNEL = "signal" as const;
+const INHERITED_NOTE_TO_SELF_FIELDS = [
+  "account",
+  "accountUuid",
+  "configPath",
+  "httpUrl",
+  "httpHost",
+  "httpPort",
+  "cliPath",
+  "ingressMode",
+] as const;
 
 type SignalConfigSection = {
   account?: string;
+  accountUuid?: string;
+  configPath?: string;
+  httpUrl?: string;
+  httpHost?: string;
+  httpPort?: number;
+  cliPath?: string;
   ingressMode?: string;
   accounts?: Record<string, Record<string, unknown> | undefined>;
 };
@@ -71,7 +87,17 @@ function materializeInheritedNoteToSelfAccounts(params: {
         (entry.ingressMode ?? originalSignal?.ingressMode) === "note-to-self";
       if (!entry.account && inheritedNoteToSelf) {
         changed = true;
-        return [accountId, { ...entry, account: rootAccount }];
+        const materialized: Record<string, unknown> = { ...entry, account: rootAccount };
+        for (const field of INHERITED_NOTE_TO_SELF_FIELDS) {
+          if (field in materialized) {
+            continue;
+          }
+          const value = originalSignal?.[field];
+          if (value !== undefined) {
+            materialized[field] = value;
+          }
+        }
+        return [accountId, materialized];
       }
       return [accountId, entry];
     }),

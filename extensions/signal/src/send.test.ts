@@ -414,6 +414,14 @@ describe("sendMessageSignal receipts", () => {
       text: "<media:image:image/png:4321>",
       persist: false,
     });
+    expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith({
+      accountId: "default",
+      accountIdentity: "+15550001111",
+      messageId: "unknown",
+      timestamp: undefined,
+      text: "<media:image>",
+      persist: false,
+    });
   });
 
   it("records UUID-addressed self-send echoes for note-to-self accounts", async () => {

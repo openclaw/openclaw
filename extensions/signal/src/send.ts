@@ -79,6 +79,15 @@ function isSignalUuidRecipient(value: string): boolean {
   return looksLikeUuid(value.trim().replace(/^uuid:/i, ""));
 }
 
+function resolveGenericMediaEchoText(contentType?: string): string {
+  const kind = kindFromMime(contentType ?? undefined);
+  return kind ? `<media:${kind}>` : "<media:attachment>";
+}
+
+function uniqueEchoTexts(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
 async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
   if (opts.baseUrl?.trim() && opts.account?.trim()) {
     return undefined;
@@ -346,8 +355,13 @@ export async function sendMessageSignal(
             .catch(() => undefined),
         })
       : undefined;
-  const fallbackEchoText = messageFromPlaceholder ? attachmentEchoText : message;
-  if (shouldRememberSelfEcho && fallbackEchoText) {
+  const attachmentFallbackEchoText = attachmentEchoMetadata
+    ? resolveGenericMediaEchoText(attachmentEchoMetadata.contentType)
+    : undefined;
+  const fallbackEchoTexts = messageFromPlaceholder
+    ? uniqueEchoTexts([attachmentEchoText, attachmentFallbackEchoText])
+    : uniqueEchoTexts([message]);
+  for (const fallbackEchoText of shouldRememberSelfEcho ? fallbackEchoTexts : []) {
     await rememberSignalSelfReplyEcho({
       accountId: accountInfo.accountId,
       accountIdentity: accountUuid ?? account,
@@ -365,13 +379,15 @@ export async function sendMessageSignal(
       apiMode,
     });
   } catch (err) {
-    if (shouldRememberSelfEcho && fallbackEchoText && isDefiniteSignalSendFailure(err)) {
-      forgetSignalSelfReplyEcho({
-        accountId: accountInfo.accountId,
-        accountIdentity: accountUuid ?? account,
-        messageId: "unknown",
-        text: fallbackEchoText,
-      });
+    if (shouldRememberSelfEcho && isDefiniteSignalSendFailure(err)) {
+      for (const fallbackEchoText of fallbackEchoTexts) {
+        forgetSignalSelfReplyEcho({
+          accountId: accountInfo.accountId,
+          accountIdentity: accountUuid ?? account,
+          messageId: "unknown",
+          text: fallbackEchoText,
+        });
+      }
     }
     throw err;
   }
@@ -387,7 +403,7 @@ export async function sendMessageSignal(
     targetAuthorUuid: accountUuid,
   });
   if (shouldRememberSelfEcho && timestamp != null) {
-    if (fallbackEchoText) {
+    for (const fallbackEchoText of fallbackEchoTexts) {
       forgetSignalSelfReplyEcho({
         accountId: accountInfo.accountId,
         accountIdentity: accountUuid ?? account,
@@ -400,16 +416,18 @@ export async function sendMessageSignal(
       accountIdentity: accountUuid ?? account,
       messageId,
       timestamp,
-      text: fallbackEchoText ?? message,
+      text: fallbackEchoTexts[0] ?? message,
     });
-  } else if (shouldRememberSelfEcho && fallbackEchoText) {
-    await rememberSignalSelfReplyEcho({
-      accountId: accountInfo.accountId,
-      accountIdentity: accountUuid ?? account,
-      messageId: "unknown",
-      text: fallbackEchoText,
-      persist: false,
-    });
+  } else if (shouldRememberSelfEcho) {
+    for (const fallbackEchoText of fallbackEchoTexts) {
+      await rememberSignalSelfReplyEcho({
+        accountId: accountInfo.accountId,
+        accountIdentity: accountUuid ?? account,
+        messageId: "unknown",
+        text: fallbackEchoText,
+        persist: false,
+      });
+    }
   }
   return {
     messageId,

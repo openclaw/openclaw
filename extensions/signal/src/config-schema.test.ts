@@ -73,6 +73,8 @@ describe("signal groups schema", () => {
         channels: {
           signal: {
             account: "+15555550123",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            configPath: "/tmp/signal-cli",
             ingressMode: "note-to-self",
             accounts: {
               work: {},
@@ -88,6 +90,9 @@ describe("signal groups schema", () => {
       accounts: {
         work: {
           account: "+15555550123",
+          accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+          configPath: "/tmp/signal-cli",
+          ingressMode: "note-to-self",
         },
       },
     });
