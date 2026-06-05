@@ -593,6 +593,50 @@ describe("openai transport stream", () => {
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
     });
+    expect(headers.Accept).toBeUndefined();
+    expect(headers.accept).toBeUndefined();
+  });
+
+  it("adds SSE Accept only to native ChatGPT/Codex Responses stream requests", () => {
+    const codexModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 400000,
+      maxTokens: 128000,
+    } satisfies Model<"openai-chatgpt-responses">;
+    const transportAliasModel = {
+      ...codexModel,
+      api: "openclaw-openai-responses-transport" as Api,
+    } satisfies Model;
+    const nonNativeChatGPTModel = {
+      ...codexModel,
+      baseUrl: "https://api.openai.com/v1",
+    } satisfies Model<"openai-chatgpt-responses">;
+    const openAIModel = {
+      ...codexModel,
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } satisfies Model<"openai-responses">;
+
+    expect(testing.buildOpenAISdkRequestOptions(codexModel, undefined, { stream: true })).toEqual({
+      headers: { Accept: "text/event-stream" },
+    });
+    expect(
+      testing.buildOpenAISdkRequestOptions(transportAliasModel, undefined, { stream: true }),
+    ).toEqual({ headers: { Accept: "text/event-stream" } });
+    expect(testing.buildOpenAISdkRequestOptions(codexModel)).toBeUndefined();
+    expect(
+      testing.buildOpenAISdkRequestOptions(nonNativeChatGPTModel, undefined, { stream: true }),
+    ).toBeUndefined();
+    expect(
+      testing.buildOpenAISdkRequestOptions(openAIModel, undefined, { stream: true }),
+    ).toBeUndefined();
   });
 
   it("moves Azure OpenAI completions api-version headers into default query params", () => {
