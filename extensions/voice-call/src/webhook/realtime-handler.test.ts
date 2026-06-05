@@ -723,6 +723,11 @@ describe("RealtimeCallHandler path routing", () => {
     let callbacks:
       | {
           onAudio?: (audio: Buffer) => void;
+          onEvent?: (event: {
+            direction: "client" | "server";
+            type: string;
+            detail?: string;
+          }) => void;
         }
       | undefined;
     const sendAudio = vi.fn();
@@ -767,12 +772,20 @@ describe("RealtimeCallHandler path routing", () => {
         });
 
         callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
-        const speechPayload = Buffer.alloc(160, 0x00).toString("base64");
-        ws.send(JSON.stringify({ event: "media", media: { payload: speechPayload } }));
-        ws.send(JSON.stringify({ event: "media", media: { payload: speechPayload } }));
+        callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
 
         await waitForRealtimeTest(() => {
-          expect(sendAudio).toHaveBeenCalledTimes(2);
+          const recent = call.metadata?.recentTalkEvents as
+            | Array<{
+                turnId?: string;
+                type: string;
+              }>
+            | undefined;
+          const cancelled = recent?.find((event) => event.type === "turn.cancelled");
+          if (!cancelled) {
+            throw new Error("expected provider barge-in to cancel the active turn");
+          }
+          expect(cancelled.turnId).toMatch(/^turn-\d+$/);
         });
 
         const recent = call.metadata?.recentTalkEvents as
@@ -786,7 +799,7 @@ describe("RealtimeCallHandler path routing", () => {
           throw new Error("expected barge-in to cancel the active turn");
         }
         expect(cancelled.turnId).toMatch(/^turn-\d+$/);
-        expect(recent?.findLast((event) => event.type === "input.audio.delta")?.turnId).not.toBe(
+        expect(recent?.findLast((event) => event.type === "output.audio.done")?.turnId).toBe(
           cancelled.turnId,
         );
       } finally {

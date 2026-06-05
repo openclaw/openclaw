@@ -784,7 +784,21 @@ export class RealtimeCallHandler {
       },
       onEvent: (event) => {
         if (event.type === "input_audio_buffer.speech_started") {
-          ensureTalkTurn();
+          const interruptedTurnId = ensureTalkTurn();
+          if (talk.outputAudioActive) {
+            const clearedBytes = audioPacer.clearAudio();
+            console.log(
+              `[voice-call] realtime outbound audio cleared by provider barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+            );
+            finishOutputAudio("provider-barge-in");
+            const cancelled = talk.cancelTurn({
+              turnId: interruptedTurnId,
+              payload: { callId, providerCallId: callSid, reason: "provider-barge-in" },
+            });
+            if (cancelled.ok) {
+              rememberTalkEvent(cancelled.event);
+            }
+          }
           return;
         }
         if (event.type === "input_audio_buffer.speech_stopped") {
@@ -868,19 +882,9 @@ export class RealtimeCallHandler {
     const sendAudioToSession = session.sendAudio.bind(session);
     session.sendAudio = (audio) => {
       if (speechDetector.accept(audio)) {
-        const interruptedTurnId = ensureTalkTurn();
-        const clearedBytes = audioPacer.clearAudio();
         console.log(
-          `[voice-call] realtime outbound audio cleared by barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+          `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );
-        finishOutputAudio("barge-in");
-        const cancelled = talk.cancelTurn({
-          turnId: interruptedTurnId,
-          payload: { callId, providerCallId: callSid, reason: "barge-in" },
-        });
-        if (cancelled.ok) {
-          rememberTalkEvent(cancelled.event);
-        }
       }
       emitTalkEvent({
         type: "input.audio.delta",
