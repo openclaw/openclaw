@@ -1437,10 +1437,10 @@ class NodeRuntime(
   ) {
     activeGatewayAuth = auth
     val tls = connectionManager.resolveTlsParams(endpoint)
-    
+
     val tunnelConfig = prefs.loadSshTunnelConfig()
     sshTunnelManager.start(tunnelConfig)
-    
+
     val effectiveEndpoint = if (tunnelConfig.enabled) {
       endpoint.copy(host = "127.0.0.1", port = tunnelConfig.localPort)
     } else {
@@ -1490,7 +1490,7 @@ class NodeRuntime(
     val connectAttemptId = connectAttemptSeq.incrementAndGet()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
-    
+
     val tunnelConfig = prefs.loadSshTunnelConfig()
     if (tunnelConfig.enabled) {
       _statusText.value = "Starting SSH tunnel…"
@@ -1504,7 +1504,7 @@ class NodeRuntime(
         tls.expectedFingerprint
           ?.let(::normalizeGatewayTlsFingerprint)
           ?.takeIf { it.isNotBlank() }
-      
+
       scope.launch {
         if (tunnelConfig.enabled) {
           var waited = 0
@@ -1519,11 +1519,11 @@ class NodeRuntime(
           }
           _statusText.value = "Verify gateway TLS fingerprint…"
         }
-        
+
         val probeHost = if (tunnelConfig.enabled) "127.0.0.1" else endpoint.host
         val probePort = if (tunnelConfig.enabled) tunnelConfig.localPort else endpoint.port
         val tlsProbe = tlsFingerprintProbe(probeHost, probePort)
-        
+
         if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
         val fp =
           tlsProbe.fingerprintSha256 ?: run {
