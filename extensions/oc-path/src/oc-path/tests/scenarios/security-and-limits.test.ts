@@ -1,3 +1,4 @@
+// OC Path tests cover security and limits plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   MAX_PATH_LENGTH,

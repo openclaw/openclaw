@@ -1,3 +1,4 @@
+// Creates reusable import-boundary guards for bundled extension source trees.
 import { promises as fs } from "node:fs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./bundled-plugin-paths.mjs";
 import {
@@ -64,6 +65,7 @@ function scanImportBoundaryViolations(source, filePath, boundaryLabel, allowReso
   return entries;
 }
 
+/** Create a boundary checker with cached inventory collection and a CLI-style main function. */
 export function createExtensionImportBoundaryChecker(params) {
   const scanRoots = resolveSourceRoots(repoRoot, params.roots);
 

@@ -1,3 +1,4 @@
+// Package Mac App tests cover package mac app script behavior.
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

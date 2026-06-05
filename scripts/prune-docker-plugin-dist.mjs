@@ -1,3 +1,5 @@
+// Prunes omitted bundled plugin files and their unshared runtime dependencies
+// from Docker-oriented production package output.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,6 +20,9 @@ function parsePluginList(value) {
   );
 }
 
+/**
+ * Parses OPENCLAW_EXTENSIONS into the bundled plugin ids that Docker should keep.
+ */
 export function parseDockerPluginKeepList(value) {
   return parsePluginList(value);
 }
@@ -158,6 +163,9 @@ function pruneNodeModulesForOmittedPlugins(repoRoot, bundledPluginDir, omittedPl
   return removed;
 }
 
+/**
+ * Removes omitted plugin dist trees plus node_modules packages not needed by kept runtime code.
+ */
 export function pruneDockerPluginDist(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const env = params.env ?? process.env;

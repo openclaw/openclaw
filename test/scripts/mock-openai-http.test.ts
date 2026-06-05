@@ -1,3 +1,4 @@
+// Mock Openai Http tests cover mock openai http script behavior.
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {

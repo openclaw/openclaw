@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime room behavior.
 import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";

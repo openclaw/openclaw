@@ -1,3 +1,4 @@
+// Host Command script supports OpenClaw repository automation.
 import { spawn, spawnSync, type SpawnOptions, type SpawnSyncReturns } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -15,6 +16,7 @@ const HOST_COMMAND_WRAPPER_BACKSTOP_MS = 5_000;
 const HOST_COMMAND_CHILD_PID_PREFIX = "__OPENCLAW_HOST_COMMAND_CHILD_PID__";
 const HOST_COMMAND_SPAWN_ERROR_PREFIX = "__OPENCLAW_HOST_COMMAND_SPAWN_ERROR__";
 const HOST_COMMAND_TIMEOUT_PREFIX = "__OPENCLAW_HOST_COMMAND_TIMEOUT__";
+let progressStderrDepth = 0;
 
 type HostCommandInvocation = {
   args: string[];
@@ -42,11 +44,21 @@ function hostInvocationFromRunner(runner: HostCommandInvocation): HostCommandInv
 }
 
 export function say(message: string): void {
-  process.stdout.write(`==> ${message}\n`);
+  const stream = progressStderrDepth > 0 ? process.stderr : process.stdout;
+  stream.write(`==> ${message}\n`);
 }
 
 export function warn(message: string): void {
   process.stderr.write(`warn: ${message}\n`);
+}
+
+export async function withProgressOnStderr<T>(fn: () => Promise<T>): Promise<T> {
+  progressStderrDepth++;
+  try {
+    return await fn();
+  } finally {
+    progressStderrDepth--;
+  }
 }
 
 export function die(message: string): never {
@@ -508,7 +520,12 @@ export async function runStreaming(
         } else {
           resolve(code ?? (signal ? 128 : 1));
         }
-      })();
+      })().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        reject(
+          new Error(`failed to write Parallels host command log: ${message}`, { cause: error }),
+        );
+      });
     });
   });
 }

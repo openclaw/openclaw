@@ -1,3 +1,4 @@
+// Zalo API module exposes the plugin public contract.
 export {
   type BaseProbeResult,
   type BaseTokenResolution,

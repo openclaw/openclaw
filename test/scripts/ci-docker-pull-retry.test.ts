@@ -1,3 +1,4 @@
+// Ci Docker Pull Retry tests cover ci docker pull retry script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

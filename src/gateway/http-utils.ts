@@ -1,3 +1,5 @@
+// Gateway HTTP request helpers.
+// Resolves OpenAI-compatible agent/model/session headers and re-exports auth helpers.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import {
@@ -32,6 +34,7 @@ export {
 } from "./http-auth-utils.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
+/** Default OpenAI-compatible model alias that targets the default OpenClaw agent. */
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
 
 function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
@@ -45,6 +48,7 @@ function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   return normalizeAgentId(raw);
 }
 
+/** Resolves the target agent encoded by an OpenAI-compatible model id. */
 export function resolveAgentIdFromModel(
   model: string | undefined,
   cfg = getRuntimeConfig(),
@@ -68,6 +72,7 @@ export function resolveAgentIdFromModel(
   return normalizeAgentId(agentId);
 }
 
+/** Validates and resolves the `x-openclaw-model` override for OpenAI-compatible requests. */
 export async function resolveOpenAiCompatModelOverride(params: {
   req: IncomingMessage;
   agentId: string;
@@ -104,6 +109,8 @@ export async function resolveOpenAiCompatModelOverride(params: {
     return { errorMessage: "Invalid `x-openclaw-model`." };
   }
 
+  // Overrides must pass the same visibility policy as model picker surfaces;
+  // otherwise API clients could target hidden plugin/provider models by header.
   const catalog = await loadGatewayModelCatalog();
   const policy = createModelVisibilityPolicy({
     cfg,
@@ -124,6 +131,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
   return { modelOverride: raw };
 }
 
+/** Resolves the request agent from headers, model alias, or the configured default. */
 export function resolveAgentIdForRequest(params: {
   req: IncomingMessage;
   model: string | undefined;
@@ -154,6 +162,7 @@ function resolveSessionKey(params: {
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
+/** Resolves gateway agent/session/channel context for OpenAI-compatible handlers. */
 export function resolveGatewayRequestContext(params: {
   req: IncomingMessage;
   model: string | undefined;

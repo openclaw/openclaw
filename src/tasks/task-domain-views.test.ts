@@ -1,3 +1,4 @@
+// Verifies task domain view projections from registry and flow records.
 import { describe, expect, it } from "vitest";
 import {
   mapTaskFlowDetail,

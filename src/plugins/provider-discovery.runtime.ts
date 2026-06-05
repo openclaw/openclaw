@@ -1,3 +1,4 @@
+// Runtime boundary for provider discovery through plugin entrypoints.
 import path from "node:path";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";

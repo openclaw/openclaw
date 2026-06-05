@@ -1,3 +1,4 @@
+// Provider-index normalization validates generated discovery metadata and rejects unsafe provider entries.
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
@@ -16,6 +17,8 @@ import type {
   OpenClawProviderIndexProvider,
 } from "./types.js";
 
+// Provider-index normalization accepts generated discovery metadata from the
+// bundled index and rejects malformed or prototype-polluting entries.
 const OPENCLAW_PROVIDER_INDEX_VERSION = 1;
 
 function normalizeSafeKey(value: unknown): string {
@@ -31,6 +34,7 @@ function normalizeInstall(value: unknown): OpenClawProviderIndexPluginInstall | 
   const parsedClawHub = clawhubSpec ? parseClawHubPluginSpec(clawhubSpec) : null;
   const npmSpec = normalizeOptionalString(value.npmSpec);
   const parsedNpm = npmSpec ? parseRegistryNpmSpec(npmSpec) : null;
+  // Install metadata is useful only when at least one install spec parses.
   if (!parsedClawHub && !parsedNpm) {
     return undefined;
   }
@@ -78,6 +82,8 @@ function normalizePreviewCatalog(params: {
   providerId: string;
   value: unknown;
 }): ModelCatalogProvider | undefined {
+  // Reuse catalog-core normalization so preview models obey the same model
+  // schema as installed plugin manifests.
   const catalog = normalizeModelCatalog(
     { providers: { [params.providerId]: params.value } },
     { ownedProviders: new Set([params.providerId]) },
@@ -217,6 +223,8 @@ export function normalizeOpenClawProviderIndex(value: unknown): OpenClawProvider
   const providers: Record<string, OpenClawProviderIndexProvider> = {};
   for (const [rawProviderId, rawProvider] of Object.entries(value.providers)) {
     const providerId = normalizeModelCatalogProviderId(rawProviderId);
+    // Provider ids become object keys, so blocked keys are dropped before
+    // writing into the normalized provider map.
     if (!providerId || isBlockedObjectKey(providerId)) {
       continue;
     }

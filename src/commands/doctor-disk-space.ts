@@ -1,3 +1,4 @@
+/** Doctor contribution for low disk space around the OpenClaw state directory. */
 import os from "node:os";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/config.js";

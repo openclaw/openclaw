@@ -1,3 +1,6 @@
+/**
+ * Resolves bundled static catalog rows for embedded-agent model selection.
+ */
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,6 +13,9 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 
+/**
+ * Resolves bundled plugin static model-catalog rows into runtime model records.
+ */
 function rowMatchesModel(params: {
   row: NormalizedModelCatalogRow;
   provider: string;
@@ -45,6 +51,7 @@ function normalizeStaticCatalogCost(
   };
 }
 
+/** Converts a normalized catalog row into the provider runtime model shape. */
 function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRuntimeModel {
   return {
     id: row.id,
@@ -112,6 +119,7 @@ function resolveManifestModelCatalogProviderAlias(params: {
   return targets.size === 1 ? [...targets][0] : undefined;
 }
 
+/** Resolves a provider alias from plugin model-catalog metadata when the alias is unambiguous. */
 export function canonicalizeManifestModelCatalogProviderAlias(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -134,6 +142,7 @@ export function canonicalizeManifestModelCatalogProviderAlias(params: {
   );
 }
 
+/** Returns whether a bundled static catalog asks runtime discovery to augment its rows. */
 export function bundledStaticCatalogProviderUsesRuntimeAugment(params: {
   provider: string;
   env?: NodeJS.ProcessEnv;
@@ -158,6 +167,7 @@ export function bundledStaticCatalogProviderUsesRuntimeAugment(params: {
   });
 }
 
+/** Resolves one bundled static-catalog model row for provider/model lookup. */
 export function resolveBundledStaticCatalogModel(params: {
   provider: string;
   modelId: string;
@@ -183,6 +193,8 @@ export function resolveBundledStaticCatalogModel(params: {
       entry.discovery !== "static" &&
       !(params.includeRuntimeDiscovery && entry.discovery === "runtime")
     ) {
+      // Static lookups normally ignore runtime-discovery rows. Callers opt in only when they are
+      // merging static catalog facts with already-discovered provider runtime state.
       continue;
     }
     const row = entry.rows.find((candidate) =>

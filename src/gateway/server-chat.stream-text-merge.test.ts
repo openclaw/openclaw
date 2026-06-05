@@ -1,3 +1,6 @@
+/**
+ * Tests chat stream text merging before gateway events reach clients.
+ */
 import { describe, expect, it } from "vitest";
 import { MAX_LIVE_CHAT_BUFFER_CHARS, resolveMergedAssistantText } from "./live-chat-projector.js";
 

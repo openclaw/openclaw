@@ -1,3 +1,4 @@
+// Covers automatic NODE_EXTRA_CA_CERTS discovery and validation.
 import { describe, expect, it } from "vitest";
 import {
   isNodeVersionManagerRuntime,

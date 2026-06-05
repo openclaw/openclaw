@@ -1,3 +1,7 @@
+/**
+ * Manages optional local provider sidecar processes attached to models. Leases
+ * keep shared services alive while requests run and stop them after idle.
+ */
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import {
@@ -36,10 +40,12 @@ type LocalServiceExit = {
   signal: NodeJS.Signals | null;
 };
 
+/** Lease returned for a started or already-running local provider service. */
 export type ProviderLocalServiceLease = {
   release: () => void;
 };
 
+/** Attach local-service startup metadata to a model without mutating the original object. */
 export function attachModelProviderLocalService<TModel extends object>(
   model: TModel,
   service: ModelProviderLocalServiceConfig | undefined,
@@ -52,12 +58,14 @@ export function attachModelProviderLocalService<TModel extends object>(
   return next;
 }
 
+/** Read local-service startup metadata attached to a model. */
 export function getModelProviderLocalService(
   model: object,
 ): ModelProviderLocalServiceConfig | undefined {
   return (model as ModelWithProviderLocalService)[MODEL_PROVIDER_LOCAL_SERVICE_SYMBOL];
 }
 
+/** Ensure a model's local provider service is healthy and return a lease. */
 export async function ensureModelProviderLocalService(
   model: Model,
   probeHeaders?: HeadersInit,
@@ -98,6 +106,7 @@ export async function ensureModelProviderLocalService(
       return { release };
     }
     if (!managed.starting) {
+      // Concurrent callers share one startup promise for the same service key.
       const startupAbort = new AbortController();
       managed.startupAbort = startupAbort;
       managed.starting = startAndWaitForLocalService({
@@ -135,6 +144,7 @@ export async function ensureModelProviderLocalService(
   }
 }
 
+/** Stop all managed local services and clear process state for tests. */
 export function stopManagedProviderLocalServicesForTest(): void {
   for (const [key, managed] of services) {
     stopManagedService(key, managed, "test");
@@ -307,6 +317,7 @@ function scheduleIdleStop(
   if (idleStopMs === undefined) {
     return;
   }
+  // Services without idleStopMs remain running until process exit or test cleanup.
   managed.idleTimer = setTimeout(() => {
     if (managed.active === 0) {
       stopManagedService(key, managed, "idle");
@@ -498,6 +509,7 @@ function waitForChildExit(
   });
 }
 
+/** Return whether a child process has already reported an exit code or signal. */
 export function hasLocalServiceProcessExited(
   child: Pick<ChildProcess, "exitCode" | "signalCode">,
 ): boolean {

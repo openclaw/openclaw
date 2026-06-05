@@ -1,3 +1,4 @@
+// Qa E2E tests cover qa e2e script behavior.
 import { describe, expect, it } from "vitest";
 import { enablePrivateQaScriptEnv, resolveQaE2eOutputPath } from "../../scripts/qa-e2e.js";
 

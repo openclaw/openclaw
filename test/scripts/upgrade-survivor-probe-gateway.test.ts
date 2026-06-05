@@ -1,3 +1,4 @@
+// Upgrade Survivor Probe Gateway tests cover upgrade survivor probe gateway script behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createServer as createHttpServer } from "node:http";

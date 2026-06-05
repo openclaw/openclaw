@@ -1,3 +1,4 @@
+// OpenClaw SDK tests cover package behavior.
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";

@@ -1,3 +1,4 @@
+// Live Docker Auth tests cover live docker auth script behavior.
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

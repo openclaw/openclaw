@@ -1,3 +1,4 @@
+// Registers plugin-provided models into the model catalog.
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogSource,
@@ -58,6 +59,7 @@ function mergeModelCatalogHooks(
   };
 }
 
+/** Creates handlers that register plugin model catalog providers into a registry. */
 export function createModelCatalogRegistrationHandlers(params: {
   registry: PluginRegistry;
   pushDiagnostic: (diagnostic: PluginDiagnostic) => void;

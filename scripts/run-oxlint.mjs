@@ -1,3 +1,5 @@
+// Runs oxlint with local heavy-check policy, sparse-checkout filtering, and
+// plugin package-boundary artifact preparation when needed.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -38,10 +40,16 @@ const OXLINT_VALUE_FLAGS = new Set([
   "--warn",
 ]);
 
+/**
+ * Returns whether oxlint args need package-boundary declaration artifacts first.
+ */
 export function shouldPrepareExtensionPackageBoundaryArtifacts(args) {
   return !args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg));
 }
 
+/**
+ * Drops tracked-but-missing sparse-checkout targets so narrow sparse checks can pass.
+ */
 export function filterSparseMissingOxlintTargets(
   args,
   {
@@ -194,6 +202,9 @@ async function prepareExtensionPackageBoundaryArtifacts(env) {
   }
 }
 
+/**
+ * Applies wrapper policy and runs oxlint with the final argument list.
+ */
 export async function main(argv = process.argv.slice(2), runtimeEnv = process.env) {
   const { args: policyArgs, env } = applyLocalOxlintPolicy(
     argv,

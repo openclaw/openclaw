@@ -1,3 +1,8 @@
+/**
+ * Effective tool inventory resolver.
+ *
+ * Builds model-visible tool lists after profile, provider, plugin, policy, and compatibility filters.
+ */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -65,6 +70,7 @@ function buildToolInventoryNotices(params: {
     return undefined;
   }
 
+  // Browser can be configured yet absent after policy/profile/plugin filtering; surface why.
   const browserDenied = [
     params.effectivePolicy.globalPolicy,
     params.effectivePolicy.globalProviderPolicy,
@@ -169,6 +175,7 @@ function resolveDynamicRuntimeModelContext(params: {
   };
 }
 
+/** Resolves the runtime model metadata needed to filter model-compatible tools. */
 export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -203,6 +210,7 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
     workspaceDir,
   });
   if (configuredModel) {
+    // Configured model entries override the bundled catalog but inherit missing transport details.
     const configuredApi =
       normalizeOptionalString(configuredModel.api) ??
       normalizeOptionalString(providerConfig?.api) ??
@@ -283,6 +291,7 @@ function resolveEffectiveModelCompat(params: {
   return extractModelCompat(match);
 }
 
+/** Resolves the grouped effective tool inventory and user-visible filtering notices. */
 export function resolveEffectiveToolInventory(
   params: ResolveEffectiveToolInventoryParams,
 ): EffectiveToolInventoryResult {

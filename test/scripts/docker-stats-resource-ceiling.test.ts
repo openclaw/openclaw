@@ -1,5 +1,6 @@
+// Docker Stats Resource Ceiling tests cover docker stats resource ceiling script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -72,6 +73,14 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
     expect(result.stdout).toContain("memory=128.0MiB");
     expect(result.stdout).toContain("cpu=25.0%");
     expect(result.stdout).toContain("samples=1");
+  });
+
+  it("streams stats logs instead of slurping them into memory", () => {
+    const source = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(source).toContain("createReadStream");
+    expect(source).not.toContain("readFileSync(statsFile");
+    expect(source).not.toContain("split(/\\r?\\n/u)");
   });
 
   it("accepts byte-unit Docker memory samples", () => {

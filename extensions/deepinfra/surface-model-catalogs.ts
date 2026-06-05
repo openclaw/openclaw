@@ -1,3 +1,4 @@
+// Deepinfra plugin module implements surface model catalogs behavior.
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogProviderContext,

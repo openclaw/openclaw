@@ -1,3 +1,4 @@
+// Rtt Harness tests cover rtt harness script behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -207,7 +208,27 @@ describe("RTT harness", () => {
     expect(script).toContain("start_credential_heartbeat() {\n  (\n    set +e");
     expect(script).toContain("Convex credential heartbeat exited with status");
     expect(script).toContain('kill -TERM "$rtt_shell_pid"');
+    expect(script).toContain("const controller = new AbortController();");
+    expect(script).toContain("const timer = setTimeout(() => controller.abort(), 1000);");
+    expect(script).toContain('if [ "$mock_ready" != "1" ]; then');
+    expect(script).toContain("Mock OpenAI server did not become ready");
+    expect(script).not.toContain("fetch('http://127.0.0.1:${mock_port}/health')");
     expect(script).not.toContain('export TELEGRAM_BOT_TOKEN="$OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN"');
+  });
+
+  it("keeps RTT Docker artifacts isolated by default", async () => {
+    const script = await fs.readFile(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      'RUN_ID="${OPENCLAW_NPM_TELEGRAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"',
+    );
+    expect(script).toContain(
+      'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-rtt/$RUN_ID}"',
+    );
+    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
+    expect(script).not.toContain(
+      'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-rtt}"',
+    );
   });
 
   it("keeps broker helper heartbeat handling aligned with QA leases", async () => {
