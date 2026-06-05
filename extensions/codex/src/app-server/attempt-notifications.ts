@@ -115,6 +115,14 @@ export function isRawReasoningCompletionNotification(
   return item ? readString(item, "type") === "reasoning" : false;
 }
 
+/** Returns true for streamed app-server reasoning text progress. */
+export function isReasoningDeltaNotification(notification: CodexServerNotification): boolean {
+  return (
+    notification.method === "item/reasoning/textDelta" ||
+    notification.method === "item/reasoning/summaryTextDelta"
+  );
+}
+
 /** Returns true when assistant completion can release the short idle watch. */
 export function isAssistantCompletionReleaseNotification(
   notification: CodexServerNotification,
