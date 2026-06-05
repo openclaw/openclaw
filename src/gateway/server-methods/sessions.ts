@@ -303,9 +303,15 @@ export function emitSessionsChanged(
     payload.reason === "reset" || payload.reason === "delete" || payload.reason === "new";
 
   if (isTeardown) {
-    const msgSubs = payload.sessionKey
-      ? context.getSessionMessageSubscriberConnIds(payload.sessionKey)
-      : new Set<string>();
+    let msgSubs = new Set<string>();
+    if (payload.sessionKey) {
+      const subscriptionKey = resolveSessionMessageSubscriptionKey({
+        canonicalKey: payload.sessionKey,
+        agentId: payload.agentId,
+        defaultAgentId: resolveDefaultAgentId(context.getRuntimeConfig()),
+      });
+      msgSubs = context.getSessionMessageSubscriberConnIds(subscriptionKey);
+    }
     const drainConnIds = new Set<string>([...evSubs, ...msgSubs]);
 
     if (drainConnIds.size > 0 && payload.sessionKey) {
