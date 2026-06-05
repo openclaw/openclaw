@@ -1,10 +1,13 @@
+// Exercises npm-managed root detection across package-manager markers.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import YAML from "yaml";
 import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
@@ -19,7 +22,7 @@ const fixtureRootTracker = createSuiteTempRootTracker({
   prefix: "openclaw-npm-managed-root-",
 });
 const tempDirs: string[] = [];
-let previousNpmGlobalConfig: string | undefined;
+let npmConfigEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 const successfulSpawn = {
   code: 0,
@@ -38,7 +41,7 @@ async function makeTempRoot(): Promise<string> {
 
 beforeAll(async () => {
   const fixtureRoot = await fixtureRootTracker.setup();
-  previousNpmGlobalConfig = process.env.NPM_CONFIG_GLOBALCONFIG;
+  npmConfigEnvSnapshot = captureEnv(["NPM_CONFIG_GLOBALCONFIG"]);
   const globalConfig = path.join(fixtureRoot, "global-npmrc");
   await fs.writeFile(globalConfig, "", "utf8");
   process.env.NPM_CONFIG_GLOBALCONFIG = globalConfig;
@@ -49,11 +52,8 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  if (previousNpmGlobalConfig === undefined) {
-    delete process.env.NPM_CONFIG_GLOBALCONFIG;
-  } else {
-    process.env.NPM_CONFIG_GLOBALCONFIG = previousNpmGlobalConfig;
-  }
+  npmConfigEnvSnapshot?.restore();
+  npmConfigEnvSnapshot = undefined;
   await fixtureRootTracker.cleanup();
 });
 
@@ -232,18 +232,20 @@ describe("managed npm root", () => {
     });
   });
 
-  it("reads package-level npm overrides for managed plugin installs", async () => {
-    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual({
+  it("reads workspace pnpm overrides for managed plugin installs", async () => {
+    const workspace = YAML.parse(
+      await fs.readFile(path.resolve(process.cwd(), "pnpm-workspace.yaml"), "utf8"),
+    ) as { overrides?: Record<string, unknown> };
+    const expectedOverrides = workspace.overrides ?? {};
+
+    expect(expectedOverrides).toMatchObject({
       axios: "1.16.0",
-      "fast-uri": "3.1.2",
-      "follow-redirects": "1.16.0",
-      "ip-address": "10.2.0",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-      uuid: "14.0.0",
     });
+    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual(expectedOverrides);
   });
 
-  it("resolves package-level npm overrides from packaged dist chunks", async () => {
+  it("resolves workspace pnpm overrides from packaged dist chunks", async () => {
     const packageRoot = await makeTempRoot();
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
     await fs.writeFile(
@@ -251,13 +253,14 @@ describe("managed npm root", () => {
       `${JSON.stringify(
         {
           name: "openclaw",
-          overrides: {
-            axios: "1.16.0",
-          },
         },
         null,
         2,
       )}\n`,
+    );
+    await fs.writeFile(
+      path.join(packageRoot, "pnpm-workspace.yaml"),
+      "overrides:\n  axios: 1.16.0\n",
     );
 
     await expect(
@@ -284,19 +287,23 @@ describe("managed npm root", () => {
           optionalDependencies: {
             "optional-runtime": "2.0.0",
           },
-          overrides: {
-            "managed-runtime": "$managed-runtime",
-            nested: {
-              "optional-runtime": "$optional-runtime",
-              alias: "$node-domexception",
-            },
-            axios: "1.16.0",
-            "node-domexception": "$node-domexception",
-          },
         },
         null,
         2,
       )}\n`,
+    );
+    await fs.writeFile(
+      path.join(packageRoot, "pnpm-workspace.yaml"),
+      [
+        "overrides:",
+        '  managed-runtime: "$managed-runtime"',
+        "  nested:",
+        '    optional-runtime: "$optional-runtime"',
+        '    alias: "$node-domexception"',
+        "  axios: 1.16.0",
+        '  node-domexception: "$node-domexception"',
+        "",
+      ].join("\n"),
     );
 
     await expect(readOpenClawManagedNpmRootOverrides({ packageRoot })).resolves.toEqual({

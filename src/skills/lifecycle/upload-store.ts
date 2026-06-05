@@ -1,3 +1,4 @@
+// Skill upload store persists uploaded skill archives before installation.
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
@@ -13,6 +14,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createAsyncLock, readDurableJsonFile, writeJsonAtomic } from "../../infra/json-files.js";
 import { validateRequestedSkillSlug } from "./archive-install.js";
 
+/** Time window in which uploaded skill archive chunks may be committed. */
 export const SKILL_UPLOAD_TTL_MS = 60 * 60 * 1000;
 export const MAX_SKILL_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
 export const MAX_SKILL_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_SKILL_UPLOAD_CHUNK_BYTES / 3) * 4;

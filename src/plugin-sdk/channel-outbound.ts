@@ -1,3 +1,4 @@
+// Channel outbound contracts define plugin send results, media handling, and delivery metadata.
 import type {
   DurableMessageBatchSendResult,
   DurableMessageSendContext,
@@ -75,6 +76,7 @@ export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 export { sanitizeForPlainText } from "../infra/outbound/sanitize-text.js";
 export { logAckFailure, logTypingFailure } from "../channels/logging.js";
 export * from "../channels/streaming.js";
+export * from "../channels/progress-draft-compositor.js";
 export {
   classifyDurableSendRecoveryState,
   createChannelMessageAdapterFromOutbound,
@@ -206,6 +208,9 @@ export const deliverInboundReplyWithMessageSendContext: ChannelInboundKernelModu
 
 /** Sends a durable message batch without eager-loading channel message runtime internals. */
 export async function sendDurableMessageBatch(
+  /**
+   * Durable send context and outbound batch data forwarded to the channel runtime.
+   */
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
   const mod = await loadChannelMessageRuntimeModule();
@@ -214,7 +219,13 @@ export async function sendDurableMessageBatch(
 
 /** Runs work inside a durable message send context loaded through the SDK lazy boundary. */
 export async function withDurableMessageSendContext<T>(
+  /**
+   * Durable send context used to bind sends, receipts, and lifecycle callbacks.
+   */
   params: DurableMessageSendContextParams,
+  /**
+   * Callback executed with the loaded durable-send runtime context.
+   */
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
   const mod = await loadChannelMessageRuntimeModule();

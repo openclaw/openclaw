@@ -1,3 +1,4 @@
+// Check Gateway Watch Regression tests cover check gateway watch regression script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,6 +9,7 @@ import {
   hasGatewayReadyLog,
   parseArgs,
   runTimedWatch,
+  readNonNegativeInteger,
   shouldRefreshBuildStampForRestoredArtifacts,
   stopTimedWatchChild,
   updateWatchBuildDetection,
@@ -25,6 +27,59 @@ describe("check-gateway-watch-regression", () => {
       skipBuild: true,
       windowMs: 1500,
     });
+  });
+
+  it("parses timing and growth limits as strict non-negative integers", () => {
+    expect(readNonNegativeInteger("0", "limit")).toBe(0);
+    expect(readNonNegativeInteger(" 42 ", "limit")).toBe(42);
+    expect(
+      parseArgs([
+        "--window-ms",
+        "0",
+        "--ready-timeout-ms",
+        "1",
+        "--ready-settle-ms",
+        "2",
+        "--sigkill-grace-ms",
+        "3",
+        "--sigkill-exit-grace-ms",
+        "4",
+        "--cpu-warn-ms",
+        "5",
+        "--cpu-fail-ms",
+        "6",
+        "--dist-runtime-file-growth-max",
+        "7",
+        "--dist-runtime-byte-growth-max",
+        "8",
+      ]),
+    ).toMatchObject({
+      cpuFailMs: 6,
+      cpuWarnMs: 5,
+      distRuntimeByteGrowthMax: 8,
+      distRuntimeFileGrowthMax: 7,
+      readySettleMs: 2,
+      readyTimeoutMs: 1,
+      sigkillExitGraceMs: 4,
+      sigkillGraceMs: 3,
+      windowMs: 0,
+    });
+
+    expect(() => readNonNegativeInteger("1.5", "limit")).toThrow(
+      "limit must be a non-negative integer",
+    );
+    expect(() => readNonNegativeInteger("1e3", "limit")).toThrow(
+      "limit must be a non-negative integer",
+    );
+    expect(() => readNonNegativeInteger("-1", "limit")).toThrow(
+      "limit must be a non-negative integer",
+    );
+    expect(() => readNonNegativeInteger("9007199254740992", "limit")).toThrow(
+      "limit must be a safe integer",
+    );
+    expect(() => parseArgs(["--window-ms", "soon"])).toThrow(
+      "--window-ms must be a non-negative integer",
+    );
   });
 
   it("recognizes current and legacy gateway ready logs", () => {
