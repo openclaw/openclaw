@@ -24,6 +24,7 @@ import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runt
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.js";
+import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import {
   buildAgentModelCatalogCacheKey,
@@ -40,6 +41,7 @@ import {
 import {
   buildConfiguredModelCatalog,
   hasConfiguredProviderModelRows,
+  parseConfiguredModelVisibilityEntries,
 } from "./model-selection-shared.js";
 import {
   buildModelsJsonSourceFingerprint,
@@ -65,16 +67,36 @@ type DiscoveredModel = {
   id: string;
   name?: string;
   provider: string;
-  api?: ModelCatalogEntry["api"];
+  alias?: string;
+  api?: ModelCatalogEntry["api"] | null;
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
   params?: ModelCatalogEntry["params"];
   compat?: ModelCatalogEntry["compat"];
+  mediaInput?: ModelCatalogEntry["mediaInput"];
 };
+type DynamicLiveModel = Parameters<typeof appendPrioritizedDynamicLiveModels>[0]["models"][number];
+type DynamicLiveModelRegistry = Parameters<
+  typeof appendPrioritizedDynamicLiveModels
+>[0]["modelRegistry"];
 
 type AgentDiscoveryModule = typeof import("./agent-model-discovery.js");
+
+class PartialModelCatalogError extends Error {
+  readonly catalog: ModelCatalogEntry[];
+
+  constructor(message: string, catalog: ModelCatalogEntry[]) {
+    super(message);
+    this.name = "PartialModelCatalogError";
+    this.catalog = catalog;
+  }
+}
+
+function isPartialModelCatalogError(error: unknown): error is PartialModelCatalogError {
+  return error instanceof PartialModelCatalogError;
+}
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
@@ -543,6 +565,7 @@ export async function loadModelCatalog(params?: {
   useCache?: boolean;
   readOnly?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
+  requireCacheableResult?: boolean;
 }): Promise<ModelCatalogEntry[]> {
   const readOnly = params?.readOnly === true;
   if (readOnly) {
@@ -557,7 +580,7 @@ export async function loadModelCatalog(params?: {
   if (!readOnly && params?.useCache === false) {
     modelCatalogPromise = null;
   }
-  const useSharedCache = !readOnly && !params?.metadataSnapshot;
+  const useSharedCache = !readOnly && !params?.metadataSnapshot && !params?.requireCacheableResult;
   if (useSharedCache && modelCatalogPromise) {
     return modelCatalogPromise;
   }
@@ -658,11 +681,45 @@ export async function loadModelCatalog(params?: {
       logStage("registry-ready");
       const entries = registry.getAll() as DiscoveredModel[];
       logStage("registry-read", `entries=${entries.length}`);
+      let liveEntries = entries;
+      let dynamicAllowlistHydrationFailed = false;
+      if (!readOnly) {
+        const configuredExactRefs = parseConfiguredModelVisibilityEntries({
+          cfg,
+        }).exactModelRefs.flatMap((raw) => {
+          const separator = raw.indexOf("/");
+          if (separator <= 0 || separator === raw.length - 1) {
+            return [];
+          }
+          return [{ provider: raw.slice(0, separator), id: raw.slice(separator + 1) }];
+        });
+        for (const ref of configuredExactRefs) {
+          try {
+            const augmented = await appendPrioritizedDynamicLiveModels({
+              models: liveEntries as DynamicLiveModel[],
+              config: cfg,
+              agentDir,
+              workspaceDir,
+              env: process.env,
+              modelRegistry: registry as DynamicLiveModelRegistry,
+              normalizeModel: (model) => model,
+              refs: [ref],
+            });
+            liveEntries = augmented.models as DiscoveredModel[];
+            logStage("dynamic-allowlist-models", `added=${augmented.added.length}`);
+          } catch (error) {
+            dynamicAllowlistHydrationFailed = true;
+            log.warn(
+              `Failed to hydrate dynamic allowlisted model metadata for ${ref.provider}/${ref.id}: ${String(error)}`,
+            );
+          }
+        }
+      }
 
       const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
       logStage("suppress-resolver-ready");
 
-      for (const entry of entries) {
+      for (const entry of liveEntries) {
         const rawId = normalizeOptionalString(entry?.id) ?? "";
         if (!rawId) {
           continue;
@@ -678,6 +735,8 @@ export async function loadModelCatalog(params?: {
           continue;
         }
         const name = normalizeOptionalString(entry?.name ?? id) || id;
+        const alias = normalizeOptionalString(entry?.alias);
+        const api = normalizeOptionalString(entry?.api) as ModelCatalogEntry["api"] | undefined;
         const contextWindow =
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
@@ -687,15 +746,17 @@ export async function loadModelCatalog(params?: {
             ? entry.contextTokens
             : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
-        const api = typeof entry?.api === "string" ? entry.api : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
         const modelParams =
           entry?.params && typeof entry.params === "object" ? entry.params : undefined;
         const compat = entry?.compat && typeof entry.compat === "object" ? entry.compat : undefined;
+        const mediaInput =
+          entry?.mediaInput && typeof entry.mediaInput === "object" ? entry.mediaInput : undefined;
         models.push({
           id,
           name,
           provider,
+          ...(alias ? { alias } : {}),
           ...(api ? { api } : {}),
           contextWindow,
           ...(contextTokens !== undefined ? { contextTokens } : {}),
@@ -703,6 +764,7 @@ export async function loadModelCatalog(params?: {
           input,
           ...(modelParams ? { params: modelParams } : {}),
           compat,
+          ...(mediaInput ? { mediaInput } : {}),
         });
       }
       mergeCatalogEntries(
@@ -787,9 +849,25 @@ export async function loadModelCatalog(params?: {
           entries: sorted,
         });
       }
+      if (dynamicAllowlistHydrationFailed) {
+        // Current callers can still use discovered rows, but provider metadata is incomplete.
+        // Do not let shared or gateway catalog caches treat this partial load as stable.
+        if (useSharedCache) {
+          modelCatalogPromise = null;
+        }
+        if (params?.requireCacheableResult) {
+          throw new PartialModelCatalogError(
+            "Dynamic allowlisted model metadata hydration failed",
+            sorted,
+          );
+        }
+      }
       logStage("complete", `entries=${sorted.length}`);
       return sorted;
     } catch (error) {
+      if (isPartialModelCatalogError(error)) {
+        throw error;
+      }
       if (!hasLoggedModelCatalogError) {
         hasLoggedModelCatalogError = true;
         log.warn(`Failed to load model catalog: ${String(error)}`);
@@ -805,7 +883,7 @@ export async function loadModelCatalog(params?: {
     }
   };
 
-  if (readOnly || params?.metadataSnapshot) {
+  if (readOnly || params?.metadataSnapshot || params?.requireCacheableResult) {
     return loadCatalog();
   }
 

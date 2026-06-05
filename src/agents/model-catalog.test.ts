@@ -16,6 +16,8 @@ let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
 let prepareOpenClawModelsJsonSourceMock: ReturnType<typeof vi.fn>;
+let prepareDynamicModelMock: ReturnType<typeof vi.fn>;
+let runDynamicModelMock: ReturnType<typeof vi.fn>;
 let currentPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let loadPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let readFileMock: ReturnType<typeof vi.fn<(pathname: string) => Promise<string>>>;
@@ -284,6 +286,10 @@ describe("loadModelCatalog", () => {
     vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
       augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
     }));
+    vi.doMock("../plugins/provider-runtime.js", () => ({
+      prepareProviderDynamicModel: vi.fn().mockResolvedValue(undefined),
+      runProviderDynamicModel: vi.fn(),
+    }));
     currentPluginMetadataSnapshotMock = vi.fn(() => emptyPluginMetadataSnapshot());
     loadPluginMetadataSnapshotMock = vi.fn(() => emptyPluginMetadataSnapshot());
     vi.doMock("../plugins/current-plugin-metadata-snapshot.js", () => ({
@@ -325,6 +331,9 @@ describe("loadModelCatalog", () => {
     } = await import("./model-catalog.js"));
     const providerRuntime = await import("../plugins/provider-runtime.runtime.js");
     augmentCatalogMock = vi.mocked(providerRuntime.augmentModelCatalogWithProviderPlugins);
+    const dynamicRuntime = await import("../plugins/provider-runtime.js");
+    prepareDynamicModelMock = vi.mocked(dynamicRuntime.prepareProviderDynamicModel);
+    runDynamicModelMock = vi.mocked(dynamicRuntime.runProviderDynamicModel);
   });
 
   beforeEach(() => {
@@ -341,6 +350,8 @@ describe("loadModelCatalog", () => {
       wrote: false,
     });
     augmentCatalogMock.mockClear();
+    prepareDynamicModelMock.mockClear();
+    runDynamicModelMock.mockReset();
     currentPluginMetadataSnapshotMock.mockReset();
     currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     loadPluginMetadataSnapshotMock.mockReset();
@@ -369,6 +380,7 @@ describe("loadModelCatalog", () => {
     vi.doUnmock("./model-catalog-state-cache.js");
     vi.doUnmock("./agent-scope.js");
     vi.doUnmock("../plugins/provider-runtime.runtime.js");
+    vi.doUnmock("../plugins/provider-runtime.js");
     vi.doUnmock("../plugins/current-plugin-metadata-snapshot.js");
     vi.doUnmock("../plugins/plugin-metadata-snapshot.js");
     vi.doUnmock("../plugins/manifest-contract-eligibility.js");
@@ -1660,6 +1672,193 @@ describe("loadModelCatalog", () => {
     expect(entry.input).toEqual(["text", "image"]);
     expect(entry.reasoning).toBe(true);
     expect(entry.contextWindow).toBe(128_000);
+  });
+
+  it("materializes exact allowlisted dynamic models with provider metadata", async () => {
+    mockAgentDiscoveryModels([{ id: "llama3.2", provider: "ollama", name: "Llama 3.2" }]);
+    runDynamicModelMock.mockReturnValueOnce({
+      id: "minimax-m3:cloud",
+      name: "minimax-m3:cloud",
+      provider: "ollama",
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 8192,
+      compat: { supportsTools: true, supportsUsageInStreaming: true },
+      mediaInput: { image: { maxBytes: 1_000_000 } },
+    });
+
+    const result = await loadModelCatalog({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "ollama/minimax-m3:cloud": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const entry = requireCatalogEntry(result, "ollama", "minimax-m3:cloud");
+    expect(entry.api).toBe("ollama");
+    expect(entry.reasoning).toBe(true);
+    expect(entry.contextWindow).toBe(1_048_576);
+    expect(entry.compat).toEqual({ supportsTools: true, supportsUsageInStreaming: true });
+    expect(entry.mediaInput).toEqual({ image: { maxBytes: 1_000_000 } });
+    expect(prepareDynamicModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "ollama",
+        context: expect.objectContaining({
+          modelId: "minimax-m3:cloud",
+          provider: "ollama",
+        }),
+      }),
+    );
+    expect(runDynamicModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "ollama",
+        context: expect.objectContaining({
+          modelId: "minimax-m3:cloud",
+          provider: "ollama",
+        }),
+      }),
+    );
+  });
+
+  it("keeps discovered catalog entries when dynamic allowlist metadata fails", async () => {
+    mockAgentDiscoveryModels([{ id: "llama3.2", provider: "ollama", name: "Llama 3.2" }]);
+    runDynamicModelMock
+      .mockImplementationOnce(() => {
+        throw new Error("show failed");
+      })
+      .mockReturnValueOnce({
+        id: "glm-5.1:cloud",
+        name: "glm-5.1:cloud",
+        provider: "ollama",
+        api: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 202_752,
+        maxTokens: 8192,
+      });
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    try {
+      const result = await loadModelCatalog({
+        config: {
+          agents: {
+            defaults: {
+              models: {
+                "ollama/minimax-m3:cloud": {},
+                "ollama/glm-5.1:cloud": {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(requireCatalogEntry(result, "ollama", "llama3.2").name).toBe("Llama 3.2");
+      expectNoCatalogEntry(result, "ollama", "minimax-m3:cloud");
+      expect(requireCatalogEntry(result, "ollama", "glm-5.1:cloud").reasoning).toBe(true);
+      expect(runDynamicModelMock).toHaveBeenCalledTimes(2);
+    } finally {
+      resetLogger();
+    }
+  });
+
+  it("retries exact allowlisted dynamic model metadata after a partial cache load", async () => {
+    mockAgentDiscoveryModels([{ id: "llama3.2", provider: "ollama", name: "Llama 3.2" }]);
+    runDynamicModelMock
+      .mockImplementationOnce(() => {
+        throw new Error("show failed");
+      })
+      .mockReturnValueOnce({
+        id: "minimax-m3:cloud",
+        name: "minimax-m3:cloud",
+        provider: "ollama",
+        api: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+        maxTokens: 8192,
+      });
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/minimax-m3:cloud": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    try {
+      const partial = await loadModelCatalog({ config });
+      expect(requireCatalogEntry(partial, "ollama", "llama3.2").name).toBe("Llama 3.2");
+      expectNoCatalogEntry(partial, "ollama", "minimax-m3:cloud");
+
+      const retry = await loadModelCatalog({ config });
+      expect(requireCatalogEntry(retry, "ollama", "minimax-m3:cloud").reasoning).toBe(true);
+      expect(runDynamicModelMock).toHaveBeenCalledTimes(2);
+    } finally {
+      resetLogger();
+    }
+  });
+
+  it("does not share partial dynamic hydration promises with cacheable callers", async () => {
+    mockAgentDiscoveryModels([{ id: "llama3.2", provider: "ollama", name: "Llama 3.2" }]);
+    let releaseHydration: (() => void) | undefined;
+    const hydrationStarted = new Promise<void>((resolve) => {
+      releaseHydration = resolve;
+    });
+    const failAfterHydration = () =>
+      hydrationStarted.then(() => {
+        throw new Error("show failed");
+      });
+    runDynamicModelMock
+      .mockReturnValueOnce(failAfterHydration())
+      .mockReturnValueOnce(failAfterHydration());
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/minimax-m3:cloud": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    try {
+      const normalLoad = loadModelCatalog({ config });
+      const cacheableLoad = loadModelCatalog({ config, requireCacheableResult: true });
+      releaseHydration?.();
+
+      await expect(normalLoad).resolves.toEqual([
+        expect.objectContaining({ id: "llama3.2", provider: "ollama" }),
+      ]);
+      await expect(cacheableLoad).rejects.toMatchObject({ name: "PartialModelCatalogError" });
+      expect(runDynamicModelMock).toHaveBeenCalledTimes(2);
+    } finally {
+      resetLogger();
+    }
   });
 
   it("overlays configured model compat onto discovered catalog rows", async () => {

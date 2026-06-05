@@ -19,6 +19,13 @@ function model(id: string): GatewayModelChoice {
   return { id, name: id, provider: "openai" } as GatewayModelChoice;
 }
 
+function partialCatalogError(catalog: GatewayModelChoice[]): Error {
+  return Object.assign(new Error("partial catalog"), {
+    name: "PartialModelCatalogError",
+    catalog,
+  });
+}
+
 const getConfig = () => ({}) as OpenClawConfig;
 
 function createRefreshingCatalogLoader(
@@ -95,6 +102,7 @@ describe("loadGatewayModelCatalog", () => {
     expect(loadModelCatalog).toHaveBeenNthCalledWith(2, {
       config: getConfig(),
       readOnly: false,
+      requireCacheableResult: true,
     });
   });
 
@@ -123,6 +131,30 @@ describe("loadGatewayModelCatalog", () => {
     await expectCatalog(loadModelCatalog, freshCatalog, false);
 
     expect(loadModelCatalog).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache partial full catalog loads", async () => {
+    const partialCatalog = [model("llama3.2")];
+    const freshCatalog = [model("minimax-m3:cloud")];
+    const loadModelCatalog = vi
+      .fn<LoadModelCatalogForTest>()
+      .mockRejectedValueOnce(partialCatalogError(partialCatalog))
+      .mockResolvedValueOnce(freshCatalog);
+
+    await expectCatalog(loadModelCatalog, partialCatalog, false);
+    await expectCatalog(loadModelCatalog, freshCatalog, false);
+
+    expect(loadModelCatalog).toHaveBeenCalledTimes(2);
+    expect(loadModelCatalog).toHaveBeenNthCalledWith(1, {
+      config: getConfig(),
+      readOnly: false,
+      requireCacheableResult: true,
+    });
+    expect(loadModelCatalog).toHaveBeenNthCalledWith(2, {
+      config: getConfig(),
+      readOnly: false,
+      requireCacheableResult: true,
+    });
   });
 
   it("returns the last catalog while a stale reload refresh is still pending", async () => {
