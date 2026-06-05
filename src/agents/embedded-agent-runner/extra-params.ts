@@ -919,16 +919,22 @@ function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
   return withoutSuffix.split("/").pop();
 }
 
-/** Prefix shared by the canonical Foundry provider id and all alias ids (e.g. microsoft-foundry-9433). */
-const MICROSOFT_FOUNDRY_PROVIDER_PREFIX = "microsoft-foundry";
+/** Canonical Foundry provider id and the alias namespace (e.g. microsoft-foundry-9433). */
+const MICROSOFT_FOUNDRY_IDS = new Set(["microsoft-foundry"]);
 
 function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
     model.api === "openai-completions" &&
-    !model.provider.startsWith(MICROSOFT_FOUNDRY_PROVIDER_PREFIX) &&
+    !isMicrosoftFoundryProvider(model.provider) &&
     (normalizedModelId === "deepseek-v4-flash" || normalizedModelId === "deepseek-v4-pro")
   );
+}
+
+/** Returns true for the canonical microsoft-foundry provider id or any microsoft-foundry-*
+ * alias (e.g. microsoft-foundry-9433). Does not match raw prefixes like microsoft-foundrybackup. */
+function isMicrosoftFoundryProvider(provider: string): boolean {
+  return MICROSOFT_FOUNDRY_IDS.has(provider) || provider.startsWith("microsoft-foundry-");
 }
 
 const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([

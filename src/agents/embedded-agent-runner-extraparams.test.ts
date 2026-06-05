@@ -786,6 +786,26 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("thinking");
   });
 
+  it("does not skip DeepSeek V4 thinking for raw-prefix providers that are not Foundry aliases (e.g. microsoft-foundrybackup)", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "microsoft-foundrybackup",
+      applyModelId: "deepseek-v4-pro",
+      thinkingLevel: "high",
+      model: {
+        api: "openai-completions",
+        provider: "microsoft-foundrybackup",
+        id: "deepseek-v4-pro",
+      } as Model<"openai-completions">,
+      payload: {
+        reasoning_effort: "high",
+        messages: [{ role: "user", content: "hello" }],
+      },
+    });
+
+    expect(payload.reasoning_effort).toBe("high");
+    expect(payload.thinking).toEqual({ type: "enabled" });
+  });
+
   it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "opencode",
