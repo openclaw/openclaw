@@ -1,5 +1,5 @@
 // Telegram plugin module implements bot handlers behavior.
-import { rm } from "node:fs/promises";
+import { unlink } from "node:fs/promises";
 import { InputFile } from "grammy";
 import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
@@ -165,11 +165,13 @@ function isTelegramVoiceMessagesForbidden(err: unknown): boolean {
   return formatErrorMessage(err).includes(VOICE_MESSAGES_FORBIDDEN_MARKER);
 }
 
-async function cleanupSpeakeasyGeneratedAudio(audioPath: string): Promise<void> {
+async function cleanupSpeakeasyAudioPath(audioPath: string): Promise<void> {
   try {
-    await rm(audioPath, { force: true });
+    await unlink(audioPath);
   } catch (err) {
-    logVerbose(`telegram speakeasy audio cleanup failed: ${String(err)}`);
+    if (!err || typeof err !== "object" || !("code" in err) || err.code !== "ENOENT") {
+      logVerbose(`telegram speakeasy audio cleanup failed: ${String(err)}`);
+    }
   }
 }
 
@@ -2249,7 +2251,6 @@ export const registerTelegramHandlers = ({
                 ...effectiveParams,
               }),
           });
-          await cleanupSpeakeasyGeneratedAudio(audioPath);
         } catch (err) {
           if (isTelegramVoiceMessagesForbidden(err)) {
             logVerbose(
@@ -2273,6 +2274,8 @@ export const registerTelegramHandlers = ({
             return;
           }
           throw new TelegramRetryableCallbackError(err);
+        } finally {
+          await cleanupSpeakeasyAudioPath(audioPath);
         }
         return;
       }

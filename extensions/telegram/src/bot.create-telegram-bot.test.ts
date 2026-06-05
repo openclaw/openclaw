@@ -1,5 +1,5 @@
 // Telegram tests cover bot.create telegram bot plugin behavior.
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -1295,7 +1295,7 @@ describe("createTelegramBot", () => {
         show_alert: false,
       });
       expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
-      await expect(readFile(audioPath, "utf8")).rejects.toThrow();
+      await expect(stat(audioPath)).rejects.toThrow();
     } finally {
       process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
       await rm(workspaceDir, { recursive: true, force: true });

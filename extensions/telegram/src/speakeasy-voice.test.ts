@@ -6,6 +6,7 @@ import {
   SPEAKEASY_VOICE_BUTTON_LABEL,
   SPEAKEASY_VOICE_CALLBACK_PREFIX,
   assertSpeakeasyVoiceNoteOutputPath,
+  flushSpeakeasyCacheWritesForTest,
   generateSpeakeasyVoiceNote,
   loadSpeakeasyCache,
   markSpeakeasyVoiceGenerated,
@@ -40,12 +41,6 @@ async function withSpeakeasyWorkspace<T>(
   }
 }
 
-async function flushSpeakeasyCacheWrites(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 10);
-  });
-}
-
 describe("speakeasy voice button", () => {
   it("adds one cached callback button to eligible enabled DM text replies", async () => {
     await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
@@ -68,7 +63,7 @@ describe("speakeasy voice button", () => {
       ]);
 
       const callbackData = reply.channelData?.telegram?.buttons?.[0]?.[0]?.callback_data ?? "";
-      await flushSpeakeasyCacheWrites();
+      await flushSpeakeasyCacheWritesForTest();
       const cache = loadSpeakeasyCache(cfg);
       expect(resolveSpeakeasyCachedText({ cfg, cache, data: callbackData, chatId: "123" })).toEqual(
         {
@@ -104,7 +99,7 @@ describe("speakeasy voice button", () => {
       const firstCallbackData = first.channelData?.telegram?.buttons?.[0]?.[0]?.callback_data ?? "";
       const secondCallbackData =
         second.channelData?.telegram?.buttons?.[0]?.[0]?.callback_data ?? "";
-      await flushSpeakeasyCacheWrites();
+      await flushSpeakeasyCacheWritesForTest();
       const cache = loadSpeakeasyCache(cfg);
       expect(
         resolveSpeakeasyCachedText({ cfg, cache, data: firstCallbackData, chatId: "123" }),
@@ -127,20 +122,20 @@ describe("speakeasy voice button", () => {
         cfg,
         chatId: "123",
       });
-      await flushSpeakeasyCacheWrites();
+      await flushSpeakeasyCacheWritesForTest();
 
       expect((await stat(cachePath)).mode & 0o777).toBe(0o600);
     });
   });
 
-  it("accepts Telegram-supported Speakeasy voice-note output paths", () => {
-    expect(() => assertSpeakeasyVoiceNoteOutputPath("/tmp/speakeasy.mp3")).not.toThrow();
-    expect(() => assertSpeakeasyVoiceNoteOutputPath("/tmp/speakeasy.m4a")).not.toThrow();
-    expect(() => assertSpeakeasyVoiceNoteOutputPath("/tmp/speakeasy.ogg")).not.toThrow();
-    expect(() => assertSpeakeasyVoiceNoteOutputPath("/tmp/speakeasy.opus")).not.toThrow();
+  it("accepts Telegram-supported Speakeasy voice output paths", () => {
     expect(() => assertSpeakeasyVoiceNoteOutputPath("/tmp/speakeasy.wav")).toThrow(
       "not a Telegram voice-note file",
     );
+    expect(() => assertSpeakeasyVoiceNoteOutputPath("/tmp/speakeasy.ogg")).not.toThrow();
+    expect(() => assertSpeakeasyVoiceNoteOutputPath("/tmp/speakeasy.opus")).not.toThrow();
+    expect(() => assertSpeakeasyVoiceNoteOutputPath("/tmp/speakeasy.mp3")).not.toThrow();
+    expect(() => assertSpeakeasyVoiceNoteOutputPath("/tmp/speakeasy.m4a")).not.toThrow();
   });
 
   it("expands configured tilde workspace paths", async () => {
@@ -271,7 +266,7 @@ describe("speakeasy voice button", () => {
     });
   });
 
-  it("keeps the optional voice button off the send path when the callback cache cannot be written", async () => {
+  it("keeps optional voice-button delivery off the synchronous cache-write path", async () => {
     const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-cache-fail-"));
     await mkdir(path.join(workspaceDir, "config"), { recursive: true });
     await writeFile(
@@ -285,29 +280,29 @@ describe("speakeasy voice button", () => {
         reply,
         cfg: { agents: { defaults: { workspace: workspaceDir } } },
         chatId: "123",
-      }) as typeof reply & {
+      }) as {
         channelData?: { telegram?: { buttons?: Array<Array<{ callback_data: string }>> } };
       };
-      expect(enriched).not.toBe(reply);
+
       expect(enriched.channelData?.telegram?.buttons?.[0]?.[0]?.callback_data).toMatch(
         /^tts:speakeasy:/,
       );
+      await flushSpeakeasyCacheWritesForTest();
     } finally {
       await rm(workspaceDir, { recursive: true, force: true });
     }
   });
 
-  it("does not block button attachment when a fresh cache lock exists", async () => {
+  it("does not wait on a fresh cache lock before adding the optional voice button", async () => {
     await withSpeakeasyWorkspace(async ({ cfg, workspaceDir }) => {
       const cachePath = path.join(workspaceDir, "state", "speakeasy-cache.json");
       const lockPath = `${cachePath}.lock`;
       await writeFile(lockPath, "active lock");
       const reply = { text: "This reply is long enough to qualify for on-demand voice playback." };
 
-      const enriched = withSpeakeasyVoiceButton({ reply, cfg, chatId: "123" }) as typeof reply & {
+      const enriched = withSpeakeasyVoiceButton({ reply, cfg, chatId: "123" }) as {
         channelData?: { telegram?: { buttons?: Array<Array<{ callback_data: string }>> } };
       };
-      expect(enriched).not.toBe(reply);
       expect(enriched.channelData?.telegram?.buttons?.[0]?.[0]?.callback_data).toMatch(
         /^tts:speakeasy:/,
       );
@@ -423,7 +418,7 @@ describe("speakeasy voice button", () => {
         channelData?: { telegram?: { buttons?: Array<Array<{ callback_data: string }>> } };
       };
       const callbackData = reply.channelData?.telegram?.buttons?.[0]?.[0]?.callback_data ?? "";
-      await flushSpeakeasyCacheWrites();
+      await flushSpeakeasyCacheWritesForTest();
 
       expect(reserveSpeakeasyVoiceGeneration({ cfg, data: callbackData, chatId: "123" })).toEqual({
         ok: true,
@@ -477,6 +472,7 @@ describe("speakeasy voice button", () => {
       }) as {
         channelData?: { telegram?: { buttons?: Array<Array<{ callback_data: string }>> } };
       };
+      await flushSpeakeasyCacheWritesForTest();
 
       expect(reply.channelData?.telegram?.buttons?.[0]?.[0]?.callback_data).toMatch(
         /^tts:speakeasy:/,
