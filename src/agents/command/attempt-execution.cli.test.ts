@@ -177,6 +177,37 @@ function firstEmbeddedAgentArg(callIndex = 0) {
   return requireMockArg(runEmbeddedAgentMock, callIndex, "embedded OpenClaw agent argument");
 }
 
+async function persistApprovedCliUserTurnFromMock(args: Record<string, unknown>) {
+  const recorder = requireRecord(args.userTurnTranscriptRecorder, "user turn recorder") as {
+    persistApproved: (params: {
+      target: {
+        transcriptPath: string;
+        sessionId: string;
+        agentId?: string;
+        sessionKey?: string;
+        cwd: string;
+        config?: OpenClawConfig;
+      };
+    }) => Promise<{ message?: unknown } | undefined>;
+  };
+  const persisted = await recorder.persistApproved({
+    target: {
+      transcriptPath: args.sessionFile as string,
+      sessionId: args.sessionId as string,
+      agentId: args.agentId as string | undefined,
+      sessionKey: args.sessionKey as string | undefined,
+      cwd: (args.cwd as string | undefined) ?? (args.workspaceDir as string),
+      config: args.config as OpenClawConfig | undefined,
+    },
+  });
+  if (persisted?.message) {
+    const notify = args.onUserMessagePersisted;
+    if (typeof notify === "function") {
+      await notify(persisted.message);
+    }
+  }
+}
+
 describe("CLI attempt execution", () => {
   let tmpDir: string;
   let storePath: string;
@@ -817,7 +848,10 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
     const onUserMessagePersisted = vi.fn();
-    runCliAgentMock.mockRejectedValueOnce(new Error("cli crashed before reply"));
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      await persistApprovedCliUserTurnFromMock(requireRecord(args, "run CLI agent argument"));
+      throw new Error("cli crashed before reply");
+    });
 
     await expect(
       runAgentAttempt({
@@ -856,7 +890,7 @@ describe("CLI attempt execution", () => {
 
     expect(onUserMessagePersisted).toHaveBeenCalledTimes(1);
     expect(firstRunCliAgentArg().cwd).toBe(taskCwd);
-    const sessionFile = sessionStore[sessionKey]?.sessionFile ?? "";
+    const sessionFile = path.join(tmpDir, "session.jsonl");
     const entries = await readSessionFileEntries(sessionFile);
     expectRecordFields(requireRecord(entries[0], "session entry"), {
       type: "session",
@@ -868,6 +902,97 @@ describe("CLI attempt execution", () => {
       role: "user",
       content: "visible ask",
     });
+  });
+
+  it("does not persist raw CLI prompts when before_agent_run blocks", async () => {
+    const sessionKey = "agent:main:subagent:cli-before-run-blocked";
+    const sessionFile = path.join(tmpDir, "blocked-session.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-before-run-blocked",
+      updatedAt: Date.now(),
+    };
+    const onUserMessagePersisted = vi.fn();
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const cliArgs = requireRecord(args, "run CLI agent argument");
+      await appendSessionTranscriptMessage({
+        transcriptPath: cliArgs.sessionFile as string,
+        sessionId: cliArgs.sessionId as string,
+        cwd: (cliArgs.cwd as string | undefined) ?? (cliArgs.workspaceDir as string),
+        config: {},
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+            },
+          ],
+          timestamp: Date.now(),
+          __openclaw: {
+            beforeAgentRunBlocked: {
+              blockedBy: "policy-plugin",
+              blockedAt: Date.now(),
+            },
+          },
+        },
+      });
+      return {
+        payloads: [
+          {
+            text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+            isError: true,
+          },
+        ],
+        meta: {
+          durationMs: 1,
+          finalAssistantVisibleText:
+            "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          livenessState: "blocked",
+          executionTrace: {
+            winnerProvider: "claude-cli",
+            winnerModel: "opus",
+            runner: "cli",
+          },
+        },
+      } satisfies EmbeddedAgentRunResult;
+    });
+
+    const result = await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile,
+      workspaceDir: tmpDir,
+      body: "runtime wrapper\nsecret prompt",
+      transcriptBody: "secret prompt",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-before-run-blocked",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionHasHistory: false,
+      onUserMessagePersisted,
+    });
+
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(onUserMessagePersisted).not.toHaveBeenCalled();
+    const rawTranscript = await fs.readFile(sessionFile, "utf-8");
+    expect(rawTranscript).toContain("beforeAgentRunBlocked");
+    expect(rawTranscript).toContain("The agent cannot read this message");
+    expect(rawTranscript).not.toContain("secret prompt");
   });
 
   it("persists internal CLI user turns to the active attempt transcript", async () => {
@@ -890,7 +1015,10 @@ describe("CLI attempt execution", () => {
         timestamp: Date.now(),
       },
     });
-    runCliAgentMock.mockRejectedValueOnce(new Error("cli crashed before internal reply"));
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      await persistApprovedCliUserTurnFromMock(requireRecord(args, "run CLI agent argument"));
+      throw new Error("cli crashed before internal reply");
+    });
 
     await expect(
       runAgentAttempt({
