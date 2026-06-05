@@ -854,11 +854,13 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
     resolved.webhookSecurity.trustForwardingHeaders ?? false;
   resolved.webhookSecurity.trustedProxyIPs = resolved.webhookSecurity.trustedProxyIPs ?? [];
 
-  // Microsoft Teams is inbound-first: calls and meeting joins are delivered to the
-  // bot, so requiring the operator to also flip inboundPolicy is redundant. Default
-  // it to "open" for msteams unless an explicit policy was configured.
+  // Microsoft Teams is inbound-first, but defaulting inbound to "open" would
+  // accept every authenticated Teams caller out of the box. Use a safe
+  // allowlist-oriented default instead: with an empty allowFrom no caller is
+  // accepted until the operator opts callers in (the allowlist accepts AAD
+  // object ids) or explicitly sets inboundPolicy: "open". No unsafe default.
   if (resolved.provider === "msteams" && config.inboundPolicy === undefined) {
-    resolved.inboundPolicy = "open";
+    resolved.inboundPolicy = "allowlist";
   }
 
   return normalizeVoiceCallConfig(resolved);

@@ -107,12 +107,12 @@ Two modes:
 
 At least one of `streaming.enabled` / `realtime.enabled` must be set (validated), and `msteams.port` + `msteams.sharedSecret` are required.
 
-For `inboundPolicy: "allowlist"`, Teams callers have no phone number, so `allowFrom` entries are matched against the caller's **AAD object id** (a GUID) — list the caller's `aadId` (carrier providers still use E.164 numbers; either form is accepted).
+When `inboundPolicy` is unset, msteams defaults to a **safe `"allowlist"`** (never `"open"`): with an empty `allowFrom` no caller is accepted until you opt callers in or set `inboundPolicy: "open"` explicitly. For `inboundPolicy: "allowlist"`, Teams callers have no phone number, so `allowFrom` entries are matched against the caller's **AAD object id** (a GUID) — list the caller's `aadId` (carrier providers still use E.164 numbers; either form is accepted).
 
 ```json5
 {
   provider: "msteams",
-  inboundPolicy: "open", // defaulted to "open" for msteams (Teams is inbound-first)
+  inboundPolicy: "open", // accept any authenticated Teams caller; or "allowlist" + allowFrom (the safe default)
   responseModel: "microsoft-foundry/gpt-5.4", // agent model for the streaming path
 
   msteams: {
