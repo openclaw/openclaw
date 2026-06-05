@@ -1066,6 +1066,7 @@ export async function fetchClawHubSkillInstallResolution(params: {
   token?: string;
   timeoutMs?: number;
   fetchImpl?: FetchLike;
+  forceInstall?: boolean;
 }): Promise<ClawHubSkillInstallResolutionResponse> {
   const { response, url, hasToken } = await clawhubRequest({
     baseUrl: params.baseUrl,
@@ -1073,6 +1074,9 @@ export async function fetchClawHubSkillInstallResolution(params: {
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
+    search: {
+      forceInstall: params.forceInstall ? "1" : undefined,
+    },
   });
   const isStructuredBlock = [403, 409, 410, 423].includes(response.status);
   if (!response.ok && !isStructuredBlock) {

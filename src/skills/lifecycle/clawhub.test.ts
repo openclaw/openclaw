@@ -325,6 +325,46 @@ describe("skills-clawhub", () => {
     });
   });
 
+  it("passes forceInstall to the ClawHub install resolver", async () => {
+    const commit = "b".repeat(40);
+    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "aiq-deploy",
+      installKind: "github",
+      github: {
+        repo: "NVIDIA/skills",
+        path: "skills/aiq-deploy",
+        commit,
+        contentHash: "hash-aiq-deploy",
+        sourceUrl: `https://github.com/NVIDIA/skills/tree/${commit}/skills/aiq-deploy`,
+      },
+    });
+    withExtractedArchiveRootMock.mockImplementationOnce(async (params) => {
+      return await params.onExtracted("/tmp/extracted-github-repo");
+    });
+    installPackageDirMock.mockResolvedValueOnce({
+      ok: true,
+      targetDir: "/tmp/workspace/skills/aiq-deploy",
+    });
+
+    const result = await installSkillFromClawHub({
+      workspaceDir: "/tmp/workspace",
+      slug: "aiq-deploy",
+      forceInstall: true,
+    });
+
+    expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
+      slug: "aiq-deploy",
+      baseUrl: undefined,
+      forceInstall: true,
+    });
+    expectInstalledSkill(result, {
+      slug: "aiq-deploy",
+      version: commit,
+      targetDir: "/tmp/workspace/skills/aiq-deploy",
+    });
+  });
+
   it("keeps ClawHub install telemetry best-effort", async () => {
     reportClawHubSkillInstallTelemetryMock.mockRejectedValueOnce(new Error("telemetry down"));
 
@@ -451,6 +491,40 @@ describe("skills-clawhub", () => {
         expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalledWith({
           url: `https://legacy.clawhub.ai/api/v1/download?slug=${encodeURIComponent(slug)}&version=1.0.0`,
           baseUrl: "https://legacy.clawhub.ai",
+        });
+        expectLegacyUpdateSuccess(results, workspaceDir, slug);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("passes forceInstall to resolver for tracked updates", async () => {
+      const slug = "agentreceipt";
+      const { workspaceDir } = await createLegacyTrackedSkillFixture(slug);
+      fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
+        ok: true,
+        slug,
+        installKind: "archive",
+        archive: {
+          version: "1.0.0",
+          downloadUrl: `https://legacy.clawhub.ai/api/v1/download?slug=${encodeURIComponent(slug)}&version=1.0.0`,
+        },
+      });
+      installPackageDirMock.mockResolvedValueOnce({
+        ok: true,
+        targetDir: path.join(workspaceDir, "skills", slug),
+      });
+
+      try {
+        const results = await updateSkillsFromClawHub({
+          workspaceDir,
+          forceInstall: true,
+        });
+
+        expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
+          slug,
+          baseUrl: "https://legacy.clawhub.ai",
+          forceInstall: true,
         });
         expectLegacyUpdateSuccess(results, workspaceDir, slug);
       } finally {

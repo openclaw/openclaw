@@ -137,6 +137,7 @@ type ClawHubInstallParams = {
   version?: string;
   baseUrl?: string;
   force?: boolean;
+  forceInstall?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
 };
@@ -916,6 +917,7 @@ async function performClawHubSkillInstall(
             await fetchClawHubSkillInstallResolution({
               slug: params.slug,
               baseUrl: params.baseUrl,
+              forceInstall: params.forceInstall,
             }),
           );
           if (latestResolution.installKind === "github") {
@@ -1080,6 +1082,7 @@ export async function installSkillFromClawHub(params: {
   version?: string;
   baseUrl?: string;
   force?: boolean;
+  forceInstall?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
 }): Promise<InstallClawHubSkillResult> {
@@ -1090,6 +1093,7 @@ export async function updateSkillsFromClawHub(params: {
   workspaceDir: string;
   slug?: string;
   baseUrl?: string;
+  forceInstall?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
 }): Promise<UpdateClawHubSkillResult[]> {
@@ -1123,6 +1127,7 @@ export async function updateSkillsFromClawHub(params: {
       slug: tracked.slug,
       baseUrl: tracked.baseUrl,
       force: true,
+      forceInstall: params.forceInstall,
       logger: params.logger,
       config: params.config,
     });
