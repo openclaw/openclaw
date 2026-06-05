@@ -1,5 +1,5 @@
 ---
-summary: "Place outbound and accept inbound voice calls via Twilio, Telnyx, or Plivo, with optional realtime voice and streaming transcription"
+summary: "Place outbound and accept inbound voice calls via Twilio, Telnyx, Plivo, or Microsoft Teams, with optional realtime voice and streaming transcription"
 read_when:
   - You want to place an outbound voice call from OpenClaw
   - You are configuring or developing the voice-call plugin
@@ -14,7 +14,9 @@ transcription, and inbound calls with allowlist policies.
 
 **Current providers:** `twilio` (Programmable Voice + Media Streams),
 `telnyx` (Call Control v2), `plivo` (Voice API + XML transfer + GetInput
-speech), `mock` (dev/no network).
+speech), `msteams` (Microsoft Teams voice over an external bridge —
+inbound-first; see [Microsoft Teams voice](#microsoft-teams-voice-msteams)),
+`mock` (dev/no network).
 
 <Note>
 The Voice Call plugin runs **inside the Gateway process**. If you use a
@@ -652,6 +654,58 @@ auto-ending the call:
 
 - If the stream reconnects during that window, auto-end is canceled.
 - If no stream re-registers after the grace period, the call is ended to prevent stuck active calls.
+
+## Microsoft Teams voice (msteams)
+
+The `msteams` provider connects OpenClaw to **Microsoft Teams 1:1 voice
+calls**. Unlike the carrier providers, Teams calls do **not** arrive on the
+webhook/media-stream plane: an **external Windows worker** (not part of this
+repo) owns the Microsoft Graph Calling notification endpoint and the
+`Microsoft.Skype.Bots.Media` audio socket — those SDKs are Windows-only — and
+relays PCM audio to OpenClaw over a **per-call WebSocket**, authenticated with
+HMAC-SHA256 and bound to loopback by default. The provider is **inbound-first**
+(it does not place outbound PSTN calls).
+
+```json5
+{
+  provider: "msteams",
+  // Inbound default is a safe "allowlist" (never "open"): with an empty
+  // allowFrom no caller is accepted until you opt callers in, or set
+  // inboundPolicy: "open" explicitly to accept any authenticated Teams caller.
+  inboundPolicy: "open",
+  responseModel: "openai/gpt-5.4", // agent model for the streaming path
+
+  msteams: {
+    port: 8443,
+    bindAddress: "127.0.0.1", // loopback by default; set a trusted-network IP only if the worker is remote
+    path: "/voice/msteams/stream",
+    sharedSecret: "${MSTEAMS_WS_SECRET}", // SecretRef-compatible; must match the worker
+    requireRecordingStatus: true, // gate transcripts on active Teams recording status
+  },
+
+  // Pick one mode:
+  streaming: { enabled: true, provider: "elevenlabs" }, // agent does work (STT -> agent -> TTS)
+  // realtime: { enabled: true, provider: "openai" },   // speech-to-speech, lowest latency
+}
+```
+
+Key points:
+
+- **Modes:** enable `streaming` (transcription → the OpenClaw agent → TTS, for
+  doing work) **or** `realtime` (speech-to-speech for low-latency
+  conversation). At least one is required.
+- **Allowlist:** because Teams callers have no phone number, `allowFrom`
+  entries accept the caller's **AAD object id** (a GUID) as well as E.164
+  numbers — list the caller's `aadId` for `inboundPolicy: "allowlist"`.
+- **Recording gate:** with `requireRecordingStatus: true` (default), no
+  media-derived transcript is processed until the worker reports active Teams
+  recording status (a Microsoft Media Access API obligation).
+- **Security:** the WebSocket listener binds to loopback by default, verifies
+  HMAC-SHA256 over the handshake, caps payloads, and the shared secret is
+  SecretRef-backed.
+
+See the [voice-call extension README](https://github.com/openclaw/openclaw/blob/main/extensions/voice-call/README.md)
+for the full WebSocket bridge protocol and worker setup.
 
 ## Stale call reaper
 
