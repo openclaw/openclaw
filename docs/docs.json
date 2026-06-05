@@ -786,7 +786,11 @@
     },
     {
       "source": "/templates/AGENTS",
-      "destination": "/reference/templates/AGENTS"
+      "destination": "/reference/templates/agents-template"
+    },
+    {
+      "source": "/reference/templates/AGENTS",
+      "destination": "/reference/templates/agents-template"
     },
     {
       "source": "/templates/BOOT",
@@ -1792,7 +1796,7 @@
                 "group": "Templates",
                 "pages": [
                   "reference/AGENTS.default",
-                  "reference/templates/AGENTS",
+                  "reference/templates/agents-template",
                   "reference/templates/BOOT",
                   "reference/templates/BOOTSTRAP",
                   "reference/templates/HEARTBEAT",

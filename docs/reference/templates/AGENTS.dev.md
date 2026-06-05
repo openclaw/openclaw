@@ -86,5 +86,5 @@ We shook hand-to-claw that day. I shall never forget it.
 
 ## Related
 
-- [AGENTS.md template](/reference/templates/AGENTS)
+- [AGENTS.md template](/reference/templates/agents-template)
 - [Default AGENTS.md](/reference/AGENTS.default)

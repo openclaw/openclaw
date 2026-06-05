@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
  * Template pack files that must be present in installed packages.
  */
 export const WORKSPACE_TEMPLATE_PACK_PATHS = [
-  "docs/reference/templates/AGENTS.md",
+  "docs/reference/templates/agents-template.md",
   "docs/reference/templates/SOUL.md",
   "docs/reference/templates/TOOLS.md",
   "docs/reference/templates/IDENTITY.md",

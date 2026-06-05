@@ -24,7 +24,7 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [OpenClaw assistant setup](/start/openclaw)
 - [Skills](/tools/skills)
 - [Skills config](/tools/skills-config)
-- [Workspace templates](/reference/templates/AGENTS)
+- [Workspace templates](/reference/templates/agents-template)
 - [RPC adapters](/reference/rpc)
 - [Gateway runbook](/gateway)
 - [Nodes (iOS and Android)](/nodes)
