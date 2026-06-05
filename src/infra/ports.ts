@@ -109,4 +109,4 @@ export {
   isExpectedGatewayListeners,
   isSingleExpectedGatewayListener,
 } from "./ports-format.js";
-export { inspectPortConnections, inspectPortUsage } from "./ports-inspect.js";
+export { inspectPortConnections, inspectPortUsage, inspectPortUsages } from "./ports-inspect.js";
