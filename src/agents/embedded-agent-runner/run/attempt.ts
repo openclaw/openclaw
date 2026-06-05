@@ -349,6 +349,7 @@ import {
   normalizeMessagesForCurrentPromptBoundary,
   normalizeMessagesForLlmBoundary,
 } from "./attempt.llm-boundary.js";
+import { resolveUserTimezone } from "../../date-time.js";
 import {
   diagnosticErrorCategory,
   wrapStreamFnWithDiagnosticModelCallEvents,
@@ -2290,10 +2291,17 @@ export async function runEmbeddedAttempt(
         activeSession.agent.reset();
         setActiveSessionSystemPrompt("");
       }
+      // Single source for the per-message timestamp prefix (issue #3658): the
+      // boundary normalizer stamps every user message from its own timestamp
+      // using this configured timezone, so current and historical turns are
+      // byte-identical and full-resend transports can cache the prefix.
+      const boundaryUserTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
       if (typeof activeSession.agent.convertToLlm === "function") {
         const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
         activeSession.agent.convertToLlm = async (messages) =>
-          await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages));
+          await baseConvertToLlm(
+            normalizeMessagesForLlmBoundary(messages, { timezone: boundaryUserTimezone }),
+          );
       }
       let prePromptMessageCount = activeSession.messages.length;
       let contextEngineAfterTurnCheckpoint: number | null = null;
@@ -3852,6 +3860,7 @@ export async function runEmbeddedAttempt(
           const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
             messages: messagesForCurrentPrompt,
             prompt: promptForModel,
+            timezone: boundaryUserTimezone,
           });
           if (systemPromptReport) {
             systemPromptReport.currentTurn = {
