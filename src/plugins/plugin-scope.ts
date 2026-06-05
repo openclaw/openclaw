@@ -1,3 +1,4 @@
+// Normalizes plugin scope identifiers and scope lists.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 /** Optional scoped plugin id list; undefined means unscoped. */

@@ -1,3 +1,4 @@
+// Resolves plugin install paths for local and package sources.
 import path from "node:path";
 import {
   resolveSafeInstallDir,

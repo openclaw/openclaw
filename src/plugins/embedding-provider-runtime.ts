@@ -1,3 +1,4 @@
+/** Runtime resolver for plugin-contributed embedding providers. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getRuntimeEmbeddingProviderAdapter,

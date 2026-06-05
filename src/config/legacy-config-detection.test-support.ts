@@ -1,3 +1,4 @@
+// Provides assertions for legacy config detection tests.
 import { expect } from "vitest";
 
 type SchemaParseResult<TData = unknown> =

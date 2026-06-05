@@ -1,3 +1,4 @@
+/** Shared fixtures for secrets runtime matrix tests. */
 import { vi } from "vitest";
 import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 

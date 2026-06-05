@@ -1,3 +1,4 @@
+// Creates backup archives while filtering volatile runtime state.
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";

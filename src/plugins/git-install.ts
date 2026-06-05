@@ -1,3 +1,4 @@
+/** Parses, clones, verifies, and installs plugin packages from Git specs. */
 import "../infra/fs-safe-defaults.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -34,6 +35,7 @@ type PluginInstallLogger = {
   warn?: (message: string) => void;
 };
 
+/** Resolved Git source metadata persisted into plugin install records. */
 export type GitPluginResolution = {
   url: string;
   ref?: string;
@@ -45,6 +47,7 @@ export type GitPluginInstallResult =
   | (Extract<InstallPluginResult, { ok: true }> & { git: GitPluginResolution })
   | Extract<InstallPluginResult, { ok: false }>;
 
+/** Normalized Git plugin install spec accepted by the Git installer. */
 export type ParsedGitPluginSpec = {
   input: string;
   url: string;
@@ -53,6 +56,7 @@ export type ParsedGitPluginSpec = {
   normalizedSpec: string;
 };
 
+/** Returns true for full commit SHAs that do not require branch/tag drift checks. */
 export function isImmutableGitCommitRef(ref: string | undefined): boolean {
   return FULL_GIT_COMMIT_PATTERN.test(ref ?? "");
 }

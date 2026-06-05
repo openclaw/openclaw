@@ -1,3 +1,4 @@
+// Computes task retention windows and pruning eligibility for registry cleanup.
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 
 /** Default retention for terminal task records before maintenance prunes them. */

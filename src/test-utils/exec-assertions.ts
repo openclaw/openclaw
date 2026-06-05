@@ -1,3 +1,4 @@
+// Assertion helpers for command execution tests and captured output.
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";

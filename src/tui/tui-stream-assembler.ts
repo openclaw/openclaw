@@ -1,3 +1,4 @@
+// Assembles streamed backend events into TUI-visible messages.
 import {
   composeThinkingAndContent,
   extractContentFromMessage,

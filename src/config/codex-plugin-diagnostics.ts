@@ -1,3 +1,4 @@
+// Builds diagnostics for Codex plugin config and provider wiring.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {

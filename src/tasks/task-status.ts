@@ -1,3 +1,4 @@
+// Builds task status summaries and formatted status text for user-facing surfaces.
 import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,

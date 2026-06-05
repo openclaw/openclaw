@@ -1,3 +1,4 @@
+// Rotates config backup files while preserving recent recovery points.
 import path from "node:path";
 
 const CONFIG_BACKUP_COUNT = 5;

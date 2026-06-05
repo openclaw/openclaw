@@ -1,3 +1,4 @@
+// Applies scoped config mutations while preserving IO and observer state.
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";

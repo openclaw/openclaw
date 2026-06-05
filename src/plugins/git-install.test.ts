@@ -1,3 +1,4 @@
+// Covers plugin install behavior from git-backed sources.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

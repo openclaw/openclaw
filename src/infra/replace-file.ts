@@ -1,3 +1,4 @@
+// Wraps fs-safe atomic replacement and move helpers for OpenClaw install flows.
 import "./fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";

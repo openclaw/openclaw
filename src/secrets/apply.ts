@@ -1,3 +1,4 @@
+/** Applies secrets migration plans across config files, auth stores, and env files. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -801,6 +802,7 @@ function toJsonWrite(pathname: string, value: Record<string, unknown>): ApplyWri
 }
 
 /** Applies or dry-runs a validated secrets plan across config, auth stores, and scrub targets. */
+/** Applies a normalized secrets plan, or reports file/auth-store changes in dry-run mode. */
 export async function runSecretsApply(params: {
   plan: SecretsApplyPlan;
   env?: NodeJS.ProcessEnv;

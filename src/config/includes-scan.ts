@@ -1,3 +1,4 @@
+// Scans included config files and resolves include graphs.
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";

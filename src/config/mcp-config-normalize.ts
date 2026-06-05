@@ -1,3 +1,4 @@
+// Normalizes MCP config records into canonical runtime shape.
 import { isRecord } from "../utils.js";
 
 type ConfigMcpServers = Record<string, Record<string, unknown>>;

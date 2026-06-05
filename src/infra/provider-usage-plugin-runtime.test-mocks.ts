@@ -1,3 +1,4 @@
+// Mocks plugin-backed provider usage runtime for tests.
 import { vi } from "vitest";
 
 const resolveProviderUsageSnapshotWithPluginMock = vi.hoisted(() =>

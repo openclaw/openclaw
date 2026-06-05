@@ -1,3 +1,4 @@
+/** Tracks plugin API lifecycle callbacks registered during runtime activation. */
 import type { OpenClawPluginApi } from "./types.js";
 
 type FunctionPropertyNames<T> = Extract<

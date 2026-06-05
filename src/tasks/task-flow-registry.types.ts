@@ -1,3 +1,4 @@
+// Defines managed task-flow registry records and parser helpers.
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { TaskNotifyPolicy } from "./task-registry.types.js";
 

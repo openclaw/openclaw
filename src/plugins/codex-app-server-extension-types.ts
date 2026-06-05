@@ -1,3 +1,4 @@
+// Defines Codex app-server extension contracts exposed through plugins.
 import type { AgentToolResult } from "../agents/runtime/index.js";
 
 /** Tool-result event emitted to Codex app-server plugin extensions. */

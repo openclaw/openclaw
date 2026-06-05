@@ -1,3 +1,4 @@
+// Provides import-boundary assertions shared by task architecture tests.
 import fs from "node:fs/promises";
 import path from "node:path";
 
