@@ -72,7 +72,7 @@ async function main() {
             groupPolicy: "allowlist",
           },
         },
-      } as unknown as import("../extensions/discord/src/runtime-api.js").OpenClawConfig,
+      } as unknown as import("../../extensions/discord/src/runtime-api.js").OpenClawConfig,
     });
 
     try {
@@ -98,7 +98,7 @@ async function main() {
             groupPolicy: "allowlist",
           },
         },
-      } as unknown as import("../extensions/discord/src/runtime-api.js").OpenClawConfig,
+      } as unknown as import("../../extensions/discord/src/runtime-api.js").OpenClawConfig,
     });
 
     try {
@@ -124,7 +124,7 @@ async function main() {
             groupPolicy: "allowlist",
           },
         },
-      } as unknown as import("../extensions/discord/src/runtime-api.js").OpenClawConfig,
+      } as unknown as import("../../extensions/discord/src/runtime-api.js").OpenClawConfig,
     });
 
     try {
@@ -152,7 +152,7 @@ async function main() {
             groupPolicy: "allowlist",
           },
         },
-      } as unknown as import("../extensions/discord/src/runtime-api.js").OpenClawConfig,
+      } as unknown as import("../../extensions/discord/src/runtime-api.js").OpenClawConfig,
     });
 
     try {
@@ -178,7 +178,7 @@ async function main() {
             groupPolicy: "allowlist",
           },
         },
-      } as unknown as import("../extensions/discord/src/runtime-api.js").OpenClawConfig,
+      } as unknown as import("../../extensions/discord/src/runtime-api.js").OpenClawConfig,
     });
 
     try {
@@ -204,7 +204,7 @@ async function main() {
             groupPolicy: "allowlist",
           },
         },
-      } as unknown as import("../extensions/discord/src/runtime-api.js").OpenClawConfig,
+      } as unknown as import("../../extensions/discord/src/runtime-api.js").OpenClawConfig,
     });
 
     try {
@@ -230,7 +230,7 @@ async function main() {
             groupPolicy: "allowlist",
           },
         },
-      } as unknown as import("../extensions/discord/src/runtime-api.js").OpenClawConfig,
+      } as unknown as import("../../extensions/discord/src/runtime-api.js").OpenClawConfig,
     });
 
     try {
