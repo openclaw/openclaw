@@ -6,6 +6,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import {
   isPluginJsonValue,
+  type PluginAgentEventSubscriptionRegistration,
   type PluginHostCleanupReason,
   type PluginJsonValue,
   type PluginRunContextGetParams,
@@ -17,6 +18,9 @@ import type { PluginRegistry } from "./registry-types.js";
 
 type PluginRunContextNamespaces = Map<string, PluginJsonValue>;
 type PluginRunContextByPlugin = Map<string, PluginRunContextNamespaces>;
+type PluginAgentEventSubscriptionContext = Parameters<
+  PluginAgentEventSubscriptionRegistration["handle"]
+>[1];
 
 type SchedulerJobRecord = {
   pluginId: string;
@@ -305,10 +309,12 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     const pluginId = registration.pluginId;
     const runId = params.event.runId;
     let handlerActive = true;
-    const ctx = {
-      // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
-      getRunContext: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) =>
-        getPluginRunContext({ pluginId, get: { runId, namespace } }) as T | undefined,
+    const ctx: PluginAgentEventSubscriptionContext = {
+      getRunContext: ((namespace: string) =>
+        getPluginRunContext({
+          pluginId,
+          get: { runId, namespace },
+        })) as PluginAgentEventSubscriptionContext["getRunContext"],
       setRunContext: (namespace: string, value: PluginJsonValue) => {
         setPluginRunContext({
           pluginId,
