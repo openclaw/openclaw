@@ -171,9 +171,10 @@ describe("hydrateDiscordMessageIfNeeded", () => {
   it("keeps the original reply message when hydration fetch fails", async () => {
     const client = createInternalTestClient();
     const rest = createFakeRestClient();
-    rest.get = vi.fn(async () => {
+    const get = vi.fn(async () => {
       throw Object.assign(new Error("Missing Access"), { status: 403 });
     });
+    rest.get = get;
     const message = new Message(client, {
       id: "m1",
       channel_id: "c1",
@@ -207,7 +208,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       messageChannelId: "c1",
     });
 
-    expect(rest.get).toHaveBeenCalledOnce();
+    expect(get).toHaveBeenCalledOnce();
     expect(hydrated).toBe(message);
     expect(hydrated.referencedMessage).toBeNull();
   });
