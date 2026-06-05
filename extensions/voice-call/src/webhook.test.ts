@@ -616,6 +616,21 @@ describe("VoiceCallWebhookServer stale call reaper", () => {
     });
     expect(endCall).not.toHaveBeenCalled();
   });
+
+  it("does not reap live calls in speaking state without answeredAt (inbound Twilio)", async () => {
+    const { endCall } = await runStaleCallReaperCase({
+      callAgeMs: 120_000,
+      staleCallReaperSeconds: 60,
+      advanceMs: 30_000,
+      callOverrides: {
+        state: "speaking",
+        // answeredAt intentionally absent — inbound Twilio calls never fire
+        // call.answered, so answeredAt stays undefined even while live.
+        answeredAt: undefined,
+      },
+    });
+    expect(endCall).not.toHaveBeenCalled();
+  });
 });
 
 describe("VoiceCallWebhookServer path matching", () => {
