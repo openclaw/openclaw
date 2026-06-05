@@ -1,3 +1,4 @@
+// Test Live Shard tests cover test live shard script behavior.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -123,6 +124,9 @@ describe("scripts/test-live-shard", () => {
 
   it("rejects unknown shard names", () => {
     expect(() => selectLiveShardFiles("native-live-missing")).toThrow(/Unknown live test shard/u);
+    expect(() => selectLiveShardFiles("native-live-extensions-l-z")).toThrow(
+      /Unknown live test shard/u,
+    );
   });
 
   it("parses list mode and rejects unknown live shard options", () => {

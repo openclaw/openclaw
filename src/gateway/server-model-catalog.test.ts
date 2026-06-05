@@ -1,3 +1,6 @@
+/**
+ * Gateway server model catalog tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayModelChoice } from "./server-model-catalog.js";
@@ -6,28 +9,11 @@ import {
   loadGatewayModelCatalog,
   markGatewayModelCatalogStaleForReload,
 } from "./server-model-catalog.js";
+import { createDeferred } from "./test-helpers.deferred.js";
 
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (error: unknown) => void;
-};
 type LoadModelCatalogForTest = NonNullable<
   NonNullable<Parameters<typeof loadGatewayModelCatalog>[0]>["loadModelCatalog"]
 >;
-
-function createDeferred<T>(): Deferred<T> {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((error: unknown) => void) | undefined;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 function model(id: string): GatewayModelChoice {
   return { id, name: id, provider: "openai" } as GatewayModelChoice;

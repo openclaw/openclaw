@@ -1,3 +1,4 @@
+// TTS runtime exports expose text-to-speech runtime helpers through the plugin SDK.
 export {
   TtsAutoSchema,
   TtsConfigSchema,
@@ -5,8 +6,11 @@ export {
   TtsProviderSchema,
 } from "../config/zod-schema.core.js";
 
+/** Compatibility no-op retained for callers that prewarm facade runtimes generically. */
 export function prewarmTtsRuntimeFacade(): void {}
 
+// TTS runtime helpers are owned by speech-core; this SDK facade stays as a thin
+// export barrel so public imports do not depend on bundled plugin internals.
 export {
   buildTtsSystemPromptHint,
   getLastTtsAttempt,

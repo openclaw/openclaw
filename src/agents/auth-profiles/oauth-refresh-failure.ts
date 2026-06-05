@@ -1,3 +1,8 @@
+/**
+ * OAuth refresh failure classification and operator hints.
+ * Parses provider/reason codes from refresh failures and formats safe login
+ * commands without trusting raw provider text.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -14,6 +19,7 @@ export type OAuthRefreshFailure = {
   reason: OAuthRefreshFailureReason | null;
 };
 
+/** Error type that carries provider and classified OAuth refresh failure reason. */
 export class OAuthRefreshFailureError extends Error {
   readonly provider: string;
   readonly reason: OAuthRefreshFailureReason | null;
@@ -44,11 +50,13 @@ function extractOAuthRefreshFailureProvider(message: string): string | null {
 }
 
 function sanitizeOAuthRefreshFailureProvider(provider: string | null | undefined): string | null {
+  // Only return normalized provider ids that are safe to embed in shell guidance.
   const sanitized = provider ? sanitizeForLog(provider).replaceAll("`", "").trim() : "";
   const normalized = normalizeProviderId(sanitized);
   return normalized && SAFE_PROVIDER_ID_RE.test(normalized) ? normalized : null;
 }
 
+/** Classify a raw OAuth refresh failure message into a stable reason code. */
 export function classifyOAuthRefreshFailureReason(
   message: string,
 ): OAuthRefreshFailureReason | null {
@@ -71,6 +79,7 @@ export function classifyOAuthRefreshFailureReason(
   return null;
 }
 
+/** Classify provider/reason from a user-facing OAuth refresh failure message. */
 export function classifyOAuthRefreshFailure(message: string): OAuthRefreshFailure | null {
   if (!isOAuthRefreshFailureMessage(message)) {
     return null;
@@ -81,6 +90,7 @@ export function classifyOAuthRefreshFailure(message: string): OAuthRefreshFailur
   };
 }
 
+/** Classify provider/reason from the structured OAuth refresh failure error. */
 export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFailure | null {
   if (!(err instanceof OAuthRefreshFailureError)) {
     return null;
@@ -91,6 +101,7 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
   };
 }
 
+/** Build the login command operators should run after OAuth refresh failure. */
 export function buildOAuthRefreshFailureLoginCommand(provider: string | null | undefined): string {
   const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
   return sanitizedProvider

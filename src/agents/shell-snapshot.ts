@@ -1,3 +1,8 @@
+/**
+ * Login-shell environment snapshot capture.
+ *
+ * Caches safe shell-derived environment variables while filtering secrets and stale snapshots.
+ */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
@@ -241,7 +246,7 @@ async function validateSnapshot(
     shellArgs: opts.shellArgs,
     cwd: opts.cwd,
     env: buildTrustedSnapshotCaptureEnv(opts.env),
-    command: `. ${shQuote(snapshotPath)} >/dev/null 2>&1; :`,
+    command: `. ${shQuote(snapshotPath)} >/dev/null 2>&1`,
     timeoutMs: 2_000,
   });
   return result.status === 0;

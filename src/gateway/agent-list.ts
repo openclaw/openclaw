@@ -1,3 +1,5 @@
+// Gateway agent list projection.
+// Combines configured agents and existing on-disk agent state for lightweight UI use.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -43,11 +45,14 @@ function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
 
   const sorted = Array.from(ids).filter(Boolean);
   sorted.sort((a, b) => a.localeCompare(b));
+  // Keep the default agent first for UI selection while preserving deterministic
+  // ordering for the remaining configured/on-disk ids.
   return sorted.includes(defaultId)
     ? [defaultId, ...sorted.filter((id) => id !== defaultId)]
     : sorted;
 }
 
+/** Lists gateway-visible agent ids with default/main session metadata. */
 export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   defaultId: string;
   mainKey: string;

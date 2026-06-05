@@ -1,3 +1,4 @@
+// Feishu plugin module implements bot behavior.
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import {
   buildChannelInboundEventContext,
@@ -1575,7 +1576,7 @@ export async function handleFeishuMessage(params: {
             turnResult.dispatched &&
             shouldSendNoVisibleReplyFallback({
               ...turnResult.dispatchResult,
-              failedCounts: dispatcher.getFailedCounts(),
+              failedCounts: dispatcher.getFailedCounts?.() ?? { tool: 0, block: 0, final: 0 },
             })
           ) {
             await ensureNoVisibleReplyFallback("broadcast-dispatch-complete-no-visible-reply");
@@ -1771,7 +1772,7 @@ export async function handleFeishuMessage(params: {
       if (
         shouldSendNoVisibleReplyFallback({
           ...dispatchResult,
-          failedCounts: dispatcher.getFailedCounts(),
+          failedCounts: dispatcher.getFailedCounts?.() ?? { tool: 0, block: 0, final: 0 },
         })
       ) {
         await ensureNoVisibleReplyFallback("dispatch-complete-no-visible-reply");

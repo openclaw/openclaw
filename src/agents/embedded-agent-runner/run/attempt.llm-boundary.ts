@@ -1,3 +1,6 @@
+/**
+ * Installs runtime-context and prompt-transform boundaries before LLM calls.
+ */
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -6,6 +9,11 @@ import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
+/**
+ * Removes transcript-only metadata before messages cross into provider prompt
+ * conversion. The LLM boundary should see replay-safe assistant content, compact
+ * tool results, and only the active inbound metadata.
+ */
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   const normalized = stripUnsafeBlockedRunMetadata(
     stripToolResultDetails(normalizeAssistantReplayContent(messages)),
@@ -15,6 +23,7 @@ export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): Agent
   return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
 }
 
+/** Normalizes existing transcript messages as if the current prompt were appended last. */
 export function normalizeMessagesForCurrentPromptBoundary(params: {
   messages: AgentMessage[];
   prompt: string;
@@ -27,6 +36,11 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
   return normalizeMessagesForLlmBoundary([...params.messages, promptMessage]).slice(0, -1);
 }
 
+/**
+ * Temporarily injects a runtime-context message for prompt conversion and retry.
+ * Cleanup restores the original continuation hook and removes only the injected
+ * message object.
+ */
 export function installRuntimeContextMessageForPrompt(params: {
   session: {
     messages: AgentMessage[];
@@ -86,6 +100,11 @@ function appendRuntimeContextMessageForPrompt(params: {
   return [...params.messages, params.message];
 }
 
+/**
+ * Inserts runtime context before the active user turn on retry. Overflow rebuilds
+ * can rehydrate a transcript ending in tool-call messages, so the active prompt
+ * is found by walking backward through tool-call assistants.
+ */
 export function insertRuntimeContextMessageForPrompt(params: {
   message: RuntimeContextCustomMessage;
   messages: AgentMessage[];
@@ -174,6 +193,10 @@ function composeModelPromptContext(params: {
     .join("\n\n");
 }
 
+/**
+ * Temporarily rewrites only the active user prompt for model submission while
+ * preserving the transcript prompt text for repair/guard metadata.
+ */
 export function installModelPromptTransform(params: {
   session: {
     agent: {
@@ -317,6 +340,9 @@ function stripUnsafeBlockedRunMetadata(messages: AgentMessage[]): AgentMessage[]
 }
 
 function findActiveUserMessageIndex(messages: AgentMessage[]): number {
+  // A prompt turn may be followed by assistant tool-call scaffolding during
+  // retry reconstruction. A normal assistant reply means the latest user turn is
+  // historical, not the active prompt boundary.
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (!message) {

@@ -1,3 +1,5 @@
+// CLI session history tests protect imported Claude CLI transcript lookup,
+// fallback seeding, marker metadata, and merge ordering with local chat history.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +11,7 @@ import {
   readClaudeCliSessionMessages,
   resolveClaudeCliSessionFilePath,
 } from "./cli-session-history.js";
+import { expectRecordFields, requireRecord } from "./test-helpers.assertions.js";
 
 const ORIGINAL_HOME = process.env.HOME;
 
@@ -26,20 +29,11 @@ function requireFallbackSeed(
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
+  expectRecordFields(value, "fields", expected);
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected record");
-  }
-  return value as Record<string, unknown>;
+  return requireRecord(value, "record");
 }
 
 function expectCliSessionMarker(message: unknown, sessionId: string): void {

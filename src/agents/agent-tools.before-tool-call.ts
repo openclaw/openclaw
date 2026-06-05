@@ -1,3 +1,8 @@
+/**
+ * before_tool_call policy runtime for agent tools.
+ * Runs plugin hooks, trusted tool policies, approvals, diagnostics, loop
+ * detection, skill-use telemetry, and adjusted parameter tracking.
+ */
 import os from "node:os";
 import path from "node:path";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
@@ -68,6 +73,7 @@ export type ToolOutcomeObservation = {
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
 
+/** Detect abort-related errors produced by the supplied signal. */
 export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
   if (!signal?.aborted) {
     return false;
@@ -155,6 +161,13 @@ type BeforeToolCallWrapperOptions = {
   approvalMode?: "request" | "report" | "defer";
   emitDiagnostics: boolean;
 };
+type BeforeToolCallPreparingTool = AnyAgentTool & {
+  prepareBeforeToolCallParams?: (
+    params: unknown,
+    ctx: { toolCallId?: string; hookContext?: HookContext; signal?: AbortSignal },
+  ) => unknown;
+  finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
+};
 
 export type BeforeToolCallPolicyDiagnosticState = {
   hasBeforeToolCallHook: boolean;
@@ -165,6 +178,7 @@ export type BeforeToolCallPolicyDiagnosticState = {
   }>;
 };
 
+/** Return whether before_tool_call hooks or trusted policies are active. */
 export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDiagnosticState {
   return {
     hasBeforeToolCallHook: getGlobalHookRunner()?.hasHooks("before_tool_call") === true,
@@ -172,6 +186,7 @@ export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDi
   };
 }
 
+/** Return true when any before_tool_call policy could affect tool execution. */
 export function hasBeforeToolCallPolicy(): boolean {
   const state = getBeforeToolCallPolicyDiagnosticState();
   return state.hasBeforeToolCallHook || state.trustedToolPolicies.length > 0;
@@ -198,6 +213,7 @@ export class BeforeToolCallBlockedError extends Error {
   }
 }
 
+/** Remember hook-adjusted params for later adapter-side execution. */
 export function recordAdjustedParamsForToolCall(
   toolCallId: string | undefined,
   params: unknown,
@@ -573,6 +589,7 @@ async function requestPluginToolApproval(params: {
   }
 }
 
+/** Resolve a deferred plugin approval request at the later execution boundary. */
 export async function requestDeferredPluginToolApproval(params: {
   deferredApproval: DeferredPluginToolApproval;
   signal?: AbortSignal;
@@ -589,6 +606,7 @@ export async function requestDeferredPluginToolApproval(params: {
   });
 }
 
+/** Notify plugin approval callbacks that a deferred approval was cancelled. */
 export function cancelDeferredPluginToolApproval(
   deferredApproval: DeferredPluginToolApproval,
 ): void {
@@ -667,6 +685,7 @@ async function resolveSkillWorkshopApprovalForFinalParams(params: {
   });
 }
 
+/** Build the standard terminal result for vetoed tool calls. */
 export function buildBlockedToolResult(params: {
   reason: string;
   deniedReason?: HookBlockedReason;
@@ -767,6 +786,7 @@ async function recordLoopOutcome(args: {
   }
 }
 
+/** Run the full before_tool_call policy chain for a pending tool call. */
 export async function runBeforeToolCallHook(args: {
   toolName: string;
   params: unknown;
@@ -1081,6 +1101,7 @@ export async function runBeforeToolCallHook(args: {
   }
 }
 
+/** Wrap a tool execute function with before_tool_call hooks and diagnostics. */
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
@@ -1099,8 +1120,16 @@ export function wrapToolWithBeforeToolCallHook(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params });
-      const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params });
+      const prepare = (tool as BeforeToolCallPreparingTool).prepareBeforeToolCallParams;
+      const preparedParams = prepare
+        ? await prepare(params, {
+            ...(toolCallId ? { toolCallId } : {}),
+            ...(ctx ? { hookContext: ctx } : {}),
+            ...(signal ? { signal } : {}),
+          })
+        : params;
+      const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params: preparedParams });
+      const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params: preparedParams });
       const outcome = await runBeforeToolCallHook({
         toolName,
         params: hookParams,
@@ -1149,12 +1178,17 @@ export function wrapToolWithBeforeToolCallHook(
         });
         return blockedResult;
       }
-      const executeParams = reconcileCodeModeExecBeforeHookParams({
+      let executeParams = reconcileCodeModeExecBeforeHookParams({
         tool,
-        originalParams: params,
+        originalParams: preparedParams,
         hookParams,
         adjustedParams: outcome.params,
       });
+      executeParams =
+        (tool as BeforeToolCallPreparingTool).finalizeBeforeToolCallParams?.(
+          executeParams,
+          preparedParams,
+        ) ?? executeParams;
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const normalizedToolName = normalizeToolName(toolName || "tool");
       const trace = ctx?.trace
@@ -1252,11 +1286,13 @@ export function wrapToolWithBeforeToolCallHook(
   return wrappedTool;
 }
 
+/** Return true when a tool already carries the before_tool_call wrapper marker. */
 export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean {
   const taggedTool = tool as unknown as Record<symbol, unknown>;
   return taggedTool[BEFORE_TOOL_CALL_WRAPPED] === true;
 }
 
+/** Toggle diagnostic event emission on an existing before_tool_call wrapper. */
 export function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled: boolean): void {
   const taggedTool = tool as unknown as Record<symbol, unknown>;
   const options = taggedTool[BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS];
@@ -1265,6 +1301,7 @@ export function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled:
   }
 }
 
+/** Rebuild a before_tool_call wrapper while preserving the original source tool. */
 export function rewrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
@@ -1284,6 +1321,7 @@ export function rewrapToolWithBeforeToolCallHook(
   );
 }
 
+/** Copy before_tool_call marker metadata when another wrapper replaces a tool. */
 export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAgentTool): void {
   if (!isToolWrappedWithBeforeToolCallHook(source)) {
     return;
@@ -1307,6 +1345,7 @@ export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAg
   });
 }
 
+/** Consume and remove hook-adjusted params for a completed tool call. */
 export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
   const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
   const params = adjustedParamsByToolCallId.get(adjustedParamsKey);
@@ -1314,6 +1353,7 @@ export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: str
   return params;
 }
 
+/** Test-only access to before_tool_call internals. */
 export const testing = {
   BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
   BEFORE_TOOL_CALL_HOOK_CONTEXT,

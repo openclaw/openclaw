@@ -1,3 +1,7 @@
+/**
+ * Handles embedded-agent assistant message events, block replies, reasoning
+ * streams, reply directives, and pending tool media attachment handoff.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -8,7 +12,6 @@ import {
 } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import {
@@ -241,6 +244,7 @@ function copyPartialBlockState(
   target.pendingTagFragment = source.pendingTagFragment;
 }
 
+/** Replaces a silent-reply token with the latest sent messaging-tool text when available. */
 export function resolveSilentReplyFallbackText(params: {
   text: unknown;
   messagingToolSentTexts: string[];
@@ -272,6 +276,7 @@ function hasReplyMedia(payload: BlockReplyPayload): boolean {
   return (payload.mediaUrls ?? []).some((url) => url.trim().length > 0);
 }
 
+/** Moves queued tool media into a non-reasoning assistant reply payload. */
 export function consumePendingToolMediaIntoReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
@@ -308,6 +313,7 @@ export function consumePendingToolMediaIntoReply(
   return mergedPayload;
 }
 
+/** Consumes queued tool media as a standalone reply payload. */
 export function consumePendingToolMediaReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
@@ -322,6 +328,7 @@ export function consumePendingToolMediaReply(
   return payload;
 }
 
+/** Reads queued tool media without clearing it. */
 export function readPendingToolMediaReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
@@ -441,6 +448,7 @@ function resolveStreamingReplyText(params: {
   return resolveIncrementalStreamingReplyText(params) ?? parseFullStreamingReplyText(params.next);
 }
 
+/** Records parsed reply directives until a sendable reply payload is built. */
 export function recordPendingAssistantReplyDirectives(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   parsed: ReplyDirectiveParseResult | null | undefined,
@@ -461,6 +469,7 @@ export function recordPendingAssistantReplyDirectives(
   };
 }
 
+/** Merges pending reply directives into one reply payload and clears them. */
 export function consumePendingAssistantReplyDirectivesIntoReply(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   payload: BlockReplyPayload,
@@ -483,6 +492,7 @@ export function consumePendingAssistantReplyDirectivesIntoReply(
   };
 }
 
+/** True when a reply payload has text, media, or voice content worth sending. */
 export function hasAssistantVisibleReply(params: {
   text?: string;
   mediaUrls?: string[];
@@ -492,6 +502,7 @@ export function hasAssistantVisibleReply(params: {
   return resolveSendableOutboundReplyParts(params).hasContent || Boolean(params.audioAsVoice);
 }
 
+/** Builds normalized stream payload data for assistant visible output. */
 export function buildAssistantStreamData(params: {
   text?: string;
   delta?: string;
@@ -516,6 +527,7 @@ export function buildAssistantStreamData(params: {
   };
 }
 
+/** Handles assistant message-start boundaries for streaming state. */
 export function handleMessageStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -535,6 +547,7 @@ export function handleMessageStart(
   void ctx.params.onAssistantMessageStart?.();
 }
 
+/** Handles assistant message deltas, reasoning, directives, and block replies. */
 export function handleMessageUpdate(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
@@ -784,19 +797,8 @@ export function handleMessageUpdate(
         mediaUrls,
         phase: deliveryPhase ?? assistantPhase,
       });
-      emitAgentEvent({
-        runId: ctx.params.runId,
-        stream: "assistant",
-        data,
-      });
-      void ctx.params.onAgentEvent?.({
-        stream: "assistant",
-        data,
-      });
+      ctx.emitAssistantStreamData(data, { emitPartialReply: true });
       ctx.state.emittedAssistantUpdate = true;
-      if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
-        void ctx.params.onPartialReply(data);
-      }
     }
   }
 
@@ -825,6 +827,7 @@ export function handleMessageUpdate(
   }
 }
 
+/** Handles assistant message-end finalization, block flush, and usage commit. */
 export function handleMessageEnd(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -936,15 +939,7 @@ export function handleMessageEnd(
       mediaUrls,
       phase: assistantPhase,
     });
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      stream: "assistant",
-      data,
-    });
-    void ctx.params.onAgentEvent?.({
-      stream: "assistant",
-      data,
-    });
+    ctx.emitAssistantStreamData(data);
     ctx.state.emittedAssistantUpdate = true;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
   }

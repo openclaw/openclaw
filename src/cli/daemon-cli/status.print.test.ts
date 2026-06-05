@@ -1,3 +1,4 @@
+// Daemon status print tests cover user-facing service status formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../command-format.js";
 import { printDaemonStatus } from "./status.print.js";
@@ -515,6 +516,68 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Other gateway-like services detected");
     expectMockLineContains(runtime.log, "ai.openclaw.gateway.rescue");
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("prints a terse plugin drift warning outside deep mode", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.5.4",
+          drifts: [
+            {
+              pluginId: "whatsapp",
+              installedVersion: "2026.5.3",
+              gatewayVersion: "2026.5.4",
+              source: "npm",
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false, deep: false },
+    );
+
+    expectMockLineContains(runtime.log, "Plugin version drift: 1 active official plugin");
+    expectMockLineContains(runtime.log, "openclaw gateway status --deep");
+    expect(runtime.log.mock.calls.map(([line]) => line).join("\n")).not.toContain("whatsapp:");
+  });
+
+  it("prints detailed plugin drift entries in deep mode", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.5.4",
+          drifts: [
+            {
+              pluginId: "whatsapp",
+              installedVersion: "2026.5.3",
+              gatewayVersion: "2026.5.4",
+              source: "clawhub",
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false, deep: true },
+    );
+
+    expectMockLineContains(runtime.log, "- whatsapp: 2026.5.3 (clawhub)");
+    expectMockLineContains(runtime.log, "openclaw plugins update <plugin-id>");
+    expectMockLineContains(runtime.log, "openclaw gateway restart");
   });
 
   it("does not print systemd user-service hints when a gateway responds", () => {

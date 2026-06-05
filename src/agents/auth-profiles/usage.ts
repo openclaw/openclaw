@@ -1,3 +1,8 @@
+/**
+ * Auth profile usage accounting and cooldown mutation.
+ * Records failures under the store lock, applies WHAM usage probes for OpenAI
+ * OAuth profiles, and exposes display helpers for unavailable profiles.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
@@ -9,6 +14,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
+import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 
 const authProfileUsageLog = createSubsystemLogger("agent/embedded");
@@ -37,15 +43,9 @@ const authProfileUsageDeps = {
   updateAuthProfileStoreWithLock,
 };
 
-// Invoked once per recorded auth-profile failure. Gateway startup wires this
-// to clearCurrentProviderAuthState so the next model-listing call recomputes
-// against the real auth state.
-let onAuthProfileFailureHook: (() => void) | undefined;
+export { setAuthProfileFailureHook };
 
-export function setAuthProfileFailureHook(hook: (() => void) | undefined): void {
-  onAuthProfileFailureHook = hook;
-}
-
+/** Test-only dependency injection for usage persistence hooks. */
 export const testing = {
   setDepsForTest(
     overrides: Partial<{
@@ -399,6 +399,7 @@ export function resolveProfilesUnavailableReason(params: {
   return best;
 }
 
+/** Returns the regular transient-failure cooldown duration for an error count. */
 export function calculateAuthProfileCooldownMs(errorCount: number): number {
   const normalized = Math.max(1, errorCount);
   if (normalized <= 1) {
@@ -524,6 +525,7 @@ function resolveDisabledFailureBackoffMs(params: {
   });
 }
 
+/** Resolves the display-facing unusable timestamp, honoring provider bypasses. */
 export function resolveProfileUnusableUntilForDisplay(
   store: AuthProfileStore,
   profileId: string,
@@ -763,7 +765,7 @@ export async function markAuthProfileFailure(params: {
       });
     }
     try {
-      onAuthProfileFailureHook?.();
+      notifyAuthProfileFailureHook();
     } catch (err) {
       // Hook errors must not break failure recording; log and continue.
       authProfileUsageLog.warn("auth profile failure hook threw", {
@@ -814,7 +816,7 @@ export async function markAuthProfileFailure(params: {
     now,
   });
   try {
-    onAuthProfileFailureHook?.();
+    notifyAuthProfileFailureHook();
   } catch (err) {
     // Hook errors must not break failure recording; log and continue.
     authProfileUsageLog.warn("auth profile failure hook threw", {
@@ -825,6 +827,7 @@ export async function markAuthProfileFailure(params: {
   }
 }
 
+/** Marks a profile blocked until a provider-reported reset timestamp. */
 export async function markAuthProfileBlockedUntil(params: {
   store: AuthProfileStore;
   profileId: string;

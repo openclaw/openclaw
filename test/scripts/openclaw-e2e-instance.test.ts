@@ -1,3 +1,4 @@
+// Openclaw E2E Instance tests cover openclaw e2e instance script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -485,6 +486,97 @@ fi
     }
   });
 
+  it("terminates descendants in the tracked process group", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-process-group-"));
+    const parentPidPath = path.join(tempDir, "parent.pid");
+    const childPidPath = path.join(tempDir, "child.pid");
+    const childTermPath = path.join(tempDir, "child.term");
+    try {
+      const parentPath = path.join(tempDir, "parent.cjs");
+      const childPath = path.join(tempDir, "child.cjs");
+      const logPath = path.join(tempDir, "tracked.log");
+      fs.writeFileSync(
+        childPath,
+        [
+          "const fs = require('node:fs');",
+          "fs.writeFileSync(process.argv[2], String(process.pid));",
+          "process.on('SIGTERM', () => {",
+          "  fs.writeFileSync(process.argv[3], 'terminated');",
+          "  process.exit(0);",
+          "});",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+      );
+      fs.writeFileSync(
+        parentPath,
+        [
+          "const fs = require('node:fs');",
+          "const { spawn } = require('node:child_process');",
+          "fs.writeFileSync(process.argv[3], String(process.pid));",
+          "const child = spawn(process.execPath, [process.argv[2], process.argv[4], process.argv[5]], {",
+          "  stdio: 'ignore',",
+          "});",
+          "child.unref();",
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+      );
+
+      const script = `
+set -euo pipefail
+source ${shellQuote(helperPath)}
+tracked_pid="$(openclaw_e2e_start_tracked_process ${shellQuote(logPath)} ${shellQuote(process.execPath)} ${shellQuote(parentPath)} ${shellQuote(childPath)} ${shellQuote(parentPidPath)} ${shellQuote(childPidPath)} ${shellQuote(childTermPath)})"
+for ((i = 0; i < 100; i += 1)); do
+  [ -s ${shellQuote(parentPidPath)} ] && [ -s ${shellQuote(childPidPath)} ] && break
+  /bin/sleep 0.02
+done
+[ -s ${shellQuote(parentPidPath)} ]
+[ -s ${shellQuote(childPidPath)} ]
+child_pid="$(/bin/cat ${shellQuote(childPidPath)})"
+openclaw_e2e_stop_process "$tracked_pid"
+for ((i = 0; i < 100; i += 1)); do
+  [ -s ${shellQuote(childTermPath)} ] && break
+  /bin/sleep 0.02
+done
+[ -s ${shellQuote(childTermPath)} ] || {
+  echo "tracked child did not receive SIGTERM" >&2
+  exit 1
+}
+for ((i = 0; i < 100; i += 1)); do
+  kill -0 "$child_pid" 2>/dev/null || exit 0
+  /bin/sleep 0.02
+done
+echo "tracked child still alive after group termination" >&2
+exit 1
+`;
+
+      const result = spawnSync("/bin/bash", ["-c", script], {
+        encoding: "utf8",
+        env: shellTestEnv({
+          PATH: hostPath,
+        }),
+        timeout: 5_000,
+      });
+
+      expectShellSuccess(result);
+    } finally {
+      for (const pidPath of [childPidPath, parentPidPath]) {
+        if (!fs.existsSync(pidPath)) {
+          continue;
+        }
+        const pid = Number(fs.readFileSync(pidPath, "utf8"));
+        if (Number.isInteger(pid) && pid > 1) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {}
+        }
+      }
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("bounds HTTP readiness probes when a server accepts connections but never responds", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-http-probe-"));
     try {
@@ -599,6 +691,52 @@ fi
       expect(logPath.startsWith(`${logDir}${path.sep}`)).toBe(true);
       expect(path.basename(logPath)).toMatch(new RegExp(`^openclaw-${logLabel}\\..+\\.log$`, "u"));
       expect(fs.readFileSync(logPath, "utf8")).toContain("fixture output");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("installs the trash shim under isolated test state", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-trash-shim-"));
+    try {
+      const homeDir = path.join(tempDir, "home");
+      const stateDir = path.join(tempDir, "state");
+      const pathFile = path.join(tempDir, "path.txt");
+      const binDirFile = path.join(tempDir, "bin-dir.txt");
+      fs.mkdirSync(homeDir, { recursive: true });
+      fs.mkdirSync(stateDir, { recursive: true });
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            "openclaw_e2e_install_trash_shim",
+            "openclaw_e2e_install_trash_shim",
+            `printf "%s" "$PATH" > ${shellQuote(pathFile)}`,
+            `printf "%s" "$OPENCLAW_E2E_BIN_DIR" > ${shellQuote(binDirFile)}`,
+            "command -v trash >/dev/null",
+          ].join("; "),
+        ],
+        {
+          encoding: "utf8",
+          env: shellTestEnv({
+            HOME: homeDir,
+            OPENCLAW_STATE_DIR: stateDir,
+            PATH: hostPath,
+          }),
+        },
+      );
+
+      expectShellSuccess(result);
+      const binDir = fs.readFileSync(binDirFile, "utf8");
+      const pathEntries = fs.readFileSync(pathFile, "utf8").split(path.delimiter);
+      expect(binDir).toBe(path.join(stateDir, "e2e-bin"));
+      expect(binDir).not.toBe("/tmp/openclaw-bin");
+      expect(pathEntries.filter((entry) => entry === binDir)).toHaveLength(1);
+      expect(fs.existsSync(path.join(binDir, "trash"))).toBe(true);
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }

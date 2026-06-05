@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager sync ops behavior.
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -38,6 +39,7 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createEmbeddingProvider,
+  resolveEmbeddingProviderAdapterId,
   type EmbeddingProvider,
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
@@ -54,8 +56,9 @@ import {
 import {
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
-  shouldRunFullMemoryReindex,
+  resolveMemoryIndexIdentityState,
   type MemoryIndexMeta,
+  type MemoryIndexIdentityState,
 } from "./manager-reindex-state.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 import {
@@ -67,7 +70,16 @@ import {
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
-import { runMemoryTargetedSessionSync } from "./manager-targeted-sync.js";
+import {
+  markMemoryTargetSessionFilesDirty,
+  runMemoryTargetedSessionSync,
+} from "./manager-targeted-sync.js";
+import {
+  countChokidarWatchedEntries,
+  type MemoryWatchPressureUnit,
+  type MemoryWatchPressureWarningState,
+  warnIfMemoryWatchPressureHigh,
+} from "./watch-pressure.js";
 import {
   recordMemoryWatchEventPath,
   settleMemoryWatchEventPaths,
@@ -99,6 +111,7 @@ const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const SESSION_SYNC_YIELD_EVERY = 10;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
+const MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS = 10_000;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   "node_modules",
@@ -233,10 +246,12 @@ export abstract class MemoryManagerSyncOps {
   protected sessionUnsubscribe: (() => void) | null = null;
   protected fallbackReason?: string;
   protected intervalTimer: NodeJS.Timeout | null = null;
+  protected memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
   protected pendingWatchPaths: MemoryWatchSettleQueue = new Map();
   protected sessionsDirty = false;
+  private readonly memoryWatchPressureWarning: MemoryWatchPressureWarningState = { shown: false };
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
   protected sessionDeltas = new Map<
@@ -268,6 +283,65 @@ export abstract class MemoryManagerSyncOps {
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
+
+  protected hasIndexedChunks(): boolean {
+    const row = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
+      | { found?: number }
+      | undefined;
+    return row?.found === 1;
+  }
+
+  protected resolveCurrentIndexIdentityState(params?: {
+    meta?: MemoryIndexMeta | null;
+    provider?: { id: string; model: string } | null;
+    providerKeyKnown?: boolean;
+    vectorReady?: boolean;
+    hasIndexedChunks?: boolean;
+  }): MemoryIndexIdentityState {
+    const hasProviderOverride = params && "provider" in params;
+    const configuredProvider =
+      this.settings.provider === "none"
+        ? null
+        : {
+            id:
+              resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
+              this.settings.provider,
+            model: this.settings.model,
+          };
+    const provider = hasProviderOverride
+      ? params.provider!
+      : this.provider
+        ? { id: this.provider.id, model: this.provider.model }
+        : configuredProvider;
+    const vectorReady =
+      params && "vectorReady" in params
+        ? Boolean(params.vectorReady)
+        : this.vector.available === true;
+    return resolveMemoryIndexIdentityState({
+      meta: params && "meta" in params ? params.meta! : this.readMeta(),
+      provider,
+      providerKey: params?.providerKeyKnown === false ? undefined : (this.providerKey ?? undefined),
+      providerKeyKnown: params?.providerKeyKnown,
+      configuredSources: resolveConfiguredSourcesForMeta(this.sources),
+      configuredScopeHash: resolveConfiguredScopeHash({
+        workspaceDir: this.workspaceDir,
+        extraPaths: this.settings.extraPaths,
+        multimodal: {
+          enabled: this.settings.multimodal.enabled,
+          modalities: this.settings.multimodal.modalities,
+          maxFileBytes: this.settings.multimodal.maxFileBytes,
+        },
+      }),
+      chunkTokens: this.settings.chunking.tokens,
+      chunkOverlap: this.settings.chunking.overlap,
+      vectorReady,
+      hasIndexedChunks:
+        params && "hasIndexedChunks" in params
+          ? Boolean(params.hasIndexedChunks)
+          : this.hasIndexedChunks(),
+      ftsTokenizer: this.settings.store.fts.tokenizer,
+    });
+  }
 
   protected resetVectorState(): void {
     this.vectorReady = null;
@@ -503,8 +577,7 @@ export abstract class MemoryManagerSyncOps {
     };
     // Native recursive fs.watch for directory paths — one watcher per
     // directory on macOS (FSEvents) and Windows (ReadDirectoryChangesW).
-    // Avoids chokidar's per-file fs.watch fan-out that opened ~12k REG FDs
-    // on multi-thousand-`.md` memory trees (issue #86613).
+    // Avoids chokidar's per-file fs.watch fan-out on large memory trees.
     //
     // Linux is intentionally handled by a separate directory-tree watcher
     // below: Node's `fs.watch(dir, { recursive: true })` routes through
@@ -533,23 +606,67 @@ export abstract class MemoryManagerSyncOps {
       if (existingWatcher) {
         existingWatcher.add(Array.from(fileWatchPaths));
       } else {
-        this.watcher = resolveMemoryWatchFactory()(Array.from(fileWatchPaths), {
+        const watcher = resolveMemoryWatchFactory()(Array.from(fileWatchPaths), {
           ignoreInitial: true,
           ignored: (watchPath, stats) =>
             shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
         });
-        this.watcher.on("add", markDirty);
-        this.watcher.on("change", markDirty);
-        this.watcher.on("unlink", markDirty);
-        this.watcher.on("unlinkDir", markDirty);
-        this.watcher.on("error", (err) => {
+        this.watcher = watcher;
+        watcher.on("add", markDirty);
+        watcher.on("change", markDirty);
+        watcher.on("unlink", markDirty);
+        watcher.on("unlinkDir", markDirty);
+        watcher.on("error", (err) => {
           // File watcher errors (e.g., ENOSPC) should not crash the gateway.
           // Log the error and continue - memory search still works without auto-sync.
           const message = err instanceof Error ? err.message : String(err);
           log.warn(`memory watcher error: ${message}`);
         });
+        watcher.once("ready", () => {
+          this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
+        });
       }
     }
+    this.scheduleMemoryWatchPressureStartupCheck();
+  }
+
+  private scheduleMemoryWatchPressureStartupCheck(): void {
+    if (
+      this.memoryWatchPressureStartupTimer ||
+      this.memoryWatchPressureWarning.shown ||
+      this.closed ||
+      (this.nativeMemoryWatchPairs.length === 0 && !this.watcher)
+    ) {
+      return;
+    }
+    this.memoryWatchPressureStartupTimer = setTimeout(() => {
+      this.memoryWatchPressureStartupTimer = null;
+      if (this.closed || this.memoryWatchPressureWarning.shown) {
+        return;
+      }
+      if (this.watcher) {
+        this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(this.watcher), "paths");
+      }
+      if (this.memoryWatchPressureWarning.shown) {
+        return;
+      }
+      let directoryCount = 0;
+      for (const pair of this.nativeMemoryWatchPairs) {
+        directoryCount += pair.treeWatchers?.size ?? 0;
+      }
+      this.warnIfMemoryWatchPressure(directoryCount, "directories");
+    }, MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS);
+  }
+
+  private warnIfMemoryWatchPressure(count: number, unit: MemoryWatchPressureUnit): void {
+    warnIfMemoryWatchPressureHigh(
+      this.memoryWatchPressureWarning,
+      count,
+      unit,
+      "Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files.",
+      "Remove large extraPaths, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
+      (message) => log.warn(message),
+    );
   }
 
   private currentMemoryChokidarWatcher(): FSWatcher | null {
@@ -640,9 +757,8 @@ export abstract class MemoryManagerSyncOps {
         (_eventType, filename) => {
           // Per Node docs `filename` can be null on some platforms even
           // when the parent watcher is otherwise supported. Treat null
-          // as an unknown event and re-check the watched directory's
-          // inode (clawsweeper review [P2] 5df68c…); otherwise filter
-          // by basename so sibling events don't trigger reattach.
+          // as an unknown event and re-check the watched directory's inode;
+          // otherwise filter by basename so sibling events don't trigger reattach.
           if (filename !== null && filename !== baseName) {
             return;
           }
@@ -1012,18 +1128,22 @@ export abstract class MemoryManagerSyncOps {
       }
       // No chokidar watcher exists yet. Spin one up just for this directory
       // so the periodic-sync gap is closed.
-      this.watcher = resolveMemoryWatchFactory()([dir], {
+      const watcher = resolveMemoryWatchFactory()([dir], {
         ignoreInitial: true,
         ignored: (watchPath, stats) =>
           shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
       });
-      this.watcher.on("add", markDirty);
-      this.watcher.on("change", markDirty);
-      this.watcher.on("unlink", markDirty);
-      this.watcher.on("unlinkDir", markDirty);
-      this.watcher.on("error", (err) => {
+      this.watcher = watcher;
+      watcher.on("add", markDirty);
+      watcher.on("change", markDirty);
+      watcher.on("unlink", markDirty);
+      watcher.on("unlinkDir", markDirty);
+      watcher.on("error", (err) => {
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`memory watcher error: ${message}`);
+      });
+      watcher.once("ready", () => {
+        this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
       });
     } catch (err) {
       log.warn(`failed to attach chokidar fallback for ${dir}: ${String(err)}`);
@@ -1691,60 +1811,69 @@ export abstract class MemoryManagerSyncOps {
     }
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
-    const configuredSources = resolveConfiguredSourcesForMeta(this.sources);
-    const configuredScopeHash = resolveConfiguredScopeHash({
-      workspaceDir: this.workspaceDir,
-      extraPaths: this.settings.extraPaths,
-      multimodal: {
-        enabled: this.settings.multimodal.enabled,
-        modalities: this.settings.multimodal.modalities,
-        maxFileBytes: this.settings.multimodal.maxFileBytes,
-      },
-    });
     const targetSessionFiles = this.normalizeTargetSessionFiles(params?.sessionFiles);
     const hasTargetSessionFiles = targetSessionFiles !== null;
     if (params?.reason === "cli" && !params.force && !hasTargetSessionFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
-    const targetedSessionSync = await runMemoryTargetedSessionSync({
-      hasSessionSource: this.sources.has("sessions"),
-      targetSessionFiles,
-      reason: params?.reason,
-      progress: progress ?? undefined,
-      useUnsafeReindex:
-        process.env.OPENCLAW_TEST_FAST === "1" &&
-        process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1",
-      sessionsDirtyFiles: this.sessionsDirtyFiles,
-      syncSessionFiles: async (targetedParams) => {
-        await this.syncSessionFiles(targetedParams);
-      },
-      shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
-      activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
-      runSafeReindex: async (reindexParams) => {
-        await this.runSafeReindex(reindexParams);
-      },
-      runUnsafeReindex: async (reindexParams) => {
-        await this.runUnsafeReindex(reindexParams);
-      },
+    const indexIdentity = resolveMemoryIndexIdentityState({
+      meta,
+      // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
+      provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
+      providerKey: this.providerKey ?? undefined,
+      configuredSources: resolveConfiguredSourcesForMeta(this.sources),
+      configuredScopeHash: resolveConfiguredScopeHash({
+        workspaceDir: this.workspaceDir,
+        extraPaths: this.settings.extraPaths,
+        multimodal: {
+          enabled: this.settings.multimodal.enabled,
+          modalities: this.settings.multimodal.modalities,
+          maxFileBytes: this.settings.multimodal.maxFileBytes,
+        },
+      }),
+      chunkTokens: this.settings.chunking.tokens,
+      chunkOverlap: this.settings.chunking.overlap,
+      vectorReady,
+      hasIndexedChunks: this.hasIndexedChunks(),
+      ftsTokenizer: this.settings.store.fts.tokenizer,
     });
-    if (targetedSessionSync.handled) {
-      this.sessionsDirty = targetedSessionSync.sessionsDirty;
-      return;
-    }
+    const hasIndexedChunks = this.hasIndexedChunks();
+    const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
+    const needsExplicitIdentityReindex =
+      params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetSessionFiles;
     const needsFullReindex =
       (params?.force && !hasTargetSessionFiles) ||
-      shouldRunFullMemoryReindex({
-        meta,
-        // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
-        provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
-        providerKey: this.providerKey ?? undefined,
-        configuredSources,
-        configuredScopeHash,
-        chunkTokens: this.settings.chunking.tokens,
-        chunkOverlap: this.settings.chunking.overlap,
-        vectorReady,
-        ftsTokenizer: this.settings.store.fts.tokenizer,
+      needsInitialIndex ||
+      needsExplicitIdentityReindex;
+    if (indexIdentity.status !== "valid" && !needsFullReindex) {
+      this.dirty = true;
+      const sessionsDirty = markMemoryTargetSessionFilesDirty({
+        sessionsDirtyFiles: this.sessionsDirtyFiles,
+        targetSessionFiles,
       });
+      if (sessionsDirty) {
+        this.sessionsDirty = true;
+      }
+      return;
+    }
+    if (!needsFullReindex) {
+      const targetedSessionSync = await runMemoryTargetedSessionSync({
+        hasSessionSource: this.sources.has("sessions"),
+        targetSessionFiles,
+        reason: params?.reason,
+        progress: progress ?? undefined,
+        sessionsDirtyFiles: this.sessionsDirtyFiles,
+        syncSessionFiles: async (targetedParams) => {
+          await this.syncSessionFiles(targetedParams);
+        },
+        shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
+        activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
+      });
+      if (targetedSessionSync.handled) {
+        this.sessionsDirty = targetedSessionSync.sessionsDirty;
+        return;
+      }
+    }
     try {
       if (needsFullReindex) {
         if (
@@ -1794,20 +1923,17 @@ export abstract class MemoryManagerSyncOps {
       const activated =
         this.shouldFallbackOnError(err) && (await this.activateFallbackProvider(reason));
       if (activated) {
-        await this.runSafeReindex({
-          reason: params?.reason ?? "fallback",
-          force: true,
-          progress: progress ?? undefined,
-        });
+        if (needsFullReindex && !hasTargetSessionFiles) {
+          await this.runSafeReindex({
+            reason: params?.reason ?? "fallback",
+            force: true,
+            progress: progress ?? undefined,
+          });
+        }
         return;
       }
       if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
-        log.warn(`memory embeddings unavailable; rebuilding lexical memory index only: ${reason}`);
-        await this.runSafeReindex({
-          reason: params?.reason ?? "embedding-degraded",
-          force: true,
-          progress: progress ?? undefined,
-        });
+        log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
         return;
       }
       throw err;
@@ -1965,6 +2091,9 @@ export abstract class MemoryManagerSyncOps {
           } else {
             this.sessionsDirty = false;
           }
+          if (!shouldSyncMemory) {
+            this.dirty = false;
+          }
 
           const meta: MemoryIndexMeta = {
             model: this.provider?.model ?? "fts-only",
@@ -2044,6 +2173,9 @@ export abstract class MemoryManagerSyncOps {
       this.sessionsDirty = true;
     } else {
       this.sessionsDirty = false;
+    }
+    if (!shouldSyncMemory) {
+      this.dirty = false;
     }
 
     const nextMeta: MemoryIndexMeta = {

@@ -1,3 +1,4 @@
+// Link-understanding runner fetches allowed URLs and invokes configured commands with bounded content.
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
@@ -117,6 +118,7 @@ async function runCliEntry(params: {
   const args = params.entry.args ?? [];
   const timeoutMs = resolveTimeoutMsFromConfig({ config: params.config, entry: params.entry });
   if (isUrlFetcherCommand(command) && args.some(isLinkUrlTemplate)) {
+    // curl/wget URL templates mark the entry as a fetcher; guarded fetch already supplied content.
     return params.content;
   }
 
@@ -184,6 +186,10 @@ async function runLinkEntries(params: {
   return null;
 }
 
+/**
+ * Fetches detected links through the SSRF guard and runs configured CLI processors.
+ * Returns detected URLs even when processors are absent so callers can report discovery.
+ */
 export async function runLinkUnderstanding(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
