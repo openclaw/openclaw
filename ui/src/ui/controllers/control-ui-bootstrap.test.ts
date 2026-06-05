@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../../src/gateway/control-ui-contract.js";
+import { getTimezone, setTimezone } from "../timezone.ts";
 import { loadControlUiBootstrapConfig } from "./control-ui-bootstrap.ts";
 
 function requireFetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0) {
@@ -13,6 +14,10 @@ function requireFetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0) {
 }
 
 describe("loadControlUiBootstrapConfig", () => {
+  afterEach(() => {
+    setTimezone(undefined);
+  });
+
   it("loads assistant identity from the bootstrap endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -374,6 +379,65 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(fetchCall.init.method).toBe("GET");
     expect(fetchCall.headers.Accept).toBe("application/json");
     expect(fetchCall.headers.Authorization).toBeUndefined();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("sets timezone from bootstrap payload", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Bot",
+        assistantAvatar: "",
+        assistantAgentId: "main",
+        timezone: "America/Chicago",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+    expect(getTimezone()).toBe("America/Chicago");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("does not set timezone when payload omits it", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Bot",
+        assistantAvatar: "",
+        assistantAgentId: "main",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+    expect(getTimezone()).toBeUndefined();
 
     vi.unstubAllGlobals();
   });
