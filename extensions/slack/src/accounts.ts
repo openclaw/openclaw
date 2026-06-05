@@ -137,7 +137,7 @@ export function mergeSlackAccountConfig(
     channelConfig: cfg.channels?.slack as SlackAccountConfig,
     accounts: cfg.channels?.slack?.accounts as Record<string, Partial<SlackAccountConfig>>,
     accountId,
-    nestedObjectKeys: ["botLoopProtection"],
+    nestedObjectKeys: ["botLoopProtection", "memberPolicy"],
   });
   const streaming = mergeSlackStreamingConfig(
     (cfg.channels?.slack as Record<string, unknown> | undefined)?.streaming,
@@ -251,6 +251,7 @@ export function resolveSlackAccount(params: {
     replyToModeByChatType: merged.replyToModeByChatType,
     actions: merged.actions,
     slashCommand: merged.slashCommand,
+    memberPolicy: merged.memberPolicy,
     dm: merged.dm,
     channels: merged.channels,
   };

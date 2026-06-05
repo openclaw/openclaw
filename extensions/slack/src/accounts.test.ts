@@ -118,6 +118,38 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     expect(resolved.config.allowFrom).toEqual(["top"]);
   });
 
+  it("merges top-level member policy into named accounts", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            memberPolicy: {
+              enabled: true,
+              teamId: "T123",
+              denyExternal: true,
+            },
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                memberPolicy: {
+                  denyExternal: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.memberPolicy).toEqual({
+      enabled: true,
+      teamId: "T123",
+      denyExternal: false,
+    });
+  });
+
   it("merges top-level unfurl controls into named accounts", () => {
     const resolved = resolveSlackAccount({
       cfg: {

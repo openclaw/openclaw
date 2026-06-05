@@ -11,6 +11,7 @@ export type SlackAccountSurfaceFields = {
   replyToModeByChatType?: SlackAccountConfig["replyToModeByChatType"];
   actions?: SlackAccountConfig["actions"];
   slashCommand?: SlackAccountConfig["slashCommand"];
+  memberPolicy?: SlackAccountConfig["memberPolicy"];
   dm?: SlackAccountConfig["dm"];
   channels?: SlackAccountConfig["channels"];
 };
