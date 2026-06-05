@@ -41,7 +41,6 @@ function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): Signa
     | undefined;
   const namedAccountValue = normalizeOptionalString(namedAccount?.account);
   if (
-    accountId !== "default" &&
     rootAccountUuid &&
     namedAccountValue &&
     !normalizeOptionalString(namedAccount?.accountUuid) &&

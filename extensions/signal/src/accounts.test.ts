@@ -103,6 +103,26 @@ describe("resolveSignalAccount", () => {
     expect(resolved.config.accountUuid).toBeUndefined();
   });
 
+  it("does not inherit the root account UUID into a default account override with a different account", () => {
+    const resolved = resolveSignalAccount({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550000",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            accounts: {
+              default: { account: "+15555550123" },
+            },
+          },
+        },
+      } as never,
+      accountId: "default",
+    });
+
+    expect(resolved.config.account).toBe("+15555550123");
+    expect(resolved.config.accountUuid).toBeUndefined();
+  });
+
   it("inherits the root account UUID into named accounts that inherit the root account", () => {
     const resolved = resolveSignalAccount({
       cfg: {
