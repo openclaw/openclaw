@@ -23,6 +23,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
 import {
+  isDiscordAccountEnabledForRuntime,
   listDiscordAccountIds,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
@@ -224,7 +225,7 @@ function resolveDiscordStartupAccountIds(cfg: OpenClawConfig): string[] {
   const startupAccountIds = listDiscordAccountIds(cfg).filter((candidateId) => {
     const candidate = resolveDiscordAccount({ cfg, accountId: candidateId });
     return (
-      candidate.enabled &&
+      isDiscordAccountEnabledForRuntime(candidate, cfg) &&
       (resolveConfiguredFromCredentialStatuses(candidate) ??
         Boolean(normalizeOptionalString(candidate.token)))
     );

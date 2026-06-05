@@ -737,6 +737,76 @@ describe("discordPlugin outbound", () => {
     await discordPlugin.gateway!.startAccount!(farberContext);
     expect(sleepWithAbortMock).toHaveBeenLastCalledWith(20_000, farberContext.abortSignal);
   });
+
+  it("does not promote a duplicate-token defaultAccount to the zero-delay startup slot", async () => {
+    probeDiscordMock.mockResolvedValue({
+      ok: true,
+      bot: { username: "Jarvis" },
+      application: {
+        intents: {
+          messageContent: "limited",
+          guildMembers: "disabled",
+          presence: "disabled",
+        },
+      },
+      elapsedMs: 1,
+    });
+    monitorDiscordProviderMock.mockResolvedValue(undefined);
+
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "main",
+          accounts: {
+            billy: { token: "Bot billy-token", enabled: true },
+            // "farber" sorts before "main", so it owns the shared token.
+            farber: { token: "Bot shared-token", enabled: true },
+            main: { token: "Bot shared-token", enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await startDiscordAccount(cfg, "billy");
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+
+    const farberContext = createStartAccountContext({
+      account: resolveAccount(cfg, "farber"),
+      cfg,
+    });
+    await discordPlugin.gateway!.startAccount!(farberContext);
+    expect(sleepWithAbortMock).toHaveBeenLastCalledWith(10_000, farberContext.abortSignal);
+  });
+
+  it("does not assign startup slots to enabled but unconfigured accounts", async () => {
+    probeDiscordMock.mockResolvedValue({
+      ok: true,
+      bot: { username: "Jarvis" },
+      application: {
+        intents: {
+          messageContent: "limited",
+          guildMembers: "disabled",
+          presence: "disabled",
+        },
+      },
+      elapsedMs: 1,
+    });
+    monitorDiscordProviderMock.mockResolvedValue(undefined);
+
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            alpha: { enabled: true },
+            zeta: { token: "Bot zeta-token", enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await startDiscordAccount(cfg, "zeta");
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("discordPlugin bindings", () => {
