@@ -194,6 +194,16 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
     expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
   });
 
+  it("returns true for HTML comments only", () => {
+    expect(isHeartbeatContentEffectivelyEmpty("<!-- runtime template note -->")).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(`<!-- runtime template note -->
+
+# HEARTBEAT.md
+`),
+    ).toBe(true);
+  });
+
   it("returns false when a template includes plain instructional prose", () => {
     const defaultTemplate = `# HEARTBEAT.md
 
