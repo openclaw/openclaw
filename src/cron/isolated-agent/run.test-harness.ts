@@ -36,6 +36,7 @@ export const resolveThinkingDefaultMock = createMock();
 export const runWithModelFallbackMock = createMock();
 export const runEmbeddedPiAgentMock = createMock();
 export const runCliAgentMock = createMock();
+export const lookupContextTokensMock = createMock();
 export const getCliSessionIdMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
@@ -125,7 +126,7 @@ vi.mock("../../agents/context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/context.js")>();
   return {
     ...actual,
-    lookupContextTokens: vi.fn().mockReturnValue(128000),
+    lookupContextTokens: lookupContextTokensMock,
   };
 });
 
@@ -374,6 +375,8 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
 
   runCliAgentMock.mockReset();
   getCliSessionIdMock.mockReturnValue(undefined);
+  lookupContextTokensMock.mockReset();
+  lookupContextTokensMock.mockReturnValue(128000);
 
   updateSessionStoreMock.mockReset();
   updateSessionStoreMock.mockResolvedValue(undefined);
