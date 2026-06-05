@@ -279,8 +279,8 @@ export async function readMatrixMessages(
   return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
     const limit = resolveMatrixActionLimit(opts.limit, 20);
 
-    let nextBatch: string | null = null;
-    let prevBatch: string | null = null;
+    let nextBatch: string | null;
+    let prevBatch: string | null;
     let hydratedChunk: MatrixRawEvent[];
 
     if (opts.threadId) {

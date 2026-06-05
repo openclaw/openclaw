@@ -760,33 +760,34 @@ describe("matrix message actions", () => {
     const hydrateEvents = vi.fn(
       async (_roomId: string, events: Array<Record<string, unknown>>) => events,
     );
+    const getEvent = vi.fn(async (_roomId: string, eventId: string) =>
+      eventId === "$thread-reply"
+        ? {
+            event_id: "$thread-reply",
+            sender: "@bob:example.org",
+            type: "m.room.message",
+            origin_server_ts: 20,
+            content: {
+              msgtype: "m.text",
+              body: "thread reply",
+              "m.relates_to": {
+                rel_type: "m.thread",
+                event_id: "$thread-root",
+              },
+            },
+          }
+        : null,
+    );
     const client = {
       doRequest,
       hydrateEvents,
-      getEvent: vi.fn(async (_roomId: string, eventId: string) =>
-        eventId === "$thread-reply"
-          ? {
-              event_id: "$thread-reply",
-              sender: "@bob:example.org",
-              type: "m.room.message",
-              origin_server_ts: 20,
-              content: {
-                msgtype: "m.text",
-                body: "thread reply",
-                "m.relates_to": {
-                  rel_type: "m.thread",
-                  event_id: "$thread-root",
-                },
-              },
-            }
-          : null,
-      ),
+      getEvent,
       stop: vi.fn(),
     } as unknown as MatrixClient;
 
     const result = await readMatrixMessages("room:!room:example.org", { client, limit: 5 });
 
-    expect(client.getEvent).toHaveBeenCalledWith("!room:example.org", "$thread-reply");
+    expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$thread-reply");
     expect(result.messages.map((message) => message.eventId)).toEqual(["$main-1"]);
   });
 
