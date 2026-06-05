@@ -82,7 +82,7 @@ class GatewayBootstrapAuthTest {
         storedOperatorToken = "stored-token",
       )
 
-    assertEquals(NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null), resolved)
+    assertEquals(NodeRuntime.GatewayConnectAuth(token = "stored-token", bootstrapToken = null, password = null), resolved)
   }
 
   @Test
@@ -297,9 +297,16 @@ class GatewayBootstrapAuthTest {
   @Test
   fun connect_showsSecureEndpointGuidanceWhenTlsProbeFails() {
     val app = RuntimeEnvironment.getApplication()
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
     val runtime =
       NodeRuntime(
         app,
+        prefs = prefs,
         tlsFingerprintProbe = { _, _ ->
           GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE)
         },
