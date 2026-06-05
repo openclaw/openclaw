@@ -63,7 +63,7 @@ You can override this behavior:
 ## System prompt: current date and time
 
 If the user timezone is known, the system prompt includes a dedicated
-**Current Date & Time** section with the **time zone only** (no clock/time format)
+**Time Zone** section with the **time zone only** (no clock/time format)
 to keep prompt caching stable:
 
 ```
