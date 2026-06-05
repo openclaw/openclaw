@@ -41,6 +41,7 @@ const { buildStatusReply } = await import("./commands-status.js");
 async function buildKiraStatusReply(cfg: OpenClawConfig) {
   return await buildStatusReply({
     cfg,
+    ctx: {},
     command: {
       isAuthorizedSender: true,
       channel: "whatsapp",

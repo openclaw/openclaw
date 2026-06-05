@@ -244,3 +244,13 @@ export function findNotAuthorizedCalls(sendMessage: AnyAsyncMock) {
     (call) => typeof call[1] === "string" && call[1].includes("not authorized"),
   );
 }
+
+export function getFinalizedNativeCommandContextsForTest() {
+  return replyPipelineMocks.finalizeInboundContext.mock.calls.map((call) => call[0]);
+}
+
+export function clearNativeCommandRuntimeMocksForTest() {
+  replyPipelineMocks.finalizeInboundContext.mockClear();
+  replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+  replyPipelineMocks.recordInboundSessionMetaSafe.mockClear();
+}

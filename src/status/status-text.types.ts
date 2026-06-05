@@ -42,4 +42,5 @@ export type BuildStatusTextParams = {
   modelAuthOverride?: string;
   activeModelAuthOverride?: string;
   includeTranscriptUsage?: boolean;
+  statusNotes?: readonly string[];
 };

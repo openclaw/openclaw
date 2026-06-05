@@ -126,6 +126,7 @@ export async function resolveDirectStatusReplyForSession(
 
   return await buildStatusReply({
     cfg: statusCfg,
+    ctx: {},
     command,
     sessionEntry: statusEntry,
     sessionKey: statusSessionKey,

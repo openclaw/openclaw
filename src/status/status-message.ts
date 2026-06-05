@@ -113,6 +113,7 @@ export type StatusArgs = {
   pluginHealthLine?: string;
   channelFeatureLine?: string;
   includeTranscriptUsage?: boolean;
+  statusNotes?: readonly string[];
   now?: number;
 };
 
@@ -1110,6 +1111,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
+  const statusNotes = (args.statusNotes ?? [])
+    .map((note) => note.trim())
+    .filter(Boolean)
+    .map((note) => `⚠️ ${note}`);
 
   return [
     versionLine,
@@ -1132,6 +1137,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,
     voiceLine,
     activationLine,
+    ...statusNotes,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");

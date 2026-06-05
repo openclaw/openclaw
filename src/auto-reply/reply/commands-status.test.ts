@@ -107,6 +107,7 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
   const sessionKey = params.sessionKey ?? commandParams.sessionKey;
   return await buildStatusReply({
     cfg: baseCfg,
+    ctx: {},
     command: commandParams.command,
     sessionEntry: commandParams.sessionEntry,
     sessionKey,
@@ -119,6 +120,34 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
     resolvedThinkLevel: commandParams.resolvedThinkLevel,
     resolvedFastMode: false,
     resolvedVerboseLevel: params.verbose ? "on" : commandParams.resolvedVerboseLevel,
+    resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
+    resolvedElevatedLevel: commandParams.resolvedElevatedLevel,
+    resolveDefaultThinkingLevel: commandParams.resolveDefaultThinkingLevel,
+    isGroup: commandParams.isGroup,
+    defaultGroupActivation: commandParams.defaultGroupActivation,
+    modelAuthOverride: "api-key",
+    activeModelAuthOverride: "api-key",
+  });
+}
+
+async function buildStatusReplyTextForTest(params: { statusNotes?: string[] }) {
+  const commandParams = buildCommandTestParams("/status", baseCfg);
+  const ctx = params.statusNotes ? { StatusNotes: params.statusNotes } : {};
+  return await buildStatusReply({
+    cfg: baseCfg,
+    ctx,
+    command: commandParams.command,
+    sessionEntry: commandParams.sessionEntry,
+    sessionKey: commandParams.sessionKey,
+    parentSessionKey: commandParams.sessionKey,
+    sessionScope: commandParams.sessionScope,
+    storePath: commandParams.storePath,
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    contextTokens: 0,
+    resolvedThinkLevel: commandParams.resolvedThinkLevel,
+    resolvedFastMode: false,
+    resolvedVerboseLevel: commandParams.resolvedVerboseLevel,
     resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
     resolvedElevatedLevel: commandParams.resolvedElevatedLevel,
     resolveDefaultThinkingLevel: commandParams.resolveDefaultThinkingLevel,
@@ -308,6 +337,16 @@ describe("buildStatusReply subagent summary", () => {
     const reply = await buildStatusReplyForTest({});
 
     expect(reply?.text).toContain("🤖 Subagents: 1 active");
+  });
+
+  it("appends channel supplied status notes", async () => {
+    const reply = await buildStatusReplyTextForTest({
+      statusNotes: ["Telegram commands work, but normal group messages are blocked."],
+    });
+
+    expect(reply?.text).toContain(
+      "⚠️ Telegram commands work, but normal group messages are blocked.",
+    );
   });
 
   it("dedupes stale rows in the verbose subagent status summary", async () => {
