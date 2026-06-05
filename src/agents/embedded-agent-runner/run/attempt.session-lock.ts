@@ -575,6 +575,7 @@ export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
   releaseHeldLockForAbort(): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
+  beginOwnedSessionWritePublication(): () => void;
   reacquireAfterPrompt(): Promise<void>;
   waitForSessionEvents(session: unknown): Promise<void>;
   withSessionWriteLock<T>(
@@ -787,6 +788,25 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
   }
 
+  function publishOwnedSessionFileFenceSync(beforeWrite: SessionFileFingerprint): void {
+    if (takeoverDetected) {
+      return;
+    }
+    const fingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+    if (sameSessionFileFingerprint(beforeWrite, fingerprint)) {
+      return;
+    }
+    if (!isTrustedSessionFileState(sessionFileFenceKey, beforeWrite)) {
+      return;
+    }
+    const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, fingerprint);
+    if (fenceActive) {
+      fenceFingerprint = fingerprint;
+      fenceSnapshot = { fingerprint };
+      fenceGeneration = generation;
+    }
+  }
+
   const noopLock: SessionLock = { release: async () => {} };
 
   async function releaseHeldLockWithFence(): Promise<void> {
@@ -913,6 +933,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         fenceSnapshot = { fingerprint: fenceFingerprint };
       }
     },
+    beginOwnedSessionWritePublication(): () => void {
+      const beforeWrite = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+      return () => publishOwnedSessionFileFenceSync(beforeWrite);
+    },
     async reacquireAfterPrompt(): Promise<void> {
       await waitForHeldLockDrain();
       if (takeoverDetected || heldLock) {
@@ -1018,7 +1042,7 @@ export function installPromptSubmissionLockRelease(params: {
   reacquireAfterPrompt: () => Promise<void>;
   sessionFile?: string;
   sessionKey?: string;
-  refreshAfterOwnedSessionWrite?: () => void;
+  beginOwnedSessionTranscriptWrite?: () => (() => void) | undefined;
   withSessionWriteLock?: <T>(
     run: () => Promise<T> | T,
     options?: SessionWriteLockRunOptions,
@@ -1042,7 +1066,7 @@ export function installPromptSubmissionLockRelease(params: {
           {
             sessionFile: params.sessionFile,
             sessionKey: params.sessionKey,
-            refreshAfterOwnedSessionWrite: params.refreshAfterOwnedSessionWrite,
+            beginOwnedSessionTranscriptWrite: params.beginOwnedSessionTranscriptWrite,
             withSessionWriteLock: params.withSessionWriteLock,
           },
           async () => await originalStreamFn(...args),

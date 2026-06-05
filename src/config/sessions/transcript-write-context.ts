@@ -5,7 +5,7 @@ import path from "node:path";
 type OwnedSessionTranscriptWriteContext = {
   sessionFile?: string;
   sessionKey?: string;
-  refreshAfterOwnedSessionWrite?: () => void;
+  beginOwnedSessionTranscriptWrite?: () => (() => void) | undefined;
   withSessionWriteLock: <T>(
     run: () => Promise<T> | T,
     options?: { publishOwnedWrite?: boolean },
@@ -85,15 +85,15 @@ export function resolveOwnedSessionTranscriptWriteLockRunner(params: {
   return context.withSessionWriteLock;
 }
 
-export function publishOwnedSessionTranscriptWrite(params: {
+export function beginOwnedSessionTranscriptWrite(params: {
   sessionFile?: string;
   sessionKey?: string;
-}): void {
+}): (() => void) | undefined {
   const context = ownedTranscriptWriteContext.getStore();
   if (!context || !contextMatches({ context, ...params })) {
-    return;
+    return undefined;
   }
-  context.refreshAfterOwnedSessionWrite?.();
+  return context.beginOwnedSessionTranscriptWrite?.();
 }
 
 async function runWithOwnedSessionTranscriptWriteContext<T>(

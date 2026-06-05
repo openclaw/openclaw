@@ -54,6 +54,34 @@ async function createTempSessionFile(): Promise<string> {
   return sessionFile;
 }
 
+function createUserMessage(content = "hello") {
+  return {
+    role: "user" as const,
+    content,
+    timestamp: Date.now(),
+  };
+}
+
+function createAssistantMessage(text = "long enough to compact") {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    api: "openai-responses" as const,
+    provider: "openclaw",
+    model: "test",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp: Date.now(),
+  };
+}
+
 describe("embedded attempt session lock lifecycle", () => {
   it("serializes embedded attempts that share a session file owner", async () => {
     const sessionFile = await createTempSessionFile();
@@ -908,14 +936,8 @@ describe("embedded attempt session lock lifecycle", () => {
   it("keeps threshold compaction appends owned while the prompt lock is released", async () => {
     const sessionFile = await createTempSessionFile();
     const sessionManager = SessionManager.open(sessionFile);
-    const userId = sessionManager.appendMessage({ role: "user", content: "hello" });
-    sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "long enough to compact" }],
-      provider: "openclaw",
-      model: "test",
-      timestamp: Date.now(),
-    });
+    const userId = sessionManager.appendMessage(createUserMessage());
+    sessionManager.appendMessage(createAssistantMessage());
 
     const release = vi.fn(async () => {});
     const acquireSessionWriteLockLocal3 = vi.fn(async () => ({ release }));
@@ -929,7 +951,7 @@ describe("embedded attempt session lock lifecycle", () => {
       {
         sessionFile,
         sessionKey: "agent:main:whatsapp:direct:peer",
-        refreshAfterOwnedSessionWrite: () => controller.refreshAfterOwnedSessionWrite(),
+        beginOwnedSessionTranscriptWrite: () => controller.beginOwnedSessionWritePublication(),
         withSessionWriteLock: (operation, options) =>
           controller.withSessionWriteLock(operation, options),
       },
@@ -940,6 +962,44 @@ describe("embedded attempt session lock lifecycle", () => {
 
     await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
     expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
+  it("still rejects external edits before owned threshold compaction appends", async () => {
+    const sessionFile = await createTempSessionFile();
+    const sessionManager = SessionManager.open(sessionFile);
+    const userId = sessionManager.appendMessage(createUserMessage());
+    sessionManager.appendMessage(createAssistantMessage());
+
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal3 = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal3,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","id":"external-before-compaction"}\n',
+      "utf8",
+    );
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        sessionKey: "agent:main:whatsapp:direct:peer",
+        beginOwnedSessionTranscriptWrite: () => controller.beginOwnedSessionWritePublication(),
+        withSessionWriteLock: (operation, options) =>
+          controller.withSessionWriteLock(operation, options),
+      },
+      async () => {
+        sessionManager.appendCompaction("summary", userId, 120_000);
+      },
+    );
+
+    await expect(controller.withSessionWriteLock(() => "finalize")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
   });
 
   it("allows post-prompt writes after the prompt context publishes an owned transcript write", async () => {
