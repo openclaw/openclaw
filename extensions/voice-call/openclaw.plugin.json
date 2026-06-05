@@ -259,7 +259,7 @@
       },
       "provider": {
         "type": "string",
-        "enum": ["telnyx", "twilio", "plivo", "mock"]
+        "enum": ["telnyx", "twilio", "plivo", "mock", "msteams"]
       },
       "telnyx": {
         "type": "object",
@@ -297,6 +297,29 @@
           },
           "authToken": {
             "type": "string"
+          }
+        }
+      },
+      "msteams": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "bindAddress": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "sharedSecret": {
+            "type": ["string", "object"]
+          },
+          "requireRecordingStatus": {
+            "type": "boolean"
           }
         }
       },
@@ -904,6 +927,7 @@
     "secretInputs": {
       "paths": [
         { "path": "twilio.authToken", "expected": "string" },
+        { "path": "msteams.sharedSecret", "expected": "string" },
         { "path": "realtime.providers.*.apiKey", "expected": "string" },
         { "path": "streaming.providers.*.apiKey", "expected": "string" },
         { "path": "tts.providers.*.apiKey", "expected": "string" }

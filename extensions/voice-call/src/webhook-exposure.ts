@@ -54,6 +54,18 @@ export function resolveWebhookExposureStatus(
     };
   }
 
+  // Microsoft Teams receives calls over its own authenticated bridge WebSocket
+  // listener (msteams.port/path), not the public provider-webhook plane, so it
+  // never needs publicUrl / tunnel / tailscale exposure.
+  if (config.provider === "msteams") {
+    return {
+      ok: true,
+      configured: true,
+      message:
+        "Microsoft Teams uses the bridge WebSocket listener; no public webhook exposure needed",
+    };
+  }
+
   if (config.publicUrl) {
     if (isProviderUnreachableWebhookUrl(config.publicUrl)) {
       return {
