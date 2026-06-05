@@ -1049,7 +1049,9 @@ async function finalizeCronRun(params: {
     failureSignal: finalRunResult.meta?.failureSignal,
     finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
     preferFinalAssistantVisibleText: (
-      await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel)
+      await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel, {
+        deliveryRequested: prepared.deliveryRequested,
+      })
     ).preferFinalAssistantVisibleText,
   });
   const {
@@ -1323,6 +1325,7 @@ export async function runCronIsolatedAgentTurn(params: {
         accountId: prepared.context.resolvedDelivery.accountId,
         threadId: prepared.context.resolvedDelivery.threadId,
       },
+      deliveryRequested: prepared.context.deliveryRequested,
       sourceDelivery: prepared.context.sourceDelivery,
       skillsSnapshot: prepared.context.skillsSnapshot,
       agentPayload: prepared.context.agentPayload,
