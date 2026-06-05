@@ -7,6 +7,8 @@ import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js"
 type DebouncerFactoryParams = {
   onFlush: (entries: FeishuMessageEvent[]) => Promise<void>;
 };
+type MessageReceiveHandlerContext = Parameters<typeof createFeishuMessageReceiveHandler>[0];
+type HandleMessageParams = Parameters<MessageReceiveHandlerContext["handleMessage"]>[0];
 
 function createTextEvent(params: {
   messageId: string;
@@ -50,7 +52,7 @@ function createRuntime() {
 }
 
 function createHandler(params?: { botOpenId?: string }) {
-  const handleMessage = vi.fn(async () => {});
+  const handleMessage = vi.fn(async (_params: HandleMessageParams) => {});
   const hasProcessedMessage = vi.fn(async () => false);
   const recordProcessedMessage = vi.fn(async () => true);
   const { channelRuntime, enqueue } = createRuntime();
