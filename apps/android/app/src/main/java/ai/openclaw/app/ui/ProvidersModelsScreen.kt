@@ -324,7 +324,7 @@ internal fun readyModelProviderCount(
 
 // Older gateways did not emit `available`; keep those rows on the legacy
 // readiness path while still honoring explicit false from upgraded gateways.
-private fun modelAvailabilityUsable(model: GatewayModelSummary): Boolean = model.available != false
+internal fun modelAvailabilityUsable(model: GatewayModelSummary): Boolean = model.available != false
 
 internal fun expiringModelProviderCount(providers: List<GatewayModelProviderSummary>): Int =
   providers
@@ -579,12 +579,13 @@ private fun ModelGroup(
 
 @Composable
 private fun ModelRow(model: GatewayModelSummary) {
+  val available = modelAvailabilityUsable(model)
   Row(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
     Text(text = model.name, style = ClawTheme.type.mono, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
     modelCapabilityLabels(model).take(3).forEach { label ->
       ProviderMiniTag(text = label)
     }
-    Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(ClawTheme.colors.success))
+    Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (available) ClawTheme.colors.success else ClawTheme.colors.warning))
   }
 }
 

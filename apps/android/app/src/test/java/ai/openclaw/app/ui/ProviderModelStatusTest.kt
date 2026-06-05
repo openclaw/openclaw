@@ -102,6 +102,13 @@ class ProviderModelStatusTest {
     assertEquals(0, readyModelProviderCount(providers, models))
   }
 
+  @Test
+  fun modelAvailabilityHonorsExplicitUnavailableRows() {
+    assertTrue(modelAvailabilityUsable(model(provider = "openai", available = true)))
+    assertTrue(modelAvailabilityUsable(model(provider = "openai", available = null)))
+    assertFalse(modelAvailabilityUsable(model(provider = "openai", available = false)))
+  }
+
   private fun model(
     provider: String,
     available: Boolean?,
