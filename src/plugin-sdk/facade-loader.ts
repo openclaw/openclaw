@@ -20,6 +20,10 @@ const loadedFacadePluginIds = new Set<string>();
 let facadeLoaderSourceTransformFactory: PluginModuleLoaderFactory | undefined;
 let cachedOpenClawPackageRoot: string | undefined;
 
+type FacadeSurfaceTypeParam<T extends object> = {
+  readonly __facadeSurfaceType?: (surface: T) => T;
+};
+
 function getOpenClawPackageRoot() {
   if (cachedOpenClawPackageRoot) {
     return cachedOpenClawPackageRoot;
@@ -185,13 +189,14 @@ export function loadFacadeModuleAtLocationSync<T extends object>(params: {
 }
 
 /** Resolve and synchronously load a bundled plugin public surface by plugin dir and artifact name. */
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
-export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
-  dirName: string;
-  artifactBasename: string;
-  trackedPluginId?: string | (() => string);
-  env?: NodeJS.ProcessEnv;
-}): T {
+export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
+  params: {
+    dirName: string;
+    artifactBasename: string;
+    trackedPluginId?: string | (() => string);
+    env?: NodeJS.ProcessEnv;
+  } & FacadeSurfaceTypeParam<T>,
+): T {
   const location = resolveFacadeModuleLocation(params);
   if (!location) {
     throw new Error(
@@ -205,11 +210,13 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
 }
 
 /** Resolve and asynchronously import a bundled plugin public surface with sync-loader fallback. */
-export async function loadBundledPluginPublicSurfaceModule<T extends object>(params: {
-  dirName: string;
-  artifactBasename: string;
-  trackedPluginId?: string | (() => string);
-}): Promise<T> {
+export async function loadBundledPluginPublicSurfaceModule<T extends object>(
+  params: {
+    dirName: string;
+    artifactBasename: string;
+    trackedPluginId?: string | (() => string);
+  } & FacadeSurfaceTypeParam<T>,
+): Promise<T> {
   const location = resolveFacadeModuleLocation(params);
   if (!location) {
     throw new Error(
