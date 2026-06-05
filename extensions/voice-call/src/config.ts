@@ -63,6 +63,32 @@ const TwilioConfigSchema = z
   })
   .strict();
 
+const MsteamsConfigSchema = z
+  .object({
+    /** TCP port the Teams bridge WebSocket server listens on. */
+    port: z.number().int().min(1).max(65535).optional(),
+    /**
+     * Address the Teams bridge WebSocket server binds to. Defaults to the
+     * loopback interface (127.0.0.1) so the bridge is never exposed on all
+     * interfaces. Set to a specific trusted-network address only when the
+     * Windows worker connects from another host (e.g. a private/VPN IP).
+     */
+    bindAddress: z.string().min(1).optional(),
+    /** URL path prefix for the WebSocket upgrade (per-call path = {path}/{callId}). */
+    path: z.string().min(1).default("/voice/msteams/stream"),
+    /** Shared secret used to verify HMAC-SHA256 on the WS handshake (SecretRef-compatible). */
+    sharedSecret: SecretInputSchema.optional(),
+    /**
+     * Require the worker to report active Teams recording status before any
+     * media-derived transcript is persisted or processed (Microsoft Media
+     * Access API obligation). Default true; set false only if recording/
+     * compliance is enforced out-of-band.
+     */
+    requireRecordingStatus: z.boolean().default(true),
+  })
+  .strict();
+export type MsteamsConfig = z.infer<typeof MsteamsConfigSchema>;
+
 const PlivoConfigSchema = z
   .object({
     /** Plivo Auth ID (starts with MA/SA) */
@@ -401,8 +427,8 @@ export const VoiceCallConfigSchema = z
     /** Enable voice call functionality */
     enabled: z.boolean().default(false),
 
-    /** Active provider (telnyx, twilio, plivo, or mock) */
-    provider: z.enum(["telnyx", "twilio", "plivo", "mock"]).optional(),
+    /** Active provider (telnyx, twilio, plivo, mock, or msteams) */
+    provider: z.enum(["telnyx", "twilio", "plivo", "mock", "msteams"]).optional(),
 
     /** Telnyx-specific configuration */
     telnyx: TelnyxConfigSchema.optional(),
@@ -412,6 +438,9 @@ export const VoiceCallConfigSchema = z
 
     /** Plivo-specific configuration */
     plivo: PlivoConfigSchema.optional(),
+
+    /** Microsoft Teams provider — bridges Teams call audio via an external Windows worker */
+    msteams: MsteamsConfigSchema.optional(),
 
     /** Phone number to call from (E.164) */
     fromNumber: E164Schema.optional(),
@@ -647,6 +676,18 @@ export function resolveTwilioAuthToken(
   });
 }
 
+const MSTEAMS_SHARED_SECRET_PATH = "plugins.entries.voice-call.config.msteams.sharedSecret";
+
+/** Resolve the msteams HMAC shared secret from its SecretRef-compatible config value. */
+export function resolveMsteamsSharedSecret(
+  config: Pick<VoiceCallConfig, "msteams">,
+): string | undefined {
+  return normalizeResolvedSecretInputString({
+    value: config.msteams?.sharedSecret,
+    path: MSTEAMS_SHARED_SECRET_PATH,
+  });
+}
+
 export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const defaults = cloneDefaultVoiceCallConfig();
   const serve = { ...defaults.serve, ...config.serve };
@@ -679,6 +720,16 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     serve,
     tailscale: { ...defaults.tailscale, ...config.tailscale },
     tunnel: { ...defaults.tunnel, ...config.tunnel },
+    // msteams.path and requireRecordingStatus carry schema defaults, so apply
+    // them explicitly here — the `...config` spread above only sees the optional
+    // input shape.
+    msteams: config.msteams
+      ? {
+          ...config.msteams,
+          path: config.msteams.path ?? "/voice/msteams/stream",
+          requireRecordingStatus: config.msteams.requireRecordingStatus ?? true,
+        }
+      : config.msteams,
     webhookSecurity: {
       ...defaults.webhookSecurity,
       ...config.webhookSecurity,
@@ -781,6 +832,13 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
     resolved.webhookSecurity.trustForwardingHeaders ?? false;
   resolved.webhookSecurity.trustedProxyIPs = resolved.webhookSecurity.trustedProxyIPs ?? [];
 
+  // Microsoft Teams is inbound-first: calls and meeting joins are delivered to the
+  // bot, so requiring the operator to also flip inboundPolicy is redundant. Default
+  // it to "open" for msteams unless an explicit policy was configured.
+  if (resolved.provider === "msteams" && config.inboundPolicy === undefined) {
+    resolved.inboundPolicy = "open";
+  }
+
   return normalizeVoiceCallConfig(resolved);
 }
 
@@ -801,7 +859,9 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     errors.push("plugins.entries.voice-call.config.provider is required");
   }
 
-  if (!config.fromNumber && config.provider !== "mock") {
+  // msteams and mock are inbound-first providers that never place outbound PSTN
+  // calls, so a fromNumber is meaningless for them.
+  if (!config.fromNumber && config.provider !== "mock" && config.provider !== "msteams") {
     errors.push(
       config.provider === "twilio"
         ? "plugins.entries.voice-call.config.fromNumber is required (or set TWILIO_FROM_NUMBER env)"
@@ -853,6 +913,26 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     }
   }
 
+  if (config.provider === "msteams") {
+    // The Teams bridge cannot accept calls without a listening port and an HMAC
+    // shared secret, so require them up front rather than starting a runtime that
+    // silently never binds. (path has a schema default.)
+    if (!config.msteams?.port) {
+      errors.push("plugins.entries.voice-call.config.msteams.port is required");
+    }
+    if (!hasConfiguredSecretInput(config.msteams?.sharedSecret)) {
+      errors.push("plugins.entries.voice-call.config.msteams.sharedSecret is required");
+    }
+    // msteams is driven entirely by a realtime path: either streaming
+    // transcription or realtime voice-to-voice. Refuse to bind a listener that
+    // would accept calls it can neither transcribe nor answer.
+    if (!config.streaming?.enabled && !config.realtime?.enabled) {
+      errors.push(
+        'plugins.entries.voice-call.config.streaming.enabled (or realtime.enabled) must be true for provider "msteams"',
+      );
+    }
+  }
+
   if (config.realtime.enabled && config.inboundPolicy === "disabled") {
     errors.push(
       'plugins.entries.voice-call.config.inboundPolicy must not be "disabled" when realtime.enabled is true',
@@ -869,10 +949,11 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     config.realtime.enabled &&
     config.provider &&
     config.provider !== "twilio" &&
-    config.provider !== "telnyx"
+    config.provider !== "telnyx" &&
+    config.provider !== "msteams"
   ) {
     errors.push(
-      'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+      'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "msteams" when realtime.enabled is true',
     );
   }
 
