@@ -23,6 +23,22 @@ const E164Schema = z
   .string()
   .regex(/^\+[1-9]\d{1,14}$/, "Expected E.164 format, e.g. +15550001234");
 
+/**
+ * Microsoft Teams caller id: an AAD object id (a GUID). Teams calls carry no
+ * E.164 number — the caller is identified by `aadId` — so allowlist entries
+ * accept this form too, letting the msteams provider use
+ * `inboundPolicy: "allowlist"`. Runtime matching is in `isAllowlistedCaller`.
+ */
+const AadObjectIdSchema = z
+  .string()
+  .regex(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    "Expected an AAD object id (GUID), e.g. 00000000-0000-0000-0000-000000000000",
+  );
+
+/** An inbound allowlist entry: an E.164 phone number or a Teams AAD object id. */
+const AllowFromEntrySchema = z.union([E164Schema, AadObjectIdSchema]);
+
 // -----------------------------------------------------------------------------
 // Inbound Policy
 // -----------------------------------------------------------------------------
@@ -457,8 +473,8 @@ export const VoiceCallConfigSchema = z
     /** Inbound call policy */
     inboundPolicy: InboundPolicySchema.default("disabled"),
 
-    /** Allowlist of phone numbers for inbound calls (E.164) */
-    allowFrom: z.array(E164Schema).default([]),
+    /** Allowlist for inbound calls: E.164 phone numbers or Teams AAD object ids. */
+    allowFrom: z.array(AllowFromEntrySchema).default([]),
 
     /** Greeting message for inbound calls */
     inboundGreeting: z.string().optional(),
