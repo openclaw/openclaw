@@ -110,7 +110,9 @@ struct VoiceWakeOverlayView: View {
             self.updateFocusState(visible: self.controller.model.isVisible, editing: editing)
         }
         .onChange(of: self.controller.model.attributed) { _, _ in
-            self.controller.updateWindowFrame(animate: true)
+            DispatchQueue.main.async {
+                self.controller.updateWindowFrame(animate: true)
+            }
         }
     }
 

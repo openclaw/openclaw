@@ -65,4 +65,21 @@ struct VoiceWakeOverlayControllerTests {
     @Test func `overlay controller exercises helpers`() async {
         await VoiceWakeOverlayController.exerciseForTesting()
     }
+
+    @Test func `measuredHeight does not mutate isOverflowing when unchanged`() {
+        let controller = VoiceWakeOverlayController(enableUI: false)
+        _ = controller.startSession(
+            source: .wakeWord,
+            transcript: "short",
+            attributed: nil,
+            forwardEnabled: true,
+            isFinal: false)
+        // First call sets isOverflowing when it changes.
+        let h1 = controller.measuredHeight()
+        let overflowAfterFirst = controller.model.isOverflowing
+        // Second call with same content must not flip isOverflowing again (no-op guard).
+        let h2 = controller.measuredHeight()
+        #expect(h1 == h2)
+        #expect(controller.model.isOverflowing == overflowAfterFirst)
+    }
 }

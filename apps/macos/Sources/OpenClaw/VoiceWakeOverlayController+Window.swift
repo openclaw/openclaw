@@ -92,7 +92,10 @@ extension VoiceWakeOverlayController {
 
         let contentHeight = ceil(used.height + (textInset.height * 2))
         let total = contentHeight + self.verticalPadding * 2
-        self.model.isOverflowing = total > self.maxHeight
+        let newOverflowing = total > self.maxHeight
+        if newOverflowing != self.model.isOverflowing {
+            self.model.isOverflowing = newOverflowing
+        }
         return max(self.minHeight, min(total, self.maxHeight))
     }
 
