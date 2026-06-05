@@ -380,6 +380,45 @@ describe("resolveEffectiveToolInventory", () => {
     ]);
   });
 
+  it("preserves inventory notices for schemas quarantined during tool construction", async () => {
+    const healthy = mockTool({ name: "exec", label: "Exec", description: "Run shell commands" });
+    const rejected = mockTool({
+      name: "fuzzplugin_unreadable",
+      label: "Fuzzplugin Unreadable",
+      description: "Unreadable plugin schema",
+    });
+    const createToolsMock = vi.fn<typeof createOpenClawCodingTools>((options) => {
+      options?.onPreNormalizationSchemaDiagnostics?.(
+        [
+          {
+            toolName: "fuzzplugin_unreadable",
+            toolIndex: 1,
+            violations: ["fuzzplugin_unreadable.parameters is unreadable"],
+          },
+        ],
+        [healthy, rejected],
+      );
+      return [healthy];
+    });
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal16 } =
+      await loadHarness({
+        createToolsMock,
+        pluginMeta: { fuzzplugin_unreadable: { pluginId: "fuzzplugin" } },
+      });
+
+    const result = resolveEffectiveToolInventoryLocal16({ cfg: {} });
+
+    expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
+    expect(result.notices).toEqual([
+      {
+        id: "unsupported-tool-schema:fuzzplugin_unreadable",
+        severity: "warning",
+        message:
+          'Tool "fuzzplugin_unreadable" from plugin "fuzzplugin" has an unsupported runtime input schema (fuzzplugin_unreadable.parameters is unreadable) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
+      },
+    ]);
+  });
+
   it("reports unreadable inventory tool entries without crashing", async () => {
     const healthy = mockTool({ name: "exec", label: "Exec", description: "Run shell commands" });
     const tools = new Proxy([healthy] as AnyAgentTool[], {

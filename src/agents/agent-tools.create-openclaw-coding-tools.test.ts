@@ -131,6 +131,27 @@ function requireToolExecute(tool: OpenClawCodingTool): NonNullable<OpenClawCodin
   return tool.execute;
 }
 
+function createPluginTool(name: string): OpenClawCodingTool {
+  return {
+    name,
+    label: name,
+    description: `${name} test tool`,
+    parameters: { type: "object", properties: {} },
+    execute: vi.fn(),
+  };
+}
+
+function createUnreadableParametersTool(name: string): OpenClawCodingTool {
+  const tool = createPluginTool(name);
+  Object.defineProperty(tool, "parameters", {
+    enumerable: true,
+    get() {
+      throw new Error(`${name} parameters getter exploded`);
+    },
+  });
+  return tool;
+}
+
 function latestCreateOpenClawToolsOptions(): OpenClawToolsOptions {
   const calls = vi.mocked(createOpenClawTools).mock.calls;
   const lastCall = calls.at(-1);
@@ -626,6 +647,49 @@ describe("createOpenClawCodingTools", () => {
       expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
       const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
       expect(pluginToolOptions?.authProfileStore).toBe(authProfileStore);
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
+  it("quarantines unreadable plugin tool schemas before core schema normalization", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const unreadableTool = createUnreadableParametersTool("fuzzplugin_unreadable");
+    const healthyTool = createPluginTool("fuzzplugin_healthy");
+    const onPreNormalizationSchemaDiagnostics = vi.fn();
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([unreadableTool, healthyTool]);
+
+    try {
+      const tools = createOpenClawCodingTools({
+        config: testConfig,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["fuzzplugin_unreadable", "fuzzplugin_healthy"],
+        onPreNormalizationSchemaDiagnostics,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+      expect(toolNameList(tools)).toEqual(["fuzzplugin_healthy"]);
+      expect(onPreNormalizationSchemaDiagnostics).toHaveBeenCalledTimes(1);
+      const [diagnostics, sourceTools] = onPreNormalizationSchemaDiagnostics.mock.calls[0] ?? [];
+      expect(diagnostics).toEqual([
+        {
+          toolName: "fuzzplugin_unreadable",
+          toolIndex: 0,
+          violations: ["fuzzplugin_unreadable.parameters is unreadable"],
+        },
+      ]);
+      expect(sourceTools?.[0]).toBe(unreadableTool);
+      expect(sourceTools?.[1]).toBe(healthyTool);
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }

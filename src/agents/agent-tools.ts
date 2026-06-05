@@ -104,6 +104,10 @@ import {
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 import {
+  filterProviderNormalizableTools,
+  type RuntimeToolSchemaDiagnostic,
+} from "./tool-schema-projection.js";
+import {
   createToolSearchTools,
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
@@ -375,6 +379,20 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   };
 }
 
+function logProviderSchemaProjectionDiagnostics(
+  diagnostics: readonly RuntimeToolSchemaDiagnostic[],
+): void {
+  if (diagnostics.length === 0) {
+    return;
+  }
+  const summary = diagnostics
+    .map((diagnostic) => `${diagnostic.toolName}: ${diagnostic.violations.join(", ")}`)
+    .join("; ");
+  logWarn(
+    `agents/tools: quarantined ${diagnostics.length} unsupported tool schema${diagnostics.length === 1 ? "" : "s"} before provider schema normalization: ${summary}.`,
+  );
+}
+
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 
 /** Test-only access to internal tool assembly helpers. */
@@ -522,6 +540,11 @@ export function createOpenClawCodingTools(options?: {
   onYield?: (message: string) => Promise<void> | void;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
+  /** Reports schemas quarantined before provider-specific normalization. */
+  onPreNormalizationSchemaDiagnostics?: (
+    diagnostics: readonly RuntimeToolSchemaDiagnostic[],
+    tools: readonly AnyAgentTool[],
+  ) => void;
   /** Lower routine policy-removal audits for diagnostic-only tool probes. */
   toolPolicyAuditLogLevel?: "info" | "debug";
   /** Live observer called after wrapped tool outcomes are recorded. */
@@ -1127,14 +1150,27 @@ export function createOpenClawCodingTools(options?: {
     ],
     auditLogLevel: options?.toolPolicyAuditLogLevel,
   });
-  if (shouldInheritEffectiveToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
-  }
   options?.recordToolPrepStage?.("authorization-policy");
+  const normalizableToolProjection = filterProviderNormalizableTools(subagentFiltered);
+  if (normalizableToolProjection.diagnostics.length > 0) {
+    if (options?.onPreNormalizationSchemaDiagnostics) {
+      options.onPreNormalizationSchemaDiagnostics(
+        normalizableToolProjection.diagnostics,
+        subagentFiltered,
+      );
+    } else {
+      logProviderSchemaProjectionDiagnostics(normalizableToolProjection.diagnostics);
+    }
+  }
+  if (shouldInheritEffectiveToolAllowlist) {
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, [
+      ...normalizableToolProjection.tools,
+    ]);
+  }
   // Always normalize tool JSON Schemas before handing them to OpenClaw model runtime.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
-  const normalized = subagentFiltered.map((tool) =>
+  const normalized = normalizableToolProjection.tools.map((tool) =>
     normalizeToolParameters(tool, {
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,

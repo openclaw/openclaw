@@ -211,6 +211,8 @@ export function buildEffectiveToolInventoryEntries(
 /** Normalizes tools, quarantines incompatible schemas, and returns inventory output. */
 export function buildRuntimeCompatibleToolInventory(params: {
   tools: readonly AnyAgentTool[];
+  preNormalizationDiagnostics?: readonly RuntimeToolSchemaDiagnostic[];
+  preNormalizationTools?: readonly AnyAgentTool[];
   cfg: OpenClawConfig;
   workspaceDir?: string;
   modelProvider?: string;
@@ -221,9 +223,10 @@ export function buildRuntimeCompatibleToolInventory(params: {
   entries: EffectiveToolInventoryEntry[];
   notices: EffectiveToolInventoryNotice[];
 } {
-  const rawToolsByName = buildReadableRawToolsByName(params.tools);
+  const rawToolsByName = buildReadableRawToolsByName(params.preNormalizationTools ?? params.tools);
   const preNormalizationProjection = filterProviderNormalizableTools(params.tools);
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [
+    ...(params.preNormalizationDiagnostics ?? []),
     ...preNormalizationProjection.diagnostics,
   ];
   const normalizedTools = normalizeAgentRuntimeTools({

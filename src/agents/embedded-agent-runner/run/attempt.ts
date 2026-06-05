@@ -1255,6 +1255,14 @@ export async function runEmbeddedAttempt(
             runtimeToolAllowlist: effectiveToolsAllow,
             authProfileStore: params.authProfileStore,
             recordToolPrepStage: (name) => corePluginToolStages.mark(name),
+            onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) =>
+              logRuntimeToolSchemaQuarantine({
+                diagnostics,
+                tools: sourceTools,
+                runId: params.runId,
+                sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
+              }),
             onToolOutcome: params.onToolOutcome,
             skillsSnapshot: skillsSnapshotForRun,
             onYield: (message) => {

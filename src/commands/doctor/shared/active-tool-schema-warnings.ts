@@ -161,6 +161,19 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
         modelContextWindowTokens: runtimeModelContext.modelContextWindowTokens,
         allowGatewaySubagentBinding: true,
         toolPolicyAuditLogLevel: "debug",
+        onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) => {
+          for (const diagnostic of diagnostics) {
+            const tool = readToolByIndex(sourceTools, diagnostic.toolIndex);
+            const pluginId = readPluginId(tool);
+            warnings.push(
+              formatDiagnostic({
+                agentId,
+                diagnostic,
+                ...(pluginId ? { pluginId } : {}),
+              }),
+            );
+          }
+        },
       });
     } catch (error) {
       warnings.push(
