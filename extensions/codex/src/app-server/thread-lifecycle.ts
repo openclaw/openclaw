@@ -361,6 +361,20 @@ export async function startOrResumeThread(params: {
     params.nativeCodeModeEnabled === false &&
     params.preserveBindingWhenNativeCodeModeDisabled === true &&
     params.dynamicTools.length > 0;
+  if (
+    binding?.threadId &&
+    preserveNativeDisabledBinding &&
+    binding.dynamicToolsFingerprint !== dynamicToolsFingerprint
+  ) {
+    embeddedAgentLog.debug(
+      "codex app-server native tool surface disabled persistently; starting a restricted thread with replacement dynamic tools",
+      {
+        threadId: binding.threadId,
+      },
+    );
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
   if (binding?.threadId && preserveNativeDisabledBinding && params.pluginThreadConfig?.enabled) {
     prebuiltPluginThreadConfig = await lifecycleTiming.measure(
       "plugin-config-native-disabled-preserve",
@@ -418,7 +432,8 @@ export async function startOrResumeThread(params: {
   }
   if (
     binding?.threadId &&
-    binding.environmentSelectionFingerprint !== environmentSelectionFingerprint
+    binding.environmentSelectionFingerprint !== environmentSelectionFingerprint &&
+    !preserveNativeDisabledBinding
   ) {
     embeddedAgentLog.debug(
       "codex app-server environment selection changed; starting a new thread",
@@ -503,7 +518,8 @@ export async function startOrResumeThread(params: {
       binding.dynamicToolsFingerprint &&
       params.dynamicTools.length > 0 &&
       binding.dynamicToolsContainDeferred !== dynamicToolsContainDeferred &&
-      (binding.dynamicToolsContainDeferred !== undefined || !dynamicToolsContainDeferred)
+      (binding.dynamicToolsContainDeferred !== undefined || !dynamicToolsContainDeferred) &&
+      !preserveNativeDisabledBinding
     ) {
       embeddedAgentLog.debug(
         "codex app-server dynamic tool loading changed; starting a new thread",
@@ -525,35 +541,26 @@ export async function startOrResumeThread(params: {
         dynamicToolsFingerprint,
       )
     ) {
-      if (preserveNativeDisabledBinding) {
+      preserveExistingBinding = shouldStartTransientNoToolThread({
+        previous: binding.dynamicToolsFingerprint,
+        next: dynamicToolsFingerprint,
+      });
+      if (preserveExistingBinding) {
         embeddedAgentLog.debug(
-          "codex app-server native tool surface disabled persistently; resuming thread with replacement dynamic tools",
+          "codex app-server dynamic tools unavailable for turn; starting transient thread",
           {
             threadId: binding.threadId,
           },
         );
       } else {
-        preserveExistingBinding = shouldStartTransientNoToolThread({
-          previous: binding.dynamicToolsFingerprint,
-          next: dynamicToolsFingerprint,
-        });
-        if (preserveExistingBinding) {
-          embeddedAgentLog.debug(
-            "codex app-server dynamic tools unavailable for turn; starting transient thread",
-            {
-              threadId: binding.threadId,
-            },
-          );
-        } else {
-          embeddedAgentLog.debug(
-            "codex app-server dynamic tool catalog changed; starting a new thread",
-            {
-              threadId: binding.threadId,
-            },
-          );
-          await clearCodexAppServerBinding(params.params.sessionFile);
-          binding = undefined;
-        }
+        embeddedAgentLog.debug(
+          "codex app-server dynamic tool catalog changed; starting a new thread",
+          {
+            threadId: binding.threadId,
+          },
+        );
+        await clearCodexAppServerBinding(params.params.sessionFile);
+        binding = undefined;
       }
     }
     if (binding?.threadId && !preserveExistingBinding) {

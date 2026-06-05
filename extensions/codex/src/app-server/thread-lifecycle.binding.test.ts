@@ -8,7 +8,7 @@ import {
   threadStartResult,
 } from "./run-attempt-test-harness.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { codexDynamicToolsFingerprint, startOrResumeThread } from "./thread-lifecycle.js";
 
 function createThreadLifecycleAppServerOptions(): Parameters<
   typeof startOrResumeThread
@@ -669,7 +669,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(savedAfterAllowed?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
-  it("resumes and updates bindings for policy-disabled replacement dynamic tools", async () => {
+  it("starts a restricted thread when policy-disabled replacement dynamic tools are not installed", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeCodexAppServerBinding(sessionFile, {
@@ -688,8 +688,8 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const params = createParams(sessionFile, workspaceDir);
     const appServer = createThreadLifecycleAppServerOptions();
     const request = vi.fn(async (method: string) => {
-      if (method === "thread/resume") {
-        return threadStartResult("thread-native");
+      if (method === "thread/start") {
+        return threadStartResult("thread-restricted");
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -734,6 +734,105 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
 
     const requestCalls = request.mock.calls as unknown as Array<
+      [string, { config?: Record<string, unknown>; dynamicTools?: Array<{ name?: string }> }]
+    >;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(requestCalls[0]?.[1].dynamicTools?.map((tool) => tool.name)).toEqual(["exec"]);
+    expect(requestCalls[0]?.[1].config?.["features.code_mode"]).toBe(false);
+    expect(requestCalls[0]?.[1].config?.["features.code_mode_only"]).toBe(false);
+    expect(requestCalls[0]?.[1].config).toMatchObject({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(binding.threadId).toBe("thread-restricted");
+    expect(binding.dynamicToolsFingerprint).not.toBe("[]");
+    expect(binding.userMcpServersFingerprint).toBeUndefined();
+    expect(binding.mcpServersFingerprint).toBeUndefined();
+    expect(binding.pluginAppsFingerprint).toBe("plugin-apps-restricted");
+    expect(binding.pluginAppsInputFingerprint).toBe("plugin-input-restricted");
+    expect(binding.pluginAppPolicyContext).toEqual(restrictedPluginPolicyContext);
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-restricted");
+    expect(savedBinding?.dynamicToolsFingerprint).toBe(binding.dynamicToolsFingerprint);
+    expect(savedBinding?.userMcpServersFingerprint).toBeUndefined();
+    expect(savedBinding?.mcpServersFingerprint).toBeUndefined();
+    expect(savedBinding?.pluginAppsFingerprint).toBe("plugin-apps-restricted");
+    expect(savedBinding?.pluginAppsInputFingerprint).toBe("plugin-input-restricted");
+    expect(savedBinding?.pluginAppPolicyContext).toEqual(restrictedPluginPolicyContext);
+  });
+
+  it("resumes restricted policy-disabled threads through native-only binding drift", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const dynamicTools = [createDeferredNamedDynamicTool("exec")];
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-restricted",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: codexDynamicToolsFingerprint(dynamicTools),
+      dynamicToolsContainDeferred: false,
+      userMcpServersFingerprint: "user-mcp-v1",
+      mcpServersFingerprint: "bundle-mcp-v1",
+      pluginAppsFingerprint: "plugin-apps-enabled",
+      pluginAppsInputFingerprint: "plugin-input-enabled",
+      pluginAppPolicyContext: createPluginAppPolicyContext(),
+      environmentSelectionFingerprint: "native-env-v1",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-restricted");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const restrictedPluginPolicyContext = {
+      fingerprint: "plugin-policy-restricted",
+      apps: {},
+      pluginAppIds: {},
+    };
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools,
+      appServer,
+      nativeCodeModeEnabled: false,
+      preserveBindingWhenNativeCodeModeDisabled: true,
+      userMcpServersEnabled: false,
+      mcpServersFingerprint: undefined,
+      mcpServersFingerprintEvaluated: true,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-input-restricted",
+        enabledPluginConfigKeys: [],
+        build: async () => ({
+          enabled: true,
+          configPatch: {
+            apps: {
+              _default: {
+                enabled: false,
+                destructive_enabled: false,
+                open_world_enabled: false,
+              },
+            },
+          },
+          fingerprint: "plugin-apps-restricted",
+          inputFingerprint: "plugin-input-restricted",
+          policyContext: restrictedPluginPolicyContext,
+          diagnostics: [],
+        }),
+      },
+    });
+
+    const requestCalls = request.mock.calls as unknown as Array<
       [string, { config?: Record<string, unknown> }]
     >;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
@@ -748,21 +847,25 @@ describe("Codex app-server thread lifecycle bindings", () => {
         },
       },
     });
-    expect(binding.threadId).toBe("thread-native");
-    expect(binding.dynamicToolsFingerprint).not.toBe("[]");
+    expect(binding.threadId).toBe("thread-restricted");
+    expect(binding.dynamicToolsFingerprint).toBe(codexDynamicToolsFingerprint(dynamicTools));
+    expect(binding.dynamicToolsContainDeferred).toBe(true);
     expect(binding.userMcpServersFingerprint).toBeUndefined();
     expect(binding.mcpServersFingerprint).toBeUndefined();
     expect(binding.pluginAppsFingerprint).toBe("plugin-apps-restricted");
     expect(binding.pluginAppsInputFingerprint).toBe("plugin-input-restricted");
     expect(binding.pluginAppPolicyContext).toEqual(restrictedPluginPolicyContext);
+    expect(binding.environmentSelectionFingerprint).toBeUndefined();
     const savedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(savedBinding?.threadId).toBe("thread-native");
+    expect(savedBinding?.threadId).toBe("thread-restricted");
     expect(savedBinding?.dynamicToolsFingerprint).toBe(binding.dynamicToolsFingerprint);
+    expect(savedBinding?.dynamicToolsContainDeferred).toBe(true);
     expect(savedBinding?.userMcpServersFingerprint).toBeUndefined();
     expect(savedBinding?.mcpServersFingerprint).toBeUndefined();
     expect(savedBinding?.pluginAppsFingerprint).toBe("plugin-apps-restricted");
     expect(savedBinding?.pluginAppsInputFingerprint).toBe("plugin-input-restricted");
     expect(savedBinding?.pluginAppPolicyContext).toEqual(restrictedPluginPolicyContext);
+    expect(savedBinding?.environmentSelectionFingerprint).toBeUndefined();
   });
 
   it("keeps zero-tool policy-disabled turns transient", async () => {
