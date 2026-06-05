@@ -84,6 +84,10 @@ function hasLiteralSecret(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function hasAvailableEnvSecretRef(value: unknown): boolean {
+  return isSecretRef(value) && value.source === "env" && hasLiteralSecret(process.env[value.id]);
+}
+
 function profileModeAllowedForModel(
   provider: string,
   modelApi: string | undefined,
@@ -107,11 +111,14 @@ function profileHasReadOnlyAvailableAuth(params: {
     return false;
   }
   if (params.credential.type === "api_key") {
-    return hasLiteralSecret(params.credential.key);
+    return (
+      hasLiteralSecret(params.credential.key) || hasAvailableEnvSecretRef(params.credential.keyRef)
+    );
   }
   if (params.credential.type === "token") {
     return (
-      hasLiteralSecret(params.credential.token) &&
+      (hasLiteralSecret(params.credential.token) ||
+        hasAvailableEnvSecretRef(params.credential.tokenRef)) &&
       (params.credential.expires === undefined || params.credential.expires > params.now)
     );
   }
