@@ -83,6 +83,7 @@ title: "Thinking levels"
 - `/verbose off` stores an explicit session override; clear it via the Sessions UI by choosing `inherit`.
 - Authorized external channel senders may persist the session verbose override. Internal gateway/webchat clients need `operator.admin` to persist it.
 - Inline directive affects only that message; session/global defaults apply otherwise.
+- Resolution order: inline directive, then session override, then per-agent default (`agents.list[].verboseDefault`), then global default (`agents.defaults.verboseDefault`), then fallback (`off`).
 - Send `/verbose` (or `/verbose:`) with no argument to see the current verbose level.
 - When verbose is on, agents that emit structured tool results send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available. These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `full`.
