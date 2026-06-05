@@ -731,10 +731,10 @@ export function renderSessions(props: SessionsProps) {
                 ${sortHeader("updated", t("sessionsView.updated"))}
                 ${sortHeader("tokens", t("sessionsView.tokens"))}
                 <th class="session-compaction-col">${t("sessionsView.compaction")}</th>
-                <th>${t("sessionsView.thinking")}</th>
+                <th title=${t("sessionsView.thinkingTooltip")}>${t("sessionsView.thinking")}</th>
                 <th>${t("sessionsView.fast")}</th>
                 <th>${t("sessionsView.verbose")}</th>
-                <th>${t("sessionsView.reasoning")}</th>
+                <th title=${t("sessionsView.reasoningTooltip")}>${t("sessionsView.reasoning")}</th>
                 <th>${t("sessionsView.actions")}</th>
               </tr>
             </thead>
@@ -982,6 +982,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td>
         <select
           ?disabled=${props.loading}
+          title=${t("sessionsView.thinkingTooltip")}
           style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
@@ -1035,6 +1036,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td>
         <select
           ?disabled=${props.loading}
+          title=${t("sessionsView.reasoningTooltip")}
           style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;

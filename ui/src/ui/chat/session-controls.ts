@@ -1211,7 +1211,10 @@ function renderChatModelReasoningSelect(params: {
           role="listbox"
           aria-label=${t("chat.selectors.thinkingLevel")}
         >
-          <div class="chat-controls__inline-select-section-label">Reasoning</div>
+          <div
+            class="chat-controls__inline-select-section-label"
+            title=${t("chat.selectors.thinkingLevelTooltip")}
+          >Reasoning</div>
           <div class="chat-controls__reasoning-options">
             ${repeat(
               thinkingOptions,
