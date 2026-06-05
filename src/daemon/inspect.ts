@@ -199,7 +199,10 @@ function isOpenClawGatewaySystemdService(name: string, contents: string): boolea
 }
 
 function isOpenClawGatewayTaskName(name: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(name);
+  // schtasks /Query prefixes task names with \ (e.g. \OpenClaw Gateway).
+  // Strip it before comparing against the canonical name.
+  const cleaned = name.startsWith("\\") ? name.slice(1) : name;
+  const normalized = normalizeLowercaseStringOrEmpty(cleaned);
   if (!normalized) {
     return false;
   }

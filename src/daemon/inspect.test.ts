@@ -359,8 +359,10 @@ describe("findExtraGatewayServices (win32)", () => {
     execSchtasksMock.mockResolvedValueOnce({
       code: 0,
       stdout: [
-        "TaskName: OpenClaw Gateway",
-        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        // schtasks /Query /FO LIST /V prefixes task paths with \.
+        // The canonical launcher task must be skipped despite the leading \.
+        "TaskName: \\OpenClaw Gateway",
+        "Task To Run: C:\\Users\\test\\.openclaw\\gateway.cmd",
         "",
         "TaskName: Clawdbot Legacy",
         "Task To Run: C:\\clawdbot\\clawdbot.exe run",
@@ -378,6 +380,46 @@ describe("findExtraGatewayServices (win32)", () => {
         platform: "win32",
         label: "Clawdbot Legacy",
         detail: "task: Clawdbot Legacy, run: C:\\clawdbot\\clawdbot.exe run",
+        scope: "system",
+        marker: "clawdbot",
+        legacy: true,
+      },
+    ]);
+  });
+
+  it("skips the active launcher scheduled task with \\-prefixed name", async () => {
+    execSchtasksMock.mockResolvedValueOnce({
+      code: 0,
+      stdout: [
+        // Real-world output from schtasks: task name is \OpenClaw Gateway
+        "TaskName: \\OpenClaw Gateway",
+        "Task To Run: C:\\Users\\test\\.openclaw\\gateway.cmd",
+        "",
+      ].join("\n"),
+      stderr: "",
+    });
+
+    const result = await findExtraGatewayServices({}, { deep: true });
+    expect(result).toStrictEqual([]);
+  });
+
+  it("does not skip genuinely orphaned tasks named after the old clawdbot", async () => {
+    execSchtasksMock.mockResolvedValueOnce({
+      code: 0,
+      stdout: [
+        "TaskName: \\Clawdbot Legacy Runner",
+        "Task To Run: C:\\clawdbot\\clawdbot.exe run",
+        "",
+      ].join("\n"),
+      stderr: "",
+    });
+
+    const result = await findExtraGatewayServices({}, { deep: true });
+    expect(result).toEqual([
+      {
+        platform: "win32",
+        label: "\\Clawdbot Legacy Runner",
+        detail: "task: \\Clawdbot Legacy Runner, run: C:\\clawdbot\\clawdbot.exe run",
         scope: "system",
         marker: "clawdbot",
         legacy: true,
