@@ -1,3 +1,4 @@
+// Mattermost tests cover slash state plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";

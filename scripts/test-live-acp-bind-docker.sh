@@ -98,6 +98,26 @@ if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   PROFILE_STATUS="$PROFILE_FILE"
 fi
 
+openclaw_live_acp_bind_load_factory_api_key_from_profile() {
+  [[ -z "${FACTORY_API_KEY:-}" ]] || return 0
+  [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]] || return 0
+  [[ "$PROFILE_FILE" != "$HOME/.profile" ]] || return 0
+
+  local line value
+  line="$(sed -nE 's/^(export[[:space:]]+)?FACTORY_API_KEY=//p' "$PROFILE_FILE" | tail -n 1 || true)"
+  [[ -n "$line" ]] || return 0
+  value="$line"
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value="${value#\"}"
+    value="${value%\"}"
+  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    value="${value#\'}"
+    value="${value%\'}"
+  fi
+  [[ -n "$value" ]] || return 0
+  export FACTORY_API_KEY="$value"
+}
+
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
 [ -f "$HOME/.profile" ] && [ -r "$HOME/.profile" ] && source "$HOME/.profile" || true
@@ -317,6 +337,9 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     DOCKER_AUTH_PRESTAGED=1
   fi
 
+  if [[ "$ACP_AGENT" == "droid" ]]; then
+    openclaw_live_acp_bind_load_factory_api_key_from_profile
+  fi
   if [[ "$ACP_AGENT" == "droid" && -z "${FACTORY_API_KEY:-}" ]]; then
     echo "==> Run ACP bind live test in Docker"
     echo "==> Agent: $ACP_AGENT"

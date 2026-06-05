@@ -1,3 +1,4 @@
+// Outbound media helpers normalize plugin media attachments before channel delivery.
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "../media/load-options.js";
 import { loadWebMedia } from "./web-media.js";
 

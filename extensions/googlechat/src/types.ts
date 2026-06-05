@@ -1,3 +1,4 @@
+// Googlechat type declarations define plugin contracts.
 export type GoogleChatSpace = {
   name?: string;
   displayName?: string;

@@ -1,3 +1,4 @@
+// Memory Core plugin module implements hybrid behavior.
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyTemporalDecayToHybridResults,

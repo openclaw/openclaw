@@ -1,3 +1,4 @@
+// Memory Core tests cover hybrid plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 

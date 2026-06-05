@@ -1,3 +1,4 @@
+// CI changed scope tests cover script detection of changed files and lanes.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
