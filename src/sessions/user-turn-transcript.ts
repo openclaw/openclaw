@@ -228,6 +228,30 @@ function buildPersistedUserTurnMediaFields(
   };
 }
 
+function buildUserTurnSenderMeta(params: UserTurnInput): Record<string, unknown> | undefined {
+  const senderId = normalizeOptionalText(params.senderId);
+  const senderName = normalizeOptionalText(params.senderName);
+  const senderUsername = normalizeOptionalText(params.senderUsername);
+  const senderE164 = normalizeOptionalText(params.senderE164);
+  if (!senderId && !senderName && !senderUsername && !senderE164) {
+    return undefined;
+  }
+  const meta: Record<string, unknown> = {};
+  if (senderId) {
+    meta.senderId = senderId;
+  }
+  if (senderName) {
+    meta.senderName = senderName;
+  }
+  if (senderUsername) {
+    meta.senderUsername = senderUsername;
+  }
+  if (senderE164) {
+    meta.senderE164 = senderE164;
+  }
+  return meta;
+}
+
 function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
   const hasMedia = Boolean(mediaFields.MediaPath);
@@ -239,7 +263,7 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
   // here would NOT match the bare-current arrival (the gateway no longer stamps
   // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
   const content = text || (hasMedia ? (params.mediaOnlyText ?? "") : "");
-
+  const senderMeta = buildUserTurnSenderMeta(params);
   const message = {
     role: "user",
     content,
@@ -249,6 +273,7 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
       ? {}
       : { __openclaw: { senderIsOwner: params.senderIsOwner } }),
     ...mediaFields,
+    ...(senderMeta ? { __openclaw: senderMeta } : {}),
   } as PersistedUserTurnMessage;
   return applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage;
 }
