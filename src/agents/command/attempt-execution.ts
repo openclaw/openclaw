@@ -808,7 +808,7 @@ export function runAgentAttempt(params: {
           storePath: params.storePath,
           sessionAgentId: params.sessionAgentId,
           threadId: params.opts.threadId,
-          sessionCwd: params.workspaceDir,
+          sessionCwd: cliProcessCwd,
           config: params.cfg,
           onUserMessagePersisted: params.onUserMessagePersisted,
         });
