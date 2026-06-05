@@ -2030,29 +2030,91 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
   };
 
+  const readSessionExtensionRegistrationFields = (
+    record: PluginRecord,
+    extension: PluginSessionExtensionRegistration,
+  ):
+    | {
+        namespace: unknown;
+        description: unknown;
+        project: unknown;
+        cleanup: unknown;
+        sessionEntrySlotKey: unknown;
+        sessionEntrySlotSchema: unknown;
+      }
+    | undefined => {
+    let namespace: unknown;
+    try {
+      namespace = extension.namespace;
+      return {
+        namespace,
+        description: extension.description,
+        project: extension.project,
+        cleanup: extension.cleanup,
+        sessionEntrySlotKey: extension.sessionEntrySlotKey,
+        sessionEntrySlotSchema: extension.sessionEntrySlotSchema,
+      };
+    } catch (error) {
+      const normalizedNamespace = normalizeOptionalHostHookString(namespace);
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message:
+          `session extension registration has unreadable fields` +
+          `${normalizedNamespace ? `: ${normalizedNamespace}` : ""}: ${formatErrorMessage(error)}`,
+      });
+      return undefined;
+    }
+  };
+
   const registerSessionExtension = (
     record: PluginRecord,
     extension: PluginSessionExtensionRegistration,
   ) => {
-    const namespace = normalizeHostHookString(extension.namespace);
-    const description = normalizeHostHookString(extension.description);
-    const project = extension.project;
+    const fields = readSessionExtensionRegistrationFields(record, extension);
+    if (!fields) {
+      return;
+    }
+    const namespace = normalizeHostHookString(fields.namespace);
+    const description = normalizeHostHookString(fields.description);
+    const project = fields.project;
+    const cleanup = fields.cleanup;
     let normalizedSessionEntrySlotKey: string | undefined;
     let invalidMessage: string | undefined;
     if (!namespace || !description) {
       invalidMessage = "session extension registration requires namespace and description";
     } else if (project !== undefined && typeof project !== "function") {
       invalidMessage = "session extension projector must be a function";
-    } else if (project?.constructor?.name === "AsyncFunction") {
-      invalidMessage = "session extension projector must be synchronous";
-    } else if (extension.cleanup !== undefined && typeof extension.cleanup !== "function") {
+    } else if (project !== undefined) {
+      try {
+        if (project.constructor?.name === "AsyncFunction") {
+          invalidMessage = "session extension projector must be synchronous";
+        }
+      } catch (error) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `session extension projector metadata is unreadable: ${namespace}: ${formatErrorMessage(error)}`,
+        });
+        return;
+      }
+    }
+    if (!invalidMessage && cleanup !== undefined && typeof cleanup !== "function") {
       invalidMessage = "session extension cleanup must be a function";
-    } else if (extension.sessionEntrySlotKey !== undefined) {
-      const slotKey = normalizeSessionEntrySlotKey(extension.sessionEntrySlotKey);
+    }
+    if (!invalidMessage && fields.sessionEntrySlotKey !== undefined) {
+      const slotKey = normalizeSessionEntrySlotKey(fields.sessionEntrySlotKey);
       if (!slotKey.ok) {
         invalidMessage = slotKey.error;
       } else {
         normalizedSessionEntrySlotKey = slotKey.key;
+      }
+    }
+    if (!invalidMessage && fields.sessionEntrySlotSchema !== undefined) {
+      if (!isPluginJsonValue(fields.sessionEntrySlotSchema)) {
+        invalidMessage = `session extension slot schema must be JSON-compatible: ${namespace}`;
       }
     }
     if (invalidMessage) {
@@ -2101,12 +2163,26 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     (registry.sessionExtensions ??= []).push({
       pluginId: record.id,
       pluginName: record.name,
+      // Session extensions are projected into Gateway session rows. Store a
+      // normalized snapshot so plugin-owned accessors cannot run during reads.
       extension: {
-        ...extension,
         namespace,
         description,
+        ...(project !== undefined
+          ? { project: project as PluginSessionExtensionRegistration["project"] }
+          : {}),
+        ...(cleanup !== undefined
+          ? { cleanup: cleanup as PluginSessionExtensionRegistration["cleanup"] }
+          : {}),
         ...(normalizedSessionEntrySlotKey
           ? { sessionEntrySlotKey: normalizedSessionEntrySlotKey }
+          : {}),
+        ...(fields.sessionEntrySlotSchema !== undefined
+          ? {
+              sessionEntrySlotSchema: fields.sessionEntrySlotSchema as NonNullable<
+                PluginSessionExtensionRegistration["sessionEntrySlotSchema"]
+              >,
+            }
           : {}),
       },
       source: record.source,
