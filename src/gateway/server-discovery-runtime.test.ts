@@ -127,8 +127,11 @@ describe("startGatewayDiscovery", () => {
         delete process.env[key];
       }
     }
-    for (const [key, value] of Object.entries(prevEnv)) {
-      process.env[key] = value;
+    for (const key of Object.keys(prevEnv)) {
+      const value = prevEnv[key];
+      if (value !== undefined) {
+        process.env[key] = value;
+      }
     }
 
     vi.clearAllMocks();
