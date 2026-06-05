@@ -11,6 +11,7 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import { cancelCronJobRun } from "../active-jobs.js";
 import * as schedule from "../schedule.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type {
@@ -838,6 +839,68 @@ describe("cron service timer regressions", () => {
 
       expect(abortAwareRunner.getObservedAbortSignal()?.aborted).toBe(true);
       const job = state.store?.jobs.find((entry) => entry.id === "abort-on-timeout");
+      expect(job?.state.lastStatus).toBe("error");
+      expect(job?.state.lastError).toContain("timed out");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps timeout cleanup armed after operator cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "cancel-before-timeout",
+        name: "cancel before timeout",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      const now = scheduledAt;
+      const runnerStarted = createDeferred<AbortSignal | undefined>();
+      const cleanupTimedOutAgentRun = vi.fn(async () => {});
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        cleanupTimedOutAgentRun,
+        runIsolatedAgentJob: vi.fn(async ({ abortSignal, onExecutionStarted }) => {
+          onExecutionStarted?.();
+          runnerStarted.resolve(abortSignal);
+          await new Promise<never>(() => {});
+        }),
+      });
+
+      const timerPromise = onTimer(state);
+      const observedAbortSignal = await runnerStarted.promise;
+      const runId = `cron:cancel-before-timeout:${scheduledAt}`;
+      const cancelled = cancelCronJobRun({
+        jobId: "cancel-before-timeout",
+        runId,
+        reason: "Cancelled by operator.",
+      });
+
+      expect(cancelled).toEqual({ found: true, cancelled: true });
+      expect(observedAbortSignal?.aborted).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 10);
+      await timerPromise;
+
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          job: expect.objectContaining({ id: "cancel-before-timeout" }),
+          timeoutMs: FAST_TIMEOUT_SECONDS * 1_000,
+        }),
+      );
+      const job = state.store?.jobs.find((entry) => entry.id === "cancel-before-timeout");
       expect(job?.state.lastStatus).toBe("error");
       expect(job?.state.lastError).toContain("timed out");
     } finally {

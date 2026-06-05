@@ -146,11 +146,10 @@ export async function executeJobCoreWithTimeout(
     const deferTimeoutUntilExecutionStart =
       job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
     const triggerTimeout = (reason: string) => {
-      if (runAbortController.signal.aborted) {
-        return;
-      }
       timeoutReason = reason;
-      runAbortController.abort(reason);
+      if (!runAbortController.signal.aborted) {
+        runAbortController.abort(reason);
+      }
       resolveTimeout?.(timeoutMarker);
     };
     const watchdog = createCronAgentWatchdog({
