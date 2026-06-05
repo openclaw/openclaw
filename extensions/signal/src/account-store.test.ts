@@ -200,7 +200,7 @@ describe("signal-cli account store", () => {
     expect(readFile).toHaveBeenCalledWith(defaultStore, "utf8");
   });
 
-  it("falls back to the default signal-cli store when configured dataDir is ambiguous", async () => {
+  it("does not fall back to the default signal-cli store when configured dataDir is ambiguous", async () => {
     process.env.SIGNAL_CLI_CONFIG = "/tmp/signal-cli-config.json";
     const defaultStore = resolveSignalCliAccountsPath();
     const readFile = vi.fn(async (filePath: string | URL) => {
@@ -235,7 +235,8 @@ describe("signal-cli account store", () => {
         account: "+15550001111",
         readFile: readFile as unknown as ReadFile,
       }),
-    ).resolves.toBe("999e4567-e89b-12d3-a456-426614174999");
+    ).resolves.toBeUndefined();
+    expect(readFile).not.toHaveBeenCalledWith(defaultStore, "utf8");
   });
 
   it("does not choose an ambiguous UUID when multiple account rows match", async () => {

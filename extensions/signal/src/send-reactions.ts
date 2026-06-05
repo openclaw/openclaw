@@ -223,6 +223,14 @@ async function sendReactionSignalCore(params: {
     throw err;
   }
   if (selfReactionEchoText) {
+    if (result?.timestamp != null) {
+      forgetSignalSelfReplyEcho({
+        accountId: accountInfo.accountId,
+        accountIdentity: echoIdentity,
+        messageId: "unknown",
+        text: selfReactionEchoText,
+      });
+    }
     await rememberSignalSelfReplyEcho({
       accountId: accountInfo.accountId,
       accountIdentity: echoIdentity,

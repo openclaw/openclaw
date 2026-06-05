@@ -147,7 +147,7 @@ export async function discoverSignalAccountUuid(params: {
   for (const accountsPath of candidatePaths) {
     const uuid = await readAccountStore(accountsPath);
     if (uuid === ambiguousAccountUuid) {
-      continue;
+      return undefined;
     }
     if (uuid) {
       return uuid;
