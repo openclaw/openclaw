@@ -193,15 +193,15 @@ describe("server-runtime-services", () => {
 
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
 
-    // Advance by 60_000ms — the periodic retry should fire again
+    // Advance by 60_000ms — the periodic retry should fire again with a fresh cutoff
     await vi.advanceTimersByTimeAsync(60_000);
     await vi.dynamicImportSettled();
     expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
-    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith({
-      deps: {},
-      maxEnqueuedAt: 123,
-      log: log.child.mock.results[2]?.value,
-    });
+    let call = hoisted.recoverPendingRestartContinuationDeliveries.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    // Periodic retry uses Date.now() — known to be >= 1_250 + 60_000 = 61_250
+    expect(call!.maxEnqueuedAt).toBeGreaterThanOrEqual(61_250);
+    expect(call!.log).toBe(log.child.mock.results[2]?.value);
 
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
 
@@ -209,6 +209,44 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     await vi.dynamicImportSettled();
     expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+    // Each periodic retry uses a new Date.now() cutoff
+    call = hoisted.recoverPendingRestartContinuationDeliveries.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    expect(call!.maxEnqueuedAt).toBeGreaterThanOrEqual(61_250 + 60_000);
+    expect(call!.log).toBe(log.child.mock.results[3]?.value);
+  });
+
+  it("recovers delivery entries enqueued after startup maxEnqueuedAt via periodic retry", async () => {
+    vi.useFakeTimers();
+    const log = createLog();
+    activateScheduledServicesForTest({ log });
+
+    // Advance past the initial 1_250ms delay — first recovery uses startup cutoff (123)
+    await vi.advanceTimersByTimeAsync(1_250);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+    // First call uses the startup maxEnqueuedAt
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith({
+      deps: {},
+      maxEnqueuedAt: 123,
+      log: expect.anything(),
+    });
+
+    hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
+
+    // Simulate a delivery entry being enqueued at time 5_000 (after the startup cutoff of 123)
+    // Advance to time 5_000
+    await vi.advanceTimersByTimeAsync(3_750);
+
+    // Advance to the first periodic retry at 1_250 + 60_000 = 61_250
+    await vi.advanceTimersByTimeAsync(56_250);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+    // The periodic retry uses Date.now() which is >= 61_250, so the entry enqueued at 5_000
+    // is eligible
+    const periodicCall = hoisted.recoverPendingRestartContinuationDeliveries.mock.calls[0]?.[0];
+    expect(periodicCall).toBeDefined();
+    expect(periodicCall!.maxEnqueuedAt).toBeGreaterThanOrEqual(61_250);
   });
 
   it("stops session delivery periodic retry after close — no retry fires after stop handle is called", async () => {

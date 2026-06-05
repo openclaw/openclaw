@@ -176,7 +176,8 @@ function recoverPendingSessionDeliveries(params: {
   // Schedule periodic retry so session deliveries deferred by retry backoff
   // are retried automatically after their backoff window elapses. The recovery
   // function's backoff/eligibility/drain-protection logic prevents redundant
-  // or premature retries.
+  // or premature retries. Use a fresh Date.now() cutoff so entries enqueued
+  // after the startup sessionDeliveryRecoveryMaxEnqueuedAt are also recovered.
   const periodicTimer = setInterval(() => {
     void (async () => {
       const { recoverPendingRestartContinuationDeliveries } =
@@ -185,7 +186,7 @@ function recoverPendingSessionDeliveries(params: {
       await recoverPendingRestartContinuationDeliveries({
         deps: params.deps,
         log: logRecovery,
-        maxEnqueuedAt: params.maxEnqueuedAt,
+        maxEnqueuedAt: Date.now(),
       });
     })().catch((err: unknown) =>
       params.log.error(`Session delivery periodic retry failed: ${String(err)}`),
