@@ -25,10 +25,14 @@ type SessionToolSchemaCloneState = {
 };
 
 function describeSessionToolSnapshotError(err: unknown): string {
-  if (err instanceof Error && err.message) {
-    return err.message;
+  try {
+    if (err instanceof Error) {
+      return err.message || err.name || "Unknown session tool snapshot error";
+    }
+    return String(err);
+  } catch {
+    return "Unknown session tool snapshot error";
   }
-  return String(err);
 }
 
 function readStringField(value: unknown, fieldName: string, fallback?: string): string {

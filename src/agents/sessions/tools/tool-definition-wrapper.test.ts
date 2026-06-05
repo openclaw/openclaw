@@ -9,6 +9,12 @@ import {
 } from "./tool-definition-wrapper.js";
 
 function createUnreadableParametersDefinition(name: string): ToolDefinition {
+  const hostileError = new Error("revoked schema");
+  Object.defineProperty(hostileError, "message", {
+    get() {
+      throw new Error("message denied");
+    },
+  });
   const definition = {
     name,
     label: name,
@@ -19,7 +25,7 @@ function createUnreadableParametersDefinition(name: string): ToolDefinition {
   } as ToolDefinition;
   Object.defineProperty(definition, "parameters", {
     get: () => {
-      throw new Error("revoked schema");
+      throw hostileError;
     },
   });
   return definition;
@@ -92,6 +98,12 @@ describe("session tool definition wrapper", () => {
   });
 
   it("skips unreadable AgentTool schemas while preserving healthy base overrides", () => {
+    const hostileError = new Error("revoked schema");
+    Object.defineProperty(hostileError, "message", {
+      get() {
+        throw new Error("message denied");
+      },
+    });
     const badTool = {
       name: "bad_override",
       label: "Bad Override",
@@ -102,7 +114,7 @@ describe("session tool definition wrapper", () => {
     } as AgentTool;
     Object.defineProperty(badTool, "parameters", {
       get: () => {
-        throw new Error("revoked schema");
+        throw hostileError;
       },
     });
     const healthyTool = {
