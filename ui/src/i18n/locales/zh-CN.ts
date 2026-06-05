@@ -186,9 +186,12 @@ export const zh_CN: TranslationMap = {
     goal: "目标",
     goalNote: "目标备注",
     thinking: "思考",
+    thinkingTooltip:
+      "Reasoning effort sent to the provider API; only effective when the model supports it.",
     fast: "快速",
     verbose: "详细",
     reasoning: "推理",
+    reasoningTooltip: "Controls how reasoning output is displayed or streamed in the chat.",
     actions: "操作",
     addToWorkboard: "添加到 Workboard",
     openWorkboardCard: "打开 Workboard 卡片",
@@ -1304,6 +1307,10 @@ export const zh_CN: TranslationMap = {
       loadMoreSessions: "加载更多会话",
       model: "聊天模型",
       thinkingLevel: "聊天思考级别",
+      thinkingLevelTooltip:
+        "Reasoning effort sent to the provider API; only effective when the model supports it.",
+      reasoningDisplayTooltip:
+        "Controls how reasoning output is displayed or streamed in the chat.",
     },
     toolCards: {
       toolError: "工具错误",

@@ -190,9 +190,12 @@ export const nl: TranslationMap = {
     goal: "Doel",
     goalNote: "Doelnotitie",
     thinking: "Denken",
+    thinkingTooltip:
+      "Reasoning effort sent to the provider API; only effective when the model supports it.",
     fast: "Snel",
     verbose: "Uitgebreid",
     reasoning: "Redenering",
+    reasoningTooltip: "Controls how reasoning output is displayed or streamed in the chat.",
     actions: "Acties",
     addToWorkboard: "Toevoegen aan Workboard",
     openWorkboardCard: "Workboard-kaart openen",
@@ -1344,6 +1347,10 @@ export const nl: TranslationMap = {
       loadMoreSessions: "Meer sessies laden",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+      thinkingLevelTooltip:
+        "Reasoning effort sent to the provider API; only effective when the model supports it.",
+      reasoningDisplayTooltip:
+        "Controls how reasoning output is displayed or streamed in the chat.",
     },
     toolCards: {
       toolError: "Toolfout",

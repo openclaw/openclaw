@@ -188,9 +188,12 @@ export const id: TranslationMap = {
     goal: "Tujuan",
     goalNote: "Catatan tujuan",
     thinking: "Thinking",
+    thinkingTooltip:
+      "Reasoning effort sent to the provider API; only effective when the model supports it.",
     fast: "Cepat",
     verbose: "Verbose",
     reasoning: "Penalaran",
+    reasoningTooltip: "Controls how reasoning output is displayed or streamed in the chat.",
     actions: "Tindakan",
     addToWorkboard: "Tambahkan ke Workboard",
     openWorkboardCard: "Buka kartu Workboard",
@@ -1339,6 +1342,10 @@ export const id: TranslationMap = {
       loadMoreSessions: "Muat sesi lainnya",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+      thinkingLevelTooltip:
+        "Reasoning effort sent to the provider API; only effective when the model supports it.",
+      reasoningDisplayTooltip:
+        "Controls how reasoning output is displayed or streamed in the chat.",
     },
     toolCards: {
       toolError: "Kesalahan tool",

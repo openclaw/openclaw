@@ -190,9 +190,12 @@ export const tr: TranslationMap = {
     goal: "Hedef",
     goalNote: "Hedef notu",
     thinking: "Düşünme",
+    thinkingTooltip:
+      "Reasoning effort sent to the provider API; only effective when the model supports it.",
     fast: "Hızlı",
     verbose: "Ayrıntılı",
     reasoning: "Akıl yürütme",
+    reasoningTooltip: "Controls how reasoning output is displayed or streamed in the chat.",
     actions: "Eylemler",
     addToWorkboard: "Workboard'a ekle",
     openWorkboardCard: "Workboard kartını aç",
@@ -1346,6 +1349,10 @@ export const tr: TranslationMap = {
       loadMoreSessions: "Daha fazla oturum yükle",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+      thinkingLevelTooltip:
+        "Reasoning effort sent to the provider API; only effective when the model supports it.",
+      reasoningDisplayTooltip:
+        "Controls how reasoning output is displayed or streamed in the chat.",
     },
     toolCards: {
       toolError: "Araç hatası",

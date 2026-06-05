@@ -188,9 +188,12 @@ export const es: TranslationMap = {
     goal: "Objetivo",
     goalNote: "Nota del objetivo",
     thinking: "Pensamiento",
+    thinkingTooltip:
+      "Reasoning effort sent to the provider API; only effective when the model supports it.",
     fast: "Rápido",
     verbose: "Detallado",
     reasoning: "Razonamiento",
+    reasoningTooltip: "Controls how reasoning output is displayed or streamed in the chat.",
     actions: "Acciones",
     addToWorkboard: "Agregar al Workboard",
     openWorkboardCard: "Abrir tarjeta de Workboard",
@@ -1346,6 +1349,10 @@ export const es: TranslationMap = {
       loadMoreSessions: "Cargar más sesiones",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+      thinkingLevelTooltip:
+        "Reasoning effort sent to the provider API; only effective when the model supports it.",
+      reasoningDisplayTooltip:
+        "Controls how reasoning output is displayed or streamed in the chat.",
     },
     toolCards: {
       toolError: "Error de herramienta",

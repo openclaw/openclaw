@@ -187,9 +187,12 @@ export const ko: TranslationMap = {
     goal: "목표",
     goalNote: "목표 메모",
     thinking: "생각 수준",
+    thinkingTooltip:
+      "Reasoning effort sent to the provider API; only effective when the model supports it.",
     fast: "빠름",
     verbose: "상세",
     reasoning: "추론",
+    reasoningTooltip: "Controls how reasoning output is displayed or streamed in the chat.",
     actions: "작업",
     addToWorkboard: "Workboard에 추가",
     openWorkboardCard: "Workboard 카드 열기",
@@ -1332,6 +1335,10 @@ export const ko: TranslationMap = {
       loadMoreSessions: "세션 더 불러오기",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+      thinkingLevelTooltip:
+        "Reasoning effort sent to the provider API; only effective when the model supports it.",
+      reasoningDisplayTooltip:
+        "Controls how reasoning output is displayed or streamed in the chat.",
     },
     toolCards: {
       toolError: "도구 오류",

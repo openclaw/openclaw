@@ -1,5 +1,9 @@
 {
   "fallbackKeys": [
+    "chat.selectors.reasoningDisplayTooltip",
+    "chat.selectors.thinkingLevelTooltip",
+    "sessionsView.reasoningTooltip",
+    "sessionsView.thinkingTooltip",
     "skillWorkshop.header.useCurrentChat",
     "skillWorkshop.header.useCurrentChatAria",
     "skillWorkshop.header.useCurrentChatTooltip",
@@ -32,12 +36,12 @@
     "workboard.unknownStatus",
     "workboard.viewDetails"
   ],
-  "generatedAt": "2026-06-03T22:35:00.622Z",
+  "generatedAt": "2026-06-05T01:10:05.506Z",
   "locale": "zh-CN",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "045696b27bf36b4d0ef74cfd8ec76124de70c9bcef7ca7cb378a0d07f1bdfa61",
-  "totalKeys": 1333,
+  "sourceHash": "998e6703f216f124b7a07fca76e53d97f1d9a9b3b560e2e9d98d226cc48a0be1",
+  "totalKeys": 1337,
   "translatedKeys": 1302,
   "workflow": 1
 }

@@ -189,9 +189,12 @@ export const uk: TranslationMap = {
     goal: "Мета",
     goalNote: "Примітка до мети",
     thinking: "Обмірковування",
+    thinkingTooltip:
+      "Reasoning effort sent to the provider API; only effective when the model supports it.",
     fast: "Швидко",
     verbose: "Докладно",
     reasoning: "Міркування",
+    reasoningTooltip: "Controls how reasoning output is displayed or streamed in the chat.",
     actions: "Дії",
     addToWorkboard: "Додати до Workboard",
     openWorkboardCard: "Відкрити картку Workboard",
@@ -1343,6 +1346,10 @@ export const uk: TranslationMap = {
       loadMoreSessions: "Завантажити більше сеансів",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+      thinkingLevelTooltip:
+        "Reasoning effort sent to the provider API; only effective when the model supports it.",
+      reasoningDisplayTooltip:
+        "Controls how reasoning output is displayed or streamed in the chat.",
     },
     toolCards: {
       toolError: "Помилка інструмента",

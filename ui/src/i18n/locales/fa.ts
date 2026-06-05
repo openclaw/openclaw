@@ -189,9 +189,12 @@ export const fa: TranslationMap = {
     goal: "هدف",
     goalNote: "یادداشت هدف",
     thinking: "تفکر",
+    thinkingTooltip:
+      "Reasoning effort sent to the provider API; only effective when the model supports it.",
     fast: "سریع",
     verbose: "پرگویی",
     reasoning: "استدلال",
+    reasoningTooltip: "Controls how reasoning output is displayed or streamed in the chat.",
     actions: "اقدامات",
     addToWorkboard: "افزودن به Workboard",
     openWorkboardCard: "باز کردن کارت Workboard",
@@ -1341,6 +1344,10 @@ export const fa: TranslationMap = {
       loadMoreSessions: "بارگذاری نشست‌های بیشتر",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+      thinkingLevelTooltip:
+        "Reasoning effort sent to the provider API; only effective when the model supports it.",
+      reasoningDisplayTooltip:
+        "Controls how reasoning output is displayed or streamed in the chat.",
     },
     toolCards: {
       toolError: "خطای ابزار",

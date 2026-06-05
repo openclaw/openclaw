@@ -186,9 +186,12 @@ export const th: TranslationMap = {
     goal: "เป้าหมาย",
     goalNote: "หมายเหตุเป้าหมาย",
     thinking: "Thinking",
+    thinkingTooltip:
+      "Reasoning effort sent to the provider API; only effective when the model supports it.",
     fast: "เร็ว",
     verbose: "ละเอียด",
     reasoning: "การให้เหตุผล",
+    reasoningTooltip: "Controls how reasoning output is displayed or streamed in the chat.",
     actions: "การดำเนินการ",
     addToWorkboard: "เพิ่มไปยัง Workboard",
     openWorkboardCard: "เปิดการ์ด Workboard",
@@ -1309,6 +1312,10 @@ export const th: TranslationMap = {
       loadMoreSessions: "โหลดเซสชันเพิ่มเติม",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+      thinkingLevelTooltip:
+        "Reasoning effort sent to the provider API; only effective when the model supports it.",
+      reasoningDisplayTooltip:
+        "Controls how reasoning output is displayed or streamed in the chat.",
     },
     toolCards: {
       toolError: "ข้อผิดพลาดของเครื่องมือ",

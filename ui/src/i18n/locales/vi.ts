@@ -188,9 +188,12 @@ export const vi: TranslationMap = {
     goal: "Mục tiêu",
     goalNote: "Ghi chú mục tiêu",
     thinking: "Suy nghĩ",
+    thinkingTooltip:
+      "Reasoning effort sent to the provider API; only effective when the model supports it.",
     fast: "Nhanh",
     verbose: "Chi tiết",
     reasoning: "Suy luận",
+    reasoningTooltip: "Controls how reasoning output is displayed or streamed in the chat.",
     actions: "Hành động",
     addToWorkboard: "Thêm vào Workboard",
     openWorkboardCard: "Mở thẻ Workboard",
@@ -1332,6 +1335,10 @@ export const vi: TranslationMap = {
       loadMoreSessions: "Tải thêm phiên",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+      thinkingLevelTooltip:
+        "Reasoning effort sent to the provider API; only effective when the model supports it.",
+      reasoningDisplayTooltip:
+        "Controls how reasoning output is displayed or streamed in the chat.",
     },
     toolCards: {
       toolError: "Lỗi công cụ",

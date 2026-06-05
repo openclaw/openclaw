@@ -191,9 +191,12 @@ export const ja_JP: TranslationMap = {
     goal: "目標",
     goalNote: "目標メモ",
     thinking: "Thinking",
+    thinkingTooltip:
+      "Reasoning effort sent to the provider API; only effective when the model supports it.",
     fast: "高速",
     verbose: "詳細",
     reasoning: "推論",
+    reasoningTooltip: "Controls how reasoning output is displayed or streamed in the chat.",
     actions: "アクション",
     addToWorkboard: "Workboardに追加",
     openWorkboardCard: "Workboardカードを開く",
@@ -1343,6 +1346,10 @@ export const ja_JP: TranslationMap = {
       loadMoreSessions: "さらにセッションを読み込む",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+      thinkingLevelTooltip:
+        "Reasoning effort sent to the provider API; only effective when the model supports it.",
+      reasoningDisplayTooltip:
+        "Controls how reasoning output is displayed or streamed in the chat.",
     },
     toolCards: {
       toolError: "ツールエラー",
