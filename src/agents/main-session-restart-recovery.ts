@@ -289,6 +289,28 @@ async function markSessionFailed(params: {
   log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
 }
 
+/**
+ * Resolve the transcript path the reconnecting client (e.g. WebChat) actually
+ * reads, using the same session transcript resolver as the read path
+ * (`resolveSessionTranscriptCandidates` prefers `resolveSessionFilePath`). This
+ * keeps the recovery-notice append target inside the agent sessions directory
+ * and matches `<sessionId>.jsonl` even when `entry.sessionFile` is missing or a
+ * stale/out-of-dir value, instead of appending to a raw persisted path.
+ */
+function resolveRecoveryNoticeTranscriptPath(params: {
+  entry: SessionEntry;
+  storePath: string;
+}): string | undefined {
+  try {
+    return resolveSessionFilePath(params.entry.sessionId, params.entry, {
+      sessionsDir: path.dirname(params.storePath),
+    });
+  } catch {
+    // Keep restart recovery best-effort when session id/metadata is invalid.
+    return undefined;
+  }
+}
+
 async function sendUnresumableSessionNotice(params: {
   cfg?: OpenClawConfig;
   entry: SessionEntry;
@@ -313,13 +335,24 @@ async function sendUnresumableSessionNotice(params: {
       return false;
     }
     try {
-      await appendInjectedAssistantMessageToTranscript({
+      const appendResult = await appendInjectedAssistantMessageToTranscript({
         transcriptPath: params.transcriptPath,
         message: UNRESUMABLE_SESSION_NOTICE,
         sessionKey: params.sessionKey,
         idempotencyKey: `main-session-restart-recovery:${params.entry.sessionId}:failed-notice`,
         ...(params.cfg ? { config: params.cfg } : {}),
       });
+      if (!appendResult.ok) {
+        // appendInjectedAssistantMessageToTranscript swallows write errors and
+        // returns { ok: false } instead of throwing, so the reconnecting WebChat
+        // client would never see the notice. Surface that as a delivery failure.
+        log.warn(
+          `failed to persist interrupted main session recovery notice ${params.sessionKey}: ${
+            appendResult.error ?? "transcript append returned not-ok"
+          }`,
+        );
+        return false;
+      }
       log.info(
         `persisted interrupted main session recovery notice to transcript: ${params.sessionKey} (${params.reason})`,
       );
@@ -598,9 +631,10 @@ async function recoverStore(params: {
         entry,
         sessionKey,
         reason: resumeBlockReason,
-        ...(entry.sessionFile
-          ? { transcriptPath: path.resolve(path.dirname(params.storePath), entry.sessionFile) }
-          : {}),
+        transcriptPath: resolveRecoveryNoticeTranscriptPath({
+          entry,
+          storePath: params.storePath,
+        }),
       });
       await markSessionFailed({
         storePath: params.storePath,
