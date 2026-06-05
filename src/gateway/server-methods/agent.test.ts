@@ -1907,9 +1907,10 @@ describe("gateway agent handler", () => {
   });
 
   it("includes live session setting metadata in agent send events", async () => {
+    const updatedAt = Date.now() - 1_000;
     mockMainSessionEntry({
       sessionId: "sess-main",
-      updatedAt: Date.now(),
+      updatedAt,
       fastMode: true,
       sendPolicy: "deny",
       lastChannel: "telegram",
@@ -1920,6 +1921,8 @@ describe("gateway agent handler", () => {
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
       const store: Record<string, unknown> = {
         "agent:main:main": buildExistingMainStoreEntry({
+          sessionId: "sess-main",
+          updatedAt,
           fastMode: true,
           sendPolicy: "deny",
           lastChannel: "telegram",
