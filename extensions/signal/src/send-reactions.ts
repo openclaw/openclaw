@@ -189,7 +189,7 @@ async function sendReactionSignalCore(params: {
           emoji: normalizedEmoji,
           remove: params.remove,
           targetTimestamp: params.targetTimestamp,
-          targetAuthor: params.opts.targetAuthor,
+          targetAuthor: targetAuthorParams.targetAuthor,
           targetAuthorUuid: params.opts.targetAuthorUuid,
         })
       : undefined;

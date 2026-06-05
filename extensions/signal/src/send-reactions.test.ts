@@ -140,7 +140,6 @@ describe("sendReactionSignal", () => {
 
     await sendReactionSignal("+15550001111", 456, "👍", {
       cfg: SIGNAL_TEST_CFG,
-      targetAuthor: "+15550001111",
     });
 
     expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith({

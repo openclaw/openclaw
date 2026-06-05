@@ -140,10 +140,9 @@ export async function discoverSignalAccountUuid(params: {
     : await resolveSignalCliConfiguredDataDir({ readFile });
   const candidatePaths = params.configPath
     ? [resolveSignalCliAccountsPath(params.configPath)]
-    : [
-        ...(configuredDataDir ? [path.join(configuredDataDir, "data", "accounts.json")] : []),
-        resolveSignalCliAccountsPath(),
-      ];
+    : configuredDataDir
+      ? [path.join(configuredDataDir, "data", "accounts.json")]
+      : [resolveSignalCliAccountsPath()];
   for (const accountsPath of candidatePaths) {
     const uuid = await readAccountStore(accountsPath);
     if (uuid === ambiguousAccountUuid) {
