@@ -20,7 +20,7 @@ const dedupMocks = vi.hoisted(() => ({
   forgetProcessedFeishuMessage: vi.fn(async () => true),
   recordProcessedFeishuMessage: vi.fn(async () => true),
   releaseFeishuMessageProcessing: vi.fn(),
-  warmupDedupFromDisk: vi.fn(async () => 0),
+  warmupDedupFromPluginState: vi.fn(async () => 0),
   hasProcessedFeishuMessage: vi.fn(async () => false),
 }));
 
@@ -52,7 +52,7 @@ vi.mock("./dedup.js", () => ({
   forgetProcessedFeishuMessage: dedupMocks.forgetProcessedFeishuMessage,
   recordProcessedFeishuMessage: dedupMocks.recordProcessedFeishuMessage,
   releaseFeishuMessageProcessing: dedupMocks.releaseFeishuMessageProcessing,
-  warmupDedupFromDisk: dedupMocks.warmupDedupFromDisk,
+  warmupDedupFromPluginState: dedupMocks.warmupDedupFromPluginState,
   hasProcessedFeishuMessage: dedupMocks.hasProcessedFeishuMessage,
 }));
 
@@ -271,7 +271,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     dedupMocks.claimUnprocessedFeishuMessage.mockResolvedValue("claimed");
     dedupMocks.forgetProcessedFeishuMessage.mockResolvedValue(true);
     dedupMocks.recordProcessedFeishuMessage.mockResolvedValue(true);
-    dedupMocks.warmupDedupFromDisk.mockResolvedValue(0);
+    dedupMocks.warmupDedupFromPluginState.mockResolvedValue(0);
     dedupMocks.hasProcessedFeishuMessage.mockResolvedValue(false);
     maybeCreateDynamicAgentMock.mockResolvedValue({ created: false });
     sendMessageFeishuMock.mockResolvedValue({ messageId: "om_pair", chatId: "oc_dm" });
@@ -422,7 +422,7 @@ describe("monitorSingleAccount VC event registration", () => {
   beforeEach(() => {
     handlers = {};
     vi.clearAllMocks();
-    dedupMocks.warmupDedupFromDisk.mockResolvedValue(0);
+    dedupMocks.warmupDedupFromPluginState.mockResolvedValue(0);
     createEventDispatcherMock.mockReturnValue({
       register: vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
         handlers = registered;
