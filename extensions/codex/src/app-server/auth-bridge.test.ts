@@ -299,9 +299,8 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("selects legacy openai-codex OAuth profiles for implicit app-server auth", async () => {
+  it("does not select legacy openai-codex OAuth profiles for implicit app-server auth", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
-    const startOptions = createStartOptions({ clearEnv: ["FOO"] });
     try {
       upsertAuthProfile({
         agentDir,
@@ -320,19 +319,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         resolveCodexAppServerAuthProfileId({
           store: loadAuthProfileStoreForSecretsRuntime(agentDir),
         }),
-      ).toBe("openai-codex:work");
-      await expect(
-        bridgeCodexAppServerStartOptions({
-          startOptions,
-          agentDir,
-        }),
-      ).resolves.toEqual({
-        ...startOptions,
-        env: {
-          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
-        },
-        clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
-      });
+      ).toBeUndefined();
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

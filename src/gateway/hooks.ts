@@ -319,6 +319,8 @@ export function isHookAgentAllowed(
 export const getHookAgentPolicyError = () => "agentId is not allowed by hooks.allowedAgentIds";
 const getHookSessionKeyRequestPolicyError = () =>
   "sessionKey is disabled for externally supplied hook payload values; set hooks.allowRequestSessionKey=true to enable";
+export const getHookPersistentSessionKeyPolicyError = () =>
+  "persistent sessionMode requires an explicit allowed sessionKey for direct hook requests";
 export const getHookSessionKeyPrefixError = (prefixes: string[]) =>
   `sessionKey must start with one of: ${prefixes.join(", ")}`;
 

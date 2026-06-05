@@ -13,6 +13,7 @@ import {
   extractHookToken,
   getHookAgentPolicyError,
   getHookChannelError,
+  getHookPersistentSessionKeyPolicyError,
   getHookSessionKeyPrefixError,
   type HookAgentDispatchPayload,
   type HooksConfigResolved,
@@ -285,6 +286,10 @@ export function createHooksRequestHandler(
       }
       if (!isHookAgentAllowed(hooksConfig, normalized.value.agentId)) {
         sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+        return true;
+      }
+      if (normalized.value.sessionMode === "persistent" && !normalized.value.sessionKey) {
+        sendJson(res, 400, { ok: false, error: getHookPersistentSessionKeyPolicyError() });
         return true;
       }
       const sessionKey = resolveHookSessionKey({

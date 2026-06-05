@@ -584,6 +584,46 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("rejects direct persistent hook mode without an explicit request session key", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      defaultSessionKey: "hook:default",
+      mappings: [
+        {
+          match: { path: "mapped-persistent-default" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionMode: "persistent",
+        },
+      ],
+    };
+
+    await withGatewayServer(async ({ port }) => {
+      const direct = await postHook(port, "/hooks/agent", {
+        message: "Do not share the default key",
+        sessionMode: "persistent",
+      });
+      expect(direct.status).toBe(400);
+      const body = (await direct.json()) as { error?: string };
+      expect(body.error).toContain("requires an explicit allowed sessionKey");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+
+      mockIsolatedRunOkOnce();
+      const mapped = await postHook(port, "/hooks/mapped-persistent-default", {
+        subject: "trusted config",
+      });
+      expect(mapped.status).toBe(200);
+      await waitForSystemEvent();
+      const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string; sessionMode?: string }
+        | undefined;
+      expect(mappedCall?.sessionKey).toBe("hook:default");
+      expect(mappedCall?.sessionMode).toBe("persistent");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("enforces templated vs static mapping session keys on /hooks/<mapping>", async () => {
     testState.hooksConfig = {
       enabled: true,
