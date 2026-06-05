@@ -9,7 +9,14 @@ import type { SessionsListResult } from "./types.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
   return {
+    ts: 1,
+    path: "/api/sessions",
     count: sessions.length,
+    defaults: {
+      modelProvider: null,
+      model: null,
+      contextTokens: null,
+    },
     sessions,
   };
 }
