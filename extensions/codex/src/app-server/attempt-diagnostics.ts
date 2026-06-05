@@ -11,28 +11,56 @@ import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
 
-/** Reads a tool schema field in either app-server or OpenClaw naming. */
-export function readCodexDiagnosticToolParameters(tool: {
+type CodexDiagnosticToolInput = {
+  name?: unknown;
+  description?: unknown;
   inputSchema?: unknown;
   parameters?: unknown;
-}): unknown {
-  return tool.inputSchema ?? tool.parameters;
+};
+
+function readCodexDiagnosticToolField(
+  tool: CodexDiagnosticToolInput,
+  field: keyof CodexDiagnosticToolInput,
+): unknown {
+  try {
+    return tool[field];
+  } catch {
+    return undefined;
+  }
+}
+
+function readCodexDiagnosticToolName(tool: CodexDiagnosticToolInput): string {
+  const name = readCodexDiagnosticToolField(tool, "name");
+  return typeof name === "string" && name.trim() ? name : "";
+}
+
+function readCodexDiagnosticToolDescription(tool: CodexDiagnosticToolInput): string {
+  const description = readCodexDiagnosticToolField(tool, "description");
+  return typeof description === "string" ? description : "";
+}
+
+/** Reads a tool schema field in either app-server or OpenClaw naming. */
+export function readCodexDiagnosticToolParameters(tool: CodexDiagnosticToolInput): unknown {
+  return (
+    readCodexDiagnosticToolField(tool, "inputSchema") ??
+    readCodexDiagnosticToolField(tool, "parameters")
+  );
 }
 
 /** Builds compact diagnostic tool definitions for trusted private telemetry. */
-export function buildCodexDiagnosticToolDefinitions(
-  tools: readonly {
-    name: string;
-    description: string;
-    inputSchema?: unknown;
-    parameters?: unknown;
-  }[],
-) {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: readCodexDiagnosticToolParameters(tool),
-  }));
+export function buildCodexDiagnosticToolDefinitions(tools: readonly CodexDiagnosticToolInput[]) {
+  return tools.flatMap((tool) => {
+    const name = readCodexDiagnosticToolName(tool);
+    return name
+      ? [
+          {
+            name,
+            description: readCodexDiagnosticToolDescription(tool),
+            parameters: readCodexDiagnosticToolParameters(tool),
+          },
+        ]
+      : [];
+  });
 }
 
 /** Returns the serialized UTF-8 byte length for a JSON-compatible value. */

@@ -1,10 +1,43 @@
 // Codex tests cover attempt diagnostics plugin behavior.
 import { describe, expect, it } from "vitest";
-import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
+import {
+  buildCodexDiagnosticToolDefinitions,
+  buildCodexPluginThreadConfigEligibilityLogData,
+} from "./attempt-diagnostics.js";
 import { resolveCodexPluginsPolicy } from "./config.js";
 import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 
 describe("Codex app-server attempt diagnostics", () => {
+  it("builds tool definitions without trusting tool metadata getters", () => {
+    const unreadableNameTool = {
+      get name(): string {
+        throw new Error("name exploded");
+      },
+      description: "unreachable",
+      inputSchema: { type: "object" },
+    };
+    const unreadableMetadataTool = {
+      name: "safe-tool",
+      get description(): string {
+        throw new Error("description exploded");
+      },
+      get inputSchema(): unknown {
+        throw new Error("input schema exploded");
+      },
+      parameters: { type: "object", properties: { value: { type: "string" } } },
+    };
+
+    expect(
+      buildCodexDiagnosticToolDefinitions([unreadableNameTool, unreadableMetadataTool]),
+    ).toStrictEqual([
+      {
+        name: "safe-tool",
+        description: "",
+        parameters: { type: "object", properties: { value: { type: "string" } } },
+      },
+    ]);
+  });
+
   it("redacts plugin thread config eligibility log data", () => {
     const appServer = {
       start: {
