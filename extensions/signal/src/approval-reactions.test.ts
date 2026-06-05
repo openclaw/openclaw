@@ -136,6 +136,45 @@ describe("Signal approval reactions", () => {
     });
   });
 
+  it("keeps UUID target-mode approval reactions enabled across compact and hyphenated forms", async () => {
+    const cfg = {
+      channels: {
+        signal: {
+          allowFrom: ["123e4567-e89b-12d3-a456-426614174000"],
+        },
+      },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets" as const,
+          targets: [{ channel: "signal", to: "uuid:123e4567-e89b-12d3-a456-426614174000" }],
+        },
+      },
+    };
+    const text =
+      "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny";
+    const compactTo = "uuid:123e4567e89b12d3a456426614174000";
+    const textWithHint = appendSignalApprovalReactionHintForOutboundMessage({
+      cfg,
+      accountId: "default",
+      to: compactTo,
+      text,
+      targetAuthor: "+15550009999",
+    });
+
+    expect(textWithHint).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
+    expect(
+      registerSignalApprovalReactionTargetForOutboundMessage({
+        cfg,
+        accountId: "default",
+        to: compactTo,
+        messageId: "1700000000010",
+        text: textWithHint,
+        targetAuthor: "+15550009999",
+      }),
+    ).toBe(true);
+  });
+
   it("keeps target-mode outbound prompts manual when the target route is disabled", () => {
     const text =
       "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny";

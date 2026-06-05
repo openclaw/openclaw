@@ -138,12 +138,13 @@ function hasMatchingSignalApprovalReactionTarget(params: {
   config: ApprovalForwardingConfig;
   route: Extract<SignalApprovalReactionRoute, { deliveryMode: "target" }>;
 }): boolean {
+  const routeTo = normalizeSignalApprovalTargetForCompare(params.route.to);
   return (params.config.targets ?? []).some((target) => {
     if (normalizeLowercaseStringOrEmpty(target.channel) !== "signal") {
       return false;
     }
-    const configuredTo = normalizeSignalMessagingTarget(target.to);
-    if (!configuredTo || configuredTo !== params.route.to) {
+    const configuredTo = normalizeSignalApprovalTargetForCompare(target.to);
+    if (!configuredTo || configuredTo !== routeTo) {
       return false;
     }
     return targetAccountMatches({
@@ -151,6 +152,18 @@ function hasMatchingSignalApprovalReactionTarget(params: {
       configuredAccountId: target.accountId,
     });
   });
+}
+
+function normalizeSignalApprovalTargetForCompare(raw: string): string | undefined {
+  const normalized = normalizeSignalMessagingTarget(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if (looksLikeUuid(normalized)) {
+    const uuid = normalizeSignalUuidForCompare(normalized);
+    return uuid ? `uuid:${uuid}` : undefined;
+  }
+  return normalized;
 }
 
 function isSignalApprovalReactionRouteStillEnabled(params: {

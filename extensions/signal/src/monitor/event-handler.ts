@@ -185,7 +185,7 @@ function resolveNoteToSelfDataMessage(params: {
   noteToSelfMode: boolean;
   account?: string;
   accountUuid?: string;
-}): { envelope: SignalEnvelope; dataMessage: SignalDataMessage | null } | null {
+}): { envelope: SignalEnvelope; dataMessage: SignalDataMessage | null; isEdit?: boolean } | null {
   if ("syncMessage" in params.envelope) {
     if (!params.noteToSelfMode) {
       return null;
@@ -216,6 +216,7 @@ function resolveNoteToSelfDataMessage(params: {
         timestamp: params.envelope.timestamp ?? sentMessage?.timestamp ?? undefined,
       },
       dataMessage,
+      isEdit: Boolean(sentMessage.editMessage?.dataMessage),
     };
   }
   if (params.isOwnMessage) {
@@ -270,6 +271,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   async function isKnownSelfReplyEcho(
     envelope: SignalEnvelope,
     dataMessage: SignalDataMessage | null,
+    options?: { ignorePrimaryId?: boolean },
   ) {
     if (!noteToSelfMode) {
       return false;
@@ -284,8 +286,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     return await hasSignalSelfReplyEcho({
       accountId: deps.accountId,
       accountIdentity: deps.accountUuid ?? deps.account,
-      messageId: timestamp != null ? String(timestamp) : undefined,
-      timestamp,
+      messageId: !options?.ignorePrimaryId && timestamp != null ? String(timestamp) : undefined,
+      timestamp: options?.ignorePrimaryId ? undefined : timestamp,
       text: echoText,
       includeTextWithPrimary: true,
     });
@@ -602,7 +604,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         { messageId: entry.messageId, timestamp: entry.timestamp, text: entry.bodyText },
       ];
       for (const record of records) {
-        if (!record.messageId && record.timestamp == null) {
+        if (!record.messageId && record.timestamp == null && !record.text.trim()) {
           continue;
         }
         await rememberSignalSelfReplyEcho({
@@ -863,7 +865,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const dataMessage = resolvedMessage.dataMessage;
     const noteToSelfOwnMessage =
       noteToSelfMode && (isOwnMessage || "syncMessage" in resolvedEnvelope);
-    if (noteToSelfOwnMessage && (await isKnownSelfReplyEcho(resolvedEnvelope, dataMessage))) {
+    if (
+      noteToSelfOwnMessage &&
+      (await isKnownSelfReplyEcho(resolvedEnvelope, dataMessage, {
+        ignorePrimaryId: resolvedMessage.isEdit,
+      }))
+    ) {
       return;
     }
 
@@ -1224,7 +1231,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       recordSelfEchoAfterDispatch: noteToSelfDirectMessage && "syncMessage" in resolvedEnvelope,
       selfEchoRecords:
         noteToSelfDirectMessage && "syncMessage" in resolvedEnvelope
-          ? [{ messageId, timestamp: resolvedEnvelope.timestamp ?? undefined, text: bodyText }]
+          ? [
+              resolvedMessage.isEdit
+                ? { text: bodyText }
+                : { messageId, timestamp: resolvedEnvelope.timestamp ?? undefined, text: bodyText },
+            ]
           : undefined,
     });
   };

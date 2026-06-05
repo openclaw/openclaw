@@ -1166,6 +1166,59 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.RawBody).toBe("edited self prompt");
   });
 
+  it("accepts edited note-to-self sync messages after the original timestamp was processed", async () => {
+    hasSignalSelfReplyEchoMock.mockImplementation(
+      async (params: { messageId?: string }) => params.messageId === "1700000000108",
+    );
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        account: "+15550001111",
+        ingressMode: "note-to-self",
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550001111",
+        timestamp: 1700000000108,
+        syncMessage: {
+          sentMessage: {
+            destinationNumber: "+15550001111",
+            timestamp: 1700000000108,
+            editMessage: {
+              dataMessage: {
+                message: "edited self prompt after original",
+                attachments: [],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.RawBody).toBe("edited self prompt after original");
+    expect(hasSignalSelfReplyEchoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: undefined,
+        timestamp: undefined,
+        text: "edited self prompt after original",
+      }),
+    );
+    expect(rememberSignalSelfReplyEchoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: undefined,
+        timestamp: undefined,
+        text: "edited self prompt after original",
+      }),
+    );
+  });
+
   it("drops sent sync transcripts addressed to other Signal users", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
