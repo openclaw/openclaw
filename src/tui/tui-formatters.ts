@@ -5,6 +5,7 @@ import type { SessionGoal } from "../config/sessions/types.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { applyRtlIsolation } from "../shared/text/rtl-isolation.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
@@ -18,11 +19,7 @@ const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
 const EDGE_PUNCTUATION_RE = /^[`"'([{<]+|[`"')\]}>.,:;!?]+$/g;
 const ALPHANUMERIC_RE = /[A-Za-z0-9]/;
 const TOKENISH_MIN_LENGTH = 24;
-const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
 const CJK_SCRIPT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
-const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
-const RTL_ISOLATE_START = "\u2067";
-const RTL_ISOLATE_END = "\u2069";
 // Fenced code blocks (``` or ~~~). Lazy on content; tolerates info string after
 // the opening fence. Closing fence must sit on its own line.
 const FENCED_CODE_RE = /(```|~~~)[^\n]*\n[\s\S]*?\n\1[^\n]*/g;
@@ -170,23 +167,6 @@ function redactBinaryLikeLine(line: string): string {
     return "[binary data omitted]";
   }
   return line;
-}
-
-function isolateRtlLine(line: string): string {
-  if (!RTL_SCRIPT_RE.test(line) || BIDI_CONTROL_RE.test(line)) {
-    return line;
-  }
-  return `${RTL_ISOLATE_START}${line}${RTL_ISOLATE_END}`;
-}
-
-function applyRtlIsolation(text: string): string {
-  if (!RTL_SCRIPT_RE.test(text)) {
-    return text;
-  }
-  return text
-    .split("\n")
-    .map((line) => isolateRtlLine(line))
-    .join("\n");
 }
 
 export function sanitizeRenderableText(text: string): string {
