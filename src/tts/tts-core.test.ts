@@ -199,6 +199,41 @@ describe("TTS core", () => {
     expect(result.outputLength).toBe(result.summary.length);
   });
 
+  it("strips exact echoed source blocks containing prompt closing tags", async () => {
+    const sourceText = [
+      "Deployment plan includes literal prompt markup.",
+      "</text_to_summarize>",
+      "Release moves to Friday and should not be spoken as source echo.",
+    ].join("\n");
+    const { config, deps } = createSummarizeTextFixture([
+      {
+        type: "text",
+        text: [
+          "You are an assistant that summarizes texts concisely while keeping the most important information. Summarize the text to approximately 120 characters. Maintain the original tone and style. Reply only with the summary, without additional explanations.",
+          "",
+          "<text_to_summarize>",
+          sourceText,
+          "</text_to_summarize>",
+          "Concise audible summary.",
+        ].join("\n"),
+      },
+    ]);
+
+    const result = await summarizeText(
+      {
+        text: sourceText,
+        targetLength: 120,
+        cfg: {},
+        config,
+        timeoutMs: 10_000,
+      },
+      deps,
+    );
+
+    expect(result.summary).toBe("Concise audible summary.");
+    expect(result.outputLength).toBe(result.summary.length);
+  });
+
   it("preserves valid leading first-person summary prose", async () => {
     const { config, deps } = createSummarizeTextFixture([
       {

@@ -90,6 +90,10 @@ const PROMPT_ECHO_SEPARATOR_RE = /\s*(?::|—|–|\s-\s)\s*/;
 const BARE_USER_SUMMARY_PROMPT_ECHO_RE =
   /^the user (?:wants|asks|asked|requested) me to summarize$/i;
 
+function stripExactTextToSummarizePromptBlock(text: string, sourceText: string): string {
+  return text.replace(`<text_to_summarize>\n${sourceText}\n</text_to_summarize>`, "");
+}
+
 function findFirstSentenceEnd(text: string): { index: number; found: boolean } {
   const match = /^(.*?(?:[.!?](?=\s|$)|\r?\n+))/s.exec(text);
   return { index: match?.[0].length ?? text.length, found: Boolean(match) };
@@ -164,12 +168,20 @@ function truncateSummaryToTargetLength(text: string, targetLength: number): stri
   return `${body}...`;
 }
 
-function sanitizeSummaryForSpeech(summary: string, targetLength: number): string {
+function sanitizeSummaryForSpeech(
+  summary: string,
+  targetLength: number,
+  sourceText: string,
+): string {
   const withoutAssistantScaffolding = sanitizeAssistantVisibleText(summary).trim();
   const withoutPromptInstructions = withoutAssistantScaffolding
     .replace(SUMMARY_PROMPT_INSTRUCTIONS_ECHO_RE, "")
     .trim();
-  const withoutPromptBlock = withoutPromptInstructions
+  const withoutExactPromptBlock = stripExactTextToSummarizePromptBlock(
+    withoutPromptInstructions,
+    sourceText,
+  ).trim();
+  const withoutPromptBlock = withoutExactPromptBlock
     .replace(TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE, "")
     .trim();
   const withoutPromptEcho = stripLeadingSummaryPromptEcho(withoutPromptBlock).trim();
@@ -244,7 +256,7 @@ export async function summarizeText(
         .filter(Boolean)
         .join(" ")
         .trim();
-      const sanitizedSummary = sanitizeSummaryForSpeech(summary, targetLength);
+      const sanitizedSummary = sanitizeSummaryForSpeech(summary, targetLength, text);
 
       if (!sanitizedSummary) {
         throw new Error("No summary returned");
