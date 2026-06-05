@@ -35,3 +35,43 @@ export function seedPluginStateEntriesForTests(entries: PluginStateSeedEntry[]):
     }),
   );
 }
+
+// Latency event types and constants for Chat UI response latency display.
+// These types structure the latency metrics passed via the `chat` WebSocket event.
+
+/** Latency metrics for a chat response. */
+export type ChatResponseLatency = {
+  /** Time from send to first token in milliseconds. */
+  firstOutputLatencyMs: number;
+  /** Time from send to last token in milliseconds. */
+  totalLatencyMs: number;
+  /** Total number of tokens generated. */
+  tokenCount?: number;
+  /** Tokens generated per second. */
+  tokensPerSecond?: number;
+};
+
+/** Event type for streaming latency updates. */
+export type ChatLatencyEvent = {
+  type: "chat-latency";
+  messageId: string;
+  latency: ChatResponseLatency;
+  streaming: boolean;
+};
+
+/** Constants for latency event types. */
+export const CHAT_LATENCY_EVENT_TYPE = "chat-latency" as const;
+
+/** Helper to create a ChatLatencyEvent. */
+export function createChatLatencyEvent(
+  messageId: string,
+  latency: ChatResponseLatency,
+  streaming = false,
+): ChatLatencyEvent {
+  return {
+    type: CHAT_LATENCY_EVENT_TYPE,
+    messageId,
+    latency,
+    streaming,
+  };
+}

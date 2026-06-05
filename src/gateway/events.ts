@@ -13,3 +13,19 @@ export type UpdateAvailableEventData = {
 export type GatewayUpdateAvailableEventPayload = {
   updateAvailable: UpdateAvailableEventData | null;
 };
+
+/** Event name emitted when chat latency metrics are available. */
+export const GATEWAY_EVENT_CHAT_LATENCY = "chat.latency" as const;
+
+/** Latency metrics for a chat response. */
+export type ChatLatencyMetrics = {
+  firstOutputMs: number;
+  totalMs: number;
+  outputTokens: number;
+  throughputTokPerSec: number;
+};
+
+/** Gateway event payload for chat latency metric broadcasts. */
+export type GatewayChatLatencyEventPayload = {
+  latency: ChatLatencyMetrics;
+};

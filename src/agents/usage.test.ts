@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  computeThroughput,
   deriveContextPromptTokens,
   derivePromptTokens,
   deriveSessionTotalTokens,
@@ -407,5 +408,37 @@ describe("deriveSessionTotalTokens", () => {
       promptTokens: 2500, // Override
     });
     expect(totalTokens).toBe(2500);
+  });
+});
+
+describe("computeThroughput", () => {
+  it("computes normal throughput correctly", () => {
+    expect(computeThroughput(1000, 2000)).toBeCloseTo(500);
+  });
+
+  it("returns undefined when totalMs is zero", () => {
+    expect(computeThroughput(1000, 0)).toBeUndefined();
+  });
+
+  it("returns undefined when totalMs is undefined", () => {
+    expect(computeThroughput(1000, undefined)).toBeUndefined();
+  });
+
+  it("returns undefined when tokenCount is undefined", () => {
+    expect(computeThroughput(undefined, 2000)).toBeUndefined();
+  });
+
+  it("returns undefined when tokenCount is NaN", () => {
+    expect(computeThroughput(Number.NaN, 2000)).toBeUndefined();
+  });
+
+  it("returns undefined when totalMs is NaN", () => {
+    expect(computeThroughput(1000, Number.NaN)).toBeUndefined();
+  });
+
+  it("handles very small latency values without returning Infinity", () => {
+    const result = computeThroughput(1, 0.001);
+    expect(result !== undefined && Number.isFinite(result)).toBe(true);
+    expect(result).toBeCloseTo(1_000_000);
   });
 });

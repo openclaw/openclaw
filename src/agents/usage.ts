@@ -316,3 +316,21 @@ export function deriveSessionTotalTokens(params: {
   // percentages for terminal output.
   return promptTokens;
 }
+
+/**
+ * Safely compute token throughput (tokens per second).
+ *
+ * Returns `undefined` when the result would be non-finite (e.g. zero or
+ * negative duration, non-finite token counts) so that display layers can
+ * gracefully omit the metric instead of rendering `Infinity` or `NaN`.
+ */
+export function computeThroughput(outputTokens: unknown, totalMs: unknown): number | undefined {
+  const tokens =
+    typeof outputTokens === "number" && Number.isFinite(outputTokens) ? outputTokens : undefined;
+  const ms = typeof totalMs === "number" && Number.isFinite(totalMs) ? totalMs : undefined;
+  if (tokens === undefined || ms === undefined || ms <= 0) {
+    return undefined;
+  }
+  const tps = tokens / (ms / 1000);
+  return Number.isFinite(tps) ? tps : undefined;
+}

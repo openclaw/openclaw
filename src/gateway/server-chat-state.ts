@@ -75,6 +75,17 @@ export function createChatRunRegistry(): ChatRunRegistry {
   return { add, peek, shift, remove, clear };
 }
 
+export type LatencyMetrics = {
+  /** Time from send to first output token, in milliseconds. */
+  firstOutputMs?: number;
+  /** Total time from send to last token, in milliseconds. */
+  totalMs?: number;
+  /** Number of output tokens generated. */
+  outputTokens?: number;
+  /** Output tokens per second. */
+  throughputTokPerSec?: number;
+};
+
 export type ChatRunState = {
   registry: ChatRunRegistry;
   rawBuffers: Map<string, string>;
@@ -88,6 +99,7 @@ export type ChatRunState = {
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, BufferedAgentEvent>;
   abortedRuns: Map<string, number>;
+  latencyMetrics: Map<string, LatencyMetrics>;
   clearRun: (runId: string) => void;
   clear: () => void;
 };
@@ -104,6 +116,7 @@ export function createChatRunState(): ChatRunState {
   const agentDeltaSentAt = new Map<string, number>();
   const bufferedAgentEvents = new Map<string, BufferedAgentEvent>();
   const abortedRuns = new Map<string, number>();
+  const latencyMetrics = new Map<string, LatencyMetrics>();
 
   const clearRun = (runId: string) => {
     rawBuffers.delete(runId);
@@ -112,6 +125,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt.delete(runId);
     deltaLastBroadcastLen.delete(runId);
     deltaLastBroadcastText.delete(runId);
+    latencyMetrics.delete(runId);
     for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
       agentDeltaSentAt.delete(key);
       bufferedAgentEvents.delete(key);
@@ -129,6 +143,7 @@ export function createChatRunState(): ChatRunState {
     agentDeltaSentAt.clear();
     bufferedAgentEvents.clear();
     abortedRuns.clear();
+    latencyMetrics.clear();
   };
 
   return {
@@ -142,6 +157,7 @@ export function createChatRunState(): ChatRunState {
     agentDeltaSentAt,
     bufferedAgentEvents,
     abortedRuns,
+    latencyMetrics,
     clearRun,
     clear,
   };
