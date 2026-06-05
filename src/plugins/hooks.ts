@@ -1199,50 +1199,83 @@ export function createHookRunner(
    * Run before_agent_run gate hook.
    * Fires after session resolution and workspace preparation, before model inference.
    * Returns the most-restrictive pass/block decision from all handlers.
-   * Handlers that return void are treated as pass.
+   * Handlers that return void/undefined/null are treated as pass.
+   * Only explicit { outcome: "block", reason: ... } blocks.
+   * Hook exceptions are caught, logged with structured metadata, and treated as pass.
    */
   async function runBeforeAgentRun(
     event: PluginHookBeforeAgentRunEvent,
     ctx: PluginHookAgentContext,
   ): Promise<GateHookResult<InputGateDecision> | undefined> {
     let winningPluginId: string | undefined;
-    const decision = await runModifyingHook<"before_agent_run", InputGateDecision | undefined>(
-      "before_agent_run",
-      event,
-      ctx,
-      {
-        mergeResults: (_acc, next, reg) => {
-          if (next === undefined || next === null) {
-            const normalized: InputGateDecision = {
-              outcome: "block",
-              reason: "before_agent_run returned an invalid decision",
-            };
-            winningPluginId = reg.pluginId;
-            return normalized;
-          }
-          const normalized: InputGateDecision = isHookDecision(next)
-            ? next
-            : {
-                outcome: "block",
-                reason: "before_agent_run returned an invalid decision",
-              };
-          const merged =
-            !_acc || (normalized.outcome === "block" && _acc.outcome !== "block")
-              ? normalized
-              : _acc;
-          if (merged === normalized) {
-            winningPluginId = reg.pluginId;
-          }
-          return merged;
+    let decision: InputGateDecision | undefined;
+
+    try {
+      decision = await runModifyingHook<"before_agent_run", InputGateDecision | undefined>(
+        "before_agent_run",
+        event,
+        ctx,
+        {
+          mergeResults: (_acc, next, reg) => {
+            // undefined/null = no decision = pass
+            if (next === undefined || next === null) {
+              return _acc;
+            }
+            const normalized: InputGateDecision = isHookDecision(next)
+              ? next
+              : {
+                  outcome: "block",
+                  reason: "before_agent_run returned an invalid decision",
+                };
+            const merged =
+              !_acc || (normalized.outcome === "block" && _acc.outcome !== "block")
+                ? normalized
+                : _acc;
+            if (merged === normalized) {
+              winningPluginId = reg.pluginId;
+            }
+            return merged;
+          },
+          shouldStop: (result) => result?.outcome === "block",
+          terminalLabel: "gate-decision",
         },
-        mergeNullResults: true,
-        shouldStop: (result) => result?.outcome === "block",
-        terminalLabel: "gate-decision",
-      },
-    );
+      );
+    } catch (err) {
+      const pluginId = winningPluginId ?? "unknown";
+      const errorMsg = formatHookErrorForLog(err);
+      const logMeta = {
+        hook: "before_agent_run",
+        pluginId,
+        error: errorMsg,
+        channelId: event.channelId,
+        senderId: event.senderId,
+        senderIsOwner: event.senderIsOwner,
+      };
+      logger?.error?.(
+        `[hooks] before_agent_run handler from ${pluginId} failed: ${errorMsg}` +
+          (event.channelId ? ` (channel=${event.channelId})` : ""),
+      );
+      logger?.debug?.(`[hooks] before_agent_run structured log: ${JSON.stringify(logMeta)}`);
+      return undefined;
+    }
+
     if (!decision) {
       return undefined;
     }
+
+    const logMeta = {
+      hook: "before_agent_run",
+      pluginId: winningPluginId ?? "unknown",
+      rawResultType: typeof decision,
+      normalizedDecision: decision.outcome,
+      blockReason: decision.outcome === "block" ? decision.reason : undefined,
+      channelId: event.channelId,
+      senderId: event.senderId,
+      senderIsOwner: event.senderIsOwner,
+      fromTelegram: event.channelId === "telegram",
+    };
+    logger?.debug?.(`[hooks] before_agent_run result: ${JSON.stringify(logMeta)}`);
+
     return { decision, pluginId: winningPluginId ?? "unknown" };
   }
 

@@ -172,7 +172,7 @@ describe("before_agent_run hook", () => {
     });
   });
 
-  it("fails closed on null handler results", async () => {
+  it("treats null handler results as pass (no decision)", async () => {
     const registry = makeRegistry([
       {
         pluginId: "null-plugin",
@@ -183,13 +183,7 @@ describe("before_agent_run hook", () => {
     ]);
     const runner = createHookRunner(registry);
     const result = await runner.runBeforeAgentRun({ prompt: "test", messages: [] }, ctx);
-    expect(result).toEqual({
-      decision: {
-        outcome: "block",
-        reason: "before_agent_run returned an invalid decision",
-      },
-      pluginId: "null-plugin",
-    });
+    expect(result).toBeUndefined();
   });
 
   it("fails closed on malformed block decisions", async () => {
@@ -212,7 +206,16 @@ describe("before_agent_run hook", () => {
     });
   });
 
-  it("fails closed when handlers throw", async () => {
+  it("does not block when handlers throw", async () => {
+    const errors: string[] = [];
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: (msg: string) => {
+        errors.push(msg);
+      },
+    };
     const registry = makeRegistry([
       {
         pluginId: "throwing-plugin",
@@ -223,14 +226,23 @@ describe("before_agent_run hook", () => {
         source: "test",
       },
     ]);
-    const runner = createHookRunner(registry);
-    await expect(runner.runBeforeAgentRun({ prompt: "test", messages: [] }, ctx)).rejects.toThrow(
-      "before_agent_run handler from throwing-plugin failed: policy unavailable",
-    );
+    const runner = createHookRunner(registry, { logger });
+    const result = await runner.runBeforeAgentRun({ prompt: "test", messages: [] }, ctx);
+    expect(result).toBeUndefined();
+    expect(errors.some((msg) => msg.includes("throwing-plugin"))).toBe(true);
   });
 
-  it("fails closed when handlers exceed the default timeout", async () => {
+  it("does not block when handlers exceed the default timeout", async () => {
     vi.useFakeTimers();
+    const errors: string[] = [];
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: (msg: string) => {
+        errors.push(msg);
+      },
+    };
     const registry = makeRegistry([
       {
         pluginId: "hanging-plugin",
@@ -239,14 +251,12 @@ describe("before_agent_run hook", () => {
         source: "test",
       },
     ]);
-    const runner = createHookRunner(registry);
+    const runner = createHookRunner(registry, { logger });
     const resultPromise = runner.runBeforeAgentRun({ prompt: "test", messages: [] }, ctx);
-    const rejection = expect(resultPromise).rejects.toThrow(
-      "before_agent_run handler from hanging-plugin failed: timed out after 15000ms",
-    );
-
     await vi.advanceTimersByTimeAsync(15_000);
-    await rejection;
+    const result = await resultPromise;
+    expect(result).toBeUndefined();
+    expect(errors.some((msg) => msg.includes("hanging-plugin"))).toBe(true);
   });
 
   it("receives the correct event payload", async () => {
@@ -336,6 +346,81 @@ describe("before_agent_run invalid ask outcome", () => {
     expect(result?.decision.outcome).toBe("block");
     expect(result?.pluginId).toBe("plugin-a");
     expect(secondHandlerCalled).toBe(false);
+  });
+
+  it("returns undefined when all handlers return void", async () => {
+    const registry = makeRegistry([
+      {
+        pluginId: "void-a",
+        hookName: "before_agent_run",
+        handler: async () => {},
+        source: "test",
+        priority: 10,
+      },
+      {
+        pluginId: "void-b",
+        hookName: "before_agent_run",
+        handler: async () => undefined,
+        source: "test",
+        priority: 5,
+      },
+    ]);
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeAgentRun({ prompt: "test", messages: [] }, ctx);
+    expect(result).toBeUndefined();
+  });
+
+  it("passes when handler returns explicit pass after null handler", async () => {
+    const registry = makeRegistry([
+      {
+        pluginId: "null-plugin",
+        hookName: "before_agent_run",
+        handler: async () => null as never,
+        source: "test",
+        priority: 10,
+      },
+      {
+        pluginId: "pass-plugin",
+        hookName: "before_agent_run",
+        handler: async () => ({ outcome: "pass" as const }),
+        source: "test",
+        priority: 5,
+      },
+    ]);
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeAgentRun({ prompt: "test", messages: [] }, ctx);
+    expect(result?.decision.outcome).toBe("pass");
+    expect(result?.pluginId).toBe("pass-plugin");
+  });
+
+  it("injects channel metadata into before_agent_run event", async () => {
+    let receivedEvent: unknown;
+    const registry = makeRegistry([
+      {
+        pluginId: "test",
+        hookName: "before_agent_run",
+        handler: async (event: unknown) => {
+          receivedEvent = event;
+          return { outcome: "pass" as const };
+        },
+        source: "test",
+      },
+    ]);
+    const runner = createHookRunner(registry);
+    await runner.runBeforeAgentRun(
+      {
+        prompt: "test",
+        messages: [],
+        channelId: "telegram",
+        senderId: "user-123",
+        senderIsOwner: false,
+      },
+      ctx,
+    );
+    const event = receivedEvent as Record<string, unknown>;
+    expect(event.channelId).toBe("telegram");
+    expect(event.senderId).toBe("user-123");
+    expect(event.senderIsOwner).toBe(false);
   });
 });
 
