@@ -14,7 +14,14 @@ import type {
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import { buildApprovalPresentationFromActionDescriptors } from "openclaw/plugin-sdk/approval-reply-runtime";
+import {
+  buildApprovalPresentationFromActionDescriptors,
+  buildPluginApprovalPendingReplyPayload,
+} from "openclaw/plugin-sdk/approval-reply-runtime";
+import type {
+  PluginApprovalLanguage,
+  PluginApprovalRequest,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -251,6 +258,32 @@ function buildSlackPluginPendingApprovalBlocks(view: PluginApprovalPendingView):
   ];
 }
 
+function resolveSlackPluginApprovalLanguage(cfg: OpenClawConfig): PluginApprovalLanguage | null {
+  const language = cfg.approvals?.plugin?.language;
+  return language === "simple" || language === "simple-technical" ? language : null;
+}
+
+function buildSlackPluginLanguagePendingApprovalBlocks(
+  view: PluginApprovalPendingView,
+  text: string,
+): SlackBlock[] {
+  const interactiveBlocks =
+    resolveSlackReplyBlocks({
+      text: "",
+      presentation: buildApprovalPresentationFromActionDescriptors(view.actions),
+    }) ?? [];
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: truncateSlackMrkdwn(text, SLACK_TEXT_OBJECT_MAX),
+      },
+    },
+    ...interactiveBlocks,
+  ];
+}
+
 function buildSlackPendingApprovalBlocks(view: PendingApprovalView): SlackBlock[] {
   return view.approvalKind === "plugin"
     ? buildSlackPluginPendingApprovalBlocks(view)
@@ -450,10 +483,27 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
     },
   },
   presentation: {
-    buildPendingPayload: ({ view }) => ({
-      text: buildSlackPendingApprovalText(view),
-      blocks: buildSlackPendingApprovalBlocks(view),
-    }),
+    buildPendingPayload: ({ cfg, request, nowMs, view }) => {
+      if (view.approvalKind === "plugin") {
+        const language = resolveSlackPluginApprovalLanguage(cfg);
+        if (language) {
+          const payload = buildPluginApprovalPendingReplyPayload({
+            request: request as PluginApprovalRequest,
+            nowMs,
+            language,
+          });
+          const text = payload.text ?? buildSlackPluginPendingApprovalText(view);
+          return {
+            text,
+            blocks: buildSlackPluginLanguagePendingApprovalBlocks(view, text),
+          };
+        }
+      }
+      return {
+        text: buildSlackPendingApprovalText(view),
+        blocks: buildSlackPendingApprovalBlocks(view),
+      };
+    },
     buildResolvedResult: ({ view }) => ({
       kind: "update",
       payload: {

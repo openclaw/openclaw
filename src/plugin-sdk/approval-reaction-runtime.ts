@@ -12,7 +12,7 @@ import {
   type ExecApprovalPendingReplyParams,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
-import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import type { PluginApprovalLanguage, PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   buildApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
@@ -232,13 +232,17 @@ function listDecisionActions(actions: PendingApprovalView["actions"]): ExecAppro
   );
 }
 function buildApprovalReactionPromptText(params: {
+  request: ApprovalRequest;
   view: PendingApprovalView;
   nowMs: number;
   reactionHint: string | null;
+  language?: PluginApprovalLanguage | null;
 }): string {
   const { view } = params;
   const allowedDecisions = listDecisionActions(view.actions);
   const sections: string[] = [];
+  const usesSharedPluginLanguageText =
+    view.approvalKind === "plugin" && params.language != null && params.language !== "original";
   if (view.approvalKind === "exec") {
     const header = ["Exec approval required", `ID: ${view.approvalId}`];
     sections.push(header.join("\n"));
@@ -273,6 +277,14 @@ function buildApprovalReactionPromptText(params: {
     info.push(`Expires in: ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
     info.push(`Full id: \`${view.approvalId}\``);
     sections.push(info.join("\n"));
+  } else if (usesSharedPluginLanguageText) {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: params.request as PluginApprovalRequest,
+      nowMs: params.nowMs,
+      allowedDecisions,
+      language: params.language,
+    });
+    sections.push(replaceApprovalIdPlaceholder(payload.text, params.request.id));
   } else {
     const header = ["Plugin approval required", `ID: ${view.approvalId}`];
     sections.push(header.join("\n"));
@@ -297,16 +309,18 @@ function buildApprovalReactionPromptText(params: {
   if (params.reactionHint) {
     sections.push(params.reactionHint);
   }
-  const commandInstructions = buildCommandActionInstructionSection(view.actions);
-  if (commandInstructions.length > 0) {
-    sections.push(commandInstructions.join("\n"));
-  }
-  const manualInstructions = buildManualInstructionSection({
-    approvalId: view.approvalId,
-    allowedDecisions,
-  });
-  if (manualInstructions.length > 0) {
-    sections.push(manualInstructions.join("\n"));
+  if (!usesSharedPluginLanguageText) {
+    const commandInstructions = buildCommandActionInstructionSection(view.actions);
+    if (commandInstructions.length > 0) {
+      sections.push(commandInstructions.join("\n"));
+    }
+    const manualInstructions = buildManualInstructionSection({
+      approvalId: view.approvalId,
+      allowedDecisions,
+    });
+    if (manualInstructions.length > 0) {
+      sections.push(manualInstructions.join("\n"));
+    }
   }
   return sections.filter(Boolean).join("\n\n");
 }
@@ -343,13 +357,16 @@ export function buildApprovalPendingPromptPayload(params: {
   request: ApprovalRequest;
   view: PendingApprovalView;
   nowMs: number;
+  language?: PluginApprovalLanguage | null;
 }): ApprovalReactionPromptPayload {
   const allowedDecisions = listDecisionActions(params.view.actions);
   const reactionBindings = listApprovalReactionBindings({ allowedDecisions });
   const text = buildApprovalReactionPromptText({
+    request: params.request,
     view: params.view,
     nowMs: params.nowMs,
     reactionHint: buildApprovalReactionHint({ allowedDecisions }),
+    language: params.language,
   });
   return {
     ...buildMetadataPayload({
@@ -366,11 +383,13 @@ export function buildApprovalPendingPromptPayload(params: {
 export function buildApprovalReactionPromptPayloadForRequest(params: {
   request: ApprovalRequest;
   nowMs: number;
+  language?: PluginApprovalLanguage | null;
 }): ApprovalReactionPromptPayload {
   return buildApprovalPendingPromptPayload({
     request: params.request,
     view: buildPendingApprovalView(params.request),
     nowMs: params.nowMs,
+    language: params.language,
   });
 }
 
@@ -382,6 +401,7 @@ export function buildApprovalReactionPendingContent(params: {
   request: ApprovalRequest;
   view: PendingApprovalView;
   nowMs: number;
+  language?: PluginApprovalLanguage | null;
 }): ApprovalReactionPendingContent {
   const reactionPayload = buildApprovalPendingPromptPayload(params);
   const manualFallbackPayload =
@@ -391,6 +411,7 @@ export function buildApprovalReactionPendingContent(params: {
             request: params.request as PluginApprovalRequest,
             nowMs: params.nowMs,
             allowedDecisions: reactionPayload.allowedDecisions,
+            language: params.language,
           });
           return withoutPresentation({
             ...payload,
@@ -421,11 +442,13 @@ export function buildApprovalReactionPendingContent(params: {
 export function buildApprovalReactionPendingContentForRequest(params: {
   request: ApprovalRequest;
   nowMs: number;
+  language?: PluginApprovalLanguage | null;
 }): ApprovalReactionPendingContent {
   return buildApprovalReactionPendingContent({
     request: params.request,
     view: buildPendingApprovalView(params.request),
     nowMs: params.nowMs,
+    language: params.language,
   });
 }
 

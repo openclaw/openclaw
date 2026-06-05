@@ -187,6 +187,29 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     });
   });
 
+  it("honors simple plugin approval language for reaction prompts", () => {
+    const payload = buildApprovalReactionPromptPayloadForRequest({
+      request: pluginRequest,
+      nowMs: 1_000,
+      language: "simple",
+    });
+    const content = buildApprovalReactionPendingContentForRequest({
+      request: pluginRequest,
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("Approval needed");
+    expect(payload.text).toContain("Action");
+    expect(payload.text).toContain("React with:");
+    expect(payload.text).toContain(
+      "If buttons are unavailable, reply: /approve plugin:approval-123",
+    );
+    expect(payload.text).not.toContain("Title: Use 1Password");
+    expect(content.manualFallbackPayload.text).toContain("Approval needed");
+    expect(content.manualFallbackPayload.text).not.toContain("Title: Use 1Password");
+  });
+
   it("keeps plugin command actions visible for custom prompt views", () => {
     const payload = buildApprovalPendingPromptPayload({
       request: {

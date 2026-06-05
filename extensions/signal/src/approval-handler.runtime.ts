@@ -15,6 +15,7 @@ import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -77,11 +78,17 @@ function readSignalApprovalRuntimeContext(context: unknown): SignalApprovalRunti
 }
 
 function buildPendingPayload(params: {
+  cfg: OpenClawConfig;
   request: ApprovalRequest;
   nowMs: number;
   view: PendingApprovalView;
 }): SignalPendingDelivery {
-  return buildApprovalReactionPendingContent(params);
+  return buildApprovalReactionPendingContent({
+    request: params.request,
+    view: params.view,
+    nowMs: params.nowMs,
+    language: params.cfg.approvals?.plugin?.language,
+  });
 }
 
 export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
@@ -97,8 +104,8 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     shouldHandle: ({ context }) => Boolean(context),
   },
   presentation: {
-    buildPendingPayload: ({ request, nowMs, view }) =>
-      buildPendingPayload({ request, nowMs, view }),
+    buildPendingPayload: ({ cfg, request, nowMs, view }) =>
+      buildPendingPayload({ cfg, request, nowMs, view }),
     buildResolvedResult: ({ request, resolved, view }) => ({
       kind: "update",
       payload: { text: buildChannelApprovalResolvedText({ request, resolved, view }) },

@@ -12,6 +12,7 @@ import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   registerIMessageApprovalReactionTarget,
@@ -44,6 +45,7 @@ type IMessageFinalPayload = {
 };
 
 function buildPendingPayload(params: {
+  cfg: OpenClawConfig;
   request: ApprovalRequest;
   approvalKind: "exec" | "plugin";
   nowMs: number;
@@ -53,6 +55,7 @@ function buildPendingPayload(params: {
     request: params.request,
     view: params.view as never,
     nowMs: params.nowMs,
+    language: params.cfg.approvals?.plugin?.language,
   });
   return {
     text: pendingContent.reactionPayload.text ?? "",
@@ -104,8 +107,8 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     shouldHandle: ({ context }) => Boolean(context),
   },
   presentation: {
-    buildPendingPayload: ({ request, approvalKind, nowMs, view }) =>
-      buildPendingPayload({ request, approvalKind, nowMs, view }),
+    buildPendingPayload: ({ cfg, request, approvalKind, nowMs, view }) =>
+      buildPendingPayload({ cfg, request, approvalKind, nowMs, view }),
     buildResolvedResult: ({ request, resolved, view }) => ({
       kind: "update",
       payload: { text: buildChannelApprovalResolvedText({ request, resolved, view }) },

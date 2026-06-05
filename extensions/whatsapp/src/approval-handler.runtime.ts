@@ -14,6 +14,7 @@ import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   registerWhatsAppApprovalReactionTarget,
@@ -42,11 +43,17 @@ type WhatsAppFinalPayload = {
 };
 
 function buildPendingPayload(params: {
+  cfg: OpenClawConfig;
   request: ApprovalRequest;
   view: PendingApprovalView;
   nowMs: number;
 }): WhatsAppPendingDelivery {
-  return buildApprovalReactionPendingContent(params);
+  return buildApprovalReactionPendingContent({
+    request: params.request,
+    view: params.view,
+    nowMs: params.nowMs,
+    language: params.cfg.approvals?.plugin?.language,
+  });
 }
 
 export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
@@ -62,8 +69,8 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     shouldHandle: ({ context }) => Boolean(context),
   },
   presentation: {
-    buildPendingPayload: ({ request, nowMs, view }) =>
-      buildPendingPayload({ request, view, nowMs }),
+    buildPendingPayload: ({ cfg, request, nowMs, view }) =>
+      buildPendingPayload({ cfg, request, view, nowMs }),
     buildResolvedResult: ({ request, resolved, view }) => ({
       kind: "update",
       payload: { text: buildChannelApprovalResolvedText({ request, resolved, view }) },
