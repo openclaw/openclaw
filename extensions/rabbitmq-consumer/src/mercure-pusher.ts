@@ -52,14 +52,26 @@ export class MercurePusher {
     return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   }
 
-  /** Push a text chunk (typewriter effect) */
-  async pushText(topic: string, content: string): Promise<boolean> {
-    return this.sendToMercure(topic, { type: "text", content });
+  /**
+   * Push a text chunk (typewriter effect).
+   * `historyId` tags the chunk with its originating chat turn so the frontend
+   * can drop chunks that belong to another turn (stale SSE subscriptions on
+   * the shared per-user topic used to render them into old bubbles).
+   */
+  async pushText(topic: string, content: string, historyId?: number): Promise<boolean> {
+    return this.sendToMercure(topic, {
+      type: "text",
+      content,
+      ...(historyId === undefined ? {} : { historyId }),
+    });
   }
 
-  /** Push a done signal (frontend stops animation) */
-  async pushDone(topic: string): Promise<boolean> {
-    return this.sendToMercure(topic, { type: "done" });
+  /** Push a done signal (frontend stops animation), tagged with the chat turn. */
+  async pushDone(topic: string, historyId?: number): Promise<boolean> {
+    return this.sendToMercure(topic, {
+      type: "done",
+      ...(historyId === undefined ? {} : { historyId }),
+    });
   }
 
   /**
@@ -71,9 +83,13 @@ export class MercurePusher {
     return this.sendToMercure(topic, { type: "report_created", taskId });
   }
 
-  /** Push an error signal */
-  async pushError(topic: string, error: string): Promise<boolean> {
-    return this.sendToMercure(topic, { type: "error", error });
+  /** Push an error signal, tagged with the chat turn. */
+  async pushError(topic: string, error: string, historyId?: number): Promise<boolean> {
+    return this.sendToMercure(topic, {
+      type: "error",
+      error,
+      ...(historyId === undefined ? {} : { historyId }),
+    });
   }
 
   private async sendToMercure(topic: string, data: Record<string, unknown>): Promise<boolean> {
@@ -112,14 +128,16 @@ export class MercurePusher {
 export class StreamingMercurePusher {
   private readonly pusher: MercurePusher;
   private readonly topic: string;
+  private readonly historyId: number | undefined;
   private readonly flushIntervalMs: number;
   private buffer = "";
   private timer: ReturnType<typeof setTimeout> | null = null;
   private fullText = "";
 
-  constructor(pusher: MercurePusher, topic: string, flushIntervalMs = 80) {
+  constructor(pusher: MercurePusher, topic: string, historyId?: number, flushIntervalMs = 80) {
     this.pusher = pusher;
     this.topic = topic;
+    this.historyId = historyId;
     this.flushIntervalMs = flushIntervalMs;
   }
 
@@ -144,21 +162,21 @@ export class StreamingMercurePusher {
     const chunk = this.buffer;
     this.buffer = "";
     if (chunk) {
-      await this.pusher.pushText(this.topic, chunk);
+      await this.pusher.pushText(this.topic, chunk, this.historyId);
     }
   }
 
   /** Signal that the stream is done: flush remaining buffer + push done event. */
   async finish(): Promise<void> {
     await this.flush();
-    await this.pusher.pushDone(this.topic);
+    await this.pusher.pushDone(this.topic, this.historyId);
   }
 
   /** Push an error and finish. */
   async pushError(error: string): Promise<void> {
     this.cancelTimer();
     this.buffer = "";
-    await this.pusher.pushError(this.topic, error);
+    await this.pusher.pushError(this.topic, error, this.historyId);
   }
 
   private scheduleFlush(): void {

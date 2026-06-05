@@ -84,8 +84,8 @@ async function createReportTaskAndRespond(args: {
 
   if (feedCount === 0) {
     const emptyResponse = `该时段（${dateScope.start} ~ ${dateScope.end}）暂无舆情数据，无法生成${period}。`;
-    await mercure.pushText(mercureTopic, emptyResponse);
-    await mercure.pushDone(mercureTopic);
+    await mercure.pushText(mercureTopic, emptyResponse, chatMsg.historyId);
+    await mercure.pushDone(mercureTopic, chatMsg.historyId);
     await historyManager.updateResponse(chatMsg.historyId, emptyResponse);
     logger.info(`[CHAT_PIPELINE] No feed data for user ${chatMsg.userId}, skipping report task`);
     return emptyResponse;
@@ -111,12 +111,12 @@ async function createReportTaskAndRespond(args: {
   // The report itself is generated asynchronously by the report-generator service.
   const countHint = feedCount > 0 ? `已检索到 ${feedCount} 条数据，` : "";
   const reportResponse = `${countHint}${period}报告已创建，正在生成中...`;
-  await mercure.pushText(mercureTopic, reportResponse);
+  await mercure.pushText(mercureTopic, reportResponse, chatMsg.historyId);
   // Let the frontend open a report card for this taskId right away; progress
   // (`report_text`) and the final `report` event will target the same card.
   await mercure.pushReportCreated(mercureTopic, taskId);
   // Unlock the frontend; the report arrives later as a separate "report" event.
-  await mercure.pushDone(mercureTopic);
+  await mercure.pushDone(mercureTopic, chatMsg.historyId);
   await historyManager.updateResponse(chatMsg.historyId, reportResponse);
 
   // Notify the report-generator so it starts immediately instead of waiting
@@ -261,8 +261,14 @@ export async function processChatMessage(
     const agentId = `rabbitmq-${userId}`;
     const sessionKey = `agent:${agentId}:rabbitmq:${userId}:${sessionId}`;
 
-    // Step 3: Set up streaming pusher + subscribe to agent events
-    streamPusherCtx.streamPusher = new StreamingMercurePusher(mercure, mercureTopic);
+    // Step 3: Set up streaming pusher + subscribe to agent events.
+    // Tag every push with this turn's historyId so stale frontend
+    // subscriptions on the shared per-user topic can drop foreign chunks.
+    streamPusherCtx.streamPusher = new StreamingMercurePusher(
+      mercure,
+      mercureTopic,
+      chatMsg.historyId,
+    );
 
     // Only forward "assistant" deltas from THIS session. The agent runtime
     // attaches sessionKey to every event of a run; without that filter, any
@@ -288,7 +294,7 @@ export async function processChatMessage(
       // out waiting for the first token (cold-start + model latency can be long).
       // Fire-and-forget: a `text` chunk, not a `done` signal, so it just prefixes
       // the streamed reply and never blocks the pipeline.
-      void mercure.pushText(mercureTopic, "正在处理，请稍候…");
+      void mercure.pushText(mercureTopic, "正在处理，请稍候…", chatMsg.historyId);
 
       const runResult = await runtime.subagent.run({
         sessionKey,

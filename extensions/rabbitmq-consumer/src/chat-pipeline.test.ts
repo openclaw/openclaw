@@ -166,6 +166,44 @@ describe("processChatMessage", () => {
     expect(updateResponse).toHaveBeenCalledWith(1, "hello");
   });
 
+  it("tags every chat Mercure push with the originating historyId", async () => {
+    // Regression: text/done events carried no turn identifier, so a stale SSE
+    // subscription on the shared per-user topic rendered the next turn's
+    // chunks into an old chat bubble ("output before the question").
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: (listener) => {
+        listener?.({
+          runId: "r1",
+          seq: 1,
+          stream: "assistant",
+          ts: 1,
+          sessionKey: SESSION_KEY,
+          data: { delta: "hello" },
+        });
+      },
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const payloads = fetchMock.mock.calls.map((call) => {
+      // The pusher always sends a URL-encoded string body.
+      const init = call[1] as { body?: string };
+      const params = new URLSearchParams(init.body ?? "");
+      return JSON.parse(params.get("data") ?? "{}") as Record<string, unknown>;
+    });
+
+    const textEvents = payloads.filter((p) => p.type === "text");
+    const doneEvents = payloads.filter((p) => p.type === "done");
+    expect(textEvents.length).toBeGreaterThan(0);
+    expect(doneEvents).toHaveLength(1);
+    for (const evt of [...textEvents, ...doneEvents]) {
+      expect(evt.historyId).toBe(1);
+    }
+  });
+
   it("prefers the latest assistant session message as the canonical response", async () => {
     const runtime = createRuntimeMock({
       workspaceDir,
