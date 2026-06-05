@@ -20,6 +20,7 @@ let currentPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown
 let loadPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let readFileMock: ReturnType<typeof vi.fn<(pathname: string) => Promise<string>>>;
 let buildAgentModelCatalogCacheKeyMock: ReturnType<typeof vi.fn>;
+let buildModelsJsonSourceFingerprintMock: ReturnType<typeof vi.fn>;
 let readCachedAgentModelCatalogMock: ReturnType<typeof vi.fn>;
 let writeCachedAgentModelCatalogMock: ReturnType<typeof vi.fn>;
 
@@ -246,10 +247,19 @@ describe("loadModelCatalog", () => {
       readFile: readFileMock,
     }));
     ensureOpenClawModelsJsonMock = vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false });
+    buildModelsJsonSourceFingerprintMock = vi.fn().mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      fingerprint: "source-fingerprint",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
     vi.doMock("./models-config.js", () => ({
+      buildModelsJsonSourceFingerprint: buildModelsJsonSourceFingerprintMock,
       ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
     }));
-    buildAgentModelCatalogCacheKeyMock = vi.fn(() => "test-cache-key");
+    buildAgentModelCatalogCacheKeyMock = vi.fn(
+      (input: { cacheScope?: { sourceFingerprint?: string } }) =>
+        `test-cache-key:${input.cacheScope?.sourceFingerprint ?? "none"}`,
+    );
     readCachedAgentModelCatalogMock = vi.fn(() => undefined);
     writeCachedAgentModelCatalogMock = vi.fn();
     vi.doMock("./model-catalog-state-cache.js", () => ({
@@ -324,6 +334,12 @@ describe("loadModelCatalog", () => {
     currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     loadPluginMetadataSnapshotMock.mockReset();
     loadPluginMetadataSnapshotMock.mockReturnValue(emptyPluginMetadataSnapshot());
+    buildModelsJsonSourceFingerprintMock.mockClear();
+    buildModelsJsonSourceFingerprintMock.mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      fingerprint: "source-fingerprint",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
     buildAgentModelCatalogCacheKeyMock.mockClear();
     readCachedAgentModelCatalogMock.mockReset();
     readCachedAgentModelCatalogMock.mockReturnValue(undefined);
@@ -414,7 +430,7 @@ describe("loadModelCatalog", () => {
     expect(result).toEqual(cached);
     expect(readCachedAgentModelCatalogMock).toHaveBeenCalledWith({
       agentDir: "/tmp/openclaw",
-      catalogKey: "test-cache-key",
+      catalogKey: "test-cache-key:source-fingerprint",
     });
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(importAgentDiscoveryModule).not.toHaveBeenCalled();
@@ -433,7 +449,7 @@ describe("loadModelCatalog", () => {
     expect(readCachedAgentModelCatalogMock).not.toHaveBeenCalled();
     expect(writeCachedAgentModelCatalogMock).toHaveBeenCalledWith({
       agentDir: "/tmp/openclaw",
-      catalogKey: "test-cache-key",
+      catalogKey: "test-cache-key:source-fingerprint",
       entries: result,
     });
   });
@@ -446,8 +462,46 @@ describe("loadModelCatalog", () => {
     expect(result).toEqual([{ id: "runtime-fast", name: "Runtime Fast", provider: "openai" }]);
     expect(writeCachedAgentModelCatalogMock).toHaveBeenCalledWith({
       agentDir: "/tmp/openclaw",
-      catalogKey: "test-cache-key",
+      catalogKey: "test-cache-key:source-fingerprint",
       entries: result,
+    });
+  });
+
+  it("misses the state cached catalog when source freshness changes", async () => {
+    buildModelsJsonSourceFingerprintMock
+      .mockResolvedValueOnce({
+        agentDir: "/tmp/openclaw",
+        fingerprint: "old-source",
+        workspaceDir: "/tmp/openclaw-workspace",
+      })
+      .mockResolvedValueOnce({
+        agentDir: "/tmp/openclaw",
+        fingerprint: "new-source",
+        workspaceDir: "/tmp/openclaw-workspace",
+      });
+    readCachedAgentModelCatalogMock.mockImplementation(({ catalogKey }: { catalogKey: string }) =>
+      catalogKey.endsWith("old-source")
+        ? [{ id: "cached-stale", name: "Cached Stale", provider: "openai" }]
+        : undefined,
+    );
+    mockAgentDiscoveryModels([{ id: "fresh-fast", name: "Fresh Fast", provider: "openai" }]);
+
+    await expect(loadModelCatalog({ config: {} as OpenClawConfig })).resolves.toEqual([
+      { id: "cached-stale", name: "Cached Stale", provider: "openai" },
+    ]);
+    resetModelCatalogCacheForTest();
+    mockAgentDiscoveryModels([{ id: "fresh-fast", name: "Fresh Fast", provider: "openai" }]);
+    await expect(loadModelCatalog({ config: {} as OpenClawConfig })).resolves.toEqual([
+      { id: "fresh-fast", name: "Fresh Fast", provider: "openai" },
+    ]);
+
+    expect(readCachedAgentModelCatalogMock).toHaveBeenNthCalledWith(1, {
+      agentDir: "/tmp/openclaw",
+      catalogKey: "test-cache-key:old-source",
+    });
+    expect(readCachedAgentModelCatalogMock).toHaveBeenNthCalledWith(2, {
+      agentDir: "/tmp/openclaw",
+      catalogKey: "test-cache-key:new-source",
     });
   });
 

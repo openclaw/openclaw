@@ -40,7 +40,7 @@ import {
   buildConfiguredModelCatalog,
   hasConfiguredProviderModelRows,
 } from "./model-selection-shared.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { buildModelsJsonSourceFingerprint, ensureOpenClawModelsJson } from "./models-config.js";
 import {
   filterGeneratedPluginModelCatalogProviders,
   listPluginModelCatalogFiles,
@@ -367,10 +367,18 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
     manifestPlugins ??= getMetadataSnapshot().plugins;
     return manifestPlugins;
   };
+  const sourceFingerprint = await buildModelsJsonSourceFingerprint(cfg, agentDir, {
+    pluginMetadataSnapshot: params?.metadataSnapshot,
+    workspaceDir,
+  });
   const cached = readCachedAgentModelCatalog({
     agentDir,
     catalogKey: buildAgentModelCatalogCacheKey({
       agentDir,
+      cacheScope: {
+        source: "load-model-catalog",
+        sourceFingerprint: sourceFingerprint.fingerprint,
+      },
       config: cfg,
       workspaceDir,
     }),
@@ -540,8 +548,16 @@ export async function loadModelCatalog(params?: {
         return manifestPlugins;
       };
       const agentDir = resolveDefaultAgentDir(cfg);
+      const sourceFingerprint = await buildModelsJsonSourceFingerprint(cfg, agentDir, {
+        pluginMetadataSnapshot: params?.metadataSnapshot,
+        workspaceDir,
+      });
       const catalogKey = buildAgentModelCatalogCacheKey({
         agentDir,
+        cacheScope: {
+          source: "load-model-catalog",
+          sourceFingerprint: sourceFingerprint.fingerprint,
+        },
         config: cfg,
         workspaceDir,
       });

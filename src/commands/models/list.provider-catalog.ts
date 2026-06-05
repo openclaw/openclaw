@@ -7,6 +7,7 @@ import {
   readCachedAgentModelCatalog,
   writeCachedAgentModelCatalog,
 } from "../../agents/model-catalog-state-cache.js";
+import { buildModelsJsonSourceFingerprint } from "../../agents/models-config.js";
 import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
@@ -350,12 +351,19 @@ export async function loadProviderCatalogModelsForList(params: {
     return [];
   }
 
+  const sourceFingerprint = await buildModelsJsonSourceFingerprint(params.cfg, params.agentDir, {
+    pluginMetadataSnapshot: params.metadataSnapshot,
+    providerDiscoveryEntriesOnly: params.staticOnly === true,
+    providerDiscoveryProviderIds: scopedPluginIds,
+    workspaceDir: params.metadataSnapshot?.workspaceDir,
+  });
   const catalogKey = buildAgentModelCatalogCacheKey({
     agentDir: params.agentDir,
     cacheScope: {
       source: "models-list-provider-catalog",
       providerFilter,
       scopedPluginIds,
+      sourceFingerprint: sourceFingerprint.fingerprint,
       staticOnly: params.staticOnly === true,
     },
     config: params.cfg,

@@ -8,6 +8,7 @@ import {
 
 const providerDiscoveryMocks = vi.hoisted(() => ({
   buildAgentModelCatalogCacheKey: vi.fn(),
+  buildModelsJsonSourceFingerprint: vi.fn(),
   loadPluginRegistrySnapshotWithMetadata: vi.fn(),
   readCachedAgentModelCatalog: vi.fn(),
   resolvePluginContributionOwners: vi.fn(),
@@ -23,6 +24,10 @@ vi.mock("../../agents/model-catalog-state-cache.js", () => ({
   buildAgentModelCatalogCacheKey: providerDiscoveryMocks.buildAgentModelCatalogCacheKey,
   readCachedAgentModelCatalog: providerDiscoveryMocks.readCachedAgentModelCatalog,
   writeCachedAgentModelCatalog: providerDiscoveryMocks.writeCachedAgentModelCatalog,
+}));
+
+vi.mock("../../agents/models-config.js", () => ({
+  buildModelsJsonSourceFingerprint: providerDiscoveryMocks.buildModelsJsonSourceFingerprint,
 }));
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
@@ -206,7 +211,15 @@ function firstDiscoveryRequest(): {
 describe("loadProviderCatalogModelsForList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    providerDiscoveryMocks.buildAgentModelCatalogCacheKey.mockReturnValue("provider-cache-key");
+    providerDiscoveryMocks.buildAgentModelCatalogCacheKey.mockImplementation(
+      (input: { cacheScope?: { sourceFingerprint?: string } }) =>
+        `provider-cache-key:${input.cacheScope?.sourceFingerprint ?? "none"}`,
+    );
+    providerDiscoveryMocks.buildModelsJsonSourceFingerprint.mockResolvedValue({
+      agentDir: baseParams.agentDir,
+      fingerprint: "provider-source-fingerprint",
+      workspaceDir: "/tmp/provider-workspace",
+    });
     providerDiscoveryMocks.readCachedAgentModelCatalog.mockReturnValue(undefined);
     providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
       source: "persisted",
@@ -281,7 +294,7 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["moonshot/cached-kimi"]);
     expect(providerDiscoveryMocks.readCachedAgentModelCatalog).toHaveBeenCalledWith({
       agentDir: baseParams.agentDir,
-      catalogKey: "provider-cache-key",
+      catalogKey: "provider-cache-key:provider-source-fingerprint",
     });
     expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
     expect(providerDiscoveryMocks.writeCachedAgentModelCatalog).not.toHaveBeenCalled();
@@ -296,8 +309,44 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["moonshot/kimi-k2.6"]);
     expect(providerDiscoveryMocks.writeCachedAgentModelCatalog).toHaveBeenCalledWith({
       agentDir: baseParams.agentDir,
-      catalogKey: "provider-cache-key",
+      catalogKey: "provider-cache-key:provider-source-fingerprint",
       entries: rows,
+    });
+  });
+
+  it("misses cached provider catalog rows when source freshness changes", async () => {
+    providerDiscoveryMocks.buildModelsJsonSourceFingerprint
+      .mockResolvedValueOnce({
+        agentDir: baseParams.agentDir,
+        fingerprint: "old-provider-source",
+        workspaceDir: "/tmp/provider-workspace",
+      })
+      .mockResolvedValueOnce({
+        agentDir: baseParams.agentDir,
+        fingerprint: "new-provider-source",
+        workspaceDir: "/tmp/provider-workspace",
+      });
+    providerDiscoveryMocks.readCachedAgentModelCatalog.mockImplementation(
+      ({ catalogKey }: { catalogKey: string }) =>
+        catalogKey.endsWith("old-provider-source")
+          ? [{ provider: "moonshot", id: "cached-stale", name: "Cached Stale" }]
+          : undefined,
+    );
+
+    await expect(loadProviderCatalogModelsForList({ ...baseParams })).resolves.toEqual([
+      { provider: "moonshot", id: "cached-stale", name: "Cached Stale" },
+    ]);
+    await expect(loadProviderCatalogModelsForList({ ...baseParams })).resolves.toEqual([
+      expect.objectContaining({ provider: "moonshot", id: "kimi-k2.6" }),
+    ]);
+
+    expect(providerDiscoveryMocks.readCachedAgentModelCatalog).toHaveBeenNthCalledWith(1, {
+      agentDir: baseParams.agentDir,
+      catalogKey: "provider-cache-key:old-provider-source",
+    });
+    expect(providerDiscoveryMocks.readCachedAgentModelCatalog).toHaveBeenNthCalledWith(2, {
+      agentDir: baseParams.agentDir,
+      catalogKey: "provider-cache-key:new-provider-source",
     });
   });
 

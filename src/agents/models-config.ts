@@ -270,6 +270,58 @@ function resolveModelsConfigInput(config?: OpenClawConfig): {
   };
 }
 
+/** Builds the canonical source freshness fingerprint for generated model catalogs. */
+export async function buildModelsJsonSourceFingerprint(
+  config?: OpenClawConfig,
+  agentDirOverride?: string,
+  options: {
+    pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+    workspaceDir?: string;
+    providerDiscoveryProviderIds?: readonly string[];
+    providerDiscoveryTimeoutMs?: number;
+    providerDiscoveryEntriesOnly?: boolean;
+  } = {},
+): Promise<{ agentDir: string; fingerprint: string; workspaceDir?: string }> {
+  const resolved = resolveModelsConfigInput(config);
+  const cfg = resolved.config;
+  const workspaceDir =
+    options.workspaceDir ??
+    (agentDirOverride?.trim()
+      ? undefined
+      : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
+  const providerScopedDiscovery = Boolean(options.providerDiscoveryProviderIds?.length);
+  const pluginMetadataSnapshot =
+    options.pluginMetadataSnapshot ??
+    resolvePluginMetadataSnapshot({
+      config: cfg,
+      env: createConfigRuntimeEnv(cfg),
+      ...(workspaceDir ? { workspaceDir } : {}),
+      ...(providerScopedDiscovery ? { preferPersisted: false } : {}),
+    });
+  const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
+  const fingerprint = await buildModelsJsonFingerprint({
+    config: cfg,
+    sourceConfigForSecrets: resolved.sourceConfigForSecrets,
+    agentDir,
+    ...(workspaceDir ? { workspaceDir } : {}),
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    ...(options.providerDiscoveryProviderIds
+      ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
+      : {}),
+    ...(options.providerDiscoveryTimeoutMs !== undefined
+      ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
+      : {}),
+    ...(options.providerDiscoveryEntriesOnly === true
+      ? { providerDiscoveryEntriesOnly: true }
+      : {}),
+  });
+  return {
+    agentDir,
+    fingerprint,
+    ...(workspaceDir ? { workspaceDir } : {}),
+  };
+}
+
 async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise<T>): Promise<T> {
   const prior = MODELS_JSON_STATE.writeLocks.get(targetPath) ?? Promise.resolve();
   let release: () => void = () => {};
@@ -303,38 +355,23 @@ export async function ensureOpenClawModelsJson(
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const resolved = resolveModelsConfigInput(config);
   const cfg = resolved.config;
-  const workspaceDir =
-    options.workspaceDir ??
-    (agentDirOverride?.trim()
-      ? undefined
-      : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
-  const providerScopedDiscovery = Boolean(options.providerDiscoveryProviderIds?.length);
+  const sourceFingerprint = await buildModelsJsonSourceFingerprint(
+    config,
+    agentDirOverride,
+    options,
+  );
+  const workspaceDir = sourceFingerprint.workspaceDir;
   const pluginMetadataSnapshot =
     options.pluginMetadataSnapshot ??
     resolvePluginMetadataSnapshot({
       config: cfg,
       env: createConfigRuntimeEnv(cfg),
       ...(workspaceDir ? { workspaceDir } : {}),
-      ...(providerScopedDiscovery ? { preferPersisted: false } : {}),
+      ...(options.providerDiscoveryProviderIds?.length ? { preferPersisted: false } : {}),
     });
-  const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
+  const agentDir = sourceFingerprint.agentDir;
   const targetPath = path.join(agentDir, "models.json");
-  const fingerprint = await buildModelsJsonFingerprint({
-    config: cfg,
-    sourceConfigForSecrets: resolved.sourceConfigForSecrets,
-    agentDir,
-    ...(workspaceDir ? { workspaceDir } : {}),
-    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-    ...(options.providerDiscoveryProviderIds
-      ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
-      : {}),
-    ...(options.providerDiscoveryTimeoutMs !== undefined
-      ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
-      : {}),
-    ...(options.providerDiscoveryEntriesOnly === true
-      ? { providerDiscoveryEntriesOnly: true }
-      : {}),
-  });
+  const fingerprint = sourceFingerprint.fingerprint;
   const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
   const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
   if (cached) {
