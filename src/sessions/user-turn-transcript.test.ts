@@ -293,6 +293,66 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
+    it("persists sender metadata as __openclaw envelope", async () => {
+      const dir = createTempDir("openclaw-user-turn-append-sender-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello from group",
+          senderId: "8489979671",
+          senderName: "Ram Shenoy",
+          senderUsername: "ram_s",
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).toMatchObject({
+        role: "user",
+        content: "hello from group",
+        __openclaw: {
+          senderId: "8489979671",
+          senderName: "Ram Shenoy",
+          senderUsername: "ram_s",
+        },
+      });
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "hello from group",
+          __openclaw: {
+            senderId: "8489979671",
+            senderName: "Ram Shenoy",
+            senderUsername: "ram_s",
+          },
+        }),
+      ]);
+    });
+
+    it("omits __openclaw when no sender metadata is provided", async () => {
+      const dir = createTempDir("openclaw-user-turn-append-nosender-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello without sender",
+          senderId: "",
+          senderName: null,
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).not.toHaveProperty("__openclaw");
+    });
+
     it("uses inline update mode by default", async () => {
       const dir = createTempDir("openclaw-user-turn-append-inline-");
       const transcriptPath = path.join(dir, "session.jsonl");
