@@ -74,7 +74,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
   it("propagates attempt prep stages to the run meta", async () => {
     const prepStages = {
       totalMs: 12,
-      stages: [{ name: "system-prompt", elapsedMs: 12, atMs: 12 }],
+      stages: [{ name: "system-prompt", durationMs: 12, elapsedMs: 12 }],
     };
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
