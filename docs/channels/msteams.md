@@ -489,6 +489,39 @@ Requirements:
 
 The action is gated by `channels.msteams.actions.memberInfo` (default: enabled when Graph credentials are available).
 
+## Sender identity enrichment
+
+When `channels.msteams.senderIdentity.enabled` is set to `true`, OpenClaw fetches the sender's Azure AD profile from Microsoft Graph on each inbound message and passes it as untrusted structured metadata to the agent. This gives agents access to display name, email, department, and job title for persona-aware routing and responses.
+
+The profile data is delivered through the same `UntrustedStructuredContext` path used by other channels (Discord channel metadata, WhatsApp contacts) and is not treated as trusted prompt authority.
+
+**Requirements:**
+
+- `User.Read.All` Microsoft Graph **Application** permission with admin consent
+- Not supported when `channels.msteams.cloud` is set to `China`
+
+**Configuration:**
+
+```json
+{
+  "channels": {
+    "msteams": {
+      "senderIdentity": {
+        "enabled": true,
+        "cacheTtlMs": 3600000
+      }
+    }
+  }
+}
+```
+
+| Key                         | Type    | Default            | Description                             |
+| --------------------------- | ------- | ------------------ | --------------------------------------- |
+| `senderIdentity.enabled`    | boolean | `false`            | Enable AAD sender identity enrichment   |
+| `senderIdentity.cacheTtlMs` | integer | `3600000` (1 hour) | In-process profile cache TTL per tenant |
+
+**Privacy:** Profile fields are passed as untrusted metadata and are not logged at runtime. Operators should review their organization's data handling policies before enabling this feature.
+
 ## History context
 
 - `channels.msteams.historyLimit` controls how many recent channel/group messages are wrapped into the prompt.
@@ -629,6 +662,7 @@ Adds:
 - Downloading hosted contents (images pasted into messages).
 - Downloading file attachments stored in SharePoint/OneDrive.
 - Reading channel/chat message history via Graph.
+- [Sender identity enrichment](#sender-identity-enrichment) (`User.Read.All`).
 
 ### RSC vs Graph API
 
