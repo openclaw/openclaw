@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
+// Npm Update Smoke script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
@@ -22,6 +23,7 @@ import {
   say,
   shellQuote,
   startHostServer,
+  withProgressOnStderr,
   writeSummaryMarkdown,
   writeJson,
   type HostServer,
@@ -411,7 +413,7 @@ function parseOpenClawPackageSpecVersion(spec: string): string {
   return resolveOpenClawRegistryVersion(value) || "";
 }
 
-class NpmUpdateSmoke {
+export class NpmUpdateSmoke {
   private auth: ProviderAuth;
   private windowsAuth: ProviderAuth;
   private runDir = "";
@@ -423,7 +425,7 @@ class NpmUpdateSmoke {
   private harnessCheckoutVersion = "";
   private harnessTargetFamily = "";
   private hostIp = "";
-  private server: HostServer | null = null;
+  protected server: HostServer | null = null;
   private artifact: PackageArtifact | null = null;
   private freshTargetSpec = "";
   private startedAt = Date.now();
@@ -455,49 +457,57 @@ class NpmUpdateSmoke {
 
   async run(): Promise<void> {
     this.startedAt = Date.now();
-    this.runDir = await makeTempDir("openclaw-parallels-npm-update.");
-    this.tgzDir = await makeTempDir("openclaw-parallels-npm-update-tgz.");
+    this.runDir = await this.makeRunTempDir("openclaw-parallels-npm-update.");
+    this.tgzDir = await this.makeRunTempDir("openclaw-parallels-npm-update-tgz.");
     try {
-      this.latestVersion = resolveLatestVersion();
-      this.packageSpec = this.options.packageSpec || `openclaw@${this.latestVersion}`;
-      this.currentHead = run("git", ["rev-parse", "HEAD"], { quiet: true }).stdout.trim();
-      this.currentHeadShort = run("git", ["rev-parse", "--short=7", "HEAD"], {
-        quiet: true,
-      }).stdout.trim();
-      this.harnessCheckoutVersion = readHarnessCheckoutVersion();
-      this.hostIp = resolveHostIp(this.options.hostIp ?? "");
-      this.configurePublishedTargets();
-      this.assertPublishedTargetMatchesHarnessCheckout();
-
-      if (this.options.platforms.has("linux")) {
-        this.linuxVm = resolveUbuntuVmName(linuxVmDefault);
-      }
-      this.preflightRegistryUpdateTarget();
-
-      say(`Run fresh npm baseline: ${this.packageSpec}`);
-      say(`Platforms: ${[...this.options.platforms].join(",")}`);
-      say(`Run dir: ${this.runDir}`);
-      await this.runFreshBaselines();
-
-      await this.prepareUpdateTarget();
-      say(`Run same-guest openclaw update to ${this.updateTargetEffective}`);
-      await this.runSameGuestUpdates();
-
-      if (this.freshTargetSpec) {
-        say(`Run fresh target npm install: ${this.freshTargetSpec}`);
-        await this.runFreshTargetInstalls();
-      }
-
-      const summaryPath = await this.writeSummary();
-      if (this.options.json) {
-        process.stdout.write(await readFile(summaryPath, "utf8"));
-      } else {
-        say(`Run dir: ${this.runDir}`);
-        process.stdout.write(await readFile(summaryPath, "utf8"));
-      }
+      await this.runSteps();
     } finally {
       await this.server?.stop().catch(() => undefined);
       await rm(this.tgzDir, { force: true, recursive: true }).catch(() => undefined);
+    }
+  }
+
+  protected async makeRunTempDir(prefix: string): Promise<string> {
+    return await makeTempDir(prefix);
+  }
+
+  protected async runSteps(): Promise<void> {
+    this.latestVersion = resolveLatestVersion();
+    this.packageSpec = this.options.packageSpec || `openclaw@${this.latestVersion}`;
+    this.currentHead = run("git", ["rev-parse", "HEAD"], { quiet: true }).stdout.trim();
+    this.currentHeadShort = run("git", ["rev-parse", "--short=7", "HEAD"], {
+      quiet: true,
+    }).stdout.trim();
+    this.harnessCheckoutVersion = readHarnessCheckoutVersion();
+    this.hostIp = resolveHostIp(this.options.hostIp ?? "");
+    this.configurePublishedTargets();
+    this.assertPublishedTargetMatchesHarnessCheckout();
+
+    if (this.options.platforms.has("linux")) {
+      this.linuxVm = resolveUbuntuVmName(linuxVmDefault);
+    }
+    this.preflightRegistryUpdateTarget();
+
+    say(`Run fresh npm baseline: ${this.packageSpec}`);
+    say(`Platforms: ${[...this.options.platforms].join(",")}`);
+    say(`Run dir: ${this.runDir}`);
+    await this.runFreshBaselines();
+
+    await this.prepareUpdateTarget();
+    say(`Run same-guest openclaw update to ${this.updateTargetEffective}`);
+    await this.runSameGuestUpdates();
+
+    if (this.freshTargetSpec) {
+      say(`Run fresh target npm install: ${this.freshTargetSpec}`);
+      await this.runFreshTargetInstalls();
+    }
+
+    const summaryPath = await this.writeSummary();
+    if (this.options.json) {
+      process.stdout.write(await readFile(summaryPath, "utf8"));
+    } else {
+      say(`Run dir: ${this.runDir}`);
+      process.stdout.write(await readFile(summaryPath, "utf8"));
     }
   }
 
@@ -1299,7 +1309,10 @@ class NpmUpdateSmoke {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  await new NpmUpdateSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
+  const options = parseArgs(process.argv.slice(2));
+  const runSmoke = () => new NpmUpdateSmoke(options).run();
+  const runPromise = options.json ? withProgressOnStderr(runSmoke) : runSmoke();
+  await runPromise.catch((error: unknown) => {
     die(error instanceof Error ? error.message : String(error));
   });
 }

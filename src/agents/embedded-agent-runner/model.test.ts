@@ -1,3 +1,4 @@
+// Broad coverage for embedded runner model resolution behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
 } from "../auth-profiles.js";
 import {
   PLUGIN_MODEL_CATALOG_FILE,
@@ -191,6 +193,8 @@ afterEach(() => {
 });
 
 function createRuntimeHooks() {
+  // Runtime hooks emulate provider plugin model discovery, transport
+  // normalization, and OpenRouter capability loading without plugin imports.
   return createProviderRuntimeTestMock({
     handledDynamicProviders: [
       "openrouter",
@@ -214,6 +218,8 @@ function resolveModelForTest(
   agentDir?: string,
   cfg?: OpenClawConfig,
 ) {
+  // Most tests use fixed auth storage to keep assertions focused on model
+  // resolution rather than auth discovery.
   const resolvedAgentDir = agentDir ?? "/tmp/agent";
   return resolveModel(provider, modelId, agentDir, cfg, {
     authStorage: { mocked: true } as never,
@@ -355,9 +361,13 @@ describe("resolveModel", () => {
     const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
       runtimeHooks: createRuntimeHooks(),
     });
-    fs.writeFileSync(
-      path.join(defaultAgentDir, "auth-profiles.json"),
-      JSON.stringify({ version: 1, profiles: { openai: { type: "api_key", key: "one" } } }),
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: { "openai:default": { type: "api_key", provider: "openai", key: "one" } },
+      },
+      defaultAgentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
       runtimeHooks: createRuntimeHooks(),
@@ -419,9 +429,13 @@ describe("resolveModel", () => {
     const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
       runtimeHooks: createRuntimeHooks(),
     });
-    fs.writeFileSync(
-      path.join(mainAgentDir, "auth-profiles.json"),
-      JSON.stringify({ version: 1, profiles: { openai: { type: "api_key", key: "one" } } }),
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: { "openai:default": { type: "api_key", provider: "openai", key: "one" } },
+      },
+      mainAgentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
       runtimeHooks: createRuntimeHooks(),
@@ -1008,6 +1022,27 @@ describe("resolveModel", () => {
     expect(model.id).toBe("gemini-2.5-flash-lite");
     expect(model.api).toBe("google-generative-ai");
     expect(model.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+  });
+
+  it("defaults baseUrl-only Google Vertex fallback models to native Vertex transport", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "google-vertex": {
+            baseUrl: "https://aiplatform.googleapis.com",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("google-vertex", "gemini-2.5-flash", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model.provider).toBe("google-vertex");
+    expect(model.id).toBe("gemini-2.5-flash");
+    expect(model.api).toBe("google-vertex");
+    expect(model.baseUrl).toBe("https://aiplatform.googleapis.com");
   });
 
   it("uses bundled static metadata for configured provider fallback token limits", () => {

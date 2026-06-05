@@ -1,7 +1,9 @@
+// Covers API-key discovery from environment and key files.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 
 const envKeys = [
   "GOOGLE_APPLICATION_CREDENTIALS",
@@ -12,28 +14,17 @@ const envKeys = [
   "MOONSHOT_API_KEY",
 ] as const;
 
-const previousEnv = new Map<string, string | undefined>();
+const originalEnv = captureEnv([...envKeys]);
 const tempDirs: string[] = [];
 
 afterEach(async () => {
   vi.unstubAllGlobals();
-  for (const key of envKeys) {
-    const value = previousEnv.get(key);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  previousEnv.clear();
+  originalEnv.restore();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   vi.resetModules();
 });
 
 function setEnv(key: (typeof envKeys)[number], value: string): void {
-  if (!previousEnv.has(key)) {
-    previousEnv.set(key, process.env[key]);
-  }
   process.env[key] = value;
 }
 

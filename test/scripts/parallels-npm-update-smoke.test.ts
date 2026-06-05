@@ -1,3 +1,4 @@
+// Parallels Npm Update Smoke tests cover parallels npm update smoke script behavior.
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,8 +11,11 @@ import {
 } from "../../scripts/e2e/parallels/npm-update-scripts.ts";
 import {
   freshLaneTimeoutMs,
+  NpmUpdateSmoke,
   spawnLoggedCommand,
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
+import type { HostServer, Platform } from "../../scripts/e2e/parallels/types.ts";
+import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
 const GUEST_TRANSPORTS_PATH = "scripts/e2e/parallels/guest-transports.ts";
@@ -65,12 +69,43 @@ afterEach(() => {
 });
 
 describe("parallels npm update smoke", () => {
-  it("does not leave guard/server children attached to the wrapper", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
+  it("stops the host artifact server when the wrapper fails mid-run", async () => {
+    let stopCalls = 0;
+    const server: HostServer = {
+      hostIp: "127.0.0.1",
+      port: 48123,
+      stop: async () => {
+        stopCalls += 1;
+      },
+      urlFor: (filePath) => `http://127.0.0.1:48123/${path.basename(filePath)}`,
+    };
 
-    expect(script).toContain("spawnLogged");
-    expect(script).toContain('child.on("close"');
-    expect(script).toContain("await this.server?.stop()");
+    class FailingNpmUpdateSmoke extends NpmUpdateSmoke {
+      protected override async makeRunTempDir(prefix: string): Promise<string> {
+        void prefix;
+        return makeTempDir();
+      }
+
+      protected override async runSteps(): Promise<void> {
+        this.server = server;
+        throw new Error("forced wrapper failure");
+      }
+    }
+
+    await withEnvAsync({ OPENAI_API_KEY: "test-key" }, async () => {
+      const smoke = new FailingNpmUpdateSmoke({
+        ...TEST_AUTH,
+        json: false,
+        packageSpec: "openclaw@latest",
+        platforms: new Set<Platform>(["linux"]),
+        provider: "openai",
+        updateTarget: "local-main",
+      });
+
+      await expect(smoke.run()).rejects.toThrow("forced wrapper failure");
+    });
+
+    expect(stopCalls).toBe(1);
   });
 
   it("has a one-command beta validation mode with fresh target coverage", () => {
@@ -148,22 +183,15 @@ describe("parallels npm update smoke", () => {
   });
 
   it("sets platform-aware fresh lane timeouts", () => {
-    const previous = process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S;
-    try {
-      delete process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S;
+    withEnv({ OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: undefined }, () => {
       expect(freshLaneTimeoutMs("macos")).toBe(75 * 60 * 1000);
       expect(freshLaneTimeoutMs("linux")).toBe(75 * 60 * 1000);
       expect(freshLaneTimeoutMs("windows")).toBe(90 * 60 * 1000);
+    });
 
-      process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S = "3";
+    withEnv({ OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: "3" }, () => {
       expect(freshLaneTimeoutMs("macos")).toBe(3000);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S;
-      } else {
-        process.env.OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S = previous;
-      }
-    }
+    });
   });
 
   it.runIf(process.platform !== "win32")("times out fresh lane process groups", async () => {

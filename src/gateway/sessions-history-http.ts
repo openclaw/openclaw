@@ -1,6 +1,6 @@
-import fs from "node:fs";
+// Gateway HTTP session history endpoint.
+// Serves JSON and SSE history snapshots backed by transcript files.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -11,6 +11,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.js";
 import {
   sendInvalidRequest,
   sendJson,
@@ -24,12 +25,12 @@ import {
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
 import {
   buildSessionHistorySnapshot,
   resolveSessionHistoryTailReadOptions,
   SessionHistorySseState,
 } from "./session-history-state.js";
+import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesAsync,
@@ -77,24 +78,12 @@ function resolveLimit(req: IncomingMessage): number | undefined {
   return Math.min(MAX_SESSION_HISTORY_LIMIT, Math.max(1, value));
 }
 
-function canonicalizePath(value: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  const resolved = path.resolve(trimmed);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
-}
-
 function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+/** Handle `/sessions/:sessionKey/history` JSON/SSE requests. */
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -198,7 +187,7 @@ export async function handleSessionHistoryHttpRequest(
           entry.sessionFile,
           target.agentId,
         )
-          .map((candidate) => canonicalizePath(candidate))
+          .map((candidate) => resolveTranscriptPathForComparison(candidate))
           .filter((candidate): candidate is string => typeof candidate === "string"),
       )
     : new Set<string>();
@@ -306,7 +295,7 @@ export async function handleSessionHistoryHttpRequest(
     if (!entry?.sessionId) {
       return;
     }
-    const updatePath = canonicalizePath(update.sessionFile);
+    const updatePath = resolveTranscriptPathForComparison(update.sessionFile);
     if (!updatePath || !transcriptCandidates.has(updatePath)) {
       return;
     }

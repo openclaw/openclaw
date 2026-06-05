@@ -1,3 +1,5 @@
+// Subagent announce delivery tests cover the last-mile routing used when child
+// runs report progress or completion back to the requester session.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import {
@@ -86,6 +88,8 @@ function createQueueOutcomeMock(
 function createQueueOutcomeSequenceMock(
   queuedOutcomes: (boolean | EmbeddedAgentQueueFailureReason)[],
 ): ReturnType<typeof vi.fn<QueueEmbeddedAgentMessageWithOutcome>> {
+  // Sequence mocks model retry paths where the embedded run can become
+  // unavailable between announce attempts.
   let index = 0;
   return vi.fn((sessionId: string) => {
     const outcome = queuedOutcomes[Math.min(index, queuedOutcomes.length - 1)] ?? false;
@@ -187,6 +191,8 @@ async function deliverSlackThreadAnnouncement(params: {
   sourceTool?: string;
   requesterAbandoned?: boolean;
 }) {
+  // Slack thread delivery exercises all origins because direct, session, and
+  // completion routing can differ after a child run outlives its requester.
   testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
@@ -1482,6 +1488,142 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+  it.each([
+    { name: "no payloads", result: { payloads: [] } },
+    {
+      name: "tool calls without delivery evidence",
+      result: { payloads: [], meta: { toolSummary: { calls: 1 } } },
+    },
+  ])(
+    "fails session-only completion handoff when the in-process agent returns $name",
+    async ({ result: agentResult }) => {
+      const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+        result: agentResult,
+      });
+      testing.setDepsForTest({
+        dispatchGatewayMethodInProcess,
+        getRequesterSessionActivity: () => ({
+          sessionId: "requester-session-local",
+          isActive: false,
+        }),
+        getRuntimeConfig: () => ({}) as never,
+      });
+
+      const result = await deliverSubagentAnnouncement({
+        requesterSessionKey: "agent:main:local-session",
+        targetRequesterSessionKey: "agent:main:local-session",
+        triggerMessage: "child done",
+        steerMessage: "child done",
+        requesterIsSubagent: false,
+        expectsCompletionMessage: true,
+        bestEffortDeliver: true,
+        directIdempotencyKey: "announce-local-empty",
+      });
+
+      expectRecordFields(result, {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      });
+      expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+        deliver: false,
+        channel: undefined,
+        to: undefined,
+        bestEffortDeliver: true,
+      });
+    },
+  );
+
+  it("accepts session-only completion handoff when the in-process agent intentionally replies NO_REPLY", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+      },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:local-session",
+      targetRequesterSessionKey: "agent:main:local-session",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-local-silent",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      bestEffortDeliver: true,
+    });
+  });
+
+  it.each([
+    {
+      name: "accepted session spawn",
+      result: {
+        payloads: [],
+        acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+      },
+    },
+    {
+      name: "successful cron add",
+      result: {
+        payloads: [],
+        successfulCronAdds: 1,
+      },
+    },
+  ])("accepts session-only completion handoff with $name evidence", async ({ result }) => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result,
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const delivery = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:local-session",
+      targetRequesterSessionKey: "agent:main:local-session",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-local-side-effect",
+    });
+
+    expectRecordFields(delivery, {
+      delivered: true,
+      path: "direct",
+    });
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      bestEffortDeliver: true,
+    });
+  });
+
   it("does not require generated media delivery for no-target cron completion handoffs", async () => {
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
       result: {
@@ -2355,6 +2497,106 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: undefined,
     });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not fallback when current-chat message-tool media also has target telemetry", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentMediaUrls: ["/tmp/generated-night-drive.mp3"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "message",
+            to: undefined,
+            threadId: undefined,
+            text: "The track is ready.",
+            mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction: "Deliver the generated music through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back when targetless message-tool media names a different provider", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentMediaUrls: ["/tmp/generated-night-drive.mp3"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: undefined,
+            text: "The track is ready.",
+            mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction: "Deliver the generated music through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "acct-1",
+        to: "dm:U123",
+        content: "The generated music is ready.",
+        mediaUrls: ["/tmp/generated-night-drive.mp3"],
+        idempotencyKey: "announce-dm-fallback-empty:generated-media-direct",
+      }),
+    );
   });
 
   it("falls back when message-tool media went to a different target", async () => {

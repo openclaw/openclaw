@@ -1,3 +1,4 @@
+// Codex tests cover dynamic tool execution plugin behavior.
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -17,8 +18,8 @@ import type { CodexDynamicToolCallResponse } from "./protocol.js";
 
 describe("dynamic tool execution helpers", () => {
   afterEach(() => {
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("keeps explicit dynamic tool timeouts above the default bridge deadline", () => {

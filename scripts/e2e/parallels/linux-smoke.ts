@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
+// Linux Smoke script supports OpenClaw repository automation.
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,6 +11,7 @@ import {
   parseBoolEnv,
   parseMode,
   parseProvider,
+  readPositiveIntEnv,
   modelProviderConfigBatchJson,
   posixProviderOnlyPluginIsolationScript,
   repoRoot,
@@ -21,6 +23,7 @@ import {
   say,
   shellQuote,
   warn,
+  withProgressOnStderr,
   writeJson,
   writeSummaryMarkdown,
   type Mode,
@@ -234,6 +237,10 @@ function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
 class LinuxSmoke extends SmokeRunController<LinuxOptions> {
   private auth: ProviderAuth;
   private disableBonjour = parseBoolEnv(process.env.OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR);
+  private agentTimeoutSeconds = readPositiveIntEnv(
+    "OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S",
+    1500,
+  );
   private artifact: PackageArtifact | null = null;
   private latestVersion = "";
   private snapshot!: SnapshotInfo;
@@ -320,10 +327,8 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     );
     await this.phase("fresh.gateway-status", 240, () => this.verifyGatewayStatus());
     this.status.freshGateway = "pass";
-    await this.phase(
-      "fresh.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
-      () => this.verifyLocalTurn(),
+    await this.phase("fresh.first-local-agent-turn", this.agentTimeoutSeconds, () =>
+      this.verifyLocalTurn(),
     );
     this.status.freshAgent = "pass";
   }
@@ -352,10 +357,8 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     );
     await this.phase("upgrade.gateway-status", 240, () => this.verifyGatewayStatus());
     this.status.upgradeGateway = "pass";
-    await this.phase(
-      "upgrade.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
-      () => this.verifyLocalTurn(),
+    await this.phase("upgrade.first-local-agent-turn", this.agentTimeoutSeconds, () =>
+      this.verifyLocalTurn(),
     );
     this.status.upgradeAgent = "pass";
   }
@@ -363,7 +366,8 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
   private phase = async (name: string, timeoutSeconds: number, fn: () => Promise<void> | void) =>
     await this.phases.phase(name, timeoutSeconds, fn);
 
-  private remainingPhaseTimeoutMs = (): number | undefined => this.phases.remainingTimeoutMs();
+  private remainingPhaseTimeoutMs = (fallbackMs?: number): number | undefined =>
+    this.phases.remainingTimeoutMs(fallbackMs);
 
   private logGuestPreflight(): void {
     this.guestBash(String.raw`set -euo pipefail
@@ -406,11 +410,17 @@ printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
     say(`Restore snapshot ${this.options.snapshotHint} (${this.snapshot.id})`);
     run("prlctl", ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id], {
       quiet: true,
+      timeoutMs: this.remainingPhaseTimeoutMs(),
     });
     if (this.snapshot.state === "poweroff") {
-      waitForVmStatus(this.options.vmName, "stopped", 180);
+      waitForVmStatus(this.options.vmName, "stopped", 180, {
+        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+      });
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], { quiet: true });
+      run("prlctl", ["start", this.options.vmName], {
+        quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+      });
     }
     this.waitForGuestReady();
   }
@@ -820,5 +830,6 @@ fi`,
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const options = parseArgs(process.argv.slice(2));
   await mkdir(repoRoot, { recursive: true });
-  await new LinuxSmoke(options).run();
+  const runSmoke = () => new LinuxSmoke(options).run();
+  await (options.json ? withProgressOnStderr(runSmoke) : runSmoke());
 }

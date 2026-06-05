@@ -1,3 +1,4 @@
+/** Model selection state for reply runs, including catalog and override handling. */
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAgentConfig,
@@ -5,7 +6,7 @@ import {
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import {
@@ -58,6 +59,7 @@ type ModelSelectionState = {
   needsModelCatalog: boolean;
 };
 
+/** Creates minimal model-selection state for fast test mode. */
 export function createFastTestModelSelectionState(params: {
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
   provider: string;
@@ -109,6 +111,7 @@ function findSelectedCatalogEntry(params: {
   return params.catalog?.find((entry) => modelKey(entry.provider, entry.id) === selectedKey);
 }
 
+/** Resolves provider/model, allowlist, catalog, and thinking defaults for a reply run. */
 export async function createModelSelectionState(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -576,6 +579,7 @@ export async function createModelSelectionState(params: {
   };
 }
 
+/** Resolves the context window token count for the selected provider/model. */
 export function resolveContextTokens(params: {
   cfg: OpenClawConfig;
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;

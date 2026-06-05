@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Runs an E2E command under a pseudo-terminal.
 import fs from "node:fs";
 import process from "node:process";
 import { spawn } from "@lydell/node-pty";
@@ -6,11 +7,22 @@ import { readPositiveIntEnv } from "./env-limits.mjs";
 
 const [logPath, command, ...args] = process.argv.slice(2);
 const OUTPUT_MAX_BYTES = readPositiveIntEnv("OPENCLAW_E2E_PTY_OUTPUT_MAX_BYTES", 16 * 1024 * 1024);
+const FORCE_KILL_MS = readPositiveIntEnv("OPENCLAW_E2E_PTY_FORCE_KILL_MS", 5_000);
 
 if (!logPath || !command) {
   console.error("usage: run-with-pty.mjs <log-path> <command> [args...]");
   process.exit(2);
 }
+
+let exiting = false;
+let forwardedSignal = null;
+let forceKillTimer = null;
+let logFailed = false;
+const outputLimitMarker = `\n[run-with-pty output truncated after ${OUTPUT_MAX_BYTES} bytes]\n`;
+const outputState = {
+  bytes: 0,
+  truncated: false,
+};
 
 const log = fs.createWriteStream(logPath, { flags: "w" });
 const pty = spawn(command, args, {
@@ -21,12 +33,23 @@ const pty = spawn(command, args, {
   env: process.env,
 });
 
-let exiting = false;
-const outputLimitMarker = `\n[run-with-pty output truncated after ${OUTPUT_MAX_BYTES} bytes]\n`;
-const outputState = {
-  bytes: 0,
-  truncated: false,
-};
+log.on("error", (error) => {
+  if (logFailed) {
+    return;
+  }
+  logFailed = true;
+  console.error(`run-with-pty transcript log failed: ${error.message}`);
+  if (exiting) {
+    process.exit(1);
+  }
+  if (!exiting) {
+    pty.kill("SIGTERM");
+    forceKillTimer ??= setTimeout(() => {
+      pty.kill("SIGKILL");
+    }, FORCE_KILL_MS);
+    forceKillTimer.unref?.();
+  }
+});
 
 function writeCappedOutput(data) {
   if (outputState.truncated) {
@@ -36,18 +59,24 @@ function writeCappedOutput(data) {
   const remainingBytes = OUTPUT_MAX_BYTES - outputState.bytes;
   if (buffer.byteLength <= remainingBytes) {
     outputState.bytes += buffer.byteLength;
-    log.write(buffer);
+    if (!logFailed) {
+      log.write(buffer);
+    }
     process.stdout.write(buffer);
     return;
   }
   if (remainingBytes > 0) {
     const head = buffer.subarray(0, remainingBytes);
-    log.write(head);
+    if (!logFailed) {
+      log.write(head);
+    }
     process.stdout.write(head);
   }
   outputState.bytes = OUTPUT_MAX_BYTES;
   outputState.truncated = true;
-  log.write(outputLimitMarker);
+  if (!logFailed) {
+    log.write(outputLimitMarker);
+  }
   process.stdout.write(outputLimitMarker);
 }
 
@@ -57,7 +86,14 @@ pty.onData((data) => {
 
 pty.onExit(({ exitCode, signal }) => {
   exiting = true;
+  clearTimeout(forceKillTimer);
+  if (logFailed) {
+    process.exit(1);
+  }
   log.end(() => {
+    if (forwardedSignal) {
+      process.exit(signalExitCode(forwardedSignal));
+    }
     if (typeof exitCode === "number") {
       process.exit(exitCode);
     }
@@ -69,10 +105,28 @@ process.stdin.on("data", (chunk) => {
   pty.write(chunk.toString("utf8"));
 });
 
-for (const signal of ["SIGINT", "SIGTERM"]) {
+for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
     if (!exiting) {
+      forwardedSignal ??= signal;
       pty.kill(signal);
+      forceKillTimer ??= setTimeout(() => {
+        pty.kill("SIGKILL");
+      }, FORCE_KILL_MS);
+      forceKillTimer.unref?.();
     }
   });
+}
+
+function signalExitCode(signal) {
+  switch (signal) {
+    case "SIGHUP":
+      return 129;
+    case "SIGINT":
+      return 130;
+    case "SIGTERM":
+      return 143;
+    default:
+      return 1;
+  }
 }

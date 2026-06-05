@@ -1,3 +1,4 @@
+// Discord tests cover manager plugin behavior.
 import { PassThrough, type Readable } from "node:stream";
 import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -2154,8 +2155,8 @@ describe("DiscordVoiceManager", () => {
 
     expect(entersStateMock).toHaveBeenCalledWith(connection, "signalling", 20_000);
     expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 20_000);
-    expect(connection.destroy).toHaveBeenCalledTimes(1);
-    expect(manager.status()).toStrictEqual([]);
+    await vi.waitFor(() => expect(connection.destroy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(manager.status()).toStrictEqual([]));
   });
 
   it("uses the default reconnect grace before destroying disconnected sessions", async () => {
@@ -2175,8 +2176,8 @@ describe("DiscordVoiceManager", () => {
 
     expect(entersStateMock).toHaveBeenCalledWith(connection, "signalling", 15_000);
     expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 15_000);
-    expect(connection.destroy).toHaveBeenCalledTimes(1);
-    expect(manager.status()).toStrictEqual([]);
+    await vi.waitFor(() => expect(connection.destroy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(manager.status()).toStrictEqual([]));
   });
 
   it("closes realtime sessions when disconnected recovery destroys the connection", async () => {
@@ -2201,9 +2202,9 @@ describe("DiscordVoiceManager", () => {
     expect(disconnected).toBeTypeOf("function");
     await disconnected?.();
 
-    expect(realtimeSessionMock.close).toHaveBeenCalledTimes(1);
-    expect(connection.destroy).toHaveBeenCalledTimes(1);
-    expect(manager.status()).toStrictEqual([]);
+    await vi.waitFor(() => expect(realtimeSessionMock.close).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(connection.destroy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(manager.status()).toStrictEqual([]));
   });
 
   it("closes realtime sessions when Discord destroys the connection", async () => {

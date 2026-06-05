@@ -1,10 +1,16 @@
+/**
+ * Idle-watch controller for Codex app-server turn progress, completion, and
+ * terminal-event gaps.
+ */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 type Timer = ReturnType<typeof setTimeout>;
 
+/** Timeout bucket reported by the turn watch controller. */
 export type CodexAttemptTurnWatchTimeoutKind = "progress" | "completion" | "terminal";
 
+/** Structured timeout event emitted when a watch fires. */
 export type CodexAttemptTurnWatchTimeout = {
   kind: CodexAttemptTurnWatchTimeoutKind;
   idleMs: number;
@@ -13,10 +19,15 @@ export type CodexAttemptTurnWatchTimeout = {
   details?: Record<string, unknown>;
 };
 
+/** Controller API returned by `createCodexAttemptTurnWatchController`. */
 export type CodexAttemptTurnWatchController = ReturnType<
   typeof createCodexAttemptTurnWatchController
 >;
 
+/**
+ * Creates a controller that arms/disarms timers as Codex app-server
+ * notifications and tool handoffs progress.
+ */
 export function createCodexAttemptTurnWatchController(params: {
   threadId: string;
   signal: AbortSignal;
@@ -166,6 +177,23 @@ export function createCodexAttemptTurnWatchController(params: {
     scheduleTerminalIdleWatch();
   }
 
+  function isCompletionIdleTimeoutDueBeforeAttempt(timeoutMs: number) {
+    if (
+      params.isCompleted() ||
+      params.isTerminalTurnNotificationQueued() ||
+      params.signal.aborted ||
+      !completionIdleWatchArmed ||
+      params.getActiveAppServerTurnRequests() > 0
+    ) {
+      return false;
+    }
+    const completionTimeoutMs = completionIdleTimeoutOverrideMs ?? turnCompletionIdleTimeoutMs;
+    if (completionTimeoutMs > timeoutMs) {
+      return false;
+    }
+    return Math.max(0, Date.now() - completionLastActivityAt) >= completionTimeoutMs;
+  }
+
   function recordAttemptProgress(
     reason: string,
     options?: { details?: Record<string, unknown>; attemptTimeoutMs?: number },
@@ -234,6 +262,10 @@ export function createCodexAttemptTurnWatchController(params: {
     const timeoutMs = attemptIdleTimeoutOverrideMs ?? turnAttemptIdleTimeoutMs;
     if (idleMs < timeoutMs) {
       scheduleAttemptIdleWatch();
+      return;
+    }
+    if (isCompletionIdleTimeoutDueBeforeAttempt(timeoutMs)) {
+      fireCompletionIdleTimeout();
       return;
     }
     const timeout = {

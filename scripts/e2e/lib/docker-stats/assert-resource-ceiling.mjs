@@ -1,4 +1,6 @@
+// Resource ceiling assertions for Docker E2E stats output.
 import fs from "node:fs";
+import { createInterface } from "node:readline";
 
 const [statsFile, maxMemoryRaw, maxCpuRaw, label = "docker"] = process.argv.slice(2);
 const maxMemoryMiB = Number(maxMemoryRaw);
@@ -55,9 +57,19 @@ function assertSampleValue(value, raw, name, labelLocal) {
   }
 }
 
-const lines = fs.existsSync(statsFile)
-  ? fs.readFileSync(statsFile, "utf8").split(/\r?\n/u).filter(Boolean)
-  : [];
+async function scanStatsFileLines(file, onLine) {
+  if (!fs.existsSync(file)) {
+    return;
+  }
+  const input = fs.createReadStream(file, { encoding: "utf8" });
+  const lines = createInterface({ crlfDelay: Infinity, input });
+  for await (const line of lines) {
+    if (line) {
+      onLine(line);
+    }
+  }
+}
+
 let maxObservedMemoryMiB = 0;
 let maxObservedCpuPercent = 0;
 let parsedSamples = 0;
@@ -65,7 +77,7 @@ let parsedSamples = 0;
 assertFiniteLimit(maxMemoryMiB, maxMemoryRaw, "max memory MiB");
 assertFiniteLimit(maxCpuPercent, maxCpuRaw, "max CPU percent");
 
-for (const line of lines) {
+await scanStatsFileLines(statsFile, (line) => {
   let parsed;
   try {
     parsed = JSON.parse(line);
@@ -79,7 +91,7 @@ for (const line of lines) {
   parsedSamples += 1;
   maxObservedMemoryMiB = Math.max(maxObservedMemoryMiB, observedMemoryMiB);
   maxObservedCpuPercent = Math.max(maxObservedCpuPercent, observedCpuPercent);
-}
+});
 
 console.log(
   `${label} resource peak: memory=${maxObservedMemoryMiB.toFixed(1)}MiB cpu=${maxObservedCpuPercent.toFixed(1)}% samples=${parsedSamples}`,
