@@ -2186,7 +2186,7 @@ export const registerTelegramHandlers = ({
             chatId: String(chatId),
           });
         } catch (err) {
-          logVerbose(`Speakeasy voice reservation failed: ${err}`);
+          logVerbose(`Speakeasy voice reservation failed: ${String(err)}`);
           await answerSpeakeasyCallback("Voice note is temporarily unavailable. Please try again.");
           return;
         }

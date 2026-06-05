@@ -255,8 +255,8 @@ describe("speakeasy voice button", () => {
         failure = err;
       }
       expect(failure).toBeInstanceOf(Error);
-      expect(String((failure as Error).message)).toMatch(/Speakeasy TTS failed/);
-      expect(String((failure as Error).message).length).toBeLessThan(1024 * 1024 + 1024);
+      expect((failure as Error).message).toMatch(/Speakeasy TTS failed/);
+      expect((failure as Error).message.length).toBeLessThan(1024 * 1024 + 1024);
     });
   });
 
