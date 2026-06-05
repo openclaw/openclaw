@@ -10,13 +10,17 @@ type DebouncerFactoryParams = {
 
 function createTextEvent(params: {
   messageId: string;
-  senderOpenId: string;
+  senderAppId?: string;
+  senderOpenId?: string;
   senderType?: string;
   text?: string;
 }): FeishuMessageEvent {
   return {
     sender: {
-      sender_id: { open_id: params.senderOpenId },
+      sender_id: {
+        ...(params.senderAppId ? { app_id: params.senderAppId } : {}),
+        ...(params.senderOpenId ? { open_id: params.senderOpenId } : {}),
+      },
       sender_type: params.senderType ?? "user",
     },
     message: {
@@ -49,7 +53,7 @@ function createRuntime() {
   return { channelRuntime, enqueue };
 }
 
-function createHandler(params?: { botOpenId?: string }) {
+function createHandler(params?: { appId?: string; botOpenId?: string }) {
   const handleMessage = vi.fn(async () => {});
   const hasProcessedMessage = vi.fn(async () => false);
   const recordProcessedMessage = vi.fn(async () => true);
@@ -69,6 +73,7 @@ function createHandler(params?: { botOpenId?: string }) {
     },
     hasProcessedMessage,
     recordProcessedMessage,
+    getAppId: () => params?.appId,
     getBotOpenId: () => params?.botOpenId,
   });
 
@@ -99,16 +104,40 @@ describe("createFeishuMessageReceiveHandler self-message filtering", () => {
     expect(enqueue).toHaveBeenCalledTimes(1);
     expect(handleMessage).toHaveBeenCalledTimes(1);
     expect(handleMessage.mock.calls[0]?.[0]?.event.sender.sender_id.open_id).toBe("ou_user");
-    expect(log).toHaveBeenCalledWith("feishu[default]: dropping self-authored message om_echo");
+    expect(log).toHaveBeenCalledWith("feishu[default]: dropping self/app-authored message om_echo");
+  });
+
+  it("drops current app-authored events before debounce even without an open_id", async () => {
+    const { handler, handleMessage, enqueue, log } = createHandler({
+      appId: "cli_current",
+      botOpenId: "ou_bot",
+    });
+
+    await handler(
+      createTextEvent({
+        messageId: "om_app_sender",
+        senderAppId: "cli_current",
+        senderType: "app",
+      }),
+    );
+
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      "feishu[default]: dropping self/app-authored message om_app_sender",
+    );
   });
 
   it("keeps other app-authored messages flowing to dispatch", async () => {
-    const { handler, handleMessage, enqueue } = createHandler({ botOpenId: "ou_bot" });
+    const { handler, handleMessage, enqueue } = createHandler({
+      appId: "cli_current",
+      botOpenId: "ou_bot",
+    });
 
     await handler(
       createTextEvent({
         messageId: "om_other_app",
-        senderOpenId: "ou_other_app",
+        senderAppId: "cli_other",
         senderType: "app",
       }),
     );

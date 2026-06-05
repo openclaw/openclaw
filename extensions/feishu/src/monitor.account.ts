@@ -165,6 +165,7 @@ function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
 type RegisterEventHandlersContext = {
   cfg: ClawdbotConfig;
   accountId: string;
+  appId?: string;
   channelRuntime: PluginRuntime["channel"];
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
@@ -268,7 +269,7 @@ function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
 ): void {
-  const { cfg, accountId, channelRuntime, runtime, chatHistories, fireAndForget } = context;
+  const { cfg, accountId, appId, channelRuntime, runtime, chatHistories, fireAndForget } = context;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
@@ -298,6 +299,7 @@ function registerEventHandlers(
         parseFeishuMessageEvent(event, botOpenId, botName).content,
       hasProcessedMessage: hasProcessedFeishuMessage,
       recordProcessedMessage: recordProcessedFeishuMessage,
+      getAppId: () => appId,
       getBotOpenId: (id) => botOpenIds.get(id),
       getBotName: (id) => botNames.get(id),
       resolveSequentialKey: getFeishuSequentialKey,
@@ -485,6 +487,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     registerEventHandlers(eventDispatcher, {
       cfg,
       accountId,
+      appId: account.appId,
       channelRuntime,
       runtime,
       chatHistories,
