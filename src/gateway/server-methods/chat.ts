@@ -132,6 +132,7 @@ import {
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
@@ -3058,8 +3059,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const abortedAt = context.chatAbortedRuns.get(clientRunId);
-    if (abortedAt !== undefined) {
+    const abortMarker = context.chatAbortedRuns.get(clientRunId);
+    if (abortMarker !== undefined) {
+      const abortedAt = chatAbortMarkerTimestampMs(abortMarker);
       const payload = buildAbortedChatSendPayload({
         runId: clientRunId,
         endedAt: abortedAt,

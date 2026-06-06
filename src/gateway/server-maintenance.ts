@@ -6,6 +6,7 @@ import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortTrackedChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
+import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
 import type { ChatRunState } from "./server-chat-state.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
@@ -199,8 +200,8 @@ export function startGatewayMaintenanceTimers(params: {
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
-    for (const [runId, abortedAt] of params.chatRunState.abortedRuns) {
-      if (now - abortedAt <= ABORTED_RUN_TTL_MS) {
+    for (const [runId, abortMarker] of params.chatRunState.abortedRuns) {
+      if (now - chatAbortMarkerTimestampMs(abortMarker) <= ABORTED_RUN_TTL_MS) {
         continue;
       }
       params.chatRunState.abortedRuns.delete(runId);

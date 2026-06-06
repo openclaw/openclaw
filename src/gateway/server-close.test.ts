@@ -543,7 +543,12 @@ describe("createGatewayCloseHandler", () => {
         nodeSendToSession,
         chatRunState,
         chatAbortControllers,
-        removeChatRun: vi.fn(() => ({ sessionKey: "session-1", clientRunId: "run-1" })),
+        removeChatRun: vi.fn(() => ({
+          sessionKey: "session-1",
+          clientRunId: "run-1",
+          registeredAtMs: 1_000,
+          registeredSequence: 1,
+        })),
       }),
     );
 
