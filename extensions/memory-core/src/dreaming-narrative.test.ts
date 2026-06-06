@@ -18,6 +18,7 @@ import {
   buildNarrativePrompt,
   dedupeDreamDiaryEntries,
   extractNarrativeText,
+  summarizeNarrativeMessages,
   formatNarrativeDate,
   formatBackfillDiaryDate,
   generateAndAppendDreamNarrative,
@@ -179,6 +180,53 @@ describe("extractNarrativeText", () => {
       { role: "assistant", content: "Final response." },
     ];
     expect(extractNarrativeText(messages)).toBe("Final response.");
+  });
+});
+
+describe("summarizeNarrativeMessages", () => {
+  it("reports empty when there are no messages", () => {
+    expect(summarizeNarrativeMessages([])).toBe("messages=0");
+  });
+
+  it("flags whitespace-only assistant string content", () => {
+    const summary = summarizeNarrativeMessages([{ role: "assistant", content: "   " }]);
+    expect(summary).toContain("assistant=1");
+    expect(summary).toContain("whitespaceOnly=1");
+    expect(summary).toContain("withText=0");
+    expect(summary).toContain("lastAssistantContent=string");
+  });
+
+  it("flags tool-only assistant turns so operators see the real cause", () => {
+    const summary = summarizeNarrativeMessages([
+      { role: "user", content: "go" },
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "t1", name: "search", input: {} }],
+      },
+    ]);
+    expect(summary).toContain("toolOnly=1");
+    expect(summary).toContain("withText=0");
+    expect(summary).toContain("lastAssistantContent=array");
+  });
+
+  it("does not flag tool-only when the assistant also has text", () => {
+    const summary = summarizeNarrativeMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "t1", name: "search", input: {} },
+          { type: "text", text: "Here is the entry." },
+        ],
+      },
+    ]);
+    expect(summary).toContain("withText=1");
+    expect(summary).toContain("toolOnly=0");
+  });
+
+  it("reports no assistant when only user messages are present", () => {
+    const summary = summarizeNarrativeMessages([{ role: "user", content: "hello" }]);
+    expect(summary).toContain("assistant=0");
+    expect(summary).toContain("lastAssistantContent=none");
   });
 });
 
