@@ -16,6 +16,10 @@ const mocks = vi.hoisted(() => ({
   buildPluginCompatibilityWarnings: vi.fn(),
   listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
   listTasksForFlowId: vi.fn<(flowId: string) => unknown[]>((_flowId: string) => []),
+  loadInstalledPluginIndexInstallRecords: vi.fn<() => Promise<Record<string, unknown>>>(() =>
+    Promise.resolve({}),
+  ),
+  VERSION: "2026.6.1",
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -34,6 +38,15 @@ vi.mock("../plugins/status.js", () => ({
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
 
+vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecords: (...args: unknown[]) =>
+    mocks.loadInstalledPluginIndexInstallRecords(...args),
+}));
+
+vi.mock("../version.js", () => ({
+  VERSION: mocks.VERSION,
+}));
+
 vi.mock("../tasks/task-flow-runtime-internal.js", () => ({
   listTaskFlowRecords: () => mocks.listTaskFlowRecords(),
 }));
@@ -48,6 +61,7 @@ async function runNoteWorkspaceStatusForTest(
   opts?: {
     flows?: unknown[];
     tasksByFlowId?: (flowId: string) => unknown[];
+    env?: Record<string, string>;
   },
 ) {
   mocks.resolveDefaultAgentId.mockReturnValue("default");
@@ -66,7 +80,7 @@ async function runNoteWorkspaceStatusForTest(
   );
 
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-  await noteWorkspaceStatus({});
+  await noteWorkspaceStatus({}, opts?.env ? { env: opts.env as NodeJS.ProcessEnv } : undefined);
   return noteSpy;
 }
 
@@ -234,6 +248,44 @@ describe("noteWorkspaceStatus", () => {
       expect(body).toContain("openclaw tasks flow show <flow-id>");
     } finally {
       noteSpy.mockRestore();
+    }
+  });
+
+  it("reports plugin version drift when an official plugin version mismatches the gateway", async () => {
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex@latest",
+        resolvedName: "@openclaw/codex",
+        resolvedVersion: "2026.5.30-beta.1",
+      },
+    });
+
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: "codex",
+            name: "Codex",
+            status: "loaded",
+            format: "bundle",
+            bundleCapabilities: ["provider:codex"],
+          }),
+        ],
+      }),
+      [],
+      { env: { OPENCLAW_HOME: "/tmp/test-openclaw" } },
+    );
+    try {
+      const driftCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugin version drift");
+      expect(driftCalls).toHaveLength(1);
+      const [[body]] = driftCalls;
+      expect(body).toContain("not on gateway 2026.6.1");
+      expect(body).toContain("codex: 2026.5.30-beta.1 -> expected 2026.6.1");
+      expect(body).toContain("openclaw plugins update <plugin-id>");
+    } finally {
+      noteSpy.mockRestore();
+      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     }
   });
 });
