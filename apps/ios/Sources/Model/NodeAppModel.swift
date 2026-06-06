@@ -2789,7 +2789,7 @@ extension NodeAppModel {
         self.connectedGatewayID = AppleReviewDemoMode.gatewayID
         self.activeGatewayConnectConfig = nil
         self.gatewayConnected = true
-        self.setOperatorConnected(true)
+        self.setOperatorConnected(false)
         self.talkMode.updateGatewayConnected(false)
         self.talkMode.setEnabled(false)
         self.talkMode.statusText = "Demo mode only"

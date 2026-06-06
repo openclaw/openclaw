@@ -183,8 +183,10 @@ struct ChatProTab: View {
     }
 
     private var gatewayConnected: Bool {
-        GatewayStatusBuilder.build(appModel: self.appModel) == .connected &&
-            self.appModel.isOperatorGatewayConnected
+        guard GatewayStatusBuilder.build(appModel: self.appModel) == .connected else {
+            return false
+        }
+        return self.appModel.isAppleReviewDemoModeEnabled || self.appModel.isOperatorGatewayConnected
     }
 
     private var messagePlaceholder: String {
