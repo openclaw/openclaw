@@ -351,4 +351,126 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       "discovered-model",
     ]);
   });
+
+  it("applies a default catalog timeout in non-live environments when no explicit timeout is set", async () => {
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+    });
+
+    const catalogOptions = firstMockArg(mocks.runProviderCatalog, "provider catalog") as {
+      timeoutMs?: number;
+    };
+    expect(catalogOptions?.timeoutMs).toBe(30_000);
+  });
+
+  it("applies a stricter catalog timeout in live test environments when no explicit timeout is set", async () => {
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: { OPENCLAW_LIVE_TEST: "1" } as NodeJS.ProcessEnv,
+      explicitProviders: {},
+    });
+
+    const catalogOptions = firstMockArg(mocks.runProviderCatalog, "provider catalog") as {
+      timeoutMs?: number;
+    };
+    expect(catalogOptions?.timeoutMs).toBe(15_000);
+  });
+
+  it("respects OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS override in any environment", async () => {
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: { OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS: "5000" } as NodeJS.ProcessEnv,
+      explicitProviders: {},
+    });
+
+    const catalogOptions = firstMockArg(mocks.runProviderCatalog, "provider catalog") as {
+      timeoutMs?: number;
+    };
+    expect(catalogOptions?.timeoutMs).toBe(5_000);
+  });
+
+  it("falls back to default timeout when OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS is invalid", async () => {
+    for (const invalid of ["abc", "0", "-5", "1.5"]) {
+      vi.clearAllMocks();
+      mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([createProvider("openai")]);
+      mocks.runProviderCatalog.mockResolvedValue(null);
+      await resolveImplicitProviders({
+        agentDir: "/tmp/openclaw-agent",
+        config: {},
+        env: { OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS: invalid } as NodeJS.ProcessEnv,
+        explicitProviders: {},
+      });
+      const catalogOptions = firstMockArg(mocks.runProviderCatalog, "provider catalog") as {
+        timeoutMs?: number;
+      };
+      expect(catalogOptions?.timeoutMs, `invalid value "${invalid}"`).toBe(30_000);
+    }
+  });
+
+  it("falls back to live timeout when OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS is invalid in a live environment", async () => {
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {
+        OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS: "bad",
+        LIVE: "1",
+      } as NodeJS.ProcessEnv,
+      explicitProviders: {},
+    });
+
+    const catalogOptions = firstMockArg(mocks.runProviderCatalog, "provider catalog") as {
+      timeoutMs?: number;
+    };
+    expect(catalogOptions?.timeoutMs).toBe(15_000);
+  });
+
+  it("uses OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS override even in live environments", async () => {
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {
+        OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS: "7000",
+        LIVE: "1",
+      } as NodeJS.ProcessEnv,
+      explicitProviders: {},
+    });
+
+    const catalogOptions = firstMockArg(mocks.runProviderCatalog, "provider catalog") as {
+      timeoutMs?: number;
+    };
+    expect(catalogOptions?.timeoutMs).toBe(7_000);
+  });
+
+  it("applies a stricter catalog timeout when OPENCLAW_LIVE_GATEWAY=1", async () => {
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: { OPENCLAW_LIVE_GATEWAY: "1" } as NodeJS.ProcessEnv,
+      explicitProviders: {},
+    });
+
+    const catalogOptions = firstMockArg(mocks.runProviderCatalog, "provider catalog") as {
+      timeoutMs?: number;
+    };
+    expect(catalogOptions?.timeoutMs).toBe(15_000);
+  });
+
+  it("applies a stricter catalog timeout when LIVE=1", async () => {
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: { LIVE: "1" } as NodeJS.ProcessEnv,
+      explicitProviders: {},
+    });
+
+    const catalogOptions = firstMockArg(mocks.runProviderCatalog, "provider catalog") as {
+      timeoutMs?: number;
+    };
+    expect(catalogOptions?.timeoutMs).toBe(15_000);
+  });
 });

@@ -73,18 +73,25 @@ type ImplicitProviderContext = ImplicitProviderParams & {
   resolveProviderAuth: ProviderAuthResolver;
 };
 
-function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
+const DEFAULT_PROVIDER_CATALOG_TIMEOUT_MS = 30_000;
+const LIVE_PROVIDER_CATALOG_TIMEOUT_MS = 15_000;
+
+// Provider catalog calls without an explicit providerDiscoveryTimeoutMs get this
+// default. Keeps uncredentialed or slow providers from blocking any discovery
+// caller — gateway startup, CLI model commands, background plan resolution —
+// when no caller-scoped timeout is set.
+// OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS overrides the default in any environment.
+function resolveDefaultProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS?.trim();
+  if (raw) {
+    const parsed = Number(raw);
+    if (/^[+]?\d+$/.test(raw) && Number.isSafeInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
-  if (!live) {
-    return null;
-  }
-  const raw = env.OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS?.trim();
-  if (!raw) {
-    return 15_000;
-  }
-  const parsed = Number(raw);
-  return /^[+]?\d+$/.test(raw) && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 15_000;
+  return live ? LIVE_PROVIDER_CATALOG_TIMEOUT_MS : DEFAULT_PROVIDER_CATALOG_TIMEOUT_MS;
 }
 
 function resolveProviderDiscoveryFilter(params: {
@@ -425,7 +432,8 @@ async function resolvePluginImplicitProviders(
           resolveProviderApiKey: resolveCatalogProviderApiKey,
           resolveProviderAuth: (providerId, options) =>
             ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
-          timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
+          timeoutMs:
+            ctx.providerDiscoveryTimeoutMs ?? resolveDefaultProviderCatalogTimeoutMs(ctx.env),
         });
     if (!result && !useStaticCatalog && provider.staticCatalog) {
       result = await runProviderStaticCatalog({
@@ -491,21 +499,15 @@ function buildPluginCatalogConfig(ctx: ImplicitProviderContext): OpenClawConfig 
 
 async function runProviderCatalogWithTimeout(
   params: Parameters<typeof runProviderCatalog>[0] & {
-    timeoutMs: number | null;
+    timeoutMs: number;
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
-  const catalogRun = runProviderCatalog(params);
-  const timeoutMs = params.timeoutMs ?? undefined;
-  if (!timeoutMs) {
-    return await catalogRun;
-  }
-
-  // Live discovery should not hang startup; timeout means skip this provider,
-  // while non-timeout catalog failures still surface to the caller.
+  const { timeoutMs } = params;
+  // Timeout means skip this provider; non-timeout catalog failures still surface to the caller.
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      catalogRun,
+      runProviderCatalog(params),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           reject(
