@@ -58,9 +58,9 @@ function equivalentTalkConfig(
 ): boolean {
   // Fast path: deep equal already failed. Check if the only difference is
   // a derived speakerVoice field.
-  const stripped = JSON.parse(JSON.stringify(normalized)) as Record<string, unknown>;
+  const stripped = structuredClone(normalized);
   const nRt = stripped.realtime as Record<string, unknown> | undefined;
-  const rRt = (raw as Record<string, unknown>).realtime as Record<string, unknown> | undefined;
+  const rRt = raw.realtime as Record<string, unknown> | undefined;
   if (nRt && rRt && typeof nRt.speakerVoice === "string" && nRt.speakerVoice === nRt.voice) {
     // speakerVoice was derived from voice — only strip when raw doesn't have it
     if (!("speakerVoice" in rRt)) {
