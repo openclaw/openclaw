@@ -1,10 +1,5 @@
 // Web media helpers load local and remote media for web-facing surfaces.
-import {
-  lstat,
-  readFile as fsReadFile,
-  realpath,
-  writeFile as fsWriteFile,
-} from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
@@ -20,10 +15,20 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
 import {
@@ -336,47 +341,53 @@ async function isTrustedGeneratedHostReadHtmlPath(filePath: string | undefined):
 const TRUSTED_GENERATED_HTML_MARKER_VERSION = 1;
 const TRUSTED_GENERATED_HTML_MARKER_KIND = "trusted-generated-html";
 
-function trustedGeneratedHtmlSidecarPath(filePath: string): string {
-  return `${filePath}.trust.json`;
-}
+type OutboundProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "outbound_media_provenance">;
 
 async function hasTrustedGeneratedHtmlMarker(resolvedFilePath: string): Promise<boolean> {
-  const sidecarPath = trustedGeneratedHtmlSidecarPath(resolvedFilePath);
-  const sidecarStat = await lstat(sidecarPath).catch(() => undefined);
-  if (!sidecarStat?.isFile() || sidecarStat.isSymbolicLink() || sidecarStat.nlink !== 1) {
-    return false;
-  }
-  const raw = await fsReadFile(sidecarPath, "utf8").catch(() => undefined);
-  if (!raw) {
-    return false;
-  }
-  try {
-    const parsed = JSON.parse(raw) as { kind?: unknown; version?: unknown };
-    return (
-      parsed.kind === TRUSTED_GENERATED_HTML_MARKER_KIND &&
-      parsed.version === TRUSTED_GENERATED_HTML_MARKER_VERSION
-    );
-  } catch {
-    return false;
-  }
+  const { db } = openOpenClawStateDatabase();
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+      .selectFrom("outbound_media_provenance")
+      .select(["kind", "version"])
+      .where("realpath", "=", resolvedFilePath),
+  );
+  return (
+    row?.kind === TRUSTED_GENERATED_HTML_MARKER_KIND &&
+    row.version === TRUSTED_GENERATED_HTML_MARKER_VERSION
+  );
 }
 
 /**
- * Writes the provenance sidecar that marks an outbound-staged HTML file as
- * originating from a trusted host-read source (under the OpenClaw temp root).
- *
- * This is the only authorized way to widen the trusted-html host-read check to
- * a file under media/outbound. Callers must have already verified the source
- * was trusted before staging.
+ * Records the trusted-generated-html provenance row for an outbound-staged HTML
+ * file. The row keys on the realpath of the staged file so a later host-read
+ * lookup can recognize it as a trusted source. Callers must have already
+ * verified the source was trusted before staging.
  */
+// TODO: prune rows when the staged outbound file is swept by the media-store
+// retention pass; until that pass exists, rows accumulate per stage.
 export async function markTrustedGeneratedHtmlPath(filePath: string): Promise<void> {
-  const payload = JSON.stringify({
-    kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
-    version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
-  });
-  await fsWriteFile(trustedGeneratedHtmlSidecarPath(filePath), payload, {
-    encoding: "utf8",
-    mode: 0o600,
+  const resolvedFilePath = await realpath(filePath);
+  const now = Date.now();
+  runOpenClawStateWriteTransaction(({ db }) => {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+        .insertInto("outbound_media_provenance")
+        .values({
+          realpath: resolvedFilePath,
+          kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
+          version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
+          created_at_ms: now,
+        })
+        .onConflict((conflict) =>
+          conflict.column("realpath").doUpdateSet({
+            kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
+            version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
+            created_at_ms: now,
+          }),
+        ),
+    );
   });
 }
 
