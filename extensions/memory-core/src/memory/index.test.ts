@@ -73,6 +73,7 @@ vi.mock("./embeddings.js", () => {
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
+      local?: { modelPath?: string };
       outputDimensionality?: number;
     }) => {
       providerCalls.push({
@@ -91,10 +92,14 @@ vi.mock("./embeddings.js", () => {
       const providerId =
         options.provider === "gemini" ||
         options.provider === "fallback-provider" ||
-        options.provider === "ollama"
+        options.provider === "ollama" ||
+        options.provider === "local"
           ? options.provider
           : "mock";
-      const model = options.model ?? "mock-embed";
+      const model =
+        providerId === "local"
+          ? (options.local?.modelPath ?? DEFAULT_LOCAL_MODEL)
+          : (options.model ?? "mock-embed");
       return {
         requestedProvider: options.provider ?? "openai",
         provider: {
@@ -279,6 +284,9 @@ describe("memory index", () => {
     fallback?: "none" | "gemini" | "fallback-provider";
     providerAliases?: NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
     model?: string;
+    local?: {
+      modelPath?: string;
+    };
     outputDimensionality?: number;
     multimodal?: {
       enabled?: boolean;
@@ -299,6 +307,7 @@ describe("memory index", () => {
             ...(params.provider !== undefined ? { provider: params.provider } : {}),
             model: params.model ?? "mock-embed",
             fallback: params.fallback,
+            local: params.local,
             outputDimensionality: params.outputDimensionality,
             store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
@@ -523,6 +532,33 @@ describe("memory index", () => {
 
       expect(status.dirty).toBe(false);
       expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await statusManager.close?.();
+    }
+  });
+
+  it("keeps status clean when local modelPath is the indexed model (#91001)", async () => {
+    const dbPath = path.join(workspaceDir, "index-local-model-path-status.sqlite");
+    const modelPath = "/models/embeddinggemma-300M-Q8_0.gguf";
+    const cfg = createCfg({
+      storePath: dbPath,
+      provider: "local",
+      local: { modelPath },
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const indexManager = await getFreshManager(cfg);
+    await indexManager.sync({ reason: "test", force: true });
+    await indexManager.close?.();
+
+    const statusManager = await getFreshManager(cfg, "status");
+    try {
+      const status = statusManager.status();
+
+      expect(status.dirty).toBe(false);
+      expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+      expect(status.custom?.indexIdentity).not.toMatchObject({
+        reason: expect.stringContaining("expected"),
+      });
     } finally {
       await statusManager.close?.();
     }
