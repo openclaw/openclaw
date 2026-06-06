@@ -211,6 +211,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
+    toolContext,
   }) => {
     if (action === "react") {
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
@@ -287,8 +288,31 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
         : "";
     // Match the shared runner semantics: trim empty reply IDs away before
     // falling back from replyToId to replyTo on direct plugin calls.
-    const replyToId =
+    const explicitReplyToId =
       normalizeOptionalString(params.replyToId) ?? normalizeOptionalString(params.replyTo);
+    const sessionThreadId = normalizeOptionalString(toolContext?.currentThreadTs);
+    const normalizedTo = normalizeMattermostMessagingTarget(to) ?? to;
+    const currentChannelId = normalizeOptionalString(toolContext?.currentChannelId);
+    const normalizedCurrentChannelId = currentChannelId
+      ? (normalizeMattermostMessagingTarget(currentChannelId) ?? currentChannelId)
+      : undefined;
+    const sameChannel = Boolean(
+      sessionThreadId && normalizedCurrentChannelId && normalizedTo === normalizedCurrentChannelId,
+    );
+    const replyToModeAllowsThread =
+      toolContext?.replyToMode === "all" ||
+      (toolContext?.replyToMode === "first" &&
+        toolContext.hasRepliedRef !== undefined &&
+        !toolContext.hasRepliedRef.value);
+    const implicitReplyToId = sameChannel && replyToModeAllowsThread ? sessionThreadId : undefined;
+    const replyToId = explicitReplyToId ?? implicitReplyToId;
+    if (
+      replyToId !== undefined &&
+      toolContext?.replyToMode === "first" &&
+      toolContext.hasRepliedRef !== undefined
+    ) {
+      toolContext.hasRepliedRef.value = true;
+    }
     const resolvedAccountId = accountId || undefined;
 
     const attachmentMedia = collectMattermostAttachmentMedia(params);
@@ -755,6 +779,34 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
       threadId,
     }),
+    buildToolContext: ({ cfg, accountId, context, hasRepliedRef }) => {
+      const account = resolveMattermostAccount({
+        cfg,
+        accountId: accountId ?? resolveDefaultMattermostAccountId(cfg),
+      });
+      const chatType =
+        context.ChatType === "direct" ||
+        context.ChatType === "group" ||
+        context.ChatType === "channel"
+          ? context.ChatType
+          : "channel";
+      const configuredReplyToMode = resolveMattermostReplyToMode(account, chatType);
+      const threadId =
+        normalizeOptionalString(
+          context.MessageThreadId == null ? undefined : String(context.MessageThreadId),
+        ) ?? normalizeOptionalString(context.ReplyToId);
+      const effectiveReplyToMode =
+        configuredReplyToMode === "off" && threadId !== undefined ? "all" : configuredReplyToMode;
+
+      return {
+        currentChannelId: normalizeOptionalString(context.To?.replace(/^mattermost:/i, "")),
+        currentChannelProvider: "mattermost",
+        currentThreadTs: threadId,
+        currentMessageId: context.CurrentMessageId,
+        replyToMode: effectiveReplyToMode,
+        hasRepliedRef,
+      };
+    },
   },
   security: mattermostSecurityAdapter,
   outbound: mattermostOutbound,

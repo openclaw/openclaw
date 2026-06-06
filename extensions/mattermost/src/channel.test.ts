@@ -74,6 +74,14 @@ function requireMattermostReplyToModeResolver() {
   return resolveReplyToMode;
 }
 
+function requireMattermostBuildToolContext() {
+  const buildToolContext = mattermostPlugin.threading?.buildToolContext;
+  if (!buildToolContext) {
+    throw new Error("mattermost threading.buildToolContext missing");
+  }
+  return buildToolContext;
+}
+
 function requireMattermostSendText() {
   const sendText = mattermostPlugin.outbound?.sendText;
   if (!sendText) {
@@ -229,6 +237,60 @@ describe("mattermostPlugin", () => {
           cfg,
           chatType: "channel",
         }),
+      ).toBe("all");
+    });
+
+    it("builds message tool context from active Mattermost thread metadata", () => {
+      const buildToolContext = requireMattermostBuildToolContext();
+      const hasRepliedRef = { value: false };
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            replyToMode: "all",
+          },
+        },
+      };
+
+      expect(
+        buildToolContext({
+          cfg,
+          context: {
+            To: "mattermost:channel:CHAN1",
+            ChatType: "channel",
+            MessageThreadId: "thread-root-id",
+            CurrentMessageId: "post-id",
+          },
+          hasRepliedRef,
+        }),
+      ).toEqual({
+        currentChannelId: "channel:CHAN1",
+        currentChannelProvider: "mattermost",
+        currentThreadTs: "thread-root-id",
+        currentMessageId: "post-id",
+        replyToMode: "all",
+        hasRepliedRef,
+      });
+    });
+
+    it("promotes replyToMode=off to all when the active Mattermost session is already threaded", () => {
+      const buildToolContext = requireMattermostBuildToolContext();
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            replyToMode: "off",
+          },
+        },
+      };
+
+      expect(
+        buildToolContext({
+          cfg,
+          context: {
+            To: "channel:CHAN1",
+            ChatType: "channel",
+            MessageThreadId: "thread-root-id",
+          },
+        })?.replyToMode,
       ).toBe("all");
     });
   });
@@ -448,6 +510,130 @@ describe("mattermostPlugin", () => {
       const options = expectSingleMattermostSend("channel:CHAN1", "hello");
       expect(options.accountId).toBe("default");
       expect(options.replyToId).toBe("post-root");
+    });
+
+    it("inherits the active Mattermost thread for message tool sends without explicit replyTo", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+          },
+          cfg,
+          accountId: "default",
+          toolContext: {
+            currentChannelId: "channel:CHAN1",
+            currentThreadTs: "thread-root-id",
+            replyToMode: "all",
+          },
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.replyToId).toBe("thread-root-id");
+    });
+
+    it("keeps explicit replyTo ahead of the active Mattermost thread", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+            replyTo: "explicit-root",
+          },
+          cfg,
+          accountId: "default",
+          toolContext: {
+            currentChannelId: "channel:CHAN1",
+            currentThreadTs: "thread-root-id",
+            replyToMode: "all",
+          },
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.replyToId).toBe("explicit-root");
+    });
+
+    it("does not inherit the active Mattermost thread across channels", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:OTHER",
+            message: "hello",
+          },
+          cfg,
+          accountId: "default",
+          toolContext: {
+            currentChannelId: "channel:CHAN1",
+            currentThreadTs: "thread-root-id",
+            replyToMode: "all",
+          },
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:OTHER", "hello");
+      expect(options.replyToId).toBeUndefined();
+    });
+
+    it("consumes replyToMode=first after the first Mattermost message tool threaded send", async () => {
+      const cfg = createMattermostTestConfig();
+      const hasRepliedRef = { value: false };
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+          },
+          cfg,
+          accountId: "default",
+          toolContext: {
+            currentChannelId: "channel:CHAN1",
+            currentThreadTs: "thread-root-id",
+            replyToMode: "first",
+            hasRepliedRef,
+          },
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.replyToId).toBe("thread-root-id");
+      expect(hasRepliedRef.value).toBe(true);
+    });
+
+    it("leaves Mattermost message tool sends unthreaded when replyToMode is off", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "hello",
+          },
+          cfg,
+          accountId: "default",
+          toolContext: {
+            currentChannelId: "channel:CHAN1",
+            currentThreadTs: "thread-root-id",
+            replyToMode: "off",
+          },
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.replyToId).toBeUndefined();
     });
 
     it("routes filePath send actions through Mattermost media upload options", async () => {
