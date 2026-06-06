@@ -1,8 +1,3 @@
-/**
- * web_fetch built-in tool.
- *
- * Fetches HTTP(S) content through SSRF guards, provider config, caching, and bounded extraction.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -658,6 +653,17 @@ export function createWebFetchTool(options?: {
   return {
     label: "Web Fetch",
     name: "web_fetch",
+    terminalResultFallback: {
+      mode: "structured_summary",
+      fields: [
+        { label: "URL", paths: [["url"]], missingText: "unknown" },
+        { label: "Final URL", paths: [["finalUrl"]], missingText: "unknown" },
+        { label: "Status", paths: [["status"]], missingText: "unknown" },
+        { label: "Title", paths: [["title"]], missingText: "none" },
+        { label: "Cached", paths: [["cached"]], missingText: "unknown" },
+        { label: "Truncated", paths: [["truncated"]], missingText: "unknown" },
+      ],
+    },
     description:
       "Fetch URL and extract readable markdown/text. Lightweight page access; no browser automation.",
     parameters: WebFetchSchema,

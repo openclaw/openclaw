@@ -1,8 +1,3 @@
-/**
- * cron built-in tool.
- *
- * Manages scheduled jobs, wake/run actions, delivery context, and reminder-style payload normalization.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Type, type TSchema } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -39,8 +34,8 @@ import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
-// Spell out job/patch properties for model-facing schema; runtime validation
-// still happens in normalizeCronJob* to avoid nested union schemas.
+// We spell out job/patch properties so that LLMs know what fields to send.
+// Nested unions are avoided; runtime validation happens in normalizeCronJob*.
 
 const CRON_ACTIONS = [
   "status",
@@ -498,6 +493,19 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     label: "Cron",
     name: "cron",
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
+    terminalResultFallback: {
+      mode: "structured_summary",
+      fields: [
+        { label: "Scheduler enabled", paths: [["enabled"]], missingText: "unknown" },
+        { label: "Jobs", paths: [["jobs"], ["total"]], format: "count", missingText: "unknown" },
+        {
+          label: "Next wake",
+          paths: [["nextWakeAtMs"]],
+          format: "none-if-nullish-or-zero",
+          missingText: "unknown",
+        },
+      ],
+    },
     description: `Manage Gateway cron jobs and wake events: reminders, check-back-later, delayed follow-ups, recurring work. Do not emulate scheduling with exec sleep/process polling.
 
 Main cron => system events for heartbeat. Isolated cron => background task in \`openclaw tasks\`.

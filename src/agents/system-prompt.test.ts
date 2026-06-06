@@ -1,5 +1,3 @@
-// System prompt tests cover the main prompt facade, prompt-surface routing, and
-// user-visible sections for owners, tools, safety, skills, and subagents.
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
@@ -175,7 +173,7 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it("includes skills in minimal prompt mode when skillsPrompt is provided (cron regression)", () => {
-    // Isolated cron sessions use promptMode="minimal" but still need skills.
+    // Isolated cron sessions use promptMode="minimal" but must still receive skills.
     const skillsPrompt =
       "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>";
     const prompt = buildAgentSystemPrompt({
@@ -375,14 +373,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Brave API");
   });
 
-  it("keeps the OpenClaw empty-tool fallback on the main prompt surface", () => {
+  it("does not advertise unavailable OpenClaw tools when the active tool list is empty", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: [],
     });
 
-    expect(prompt).toContain("OpenClaw lists the standard tools above");
-    expect(prompt).toContain("- sessions_spawn: spawn an isolated sub-agent session");
+    expect(prompt).toContain("No active OpenClaw tool list was provided.");
+    expect(prompt).toContain("Do not call tools from memory, docs, or prior sessions");
+    expect(prompt).not.toContain("- sessions_spawn:");
+    expect(prompt).not.toContain("session_status");
   });
 
   it("documents ACP sessions_spawn agent targeting requirements", () => {
@@ -606,14 +606,27 @@ describe("buildAgentSystemPrompt", () => {
     }
   });
 
-  it("hints to use session_status for current date/time", () => {
+  it("hints to use session_status for current date/time when the tool is available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
+      toolNames: ["session_status"],
       userTimezone: "America/Chicago",
     });
 
     expect(prompt).toContain("session_status");
     expect(prompt).toContain("current date");
+  });
+
+  it("does not hint to use session_status for current date/time when the tool is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      toolNames: ["message"],
+      userTimezone: "America/Chicago",
+    });
+
+    expect(prompt).not.toContain("run session_status");
+    expect(prompt).not.toContain("📊 session_status");
+    expect(prompt).toContain("Time zone: America/Chicago");
   });
 
   // The system prompt intentionally does NOT include the current date/time.

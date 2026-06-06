@@ -1,8 +1,3 @@
-/**
- * Tool definition/AgentTool adapters.
- *
- * Bridges extension-style ToolDefinition objects and core runtime AgentTool objects.
- */
 import type { TSchema } from "typebox";
 import type { AgentTool } from "../../runtime/index.js";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
@@ -22,6 +17,7 @@ export function wrapToolDefinition<
     description: definition.description,
     parameters: definition.parameters,
     prepareArguments: definition.prepareArguments,
+    terminalResultFallback: definition.terminalResultFallback,
     executionMode: definition.executionMode,
     execute: (toolCallId, params, signal, onUpdate) =>
       definition.execute(toolCallId, params, signal, onUpdate, ctxFactory?.() as ExtensionContext),
@@ -49,6 +45,7 @@ export function createToolDefinitionFromAgentTool(tool: AgentTool): ToolDefiniti
     description: tool.description,
     parameters: tool.parameters,
     prepareArguments: tool.prepareArguments,
+    terminalResultFallback: tool.terminalResultFallback,
     executionMode: tool.executionMode,
     execute: async (toolCallId, params, signal, onUpdate) =>
       tool.execute(toolCallId, params, signal, onUpdate),

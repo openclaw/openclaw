@@ -1,8 +1,3 @@
-/**
- * OpenClaw system prompt renderer.
- *
- * Assembles runtime, workspace, tooling, memory, delegation, channel, and cache-boundary prompt sections.
- */
 import { createHmac, createHash } from "node:crypto";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1015,8 +1010,6 @@ export function buildAgentSystemPrompt(params: {
         ? toolLines.join("\n")
         : buildOpenClawToolFallbackText({
             surface: promptSurface,
-            execToolName,
-            processToolName,
           }),
       "TOOLS.md is usage guidance, not availability.",
       ...(renderOpenClawToolWorkflowHints
@@ -1122,7 +1115,7 @@ export function buildAgentSystemPrompt(params: {
         ? params.modelAliasLines.join("\n")
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-      userTimezone
+      userTimezone && availableTools.has("session_status")
         ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
         : "",
       "## Workspace",

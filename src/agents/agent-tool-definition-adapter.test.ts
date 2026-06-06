@@ -1,11 +1,6 @@
-/**
- * Unit coverage for adapting runtime and client-hosted tools.
- * Exercises result coercion, error wrapping, client delegation, and conflict
- * detection at the ToolDefinition boundary.
- */
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CLIENT_TOOL_NAME_CONFLICT_PREFIX,
   createClientToolNameConflictError,
@@ -111,6 +106,87 @@ describe("agent tool definition adapter", () => {
     });
     expect(result.content[0]?.type).toBe("text");
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
+  });
+
+  it("records normalized adapter tool outcomes for terminal fallback", async () => {
+    const onToolOutcome = vi.fn();
+    const tool = {
+      name: "memory_query",
+      label: "Memory Query",
+      description: "queries memory",
+      parameters: Type.Object({ query: Type.String() }),
+      terminalResultFallback: { mode: "safe_text", prefix: "Memory:" },
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "found composer 2.5" }],
+        terminalSummary: {
+          privacy: "public" as const,
+          text: "memory returned one hit",
+          maxChars: 80,
+        },
+        details: { count: 1 },
+      }),
+    } satisfies AgentTool;
+
+    const [def] = toToolDefinitions([tool], {
+      sessionId: "adapter-terminal-fallback-success",
+      runId: "run-adapter-terminal-fallback-success",
+      onToolOutcome,
+    });
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    await def.execute(
+      "call-adapter-success",
+      { query: "composer 2.5" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "memory_query",
+        resultText: "found composer 2.5",
+        terminalSummary: {
+          privacy: "public",
+          text: "memory returned one hit",
+          maxChars: 80,
+        },
+        terminalResultFallback: { mode: "safe_text", prefix: "Memory:" },
+      }),
+    );
+  });
+
+  it("records adapter error results for terminal fallback", async () => {
+    const onToolOutcome = vi.fn();
+    const tool = {
+      name: "status_check",
+      label: "Status Check",
+      description: "checks status",
+      parameters: Type.Object({}),
+      execute: async () => {
+        throw new Error("service unavailable");
+      },
+    } satisfies AgentTool;
+
+    const [def] = toToolDefinitions([tool], {
+      sessionId: "adapter-terminal-fallback-error",
+      runId: "run-adapter-terminal-fallback-error",
+      onToolOutcome,
+    });
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    await def.execute("call-adapter-error", {}, undefined, undefined, extensionContext);
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "status_check",
+        resultText: expect.stringContaining("service unavailable"),
+      }),
+    );
   });
 });
 

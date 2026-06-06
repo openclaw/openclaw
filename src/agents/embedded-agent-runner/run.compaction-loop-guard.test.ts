@@ -1,4 +1,3 @@
-// Coverage for wiring the post-compaction loop guard into embedded runs.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   diagnosticSessionStates as DiagnosticSessionStatesType,
@@ -30,8 +29,9 @@ import {
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
-// Import after loadRunOverflowCompactionHarness so these references point at the
-// same module instances as the re-imported runner graph.
+// These need to be imported AFTER loadRunOverflowCompactionHarness so that
+// they reference the same module instances the (re-imported) runner uses.
+// vi.resetModules() inside the harness invalidates any earlier import.
 let diagnosticSessionStates: typeof DiagnosticSessionStatesType;
 let getDiagnosticSessionState: typeof GetDiagnosticSessionStateType;
 let recordToolCall: typeof RecordToolCallType;
@@ -51,8 +51,6 @@ function recordToolOutcome(
   result: unknown,
   runId?: string,
 ): void {
-  // Seed diagnostic history directly for cases that inspect persisted loop
-  // state without running a wrapped tool.
   const toolCallId = `${toolName}-${state.toolCallHistory?.length ?? 0}`;
   const scope = runId ? { runId } : undefined;
   recordToolCall(state, toolName, toolParams, toolCallId, undefined, scope);
@@ -77,8 +75,6 @@ async function executeWrappedToolOutcome(
   onToolOutcome?: ToolOutcomeObserver,
   runId = baseParams.runId,
 ): Promise<unknown> {
-  // Exercise the live before_tool_call wrapper so the guard sees the same
-  // outcome observer path used by real embedded tools.
   const tool = wrapToolWithBeforeToolCallHook(
     {
       name: toolName,
@@ -94,6 +90,34 @@ async function executeWrappedToolOutcome(
   );
   liveToolCallSeq += 1;
   return tool.execute(`${toolName}-${liveToolCallSeq}`, toolParams, undefined, undefined);
+}
+
+async function executeThrowingWrappedToolOutcome(
+  toolName: string,
+  toolParams: unknown,
+  error: Error,
+  onToolOutcome?: ToolOutcomeObserver,
+  runId = baseParams.runId,
+): Promise<void> {
+  const tool = wrapToolWithBeforeToolCallHook(
+    {
+      name: toolName,
+      execute: vi.fn(async () => {
+        throw error;
+      }),
+    } as never,
+    {
+      agentId: "main",
+      sessionKey: baseParams.sessionKey,
+      sessionId: baseParams.sessionId,
+      runId,
+      onToolOutcome,
+    },
+  );
+  liveToolCallSeq += 1;
+  await expect(
+    tool.execute(`${toolName}-${liveToolCallSeq}`, toolParams, undefined, undefined),
+  ).rejects.toThrow(error.message);
 }
 
 describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
@@ -133,19 +157,68 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     });
   });
 
+  it("records public terminal summaries from wrapped tool results", async () => {
+    const observations: Parameters<ToolOutcomeObserver>[0][] = [];
+
+    await executeWrappedToolOutcome(
+      "status_probe",
+      { scope: "current" },
+      {
+        content: [{ type: "text", text: "raw result for model context" }],
+        details: { status: "ok" },
+        terminalSummary: {
+          privacy: "public",
+          text: "Status probe completed",
+        },
+      },
+      (observation) => observations.push(observation),
+    );
+
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toMatchObject({
+      toolName: "status_probe",
+      resultText: "raw result for model context",
+      terminalSummary: {
+        privacy: "public",
+        text: "Status probe completed",
+      },
+    });
+  });
+
+  it("records thrown tool error text for terminal fallback", async () => {
+    const observations: Parameters<ToolOutcomeObserver>[0][] = [];
+
+    await executeThrowingWrappedToolOutcome(
+      "gateway",
+      { action: "lookup", path: "x" },
+      new Error("gateway lookup failed"),
+      (observation) => observations.push(observation),
+    );
+
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toEqual(
+      expect.objectContaining({
+        toolName: "gateway",
+        resultText: "gateway lookup failed",
+      }),
+    );
+  });
+
   it("aborts the attempt out-of-band when identical (tool, args, result) repeats windowSize times after compaction", async () => {
     const overflowError = makeOverflowError();
     let attemptReturned = false;
     let attemptSignalAborted = false;
     let attemptSignalReason: unknown;
 
-    // Attempt 1: overflow triggers compaction.
+    // Attempt 1: overflow → triggers compaction.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
       makeAttemptResult({ promptError: overflowError }),
     );
-    // Attempt 2: live wrapped-tool outcomes repeat while the prompt is running.
-    // The guard aborts the attempt signal, then the runner raises the loop error
-    // after the attempt unwinds.
+    // Attempt 2: post-compaction. The live wrapped-tool path records each
+    // outcome while the prompt is still running. The third identical result
+    // must not rely on throwing out of tool execution (the dependency converts
+    // tool errors into tool results); instead it aborts the attempt signal and
+    // the runner raises the persisted-loop error after the attempt unwinds.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
       const { abortSignal, onToolOutcome } = attemptParams as {
         abortSignal?: AbortSignal;
@@ -176,15 +249,25 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       }),
     );
 
-    await expect(runEmbeddedAgent(baseParams)).rejects.toBeInstanceOf(
-      PostCompactionLoopPersistedError,
-    );
+    const result = await runEmbeddedAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(attemptReturned).toBe(true);
     expect(attemptSignalAborted).toBe(true);
     expect(attemptSignalReason).toBeInstanceOf(PostCompactionLoopPersistedError);
+    expect(result.payloads).toEqual([
+      {
+        text:
+          "I stopped because gateway repeated the same tool call without progress. " +
+          "No user-facing result text was provided.",
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.completion).toEqual({
+      stopReason: "tool_loop_abort",
+      finishReason: "tool_loop_abort",
+    });
   });
 
   it("does not abort when the result hash changes across post-compaction attempts (progress was made)", async () => {
@@ -433,11 +516,17 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       }),
     );
 
-    await expect(runEmbeddedAgent(baseParams)).rejects.toBeInstanceOf(
-      PostCompactionLoopPersistedError,
-    );
+    const result = await runEmbeddedAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toEqual([
+      {
+        text:
+          "I stopped because gateway repeated the same tool call without progress. " +
+          "No user-facing result text was provided.",
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("blocked");
   });
 });

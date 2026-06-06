@@ -1,11 +1,13 @@
-// Tool handler tests cover tool lifecycle events, read-path diagnostics,
-// messaging tool capture, approvals, and emitted summaries.
 import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   onAgentEvent as registerAgentEventListener,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import {
+  diagnosticSessionStates,
+  getDiagnosticSessionState,
+} from "../logging/diagnostic-session-state.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import {
   handleToolExecutionEnd,
@@ -16,9 +18,14 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import { recordToolCall, recordToolCallOutcome } from "./tool-loop-detection.js";
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
+
+afterEach(() => {
+  diagnosticSessionStates.clear();
+});
 
 function createTestContext(): {
   ctx: ToolHandlerContext;
@@ -29,8 +36,6 @@ function createTestContext(): {
   trace: ReturnType<typeof vi.fn>;
   isEnabled: ReturnType<typeof vi.fn>;
 } {
-  // Shared tool-handler fixture exposes the callbacks and state maps mutated by
-  // start/update/end handlers without booting a full subscription.
   const onBlockReplyFlush = vi.fn<() => Promise<void>>();
   const onAgentEvent = vi.fn();
   const onExecutionPhase = vi.fn();
@@ -99,8 +104,6 @@ function requireEvent(
   predicate: (event: CapturedAgentEvent) => boolean,
   label: string,
 ): CapturedAgentEvent {
-  // Tool lifecycle tests emit multiple event streams; this helper makes the
-  // expected event kind explicit before field assertions.
   const event = events.find(predicate);
   if (!event) {
     throw new Error(`expected ${label} event`);
@@ -165,6 +168,19 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
   const targets = ctx.state.messagingToolSentTargets;
   expect(targets).toHaveLength(1);
   return requireRecord(targets[0], "messaging target");
+}
+
+function committedMessageToolResult(
+  fields: Record<string, unknown> = {},
+): ToolExecutionEndEvent["result"] {
+  return {
+    details: {
+      status: "ok",
+      deliveryStatus: "sent",
+      messageId: "message-1",
+      ...fields,
+    },
+  };
 }
 
 describe("handleToolExecutionStart read path checks", () => {
@@ -380,6 +396,67 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     expect(ctx.state.successfulCronAdds).toBe(0);
     expect(ctx.state.itemCompletedCount).toBe(1);
     expect(ctx.state.itemActiveIds.size).toBe(0);
+  });
+});
+
+describe("handleToolExecutionEnd terminal fallback observations", () => {
+  it("carries start-event terminal fallback metadata into tool summaries", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "web_fetch",
+      toolCallId: "tool-web-fetch",
+      args: { url: "https://example.com" },
+      terminalResultFallback: {
+        mode: "structured_summary",
+        fields: [{ label: "Title", paths: [["title"]], missingText: "none" }],
+      },
+    } as never);
+
+    expect(ctx.state.toolMetaById.get("tool-web-fetch")?.terminalResultFallback).toEqual({
+      mode: "structured_summary",
+      fields: [{ label: "Title", paths: [["title"]], missingText: "none" }],
+    });
+  });
+
+  it("does not emit duplicate terminal fallback observations for completed tool calls", async () => {
+    const { ctx } = createTestContext();
+    const onToolOutcome = vi.fn();
+    ctx.params.onToolOutcome = onToolOutcome;
+    const params = { path: "notes.txt" };
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-read-complete",
+      args: params,
+    } as never);
+    const sessionState = getDiagnosticSessionState({
+      sessionKey: ctx.params.sessionKey,
+      sessionId: ctx.params.sessionId,
+    });
+    recordToolCall(sessionState, "read", params, "tool-read-complete", undefined, {
+      runId: ctx.params.runId,
+    });
+    recordToolCallOutcome(sessionState, {
+      toolName: "read",
+      toolParams: params,
+      toolCallId: "tool-read-complete",
+      result: { content: [{ type: "text", text: "already observed" }] },
+      runId: ctx.params.runId,
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "read",
+      toolCallId: "tool-read-complete",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "end event result" }],
+        details: {},
+      },
+    } as never);
+
+    expect(onToolOutcome).not.toHaveBeenCalled();
   });
 });
 
@@ -1510,7 +1587,7 @@ describe("messaging tool media URL tracking", () => {
       toolName: "message",
       toolCallId: "tool-m2",
       isError: false,
-      result: { ok: true },
+      result: committedMessageToolResult(),
     };
 
     await handleToolExecutionEnd(ctx, endEvt);
@@ -1522,6 +1599,77 @@ describe("messaging tool media URL tracking", () => {
       mediaUrls: ["file:///img.jpg"],
     });
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m2")).toBe(false);
+  });
+
+  it("does not commit suppressed message sends as delivery evidence", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-suppressed",
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "hidden",
+        media: "file:///hidden.jpg",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-suppressed",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "suppressed",
+          reason: "cancelled_by_message_sending_hook",
+        },
+      },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toHaveLength(0);
+    expect(ctx.state.messagingToolSentTargets).toHaveLength(0);
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
+    expect(ctx.state.pendingMessagingTexts.has("tool-suppressed")).toBe(false);
+    expect(ctx.state.pendingMessagingTargets.has("tool-suppressed")).toBe(false);
+    expect(ctx.state.pendingMessagingMediaUrls.has("tool-suppressed")).toBe(false);
+  });
+
+  it("does not commit status-only sent message sends as delivery evidence", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-status-only-sent",
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "not confirmed",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-status-only-sent",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+        },
+      },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toHaveLength(0);
+    expect(ctx.state.messagingToolSentTargets).toHaveLength(0);
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
+    expect(ctx.state.pendingMessagingTexts.has("tool-status-only-sent")).toBe(false);
+    expect(ctx.state.pendingMessagingTargets.has("tool-status-only-sent")).toBe(false);
   });
 
   it("commits mediaUrls from tool result payload", async () => {
@@ -1541,6 +1689,11 @@ describe("messaging tool media URL tracking", () => {
       toolCallId: "tool-m2b",
       isError: false,
       result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          messageId: "message-1",
+        },
         content: [
           {
             type: "text",
@@ -1590,7 +1743,7 @@ describe("messaging tool media URL tracking", () => {
       toolName: "message",
       toolCallId: "tool-upload-file",
       isError: false,
-      result: { ok: true },
+      result: committedMessageToolResult(),
     };
     await handleToolExecutionEnd(ctx, endEvt);
 
@@ -1626,7 +1779,7 @@ describe("messaging tool media URL tracking", () => {
       toolName: "message",
       toolCallId: "tool-attachment-aliases",
       isError: false,
-      result: { ok: true },
+      result: committedMessageToolResult(),
     };
     await handleToolExecutionEnd(ctx, endEvt);
 
@@ -1752,7 +1905,7 @@ describe("messaging tool media URL tracking", () => {
       toolName: "message",
       toolCallId: "tool-send-attachment",
       isError: false,
-      result: { ok: true },
+      result: committedMessageToolResult(),
     };
     await handleToolExecutionEnd(ctx, endEvt);
 
@@ -1806,7 +1959,7 @@ describe("messaging tool media URL tracking", () => {
       toolName: "message",
       toolCallId: "tool-cap",
       isError: false,
-      result: { ok: true },
+      result: committedMessageToolResult(),
     };
     await handleToolExecutionEnd(ctx, endEvt);
 

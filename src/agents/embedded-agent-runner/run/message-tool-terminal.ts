@@ -1,16 +1,13 @@
-/**
- * Detects message-tool-only sends that should terminate an agent turn.
- */
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { isMessageToolSendActionName } from "../../embedded-agent-messaging.js";
 import { isToolResultError } from "../../embedded-agent-subscribe.tools.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
 import { normalizeToolName } from "../../tool-policy.js";
+import { hasCommittedMessagingToolResultDetails } from "../delivery-evidence.js";
 
 const MESSAGE_TOOL_NAME = "message";
 const EXPLICIT_MESSAGE_ROUTE_KEYS = ["channel", "target", "to", "channelId", "provider"];
 const DRY_RUN_DELIVERY_STATUS = "dry_run";
-const SENT_DELIVERY_STATUS = "sent";
 const RESULT_ENVELOPE_KEYS = [
   "details",
   "payload",
@@ -54,22 +51,6 @@ function parseJsonRecord(value: string): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
-}
-
-function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
-  if (hasStringValue(record.messageId)) {
-    return true;
-  }
-  const receipt = record.receipt;
-  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
-    return false;
-  }
-  const receiptRecord = receipt as Record<string, unknown>;
-  return (
-    hasStringValue(receiptRecord.primaryPlatformMessageId) ||
-    (Array.isArray(receiptRecord.platformMessageIds) &&
-      receiptRecord.platformMessageIds.some((value) => hasStringValue(value)))
-  );
 }
 
 function deliveryEnvelopeIndicatesDryRun(value: unknown, depth = 0): boolean {
@@ -120,10 +101,7 @@ function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean 
   }
 
   const record = value as Record<string, unknown>;
-  if (
-    normalizeStatus(record.deliveryStatus) === SENT_DELIVERY_STATUS ||
-    recordHasDeliveredMessageId(record)
-  ) {
+  if (hasCommittedMessagingToolResultDetails(record)) {
     return true;
   }
 
@@ -150,11 +128,6 @@ function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean 
   );
 }
 
-/**
- * Determines whether a `message.send` tool call should end the turn in
- * message-tool-only delivery mode. Only implicit-route, non-dry-run, delivered
- * sends qualify; explicit routes and errors keep the model loop alive.
- */
 export function shouldTerminateAfterMessageToolOnlySend(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   context: AfterToolCallContext;
@@ -191,11 +164,9 @@ export function shouldTerminateAfterMessageToolOnlySend(params: {
   return true;
 }
 
-/** Installs an after-tool hook that terminates the turn after a qualifying message send. */
 export function installMessageToolOnlyTerminalHook(params: {
   agent: Agent;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  onDeliveredSourceReply?: () => void;
 }): void {
   if (params.sourceReplyDeliveryMode !== "message_tool_only") {
     return;
@@ -210,7 +181,6 @@ export function installMessageToolOnlyTerminalHook(params: {
         hookResult,
       })
     ) {
-      params.onDeliveredSourceReply?.();
       return { ...hookResult, terminate: true };
     }
     return hookResult;

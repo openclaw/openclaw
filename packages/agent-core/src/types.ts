@@ -1,4 +1,3 @@
-// Agent Core type module defines shared TypeScript contracts.
 import type { Static, TSchema } from "typebox";
 import type {
   AssistantMessage,
@@ -415,12 +414,39 @@ export interface AgentToolProgress {
   id?: string;
 }
 
+export interface AgentToolTerminalSummary {
+  /** Public text suitable for a forced terminal reply when the model fails to summarize. */
+  text: string;
+  /** Terminal summaries may be delivered to the user, so they must be explicitly public. */
+  privacy: "public";
+  /** Optional cap before the shared terminal fallback truncates this summary. */
+  maxChars?: number;
+}
+
+export type AgentToolTerminalResultFallbackField = {
+  label: string;
+  paths: readonly (readonly string[])[];
+  format?: "string" | "count" | "none-if-nullish-or-zero";
+  missingText?: string;
+};
+
+export type AgentToolTerminalResultFallback =
+  | { mode: "none" }
+  | { mode: "safe_text"; maxChars?: number; prefix?: string }
+  | {
+      mode: "structured_summary";
+      fields: readonly AgentToolTerminalResultFallbackField[];
+      maxChars?: number;
+    };
+
 /** Final or partial result produced by a tool. */
 export interface AgentToolResult<T> {
   /** Text or image content returned to the model. */
   content: (TextContent | ImageContent)[];
   /** Arbitrary structured details for logs or UI rendering. */
   details: T;
+  /** Optional public summary for terminal user replies when the model loops after this result. */
+  terminalSummary?: AgentToolTerminalSummary;
   /** Optional public progress hint for partial tool updates; never model content. */
   progress?: AgentToolProgress;
   /**
@@ -445,6 +471,8 @@ export interface AgentTool<
    * Must return an object that matches `TParameters`.
    */
   prepareArguments?: (args: unknown) => Static<TParameters>;
+  /** Safe user-facing fallback for forced terminal replies after repeated tool-call loops. */
+  terminalResultFallback?: AgentToolTerminalResultFallback;
   /** Execute the tool call. Throw on failure instead of encoding errors in `content`. */
   execute: (
     toolCallId: string,
@@ -492,7 +520,13 @@ export type AgentEvent =
   | { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
   | { type: "message_end"; message: AgentMessage }
   // Tool execution lifecycle
-  | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
+  | {
+      type: "tool_execution_start";
+      toolCallId: string;
+      toolName: string;
+      args: unknown;
+      terminalResultFallback?: AgentToolTerminalResultFallback;
+    }
   | {
       type: "tool_execution_update";
       toolCallId: string;

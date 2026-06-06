@@ -1,6 +1,3 @@
-/**
- * Test fixtures for embedded-run overflow compaction scenarios.
- */
 import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -41,6 +38,7 @@ export function makeAttemptResult(
   const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
   const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
   const messagingToolSentTargets = overrides.messagingToolSentTargets ?? [];
+  const messagingToolSourceReplyPayloads = overrides.messagingToolSourceReplyPayloads ?? [];
   const successfulCronAdds = overrides.successfulCronAdds;
   const acceptedSessionSpawns = overrides.acceptedSessionSpawns ?? [];
   return {
@@ -66,6 +64,7 @@ export function makeAttemptResult(
         messagingToolSentTexts,
         messagingToolSentMediaUrls,
         messagingToolSentTargets,
+        messagingToolSourceReplyPayloads,
         acceptedSessionSpawns,
         successfulCronAdds,
       }),
@@ -78,6 +77,7 @@ export function makeAttemptResult(
     messagingToolSentTexts,
     messagingToolSentMediaUrls,
     messagingToolSentTargets,
+    messagingToolSourceReplyPayloads,
     cloudCodeAssistFormatError: false,
     ...overrides,
   };

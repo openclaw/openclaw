@@ -1,6 +1,3 @@
-/**
- * Public parameter types for subscribing to embedded-agent sessions.
- */
 import type {
   PartialReplyPayload,
   SourceReplyDeliveryMode,
@@ -10,6 +7,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type {
@@ -68,6 +66,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
     sessionKey?: string;
   }) => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
+  onToolOutcome?: ToolOutcomeObserver;
   terminalLifecyclePhase?: "end" | "finishing";
   /** Gate final block delivery/lifecycle after the natural answer is known. */
   onBeforeTerminalDelivery?: (event: {

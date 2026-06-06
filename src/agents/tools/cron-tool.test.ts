@@ -1,5 +1,3 @@
-// Cron tool tests cover schedule guidance, scoped job operations, delivery
-// context inheritance, session routing, and agent id ownership.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { callGatewayMock, extractDeliveryInfoMock } = vi.hoisted(() => ({
@@ -80,6 +78,24 @@ describe("cron tool", () => {
     expect(tool.description).toContain('For "at", ISO timestamps without timezone are UTC.');
     expect(tool.description).toContain('"expr": "0 18 * * *"');
     expect(tool.description).toContain('"tz": "Asia/Shanghai"');
+  });
+
+  it("declares a structured terminal fallback for scheduler introspection results", () => {
+    const tool = createTestCronTool();
+
+    expect(tool.terminalResultFallback).toEqual({
+      mode: "structured_summary",
+      fields: [
+        { label: "Scheduler enabled", paths: [["enabled"]], missingText: "unknown" },
+        { label: "Jobs", paths: [["jobs"], ["total"]], format: "count", missingText: "unknown" },
+        {
+          label: "Next wake",
+          paths: [["nextWakeAtMs"]],
+          format: "none-if-nullish-or-zero",
+          missingText: "unknown",
+        },
+      ],
+    });
   });
 
   function buildReminderAgentTurnJob(overrides: Record<string, unknown> = {}): {
@@ -179,8 +195,6 @@ describe("cron tool", () => {
   });
 
   it("allows scoped isolated cron runs to remove the current job", async () => {
-    // Self-removal scope lets a cron-triggered run clean up its own schedule
-    // without granting broad cron mutation access.
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
 
     await tool.execute("call-self-remove", {

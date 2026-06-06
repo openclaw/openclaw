@@ -1,6 +1,3 @@
-/**
- * Shared result and attempt types for embedded-agent run internals.
- */
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
@@ -140,22 +137,6 @@ export type EmbeddedRunAttemptResult = {
       | "tool_activity"
       | "potential_side_effect"
       | "active_item";
-    diagnostics?: {
-      idleMs?: number;
-      timeoutMs?: number;
-      lastActivityReason?: string;
-      lastNotificationMethod?: string;
-      lastNotificationItemId?: string;
-      lastNotificationItemType?: string;
-      lastNotificationItemRole?: string;
-      lastAssistantTextPreview?: string;
-      activeAppServerTurnRequests?: number;
-      activeTurnItemCount?: number;
-      terminalTurnNotificationQueued?: boolean;
-      completionIdleWatchArmed?: boolean;
-      assistantCompletionIdleWatchArmed?: boolean;
-      terminalIdleWatchArmed?: boolean;
-    };
   };
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
@@ -167,16 +148,25 @@ export type EmbeddedRunAttemptResult = {
   toolMetas: Array<{
     toolName: string;
     meta?: string;
+    mutatingAction?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+  }>;
+  asyncTaskTerminalResults?: Array<{
+    taskId: string;
+    runId?: string;
+    status?: string;
+    taskKind?: string;
+    terminalSummary?: string;
+    terminalOutcome?: string;
+    progressSummary?: string;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
-  didDeliverSourceReplyViaMessageTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];

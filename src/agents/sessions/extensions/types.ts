@@ -34,6 +34,7 @@ import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import type {
   AgentMessage,
+  AgentToolTerminalResultFallback,
   AgentToolResult,
   AgentToolUpdateCallback,
   ThinkingLevel,
@@ -514,6 +515,9 @@ export interface ToolDefinition<
   /** Optional compatibility shim to prepare raw tool call arguments before schema validation. Must return an object conforming to TParams. */
   prepareArguments?: (args: unknown) => Static<TParams>;
 
+  /** Safe user-facing fallback for forced terminal replies after repeated tool-call loops. */
+  terminalResultFallback?: AgentToolTerminalResultFallback;
+
   /**
    * Per-tool execution mode override.
    * - "sequential": this tool must execute one at a time with other tool calls.
@@ -762,6 +766,7 @@ export interface ToolExecutionStartEvent {
   toolCallId: string;
   toolName: string;
   args: unknown;
+  terminalResultFallback?: AgentToolTerminalResultFallback;
 }
 
 /** Fired during tool execution with partial/streaming output */
