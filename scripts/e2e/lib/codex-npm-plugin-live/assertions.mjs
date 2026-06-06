@@ -1,6 +1,7 @@
 // Assertions for Codex npm plugin live E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import {
   assertPathInside,
   configPath,
@@ -312,7 +313,7 @@ function assertAgentTurn() {
     ? fs.readFileSync("/tmp/openclaw-codex-agent.err", "utf8")
     : "";
   const response = JSON.parse(stdout);
-  const text = (response.payloads || []).map((payload) => payload?.text || "").join("\n");
+  const text = extractAgentReplyTexts(JSON.stringify(response)).join("\n");
   if (!text.includes(marker)) {
     throw new Error(
       `OpenClaw agent reply did not contain ${marker}:\nstdout=${stdout}\nstderr=${stderr}`,

@@ -1,6 +1,7 @@
 // Assertions for live plugin tool E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
@@ -356,7 +357,7 @@ function assertAgentTurn() {
   const errorPath = agentErrorPath();
   const stdout = fs.readFileSync(outputPath, "utf8");
   const response = JSON.parse(stdout);
-  const text = (response.payloads || []).map((payload) => payload?.text || "").join("\n");
+  const text = extractAgentReplyTexts(JSON.stringify(response)).join("\n");
   if (!text.includes(expected)) {
     const stderrTail = readTextFileTail(errorPath, ERROR_DETAIL_TAIL_BYTES);
     throw new Error(

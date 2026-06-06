@@ -5,11 +5,14 @@ import { describe, expect, it } from "vitest";
 import {
   LIVE_TEST_SHARDS,
   RELEASE_LIVE_TEST_SHARDS,
+  addLiveShardReportArgs,
   buildLiveShardPnpmArgs,
+  buildLiveShardReportPath,
   buildLiveShardSpawnParams,
   collectAllLiveTestFiles,
   parseLiveShardArgs,
   selectLiveShardFiles,
+  validateLiveShardReportPayload,
 } from "../../scripts/test-live-shard.mjs";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 
@@ -165,6 +168,45 @@ describe("scripts/test-live-shard", () => {
       "-t",
       "smoke",
     ]);
+  });
+
+  it("adds JSON report evidence without dropping operator output", () => {
+    const reportPath = buildLiveShardReportPath("native-live-src-agents", {
+      OPENCLAW_LIVE_SHARD_REPORT_DIR: ".artifacts/live-proof",
+    });
+
+    expect(reportPath).toBe(".artifacts/live-proof/native-live-src-agents.vitest.json");
+    expect(addLiveShardReportArgs(["-t", "smoke"], reportPath)).toEqual([
+      "-t",
+      "smoke",
+      "--reporter=default",
+      "--reporter=json",
+      "--outputFile.json=.artifacts/live-proof/native-live-src-agents.vitest.json",
+    ]);
+    expect(
+      buildLiveShardPnpmArgs(
+        ["src/agents/xai.live.test.ts"],
+        addLiveShardReportArgs([], reportPath),
+      ),
+    ).toContain("--reporter=json");
+  });
+
+  it("fails live shard reports with no passing tests", () => {
+    expect(validateLiveShardReportPayload({ numPassedTests: 1, numTotalTests: 3 })).toEqual({
+      ok: true,
+    });
+    expect(validateLiveShardReportPayload({ numPassedTests: 0, numTotalTests: 3 })).toEqual({
+      ok: false,
+      reason: "Vitest report has no passing live tests.",
+    });
+    expect(validateLiveShardReportPayload({ numPassedTests: 0, numTotalTests: 0 })).toEqual({
+      ok: false,
+      reason: "Vitest report has no passing live tests.",
+    });
+    expect(validateLiveShardReportPayload({ numPassedTests: 0 })).toEqual({
+      ok: false,
+      reason: "Vitest report numTotalTests must be a non-negative integer.",
+    });
   });
 
   it("spawns live shard children in a cleanup-friendly process group", () => {
