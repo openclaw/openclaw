@@ -208,6 +208,7 @@ type DiagnosticSessionAttentionBaseEvent = DiagnosticBaseEvent & {
   activeToolCallId?: string;
   activeToolAgeMs?: number;
   terminalProgressStale?: boolean;
+  pendingFinalDelivery?: boolean;
 };
 
 export type DiagnosticSessionLongRunningEvent = DiagnosticSessionAttentionBaseEvent & {

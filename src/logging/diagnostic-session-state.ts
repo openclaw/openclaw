@@ -13,6 +13,7 @@ export type SessionState = {
   state: SessionStateValue;
   queueDepth: number;
   activeQueuedTurn?: boolean;
+  hasPendingFinalDelivery?: boolean;
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
@@ -118,6 +119,12 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
   // Queue depth is additive when session id/key aliases collapse into one diagnostic entry.
   target.queueDepth += source.queueDepth;
   target.activeQueuedTurn ||= source.activeQueuedTurn;
+  if (
+    source.hasPendingFinalDelivery !== undefined &&
+    (sourceIsNewer || target.hasPendingFinalDelivery === undefined)
+  ) {
+    target.hasPendingFinalDelivery = source.hasPendingFinalDelivery;
+  }
   target.lastStuckWarnAgeMs =
     target.lastStuckWarnAgeMs === undefined || source.lastStuckWarnAgeMs === undefined
       ? undefined

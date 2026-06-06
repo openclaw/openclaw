@@ -63,6 +63,7 @@ const diagnosticMocks = vi.hoisted(() => ({
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
   markDiagnosticSessionProgress: vi.fn(),
+  markDiagnosticSessionPendingFinalDelivery: vi.fn(),
 }));
 const hookMocks = vi.hoisted(() => ({
   registry: {
@@ -407,6 +408,8 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
+  markDiagnosticSessionPendingFinalDelivery:
+    diagnosticMocks.markDiagnosticSessionPendingFinalDelivery,
 }));
 vi.mock("../../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: (sessionKey: string | undefined) =>
@@ -949,6 +952,7 @@ describe("dispatchReplyFromConfig", () => {
     diagnosticMocks.logMessageProcessed.mockClear();
     diagnosticMocks.logSessionStateChange.mockClear();
     diagnosticMocks.markDiagnosticSessionProgress.mockClear();
+    diagnosticMocks.markDiagnosticSessionPendingFinalDelivery.mockClear();
     diagnosticMocks.logMessageDispatchStarted.mockClear();
     diagnosticMocks.logMessageDispatchCompleted.mockClear();
     hookMocks.runner.hasHooks.mockClear();

@@ -112,6 +112,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     diagnosticMocks.logMessageProcessed.mockReset();
     diagnosticMocks.logSessionStateChange.mockReset();
     diagnosticMocks.markDiagnosticSessionProgress.mockReset();
+    diagnosticMocks.markDiagnosticSessionPendingFinalDelivery.mockReset();
     runtimePluginMocks.ensureRuntimePluginsLoaded.mockReset();
     resetPluginTtsAndThreadMocks();
   });
@@ -212,6 +213,94 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastError).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
+  });
+
+  it("replays a same-route pending final delivery before model work", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    sessionStoreMocks.currentEntry = {
+      sessionKey: "agent:test:session",
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "lost final answer",
+      pendingFinalDeliveryCreatedAt: 1,
+      pendingFinalDeliveryLastAttemptAt: 2,
+      pendingFinalDeliveryAttemptCount: 3,
+      pendingFinalDeliveryLastError: "gateway restarted",
+      pendingFinalDeliveryContext: {
+        channel: "slack",
+        to: "D0ACL8LRTJP",
+        accountId: "son-of-anton",
+      },
+      pendingFinalDeliveryIntentId: "intent-1",
+    };
+    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+      existing: sessionStoreMocks.currentEntry,
+    });
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "D0ACL8LRTJP",
+        AccountId: "son-of-anton",
+        To: "D0ACL8LRTJP",
+        ChatType: "direct",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => undefined,
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+    expect(vi.mocked(dispatcher.sendFinalReply).mock.calls[0]?.[0]).toMatchObject({
+      text: "lost final answer",
+    });
+    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryIntentId).toBeUndefined();
+  });
+
+  it("does not replay pending final delivery when the current route differs", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    sessionStoreMocks.currentEntry = {
+      sessionKey: "agent:test:session",
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "lost final answer",
+      pendingFinalDeliveryCreatedAt: 1,
+      pendingFinalDeliveryContext: {
+        channel: "slack",
+        to: "D0ACL8LRTJP",
+        accountId: "son-of-anton",
+      },
+    };
+    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+      existing: sessionStoreMocks.currentEntry,
+    });
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "D0OTHER",
+        AccountId: "son-of-anton",
+        To: "D0OTHER",
+        ChatType: "direct",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => undefined,
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(sessionStoreMocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("lost final answer");
   });
 
   it("preserves pending final delivery when final dispatch fails", async () => {

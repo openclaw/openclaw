@@ -30,8 +30,23 @@ export function classifySessionAttention(params: {
   queueDepth: number;
   activity: DiagnosticSessionActivitySnapshot;
   staleMs: number;
+  hasPendingFinalDelivery?: boolean;
 }): SessionAttentionClassification {
   if (params.activity.activeWorkKind) {
+    const lastProgressStale = (params.activity.lastProgressAgeMs ?? 0) > params.staleMs;
+    if (
+      params.hasPendingFinalDelivery === true &&
+      params.queueDepth > 0 &&
+      params.activity.activeWorkKind !== "tool_call" &&
+      (lastProgressStale || isTerminalDiagnosticProgressReason(params.activity.lastProgressReason))
+    ) {
+      return {
+        eventType: "session.stuck",
+        reason: "queued_pending_final_delivery",
+        classification: "stale_session_state",
+        recoveryEligible: true,
+      };
+    }
     // Idle session with queued work and stale orphaned activity (no active
     // embedded owner) should be classified as recoverable stuck state, not as
     // stalled active work. This prevents orphaned model_call or tool_call
@@ -40,7 +55,7 @@ export function classifySessionAttention(params: {
       params.state === "idle" &&
       params.queueDepth > 0 &&
       params.activity.hasActiveEmbeddedRun !== true &&
-      (params.activity.lastProgressAgeMs ?? 0) > params.staleMs
+      lastProgressStale
     ) {
       return {
         eventType: "session.stuck",
@@ -75,7 +90,7 @@ export function classifySessionAttention(params: {
         recoveryEligible: false,
       };
     }
-    if ((params.activity.lastProgressAgeMs ?? 0) > params.staleMs) {
+    if (lastProgressStale) {
       return {
         eventType: "session.stalled",
         reason: "active_work_without_progress",

@@ -4,7 +4,10 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  isSameRoutePendingFinalDeliveryReplaySafe,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 
 describe("sanitizePendingFinalDeliveryText", () => {
   it("strips internal metadata from durable pending delivery text", () => {
@@ -37,5 +40,61 @@ describe("sanitizePendingFinalDeliveryText", () => {
 
   it("preserves heartbeat ack text for ack-aware classification", () => {
     expect(sanitizePendingFinalDeliveryText("HEARTBEAT_OK short")).toBe("HEARTBEAT_OK short");
+  });
+});
+
+describe("isSameRoutePendingFinalDeliveryReplaySafe", () => {
+  it("allows replay only when channel, target, account, and thread match", () => {
+    expect(
+      isSameRoutePendingFinalDeliveryReplaySafe({
+        pendingContext: {
+          channel: "slack",
+          to: "D123",
+          accountId: "son-of-anton",
+          threadId: "1780719008.053929",
+        },
+        currentContext: {
+          channel: "SLACK",
+          to: "D123",
+          accountId: "son-of-anton",
+          threadId: "1780719008.053929",
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks replay when the saved route lacks exact destination proof", () => {
+    expect(
+      isSameRoutePendingFinalDeliveryReplaySafe({
+        pendingContext: { channel: "slack", to: "D123" },
+        currentContext: { channel: "slack", to: "D123", accountId: "son-of-anton" },
+      }),
+    ).toBe(false);
+    expect(
+      isSameRoutePendingFinalDeliveryReplaySafe({
+        pendingContext: { channel: "slack", to: "D123", accountId: "son-of-anton" },
+        currentContext: {
+          channel: "slack",
+          to: "D123",
+          accountId: "son-of-anton",
+          threadId: "1780719008.053929",
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks replay to a different channel target", () => {
+    expect(
+      isSameRoutePendingFinalDeliveryReplaySafe({
+        pendingContext: { channel: "slack", to: "D123", accountId: "son-of-anton" },
+        currentContext: { channel: "telegram", to: "D123", accountId: "son-of-anton" },
+      }),
+    ).toBe(false);
+    expect(
+      isSameRoutePendingFinalDeliveryReplaySafe({
+        pendingContext: { channel: "slack", to: "D123", accountId: "son-of-anton" },
+        currentContext: { channel: "slack", to: "D999", accountId: "son-of-anton" },
+      }),
+    ).toBe(false);
   });
 });

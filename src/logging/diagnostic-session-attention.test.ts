@@ -155,13 +155,65 @@ describe("classifySessionAttention", () => {
         recoveryEligible: false,
       },
     },
-  ])("$name", ({ activity, expected, queueDepth, state }) => {
+    {
+      name: "queued stale processing session with pending final delivery is recoverable",
+      state: "processing" as const,
+      queueDepth: 1,
+      hasPendingFinalDelivery: true,
+      activity: {
+        activeWorkKind: "model_call" as const,
+        hasActiveEmbeddedRun: false,
+        lastProgressAgeMs: 31_000,
+      },
+      expected: {
+        eventType: "session.stuck",
+        reason: "queued_pending_final_delivery",
+        classification: "stale_session_state",
+        recoveryEligible: true,
+      },
+    },
+    {
+      name: "queued terminal embedded progress with pending final delivery is recoverable",
+      state: "processing" as const,
+      queueDepth: 1,
+      hasPendingFinalDelivery: true,
+      activity: {
+        activeWorkKind: "embedded_run" as const,
+        lastProgressAgeMs: 100,
+        lastProgressReason: "codex_app_server:notification:rawResponseItem/completed",
+      },
+      expected: {
+        eventType: "session.stuck",
+        reason: "queued_pending_final_delivery",
+        classification: "stale_session_state",
+        recoveryEligible: true,
+      },
+    },
+    {
+      name: "blocked tool call with pending final delivery remains non-recoverable",
+      queueDepth: 1,
+      hasPendingFinalDelivery: true,
+      activity: {
+        activeWorkKind: "tool_call" as const,
+        activeToolAgeMs: 31_000,
+        lastProgressAgeMs: 31_000,
+      },
+      expected: {
+        eventType: "session.stalled",
+        reason: "blocked_tool_call",
+        classification: "blocked_tool_call",
+        activeWorkKind: "tool_call",
+        recoveryEligible: false,
+      },
+    },
+  ])("$name", ({ activity, expected, hasPendingFinalDelivery, queueDepth, state }) => {
     expect(
       classifySessionAttention({
         state,
         queueDepth,
         activity,
         staleMs: 30_000,
+        hasPendingFinalDelivery,
       }),
     ).toEqual(expected);
   });
