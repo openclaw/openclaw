@@ -1299,7 +1299,7 @@ export async function dispatchReplyFromConfig(
   const ensureDispatchReplyOperation = async (
     phase: "pre_dispatch" | "dispatch",
   ): Promise<DispatchReplyOperationAcquisition> => {
-    if (dispatchReplyOperation && !dispatchReplyOperation.result) {
+    if (dispatchReplyOperation) {
       return { status: "ready" };
     }
     if (dispatchAbortOperation && !dispatchAbortOperation.result) {

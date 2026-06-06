@@ -398,6 +398,29 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("keeps same-channel final text when the message tool sent it to another thread", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "thread reply" }],
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      originatingThreadId: "222.000",
+      messagingToolSentTexts: ["thread reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "thread reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("thread reply");
+  });
+
   it("does not dedupe short commentary that appears inside a longer same-target message", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,

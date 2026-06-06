@@ -112,6 +112,50 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ text: "discord-only text" }]);
   });
 
+  it("does not dedupe same-channel text sent to a different routed thread", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "thread reply" }],
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "222.000",
+        sentTexts: ["thread reply"],
+        sentTargets: [
+          {
+            tool: "slack",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "111.000",
+            text: "thread reply",
+          },
+        ],
+      }),
+    ).toEqual([{ text: "thread reply" }]);
+  });
+
+  it("dedupes same-channel text sent to the same routed thread", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "thread reply" }],
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "111.000",
+        sentTexts: ["thread reply"],
+        sentTargets: [
+          {
+            tool: "slack",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "111.000",
+            text: "thread reply",
+          },
+        ],
+      }),
+    ).toStrictEqual([]);
+  });
+
   it("falls back to global text dedupe for legacy multi-target messaging telemetry", () => {
     expect(
       resolveFollowupDeliveryPayloads({

@@ -132,7 +132,7 @@ function normalizeProviderForComparison(value?: string): string | undefined {
   return lowered;
 }
 
-function normalizeThreadIdForComparison(value?: string): string | undefined {
+function normalizeThreadIdForComparison(value?: string | number): string | undefined {
   return stringifyRouteThreadId(value);
 }
 
@@ -204,6 +204,7 @@ export function shouldDedupeMessagingToolRepliesForRoute(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
+  originatingThreadId?: string | number;
   accountId?: string;
 }): boolean {
   return getMatchingMessagingToolReplyTargets(params).length > 0;
@@ -214,6 +215,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
+  originatingThreadId?: string | number;
   accountId?: string;
 }): MessagingToolSend[] {
   const provider = normalizeProviderForComparison(params.messageProvider);
@@ -240,10 +242,12 @@ export function getMatchingMessagingToolReplyTargets(params: {
     }
     const targetRaw = normalizeOptionalString(target.to);
     const routeAccount = originAccount ?? targetAccount;
+    const originThreadId = normalizeThreadIdForComparison(params.originatingThreadId);
     const originRoute = normalizeRouteTargetForDedupe({
       provider,
       rawTarget: originRawTarget,
       accountId: routeAccount,
+      threadId: originThreadId,
     });
     if (!originRoute) {
       return false;
@@ -252,13 +256,25 @@ export function getMatchingMessagingToolReplyTargets(params: {
       provider: targetProvider,
       rawTarget: targetRaw,
       accountId: routeAccount,
-      threadId: target.threadId,
+      threadId: target.threadId ?? (target.threadImplicit ? originThreadId : undefined),
     });
     if (!targetRoute) {
       return false;
     }
     if (channelRouteTargetsMatchExact({ left: originRoute, right: targetRoute })) {
       return true;
+    }
+    // For providers without a thread-aware suppression matcher (e.g. Slack), a
+    // structured thread id on either side means the routes are NOT the same
+    // conversation, so do not fall back to channel-only matching (which would
+    // collapse distinct threads together and suppress a real reply). Providers
+    // that encode the thread/topic inside the target string carry their own
+    // matcher and must still run it.
+    const hasPluginThreadMatcher = Boolean(
+      getChannelPlugin(provider)?.outbound?.targetsMatchForReplySuppression,
+    );
+    if (!hasPluginThreadMatcher && (originRoute.threadId != null || targetRoute.threadId != null)) {
+      return false;
     }
     return targetsMatchForDedupe({
       provider,
@@ -284,6 +300,7 @@ export function resolveMessagingToolPayloadDedupe(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
+  originatingThreadId?: string | number;
   accountId?: string;
 }): MessagingToolPayloadDedupeDecision {
   const sentTargets = params.messagingToolSentTargets ?? [];
@@ -291,6 +308,7 @@ export function resolveMessagingToolPayloadDedupe(params: {
     messageProvider: params.messageProvider,
     messagingToolSentTargets: sentTargets,
     originatingTo: params.originatingTo,
+    originatingThreadId: params.originatingThreadId,
     accountId: params.accountId,
   });
   const matchingRoute = matchingTargets.length > 0;

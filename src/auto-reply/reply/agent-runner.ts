@@ -1575,6 +1575,7 @@ export async function runReplyAgent(params: {
           originatingTo: sessionCtx.OriginatingTo,
           to: sessionCtx.To,
         }),
+        originatingThreadId: replyRouteThreadId,
         accountId: sessionCtx.AccountId,
         normalizeMediaPaths: replyMediaContext.normalizePayload,
       });
@@ -2058,6 +2059,7 @@ export async function runReplyAgent(params: {
         originatingTo: sessionCtx.OriginatingTo,
         to: sessionCtx.To,
       }),
+      originatingThreadId: replyRouteThreadId,
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: replyMediaContext.normalizePayload,
     });

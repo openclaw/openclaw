@@ -23,6 +23,9 @@ import {
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
+let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
+let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
+let resetReplyRunRegistry: typeof import("./reply-run-registry.js").testing.resetReplyRunRegistry;
 
 function firstRuntimeLoadCall() {
   return runtimePluginMocks.ensureRuntimePluginsLoaded.mock.calls[0]?.[0] as
@@ -50,10 +53,15 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
+    const replyRunRegistryModule = await import("./reply-run-registry.js");
+    createReplyOperation = replyRunRegistryModule.createReplyOperation;
+    replyRunRegistry = replyRunRegistryModule.replyRunRegistry;
+    resetReplyRunRegistry = replyRunRegistryModule.testing.resetReplyRunRegistry;
   });
 
   beforeEach(() => {
     clearAgentHarnesses();
+    resetReplyRunRegistry();
     setDiscordTestRegistry();
     resetInboundDedupe();
     mocks.routeReply.mockReset().mockResolvedValue({ ok: true, messageId: "mock" });
@@ -240,5 +248,35 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
+  });
+
+  it("delivers a generated final reply when a queued follow-up claims the session first", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+    let queuedOperation: ReturnType<typeof createReplyOperation> | undefined;
+
+    try {
+      const result = await dispatchReplyFromConfig({
+        ctx: createHookCtx(),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async () => {
+          expect(replyRunRegistry.get("agent:test:session")?.sessionId).toBeTruthy();
+          replyRunRegistry.get("agent:test:session")?.complete();
+          queuedOperation = createReplyOperation({
+            sessionKey: "agent:test:session",
+            sessionId: "queued-session",
+            resetTriggered: false,
+          });
+          return { text: "first reply" };
+        },
+      });
+
+      expect(result.queuedFinal).toBe(true);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "first reply" });
+    } finally {
+      queuedOperation?.complete();
+    }
   });
 });
