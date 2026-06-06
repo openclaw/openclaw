@@ -24,11 +24,6 @@ import {
   stripParallelGeneratedSessionId,
 } from "./parallel-search-normalize.js";
 
-// Marks results served by the free Search MCP. The Control UI keys off this to
-// label the tool-call chip "Parallel Web Search". (No attribution string is
-// added to the payload because nothing consumes one.)
-const PARALLEL_FREE_MCP_TRANSPORT = "parallel-free-mcp";
-
 export async function executeParallelFreeWebSearchProviderTool(
   ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
@@ -88,7 +83,6 @@ export async function executeParallelFreeWebSearchProviderTool(
     provider: "parallel-free",
     count: results.length,
     tookMs: Date.now() - start,
-    searchTransport: PARALLEL_FREE_MCP_TRANSPORT,
     externalContent: {
       untrusted: true,
       source: "web_search",

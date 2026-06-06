@@ -150,38 +150,6 @@ export function isToolCardError(card: ToolCard): boolean {
   return isToolErrorOutput(card.outputText);
 }
 
-// Wire marker the `parallel-free` provider stamps on results served by Parallel's
-// free hosted Search MCP (see extensions/parallel parallel-free-web-search-provider.runtime.ts).
-// The paid `parallel` REST path and every other provider omit it.
-const PARALLEL_FREE_MCP_TRANSPORT = "parallel-free-mcp";
-
-/**
- * Branded label for a tool card, derived from its result. Brands the generic
- * `web_search` chip as "Parallel Web Search" only on Parallel's free Search MCP
- * path (identified by the `searchTransport` marker). Resolves once the result
- * arrives; in-flight cards (no output yet) keep the generic label.
- */
-export function resolveToolLabelOverride(card: ToolCard): string | undefined {
-  if (typeof card.name !== "string" || card.name.trim().toLowerCase() !== "web_search") {
-    return undefined;
-  }
-  const text = card.outputText?.trim();
-  if (!text || !text.startsWith("{") || !text.endsWith("}")) {
-    return undefined;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return undefined;
-  }
-  const obj = parsed as Record<string, unknown>;
-  return obj.searchTransport === PARALLEL_FREE_MCP_TRANSPORT ? "Parallel Web Search" : undefined;
-}
-
 export function extractToolPreview(
   outputText: string | undefined,
   toolName: string | undefined,
@@ -397,11 +365,7 @@ export function extractToolCardsCached(message: unknown, prefix = "tool"): ToolC
 }
 
 export function buildToolCardSidebarContent(card: ToolCard): string {
-  const display = resolveToolDisplay({
-    name: card.name,
-    args: card.args,
-    labelOverride: resolveToolLabelOverride(card),
-  });
+  const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const isError = isToolCardError(card);
   const sections = [`## ${display.label}`, `**Tool:** \`${display.name}\``];
@@ -683,12 +647,7 @@ export function renderToolCard(
     allowExternalEmbedUrls?: boolean;
   },
 ) {
-  const display = resolveToolDisplay({
-    name: card.name,
-    args: card.args,
-    detailMode: "explain",
-    labelOverride: resolveToolLabelOverride(card),
-  });
+  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const isError = isToolCardError(card);
   const summary = resolveCollapsedToolSummaryParts({
     card,
@@ -737,11 +696,7 @@ export function renderExpandedToolCardContent(
   embedSandboxMode: EmbedSandboxMode = "scripts",
   allowExternalEmbedUrls = false,
 ) {
-  const display = resolveToolDisplay({
-    name: card.name,
-    args: card.args,
-    labelOverride: resolveToolLabelOverride(card),
-  });
+  const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const hasOutput = Boolean(card.outputText?.trim());
   const hasInput = Boolean(card.inputText?.trim());
@@ -824,11 +779,7 @@ export function renderToolCardSidebar(
   embedSandboxMode: EmbedSandboxMode = "scripts",
   options?: { sessionKey?: string; agentId?: string },
 ) {
-  const display = resolveToolDisplay({
-    name: card.name,
-    args: card.args,
-    labelOverride: resolveToolLabelOverride(card),
-  });
+  const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const preview = card.preview;
   const hasText = Boolean(card.outputText?.trim());

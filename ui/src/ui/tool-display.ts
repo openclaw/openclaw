@@ -103,16 +103,13 @@ export function resolveToolDisplay(params: {
   args?: unknown;
   meta?: string;
   detailMode?: ToolDetailMode;
-  // Caller-provided label/title override (e.g. provider-specific branding
-  // derived from the tool result). Wins over the static name->spec mapping.
-  labelOverride?: string;
 }): ToolDisplay {
   const name = normalizeToolName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
-  const title = params.labelOverride ?? spec?.title ?? defaultTitle(name);
-  const label = params.labelOverride ?? spec?.label ?? title;
+  const title = spec?.title ?? defaultTitle(name);
+  const label = spec?.label ?? title;
   const toolDisplayParts = resolveToolVerbAndDetailForArgs({
     toolKey: key,
     args: params.args,

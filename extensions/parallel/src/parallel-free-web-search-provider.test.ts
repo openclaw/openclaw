@@ -102,10 +102,7 @@ describe("parallel-free web search provider", () => {
     expect(
       (endpointMockState.calls[0].init.headers as Record<string, string>).Authorization,
     ).toBeUndefined();
-    expect(result).toMatchObject({
-      provider: "parallel-free",
-      searchTransport: "parallel-free-mcp",
-    });
+    expect(result).toMatchObject({ provider: "parallel-free" });
     expect(Array.isArray(result.results)).toBe(true);
     expect((result.results as unknown[]).length).toBe(1);
     vi.unstubAllEnvs();

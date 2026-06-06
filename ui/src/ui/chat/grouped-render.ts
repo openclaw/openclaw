@@ -34,7 +34,6 @@ import {
   renderToolCard,
   renderToolPreview,
   resolveCollapsedToolDetail,
-  resolveToolLabelOverride,
 } from "./tool-cards.ts";
 
 type AssistantAttachmentAvailability =
@@ -475,7 +474,6 @@ export function renderMessageGroup(
               name: card.name,
               args: card.args,
               detailMode: "explain",
-              labelOverride: resolveToolLabelOverride(card),
             }).label,
         ),
       ),
@@ -1731,7 +1729,6 @@ function renderGroupedMessage(
         name: singleToolCard.name,
         args: singleToolCard.args,
         detailMode: "explain",
-        labelOverride: resolveToolLabelOverride(singleToolCard),
       })
     : null;
   const singleToolDisplayDetail =

@@ -1,11 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildToolCardSidebarContent,
-  extractToolCards,
-  resolveToolLabelOverride,
-} from "./tool-cards.ts";
+import { buildToolCardSidebarContent, extractToolCards } from "./tool-cards.ts";
 
 vi.mock("../icons.ts", () => ({
   icons: {},
@@ -445,46 +441,5 @@ with Example Deck
 
       expect(card?.preview, testCase.name).toBeUndefined();
     }
-  });
-});
-
-describe("resolveToolLabelOverride", () => {
-  const card = (over: Record<string, unknown>) => ({ id: "1", name: "web_search", ...over });
-
-  it("brands the free Parallel Search MCP path (marker present)", () => {
-    expect(
-      resolveToolLabelOverride(
-        card({
-          outputText: JSON.stringify({
-            provider: "parallel-free",
-            searchTransport: "parallel-free-mcp",
-          }),
-        }),
-      ),
-    ).toBe("Parallel Web Search");
-  });
-
-  it("does not brand keyed Parallel (REST) or other providers without the marker", () => {
-    expect(
-      resolveToolLabelOverride(card({ outputText: JSON.stringify({ provider: "parallel" }) })),
-    ).toBeUndefined();
-    expect(
-      resolveToolLabelOverride(card({ outputText: JSON.stringify({ provider: "brave" }) })),
-    ).toBeUndefined();
-  });
-
-  it("ignores non-web_search tools, missing output, and malformed JSON", () => {
-    expect(
-      resolveToolLabelOverride({
-        id: "1",
-        name: "terminal",
-        outputText: JSON.stringify({
-          provider: "parallel-free",
-          searchTransport: "parallel-free-mcp",
-        }),
-      }),
-    ).toBeUndefined();
-    expect(resolveToolLabelOverride(card({}))).toBeUndefined();
-    expect(resolveToolLabelOverride(card({ outputText: "not json" }))).toBeUndefined();
   });
 });
