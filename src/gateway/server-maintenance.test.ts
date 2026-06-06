@@ -140,11 +140,17 @@ describe("startGatewayMaintenanceTimers", () => {
       mediaCleanupTtlMs: MEDIA_CLEANUP_TTL_MS,
     });
 
-    expect(cleanOldMediaMock).toHaveBeenCalledWith(MEDIA_CLEANUP_TTL_MS);
+    expect(cleanOldMediaMock).toHaveBeenCalledWith(MEDIA_CLEANUP_TTL_MS, {
+      recursive: true,
+      pruneEmptyDirs: true,
+    });
 
     cleanOldMediaMock.mockClear();
     await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(cleanOldMediaMock).toHaveBeenCalledWith(MEDIA_CLEANUP_TTL_MS);
+    expect(cleanOldMediaMock).toHaveBeenCalledWith(MEDIA_CLEANUP_TTL_MS, {
+      recursive: true,
+      pruneEmptyDirs: true,
+    });
 
     stopMaintenanceTimers(timers);
   });

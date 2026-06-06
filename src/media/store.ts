@@ -27,9 +27,14 @@ const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 /** Default per-file media-store byte cap used by inbound staging and plugin SDK callers. */
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_BYTES = MEDIA_MAX_BYTES;
+const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 // Files are intentionally readable by non-owner UIDs so Docker sandbox containers can access
 // inbound media. The containing state/media directories remain 0o700, which is the trust boundary.
 const MEDIA_FILE_MODE = 0o644;
+type CleanOldMediaOptions = {
+  recursive?: boolean;
+  pruneEmptyDirs?: boolean;
+};
 type RequestImpl = typeof httpRequest;
 type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 
@@ -184,14 +189,29 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
   }
 }
 
-/**
- * Recursively prunes media files older than ttlMs across the full media tree and removes the
- * directories emptied by the sweep. This is the single media-cleanup path; it is driven by the
- * gateway maintenance timer using the configured `media.ttlHours`. Media writes never trigger
- * cleanup, so callers must opt into retention pruning by configuring that timer.
- */
-export async function cleanOldMedia(ttlMs: number) {
-  await openMediaStore().pruneExpired({ ttlMs, recursive: true, pruneEmptyDirs: true });
+// Maps the cleanup mode onto the prune sweep depth. The fs-safe prune walker keys descent off
+// maxDepth whenever it is set and only falls back to the recursive flag when maxDepth is undefined,
+// so recursive:false must resolve to depth 0 (root only). Without this, recursive:false collapses
+// to the same one-level sweep as the unset default and would still descend into — and delete —
+// retained media subdirectories (e.g. media/inbound/<id>).
+function resolveCleanupMaxDepth(recursive: boolean | undefined): number | undefined {
+  if (recursive === true) {
+    return undefined; // full-tree sweep (configured maintenance timer)
+  }
+  if (recursive === false) {
+    return 0; // root-only sweep; never descend into retained subdirectories
+  }
+  return 1; // default: prune the media root and its immediate first-level subdirectories
+}
+
+/** Prunes expired media files, optionally recursing into scoped media subdirectories. */
+export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
+  await openMediaStore().pruneExpired({
+    maxDepth: resolveCleanupMaxDepth(options.recursive),
+    ttlMs,
+    recursive: options.recursive ?? true,
+    pruneEmptyDirs: options.pruneEmptyDirs,
+  });
 }
 
 function looksLikeUrl(src: string) {

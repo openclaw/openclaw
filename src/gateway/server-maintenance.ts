@@ -259,15 +259,15 @@ export function startGatewayMaintenanceTimers(params: {
     return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null };
   }
 
-  // Capture the guard-narrowed ttl so the closure keeps a `number` (property narrowing is lost
-  // inside the deferred timer callback).
-  const mediaCleanupTtlMs = params.mediaCleanupTtlMs;
   let mediaCleanupInFlight: Promise<void> | null = null;
   const runMediaCleanup = () => {
     if (mediaCleanupInFlight) {
       return mediaCleanupInFlight;
     }
-    mediaCleanupInFlight = cleanOldMedia(mediaCleanupTtlMs)
+    mediaCleanupInFlight = cleanOldMedia(params.mediaCleanupTtlMs, {
+      recursive: true,
+      pruneEmptyDirs: true,
+    })
       .catch((err: unknown) => {
         params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
       })
