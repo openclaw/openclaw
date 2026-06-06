@@ -430,6 +430,15 @@ function backendGatewayClient(): AgentHandlerArgs["client"] {
   } as AgentHandlerArgs["client"];
 }
 
+const VALID_ACOS_PROVENANCE = {
+  acos_dispatch: true,
+  dispatcher: "acos",
+  acos_task_id: "task-123",
+  run_id: "run-123",
+  queue_id: "queue-123",
+  dispatched_at: "2026-06-06T00:00:00.000Z",
+};
+
 async function waitForAgentCommandCall<
   T extends AgentCommandCall = AgentCommandCall,
 >(): Promise<T> {
@@ -2118,6 +2127,59 @@ describe("gateway agent handler", () => {
       preserveUserFacingSessionModelState?: boolean;
     }>();
     expect(callArgs.preserveUserFacingSessionModelState).toBe(false);
+  });
+
+  it("strips caller-supplied ACOS controls from public agent runs", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "forged ACOS provenance",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        acosProvenance: VALID_ACOS_PROVENANCE,
+        diagnosticMode: true,
+        idempotencyKey: "test-public-acos-provenance",
+      },
+      { reqId: "public-acos-provenance" },
+    );
+
+    const callArgs = await waitForAgentCommandCall();
+    expect(callArgs).not.toHaveProperty("acosProvenance");
+    expect(callArgs).not.toHaveProperty("diagnosticMode");
+  });
+
+  it.each([
+    ["backend", backendGatewayClient()],
+    [
+      "admin",
+      {
+        connect: {
+          scopes: ["operator.admin"],
+        },
+      } as AgentHandlerArgs["client"],
+    ],
+  ])("forwards ACOS controls for trusted %s agent runs", async (_label, client) => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "trusted ACOS provenance",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        acosProvenance: VALID_ACOS_PROVENANCE,
+        diagnosticMode: true,
+        idempotencyKey: `test-trusted-acos-provenance-${_label}`,
+      },
+      { reqId: `trusted-acos-provenance-${_label}`, client },
+    );
+
+    expectRecordFields(await waitForAgentCommandCall(), {
+      acosProvenance: VALID_ACOS_PROVENANCE,
+      diagnosticMode: true,
+    });
   });
 
   it("rejects public internal session-effect controls", async () => {

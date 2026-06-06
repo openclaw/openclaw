@@ -218,6 +218,10 @@ function resolveCanUseInternalRuntimeHandoff(
   return client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
 }
 
+function resolveCanForwardAcosControls(client: GatewayRequestHandlerOptions["client"]): boolean {
+  return clientHasAdminScope(client) || resolveCanUseInternalRuntimeHandoff(client);
+}
+
 function emitAgentSendSessionLifecycleTransition(
   transition: AgentSendSessionLifecycleTransition | undefined,
 ): void {
@@ -1080,6 +1084,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     };
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
     const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(client);
+    const canForwardAcosControls = resolveCanForwardAcosControls(client);
     const requestedModelOverride = Boolean(request.provider || request.model);
     const requestedInternalSessionEffects = request.sessionEffects === "internal";
     const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
@@ -2530,8 +2535,12 @@ export const agentHandlers: GatewayRequestHandlers = {
               acpTurnSource: request.acpTurnSource,
               internalEvents: request.internalEvents,
               inputProvenance,
-              acosProvenance: request.acosProvenance,
-              diagnosticMode: request.diagnosticMode,
+              ...(canForwardAcosControls
+                ? {
+                    acosProvenance: request.acosProvenance,
+                    diagnosticMode: request.diagnosticMode,
+                  }
+                : {}),
               sessionEffects,
               skipInitialSessionTouch: skipAgentInitialSessionTouch,
               preserveUserFacingSessionModelState,

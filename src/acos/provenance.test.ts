@@ -122,6 +122,7 @@ describe("ACOS provenance enforcement", () => {
         env: CONTROLLED_ENV,
         diagnosticMode: true,
         mutating: true,
+        provenance: VALID_ACOS_PROVENANCE,
       }),
     ).toThrow(ACOS_DIAGNOSTIC_REJECTION_MESSAGE);
   });

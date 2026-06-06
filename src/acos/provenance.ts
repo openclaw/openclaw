@@ -159,13 +159,14 @@ export function assertAcosControlledActionAllowed(params: AssertAcosActionParams
     params.diagnosticMode === true ||
     provenance?.diagnostic_mode === true ||
     isTruthyEnvValue(env.OPENCLAW_ACOS_DIAGNOSTIC_MODE);
-  if (diagnosticMode && !params.mutating && params.requiresApproval !== true) {
+  if (diagnosticMode) {
+    if (params.mutating || params.requiresApproval === true) {
+      throw new Error(ACOS_DIAGNOSTIC_REJECTION_MESSAGE);
+    }
     return;
   }
   if (!provenance) {
-    throw new Error(
-      diagnosticMode ? ACOS_DIAGNOSTIC_REJECTION_MESSAGE : ACOS_CONTROLLED_REJECTION_MESSAGE,
-    );
+    throw new Error(ACOS_CONTROLLED_REJECTION_MESSAGE);
   }
   if (params.requiresApproval && !hasAcosApproval(provenance, params.action)) {
     throw new Error(ACOS_APPROVAL_REJECTION_MESSAGE);
