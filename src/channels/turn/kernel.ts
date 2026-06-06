@@ -16,7 +16,7 @@ import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
-  resolveChannelTurnDispatchCounts,
+  hasVisibleChannelTurnDispatch,
   type ChannelTurnDispatchResultLike,
 } from "./dispatch-result.js";
 import {
@@ -294,13 +294,10 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
     return;
   }
   const dispatchResult = params.dispatchResult as ChannelTurnDispatchResultLike;
-  const counts = resolveChannelTurnDispatchCounts(dispatchResult);
-  if (
-    dispatchResult?.queuedFinal === true ||
-    counts.tool > 0 ||
-    counts.block > 0 ||
-    counts.final > 0
-  ) {
+  // Suppress the silent-drop warning using the canonical visible-delivery signal, which
+  // includes observedReplyDelivery and other non-count delivery paths. A partial count-only
+  // check would falsely flag observed-path deliveries (queuedFinal=false, zero counts) as drops.
+  if (hasVisibleChannelTurnDispatch(dispatchResult)) {
     return;
   }
   log.warn(
