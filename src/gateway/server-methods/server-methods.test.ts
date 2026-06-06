@@ -1282,6 +1282,28 @@ describe("projectRecentChatDisplayMessages", () => {
     });
   });
 
+  it("keeps OpenClaw injected assistant rows in generic chat projection", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "live injected reply" }],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "live injected reply" }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("keeps pure commentary assistant messages hidden", () => {
     const result = projectRecentChatDisplayMessages([
       {

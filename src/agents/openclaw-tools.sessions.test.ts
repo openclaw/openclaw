@@ -707,8 +707,9 @@ describe("sessions tools", () => {
 
   it("sessions_history filters tool messages by default", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
+      const request = opts as { method?: string; params?: { limit?: number } };
       if (request.method === "chat.history") {
+        expect(request.params?.limit).toBe(1000);
         return {
           messages: [
             { role: "toolResult", content: [] },
@@ -735,6 +736,152 @@ describe("sessions tools", () => {
     });
     const withToolsDetails = withTools.details as { messages?: unknown[] };
     expect(withToolsDetails.messages).toHaveLength(2);
+  });
+
+  it("sessions_history filters transcript-only OpenClaw assistant messages", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              content: [{ type: "text", text: "duplicate mirror" }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "acp-runtime",
+              content: [{ type: "text", text: "runtime reply" }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "gateway-injected",
+              content: [{ type: "text", text: "runtime reply" }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "gateway-injected",
+              content: [{ type: "text", text: "visible injected reply" }],
+            },
+            { role: "toolResult", content: [] },
+            { role: "assistant", content: [{ type: "text", text: "real answer" }] },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-transcript-only", { sessionKey: "main" });
+    const details = result.details as { messages?: Array<{ content?: Array<{ text?: string }> }> };
+    expect(details.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+      "runtime reply",
+      "visible injected reply",
+      "real answer",
+    ]);
+
+    const withTools = await tool.execute("call-transcript-only-tools", {
+      sessionKey: "main",
+      includeTools: true,
+    });
+    const withToolsDetails = withTools.details as { messages?: Array<{ role?: string }> };
+    expect(withToolsDetails.messages?.map((message) => message.role)).toEqual([
+      "assistant",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+  });
+
+  it("sessions_history applies limit after transcript-only filtering", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: { limit?: number } };
+      if (request.method === "chat.history") {
+        expect(request.params?.limit).toBe(1000);
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "older visible answer" }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              content: [{ type: "text", text: "duplicate delivery mirror" }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "acp-runtime",
+              content: [{ type: "text", text: "runtime answer" }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "gateway-injected",
+              content: [{ type: "text", text: "runtime answer" }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "gateway-injected",
+              content: [{ type: "text", text: "visible injected answer" }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-transcript-only-limit", {
+      sessionKey: "main",
+      limit: 1,
+    });
+    const details = result.details as { messages?: Array<{ content?: Array<{ text?: string }> }> };
+    expect(details.messages).toHaveLength(1);
+    expect(details.messages?.[0]?.content?.[0]?.text).toBe("visible injected answer");
+  });
+
+  it("sessions_history preserves the default visible history window after raw overfetching", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: { limit?: number } };
+      if (request.method === "chat.history") {
+        expect(request.params?.limit).toBe(1000);
+        return {
+          messages: Array.from({ length: 250 }, (_, idx) => ({
+            role: "assistant",
+            content: [{ type: "text", text: `message ${idx + 1}` }],
+          })),
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-default-visible-limit", { sessionKey: "main" });
+    const details = result.details as { messages?: Array<{ content?: Array<{ text?: string }> }> };
+    expect(details.messages).toHaveLength(200);
+    expect(details.messages?.[0]?.content?.[0]?.text).toBe("message 51");
+    expect(details.messages?.at(-1)?.content?.[0]?.text).toBe("message 250");
   });
 
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {
