@@ -37,7 +37,6 @@ struct TalkProTab: View {
                     .padding(.top, 16)
                     .padding(.bottom, 18)
                 }
-                .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
             }
             .navigationBarHidden(true)
         }
@@ -149,7 +148,7 @@ struct TalkProTab: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 11)
                     .padding(.bottom, 3)
-                self.infoRow(icon: "person.crop.circle.fill", title: "Agent", value: self.appModel.activeAgentName)
+                self.infoRow(icon: "person.crop.circle.fill", title: "Agent", value: self.appModel.chatAgentName)
                 Divider().padding(.leading, 54)
                 self.infoRow(
                     icon: "bubble.left.and.text.bubble.right.fill",
@@ -192,13 +191,9 @@ struct TalkProTab: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 11)
                     .padding(.bottom, 3)
-                Toggle("Speakerphone", isOn: self.$talkSpeakerphoneEnabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                self.controlToggleRow("Speakerphone", isOn: self.talkSpeakerphoneBinding)
                 Divider().padding(.leading, 14)
-                Toggle("Background listening", isOn: self.$talkBackgroundEnabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                self.controlToggleRow("Background listening", isOn: self.$talkBackgroundEnabled)
                 Divider().padding(.leading, 14)
                 Button(action: self.openSettings) {
                     HStack {
@@ -216,6 +211,25 @@ struct TalkProTab: View {
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private func controlToggleRow(_ title: String, isOn: Binding<Bool>) -> some View {
+        Toggle(title, isOn: isOn)
+            .contentShape(Rectangle())
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .overlay {
+                // Keep Toggle semantics for accessibility while making the full visual row tappable.
+                Button {
+                    isOn.wrappedValue.toggle()
+                } label: {
+                    Rectangle()
+                        .fill(.clear)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHidden(true)
+            }
     }
 
     private func cardHeader(
@@ -273,7 +287,7 @@ struct TalkProTab: View {
 
     private var headerSubtitle: String {
         let mode = self.appModel.talkMode.gatewayTalkVoiceModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let agent = self.appModel.activeAgentName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let agent = self.appModel.chatAgentName.trimmingCharacters(in: .whitespacesAndNewlines)
         if mode.isEmpty || mode == "Not loaded" { return agent.isEmpty ? "Realtime voice" : agent }
         if agent.isEmpty { return mode }
         return "\(agent) • \(mode)"
@@ -289,7 +303,7 @@ struct TalkProTab: View {
         let subtitle = (self.appModel.talkMode.gatewayTalkVoiceModeSubtitle ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !subtitle.isEmpty { return subtitle }
-        return "Routes voice to \(self.appModel.activeAgentName)."
+        return "Routes voice to \(self.appModel.chatAgentName)."
     }
 
     private var transportText: String {
@@ -322,6 +336,15 @@ struct TalkProTab: View {
         }
     }
 
+    private var talkSpeakerphoneBinding: Binding<Bool> {
+        Binding(
+            get: { self.talkSpeakerphoneEnabled },
+            set: { enabled in
+                self.talkSpeakerphoneEnabled = enabled
+                self.appModel.setTalkSpeakerphoneEnabled(enabled)
+            })
+    }
+
     private func handlePrimaryAction() {
         switch self.state.primaryAction {
         case .start:
@@ -340,6 +363,7 @@ struct TalkProTab: View {
 
     private func startTalk() {
         self.talkEnabled = true
+        self.appModel.talkMode.updateMainSessionKey(self.appModel.chatSessionKey)
         self.appModel.setTalkEnabled(true)
     }
 

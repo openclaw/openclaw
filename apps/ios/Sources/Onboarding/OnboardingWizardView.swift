@@ -272,7 +272,7 @@ struct OnboardingWizardView: View {
                     OnboardingStateStore.markCompleted(mode: selectedMode)
                     self.didMarkCompleted = true
                 }
-                self.onClose()
+                self.step = .success
             }
             .onChange(of: self.scenePhase) { _, newValue in
                 guard newValue == .active else { return }
@@ -318,16 +318,7 @@ struct OnboardingWizardView: View {
                 self.selectMode(.remoteDomain)
             }
 
-            Toggle(
-                "Developer mode",
-                isOn: Binding(
-                    get: { self.developerModeEnabled },
-                    set: { newValue in
-                        self.developerModeEnabled = newValue
-                        if !newValue, self.selectedMode == .developerLocal {
-                            self.selectedMode = nil
-                        }
-                    }))
+            self.developerModeToggleRow
 
             if self.developerModeEnabled {
                 OnboardingModeRow(
@@ -346,6 +337,49 @@ struct OnboardingWizardView: View {
             }
             .disabled(self.selectedMode == nil)
         }
+    }
+
+    private var developerModeToggleRow: some View {
+        self.onboardingButtonToggle(
+            "Developer mode",
+            isOn: Binding(
+                get: { self.developerModeEnabled },
+                set: { enabled in
+                    self.developerModeEnabled = enabled
+                    if !enabled, self.selectedMode == .developerLocal {
+                        self.selectedMode = nil
+                    }
+                }))
+    }
+
+    private func onboardingButtonToggle(_ title: String, isOn: Binding<Bool>) -> some View {
+        // Onboarding Form switch rows need full-width taps; native Toggle only hits the switch edge on iOS 26.
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack {
+                Text(title)
+                Spacer(minLength: 8)
+                self.onboardingSwitchIndicator(isOn: isOn.wrappedValue)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
+    }
+
+    private func onboardingSwitchIndicator(isOn: Bool) -> some View {
+        Capsule()
+            .fill(isOn ? Color.accentColor : Color.secondary.opacity(0.35))
+            .frame(width: 52, height: 32)
+            .overlay(alignment: isOn ? .trailing : .leading) {
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 28, height: 28)
+                    .padding(2)
+                    .shadow(color: Color.black.opacity(0.14), radius: 1, x: 0, y: 1)
+            }
     }
 
     @ViewBuilder
@@ -440,7 +474,7 @@ struct OnboardingWizardView: View {
                 .autocorrectionDisabled()
             TextField("Port", text: self.$manualPortText)
                 .keyboardType(.numberPad)
-            Toggle("Use TLS", isOn: self.$manualTLS)
+            self.onboardingButtonToggle("Use TLS", isOn: self.$manualTLS)
             self.manualConnectButton
         } header: {
             Text("Developer Local")
@@ -577,7 +611,7 @@ extension OnboardingWizardView {
                 .autocorrectionDisabled()
             TextField("Port", text: self.$manualPortText)
                 .keyboardType(.numberPad)
-            Toggle("Use TLS", isOn: self.$manualTLS)
+            self.onboardingButtonToggle("Use TLS", isOn: self.$manualTLS)
             TextField("Discovery Domain (optional)", text: self.$discoveryDomain)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()

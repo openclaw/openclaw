@@ -58,16 +58,9 @@ extension AgentProTab {
     }
 
     func agentRosterState(for agent: AgentSummary) -> AgentRosterState {
-        guard self.gatewayConnected else { return .idle }
+        guard self.gatewayConnected else { return .ready }
         if agent.id == self.activeAgentID { return .online }
-        if self.cronJobsContain(agentID: agent.id) { return .busy }
-        return .idle
-    }
-
-    func cronJobsContain(agentID: String) -> Bool {
-        self.recentCronJobs.contains { job in
-            self.normalized(job.agentid) == agentID && job.enabled
-        }
+        return .ready
     }
 
     func modelLabel(for agent: AgentSummary) -> String? {

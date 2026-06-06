@@ -1268,6 +1268,19 @@ async function main() {
     upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
     upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
   });
+  if (scheduledLanes.length === 0) {
+    throw new Error(
+      [
+        "resolved zero Docker lanes",
+        `profile=${profile}`,
+        `releaseChunk=${releaseChunk || "<none>"}`,
+        `releaseProfile=${releaseProfile}`,
+        `liveMode=${liveMode}`,
+        `includeOpenWebUI=${includeOpenWebUI ? "1" : "0"}`,
+        `selectedLanes=${selectedLaneNames.length > 0 ? selectedLaneNames.join(",") : "<none>"}`,
+      ].join("; "),
+    );
+  }
 
   if (planJson) {
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);

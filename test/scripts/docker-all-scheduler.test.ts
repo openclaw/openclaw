@@ -147,6 +147,36 @@ describe("scripts/test-docker-all scheduler", () => {
     }
   });
 
+  it("rejects release-path configs that schedule zero Docker lanes", () => {
+    const logDir = mkdtempSync(`${tmpdir()}/openclaw-docker-all-`);
+    try {
+      const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_DOCKER_ALL_CHUNK: "openwebui",
+          OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+          OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI: "0",
+          OPENCLAW_DOCKER_ALL_LOG_DIR: logDir,
+          OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+          OPENCLAW_DOCKER_ALL_PROFILE: "release-path",
+          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).not.toContain("Dry run complete");
+      expect(result.stderr).toContain("resolved zero Docker lanes");
+      expect(result.stderr).toContain("profile=release-path");
+      expect(result.stderr).toContain("releaseChunk=openwebui");
+      expect(result.stderr).toContain("includeOpenWebUI=0");
+      expect(result.stderr).not.toContain("at ");
+    } finally {
+      rmSync(logDir, { force: true, recursive: true });
+    }
+  });
+
   it("allows an overweight lane to start alone under low parallelism", () => {
     expect(
       canStartSchedulerLane(

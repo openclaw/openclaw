@@ -439,14 +439,13 @@ extension AgentProTab {
     func skillEditorControls(_ skill: SkillStatusEntryLite) -> some View {
         ProCard(radius: AgentLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
-                Toggle(
+                self.skillEditorToggleRow(
                     "Enabled globally",
-                    isOn: Binding(
-                        get: { skill.isGloballyEnabled },
-                        set: { enabled in
-                            Task { await self.updateSkillGlobalEnabled(skill, enabled: enabled) }
-                        }))
-                        .disabled(self.isSkillConfigBusy(skill))
+                    isOn: skill.isGloballyEnabled,
+                    disabled: self.isSkillConfigBusy(skill))
+                { enabled in
+                    Task { await self.updateSkillGlobalEnabled(skill, enabled: enabled) }
+                }
 
                 if let primaryEnv = skill.primaryEnv, !primaryEnv.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -478,6 +477,43 @@ extension AgentProTab {
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    func skillEditorToggleRow(
+        _ title: String,
+        isOn: Bool,
+        disabled: Bool,
+        onToggle: @escaping (Bool) -> Void) -> some View
+    {
+        // Native Toggle rows in this sheet can ignore visible-row taps on iOS 26.
+        // Keep the switch semantics explicit so the control always dispatches the mutation.
+        Button {
+            onToggle(!isOn)
+        } label: {
+            HStack {
+                Text(title)
+                Spacer(minLength: 8)
+                self.skillEditorSwitchIndicator(isOn: isOn)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn ? "On" : "Off")
+    }
+
+    func skillEditorSwitchIndicator(isOn: Bool) -> some View {
+        Capsule()
+            .fill(isOn ? Color.accentColor : Color.secondary.opacity(0.35))
+            .frame(width: 52, height: 32)
+            .overlay(alignment: isOn ? .trailing : .leading) {
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 28, height: 28)
+                    .padding(2)
+                    .shadow(color: Color.black.opacity(0.14), radius: 1, x: 0, y: 1)
+            }
     }
 
     func skillEditorSetup(_ skill: SkillStatusEntryLite) -> some View {

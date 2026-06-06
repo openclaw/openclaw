@@ -3226,6 +3226,7 @@ export async function runEmbeddedAttempt(
           onExecutionPhase: params.onExecutionPhase,
           onAgentEvent: params.onAgentEvent,
           terminalLifecyclePhase: params.deferTerminalLifecycleEnd ? "finishing" : "end",
+          isTerminalAborted: () => aborted,
           onBeforeLifecycleTerminal: () => {
             if (
               requiresCompletionRequiredAsyncTaskWait({

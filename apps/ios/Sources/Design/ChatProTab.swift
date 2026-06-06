@@ -24,7 +24,8 @@ struct ChatProTab: View {
                             assistantAvatarTint: OpenClawBrand.accent,
                             showsAssistantAvatars: false,
                             composerChrome: .clean,
-                            messagePlaceholder: "Message \(self.agentDisplayName)...",
+                            isComposerEnabled: self.gatewayConnected,
+                            messagePlaceholder: self.messagePlaceholder,
                             talkControl: self.talkControl)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     } else {
@@ -41,7 +42,9 @@ struct ChatProTab: View {
                         Spacer()
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .navigationBarHidden(true)
         }
         .task {
@@ -112,7 +115,7 @@ struct ChatProTab: View {
             return
         }
         guard viewModel.sessionKey != sessionKey else { return }
-        viewModel.switchSession(to: sessionKey)
+        viewModel.syncSession(to: sessionKey)
     }
 
     private var talkControl: OpenClawChatTalkControl {
@@ -130,8 +133,7 @@ struct ChatProTab: View {
     }
 
     private var activeAgentID: String {
-        self.normalized(self.appModel.selectedAgentId)
-            ?? self.normalized(self.appModel.gatewayDefaultAgentId)
+        self.normalized(self.appModel.chatAgentId)
             ?? "main"
     }
 
@@ -160,6 +162,10 @@ struct ChatProTab: View {
             self.appModel.isOperatorGatewayConnected
     }
 
+    private var messagePlaceholder: String {
+        self.gatewayConnected ? "Message \(self.agentDisplayName)..." : "Connect to a gateway"
+    }
+
     private var chatUserAccent: Color {
         self.colorScheme == .light ? Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0) : OpenClawBrand.accent
     }
@@ -169,7 +175,7 @@ struct ChatProTab: View {
     }
 
     private var agentDisplayName: String {
-        self.normalized(self.activeAgent?.name) ?? self.appModel.activeAgentName
+        self.normalized(self.activeAgent?.name) ?? self.appModel.chatAgentName
     }
 
     private var agentBadge: String {

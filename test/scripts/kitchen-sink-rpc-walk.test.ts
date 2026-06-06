@@ -64,19 +64,42 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(result.stdout).not.toContain("temp root preserved");
   });
 
+  it("prints help before parsing malformed runtime guardrails", async () => {
+    const result = await runCommand(
+      process.execPath,
+      ["scripts/e2e/kitchen-sink-rpc-walk.mjs", "--help"],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB: "1e3",
+        },
+      },
+    );
+
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs");
+  });
+
   it("detects short and long help flags", () => {
     expect(shouldPrintHelp(["--help"])).toBe(true);
     expect(shouldPrintHelp(["-h"])).toBe(true);
     expect(shouldPrintHelp([])).toBe(false);
   });
 
-  it("keeps loose numeric env values from corrupting runtime guardrails", () => {
+  it("rejects loose numeric env values before they bypass runtime guardrails", () => {
     expect(readPositiveInt(undefined, 60_000)).toBe(60_000);
+    expect(readPositiveInt("", 60_000)).toBe(60_000);
     expect(readPositiveInt("1000", 60_000)).toBe(1000);
     expect(readPositiveInt(" 1000 ", 60_000)).toBe(1000);
-    expect(readPositiveInt("1e3", 60_000)).toBe(60_000);
-    expect(readPositiveInt("1000ms", 60_000)).toBe(60_000);
-    expect(readPositiveInt("0", 60_000)).toBe(60_000);
+    expect(() => readPositiveInt("1e3", 60_000, "OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB")).toThrow(
+      'OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB must be a positive integer. Got: "1e3"',
+    );
+    expect(() => readPositiveInt("1000ms", 60_000, "OPENCLAW_KITCHEN_SINK_RPC_READY_MS")).toThrow(
+      'OPENCLAW_KITCHEN_SINK_RPC_READY_MS must be a positive integer. Got: "1000ms"',
+    );
+    expect(() => readPositiveInt("0", 60_000, "OPENCLAW_KITCHEN_SINK_RPC_PORT")).toThrow(
+      'OPENCLAW_KITCHEN_SINK_RPC_PORT must be a positive integer. Got: "0"',
+    );
   });
 
   it("cleans up the generated temporary home tree", async () => {
