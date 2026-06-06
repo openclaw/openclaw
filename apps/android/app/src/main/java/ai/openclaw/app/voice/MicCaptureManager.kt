@@ -44,7 +44,7 @@ data class VoiceConversationEntry(
 )
 
 /** Coordinates live mic transcription, queued sends, and assistant audio replies. */
-class MicCaptureManager(
+internal class MicCaptureManager(
   private val context: Context,
   private val scope: CoroutineScope,
   private val createTranscriptionSession: suspend () -> String,
