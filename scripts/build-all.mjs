@@ -320,6 +320,22 @@ function resolveStepEnv(step, env, platform) {
   };
 }
 
+// Some CI runners use Node builds where process.features.typescript is absent or false.
+// Keep --experimental-strip-types build steps working there by preserving the script contract
+// through tsx; removing this makes affected runners fail late in build-all.
+function resolveNodeStepArgs(args, params = {}) {
+  const nodeSupportsTypeScript =
+    params.nodeSupportsTypeScript ?? Boolean(process.features?.typescript);
+  if (nodeSupportsTypeScript || args[0] !== "--experimental-strip-types") {
+    return args;
+  }
+  const scriptPath = args[1];
+  if (typeof scriptPath !== "string" || !scriptPath.endsWith(".ts")) {
+    return args;
+  }
+  return ["--import", "tsx", scriptPath, ...args.slice(2)];
+}
+
 export function resolveBuildAllStep(step, params = {}) {
   const platform = params.platform ?? process.platform;
   const env = resolveStepEnv(step, params.env ?? process.env, platform);
@@ -357,7 +373,7 @@ export function resolveBuildAllStep(step, params = {}) {
   }
   return {
     command: params.nodeExecPath ?? nodeBin,
-    args: step.args,
+    args: resolveNodeStepArgs(step.args, params),
     options: {
       stdio: "inherit",
       env,
