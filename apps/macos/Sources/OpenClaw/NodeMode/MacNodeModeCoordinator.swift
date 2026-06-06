@@ -22,11 +22,7 @@ struct MacNodeGatewayTLSSessionCache {
     private var cachedKey: Key?
     private var cachedBox: WebSocketSessionBox?
 
-    mutating func sessionBox(url: URL, params: GatewayTLSParams?) -> WebSocketSessionBox? {
-        guard let params else {
-            self.invalidate()
-            return nil
-        }
+    mutating func sessionBox(url: URL, params: GatewayTLSParams) -> WebSocketSessionBox {
         let key = Key(url: url, params: params)
         if let cachedKey = self.cachedKey, cachedKey == key, let cachedBox = self.cachedBox {
             return cachedBox
@@ -316,11 +312,15 @@ final class MacNodeModeCoordinator {
         }
         let stableID = Self.tlsPinStoreKey(for: url)
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-        let params = Self.tlsParams(
+        guard let params = Self.tlsParams(
             for: url,
             connectionMode: connectionMode,
             root: OpenClawConfigFile.loadDict(),
             storedFingerprint: stored)
+        else {
+            self.tlsSessionCache.invalidate()
+            return nil
+        }
         return self.tlsSessionCache.sessionBox(url: url, params: params)
     }
 }

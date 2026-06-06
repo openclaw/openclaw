@@ -98,8 +98,8 @@ struct MacNodeModeCoordinatorTests {
             root: ["gateway": ["remote": ["tlsFingerprint": "sha256:configured"]]],
             storedFingerprint: "stored"))
 
-        let first = try #require(cache.sessionBox(url: url, params: params))
-        let second = try #require(cache.sessionBox(url: url, params: params))
+        let first = cache.sessionBox(url: url, params: params)
+        let second = cache.sessionBox(url: url, params: params)
 
         #expect(ObjectIdentifier(first.session) == ObjectIdentifier(second.session))
     }
@@ -118,8 +118,8 @@ struct MacNodeModeCoordinatorTests {
             root: ["gateway": ["remote": ["tlsFingerprint": "sha256:rotated"]]],
             storedFingerprint: "stored"))
 
-        let first = try #require(cache.sessionBox(url: url, params: firstParams))
-        let second = try #require(cache.sessionBox(url: url, params: secondParams))
+        let first = cache.sessionBox(url: url, params: firstParams)
+        let second = cache.sessionBox(url: url, params: secondParams)
 
         #expect(ObjectIdentifier(first.session) != ObjectIdentifier(second.session))
     }
