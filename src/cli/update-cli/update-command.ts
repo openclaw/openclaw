@@ -48,6 +48,7 @@ import {
   readGatewayServiceState,
   resolveGatewayService,
   type GatewayService,
+  type GatewayServiceState,
 } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { pathExists } from "../../infra/fs-safe.js";
@@ -639,6 +640,59 @@ export function shouldUseLegacyProcessRestartAfterUpdate(params: {
   updateMode: UpdateRunResult["mode"];
 }): boolean {
   return !isPackageManagerUpdateMode(params.updateMode);
+}
+
+type GatewayServiceSupervisionVerification =
+  | { verified: true; state: GatewayServiceState }
+  | { verified: false; diagnostics: string[]; state?: GatewayServiceState };
+
+function gatewayServiceSupervisionVerified(state: GatewayServiceState): boolean {
+  return (
+    state.installed &&
+    state.loaded &&
+    state.running &&
+    !state.runtime?.missingUnit &&
+    !state.runtime?.missingSupervision
+  );
+}
+
+function formatGatewayServiceSupervisionDiagnostics(state: GatewayServiceState): string[] {
+  const diagnostics = [
+    `Service state: installed=${state.installed}, loaded=${state.loaded}, running=${state.running}.`,
+  ];
+  if (state.command?.sourcePath) {
+    diagnostics.push(`Service unit: ${state.command.sourcePath}.`);
+  }
+  if (state.runtime?.detail) {
+    diagnostics.push(`Service runtime: ${state.runtime.detail}`);
+  } else if (state.runtime?.missingUnit) {
+    diagnostics.push("Service runtime: unit is missing.");
+  } else if (state.runtime?.missingSupervision) {
+    diagnostics.push("Service runtime: gateway process is not supervised by the service manager.");
+  }
+  return diagnostics;
+}
+
+async function verifyGatewayServiceSupervision(params: {
+  service: GatewayService;
+  env?: NodeJS.ProcessEnv;
+}): Promise<GatewayServiceSupervisionVerification> {
+  try {
+    const state = await readGatewayServiceState(params.service, { env: params.env });
+    if (gatewayServiceSupervisionVerified(state)) {
+      return { verified: true, state };
+    }
+    return {
+      verified: false,
+      state,
+      diagnostics: formatGatewayServiceSupervisionDiagnostics(state),
+    };
+  } catch (err) {
+    return {
+      verified: false,
+      diagnostics: [`Service state: unavailable (${String(err)}).`],
+    };
+  }
 }
 
 type PostUpdateLaunchAgentRecoveryResult =
@@ -1974,6 +2028,9 @@ async function maybeRestartService(params: {
   invocationCwd?: string;
   nodeRunner?: string;
 }): Promise<boolean> {
+  const requiresServiceSupervisionProof =
+    params.refreshServiceEnv && isPackageManagerUpdateMode(params.result.mode);
+
   const verifyRestartedGateway = async (expectedGatewayVersion: string | undefined) => {
     const restartAfterStaleCleanup = async () => {
       if (params.refreshServiceEnv && isPackageManagerUpdateMode(params.result.mode)) {
@@ -2038,7 +2095,15 @@ async function maybeRestartService(params: {
       }
     }
 
-    if (health.healthy) {
+    const serviceSupervision =
+      health.healthy && requiresServiceSupervisionProof
+        ? await verifyGatewayServiceSupervision({
+            service,
+            env: params.serviceEnv,
+          })
+        : null;
+
+    if (health.healthy && serviceSupervision?.verified !== false) {
       if (!params.opts.json) {
         defaultRuntime.log(theme.success("Gateway: restarted and verified."));
       }
@@ -2046,8 +2111,11 @@ async function maybeRestartService(params: {
     }
 
     const diagnosticLines = [
-      "Gateway did not become healthy after restart.",
+      health.healthy
+        ? "Gateway service supervision was not verified after restart."
+        : "Gateway did not become healthy after restart.",
       ...renderRestartDiagnostics(health),
+      ...(serviceSupervision?.verified === false ? serviceSupervision.diagnostics : []),
       ...(launchAgentRecovery?.attempted
         ? [
             launchAgentRecovery.recovered
@@ -2121,13 +2189,33 @@ async function maybeRestartService(params: {
             attempts: POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS,
             delayMs: POST_REFRESH_ALREADY_HEALTHY_DELAY_MS,
           });
-          refreshedGatewayAlreadyHealthy = health.healthy;
+          const serviceSupervision =
+            health.healthy && requiresServiceSupervisionProof
+              ? await verifyGatewayServiceSupervision({
+                  service: resolveGatewayService(),
+                  env: params.serviceEnv,
+                })
+              : null;
+          refreshedGatewayAlreadyHealthy = health.healthy && serviceSupervision?.verified !== false;
           if (refreshedGatewayAlreadyHealthy && !params.opts.json) {
             defaultRuntime.log(
               theme.muted(
                 "Gateway already reports the updated version after service refresh; skipped redundant restart.",
               ),
             );
+          } else if (health.healthy && serviceSupervision?.verified === false) {
+            const lines = [
+              "Gateway reports the updated version, but managed service supervision was not verified; continuing restart.",
+              ...serviceSupervision.diagnostics,
+            ];
+            if (params.opts.json) {
+              defaultRuntime.error(lines.join("\n"));
+            } else {
+              defaultRuntime.log(theme.warn(lines[0] ?? "Gateway service supervision missing."));
+              for (const line of lines.slice(1)) {
+                defaultRuntime.log(theme.muted(line));
+              }
+            }
           }
         }
       }
