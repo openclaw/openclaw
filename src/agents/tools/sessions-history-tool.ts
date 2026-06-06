@@ -5,6 +5,7 @@ import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
+import { DEFAULT_AGENT_ID, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readStringValue } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
@@ -177,6 +178,23 @@ function enforceSessionsHistoryHardCap(params: {
   return { items: placeholder, bytes: jsonUtf8Bytes(placeholder), hardCapped: true };
 }
 
+function enforceSessionHistoryAgentBoundary(params: {
+  requesterSessionKey: string;
+  targetSessionKey: string;
+}): { allowed: true } | { allowed: false; status: "forbidden"; error: string } {
+  const requesterAgentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  const targetAgentId = resolveAgentIdFromSessionKey(params.targetSessionKey);
+  if (requesterAgentId === targetAgentId || requesterAgentId === DEFAULT_AGENT_ID) {
+    return { allowed: true };
+  }
+  return {
+    allowed: false,
+    status: "forbidden",
+    error:
+      "Session history is restricted to the caller's own agent. Only James/main OOA may read other agents' histories.",
+  };
+}
+
 export function createSessionsHistoryTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
@@ -227,6 +245,17 @@ export function createSessionsHistoryTool(opts?: {
       // From here on, use the canonical key (sessionId inputs already resolved).
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
+
+      const agentBoundary = enforceSessionHistoryAgentBoundary({
+        requesterSessionKey: effectiveRequesterKey,
+        targetSessionKey: resolvedKey,
+      });
+      if (!agentBoundary.allowed) {
+        return jsonResult({
+          status: agentBoundary.status,
+          error: agentBoundary.error,
+        });
+      }
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const visibility = resolveEffectiveSessionToolsVisibility({
