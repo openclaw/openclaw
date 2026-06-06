@@ -1,6 +1,19 @@
 // Verifies safe, user-facing auth labels without exposing credential values.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { resolveModelAuthLabel } from "./model-auth-label.js";
+
+function testModelDefinition(id: string): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 4096,
+  };
+}
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
@@ -331,7 +344,7 @@ describe("resolveModelAuthLabel", () => {
               api: "openai-completions",
               baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
               apiKey: "sk-light-only",
-              models: [{ id: "glm-5-turbo" }],
+              models: [testModelDefinition("glm-5-turbo")],
             },
           },
         },

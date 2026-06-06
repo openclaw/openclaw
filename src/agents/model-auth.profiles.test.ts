@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -13,6 +14,7 @@ import {
 } from "./auth-profiles/store.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 import type { ClaudeCliCredential } from "./cli-credentials.js";
+import { resolveModelAuthLabel } from "./model-auth-label.js";
 import {
   createRuntimeProviderAuthLookup,
   getApiKeyForModel,
@@ -22,7 +24,6 @@ import {
   resolveEnvApiKey,
   resolveModelAuthMode,
 } from "./model-auth.js";
-import { resolveModelAuthLabel } from "./model-auth-label.js";
 import { hasAuthForModelProvider } from "./model-provider-auth.js";
 
 async function expectVertexAdcEnvApiKey(params: {
@@ -62,6 +63,18 @@ function testModelDefinition(id: string): Model {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: 8192,
+  };
+}
+
+function testModelConfig(id: string): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 4096,
   };
 }
 
@@ -1954,7 +1967,7 @@ describe("resolveModelAuthLabel — custom provider keys (#82020)", () => {
               api: "openai-completions",
               baseUrl: sharedBaseUrl,
               apiKey: "sk-light-only",
-              models: [{ id: "glm-5-turbo" }],
+              models: [testModelConfig("glm-5-turbo")],
             },
           },
         },
