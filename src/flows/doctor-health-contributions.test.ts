@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => ({
   }),
   checkGatewayHealth: vi.fn(),
   probeGatewayMemoryStatus: vi.fn(),
+  gatherDaemonStatus: vi.fn(),
+  noteWorkspaceStatus: vi.fn(),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   isRecord: vi.fn(
@@ -96,6 +98,14 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../commands/doctor-gateway-health.js", () => ({
   checkGatewayHealth: mocks.checkGatewayHealth,
   probeGatewayMemoryStatus: mocks.probeGatewayMemoryStatus,
+}));
+
+vi.mock("../cli/daemon-cli/status.gather.js", () => ({
+  gatherDaemonStatus: mocks.gatherDaemonStatus,
+}));
+
+vi.mock("../commands/doctor-workspace-status.js", () => ({
+  noteWorkspaceStatus: mocks.noteWorkspaceStatus,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -194,6 +204,9 @@ describe("doctor health contributions", () => {
     });
     mocks.checkGatewayHealth.mockReset();
     mocks.probeGatewayMemoryStatus.mockReset();
+    mocks.gatherDaemonStatus.mockReset();
+    mocks.gatherDaemonStatus.mockResolvedValue({});
+    mocks.noteWorkspaceStatus.mockReset();
   });
 
   afterEach(() => {
@@ -322,6 +335,126 @@ describe("doctor health contributions", () => {
 
     expect(ids.indexOf("doctor:skills")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("passes daemon-context plugin drift into the workspace status note", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const pluginVersionDrift = {
+      gatewayVersion: "2026.6.1",
+      drifts: [
+        {
+          pluginId: "codex",
+          installedVersion: "2026.5.30-beta.1",
+          gatewayVersion: "2026.6.1",
+          source: "npm",
+        },
+      ],
+    };
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: { version: "2026.6.1" },
+      pluginVersionDrift,
+    });
+    const cfg = { plugins: { entries: { codex: { enabled: true } } } };
+
+    await contribution.run({
+      cfg,
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
+      rpc: {
+        timeout: "3000",
+        json: true,
+      },
+      probe: true,
+      requireRpc: false,
+      deep: false,
+      allowExecSecretRefs: false,
+    });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
+  });
+
+  it("omits daemon-context plugin drift when probe auth was skipped", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const pluginVersionDrift = {
+      gatewayVersion: "2026.6.1",
+      drifts: [
+        {
+          pluginId: "codex",
+          installedVersion: "2026.5.30-beta.1",
+          gatewayVersion: "2026.6.1",
+          source: "npm",
+        },
+      ],
+    };
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: {},
+      rpc: { authWarning: "exec SecretRef probe auth skipped" },
+      pluginVersionDrift,
+    });
+    const cfg = { plugins: { entries: { codex: { enabled: true } } } };
+
+    await contribution.run({
+      cfg,
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionDrift: undefined,
+    });
+  });
+
+  it("skips daemon-context plugin drift probes for remote gateway mode", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const cfg = {
+      gateway: { mode: "remote" },
+      plugins: { entries: { codex: { enabled: true } } },
+    };
+
+    await contribution.run({
+      cfg,
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionDrift: undefined,
+    });
+  });
+
+  it("disables exec SecretRef materialization for daemon-context plugin drift probes by default", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const cfg = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: {
+            source: "exec",
+            provider: "vault",
+            id: "gateway/token",
+          },
+        },
+      },
+    };
+
+    await contribution.run({
+      cfg,
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
+      rpc: {
+        timeout: "3000",
+        json: true,
+      },
+      probe: true,
+      requireRpc: false,
+      deep: false,
+      allowExecSecretRefs: false,
+    });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionDrift: undefined,
+    });
   });
 
   it("uses the read-only model catalog for hooks.gmail.model warnings", async () => {
