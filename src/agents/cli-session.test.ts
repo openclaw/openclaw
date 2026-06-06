@@ -601,6 +601,29 @@ describe("cli-session helpers", () => {
     ).toEqual({ mode: "invalidate", invalidatedReason: "mcp" });
   });
 
+  it("invalidates resume-hash bindings when the current run cannot prove the resumed MCP topology", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
+      authEpochVersion: 2,
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "mcp-config-a",
+      mcpResumeHash: "mcp-resume-a",
+    };
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-config-a",
+      }),
+    ).toEqual({ mode: "invalidate", invalidatedReason: "mcp" });
+  });
+
   it("clears provider-scoped and global CLI session state", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
