@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
@@ -53,12 +54,14 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
+import { resolveSessionStoreAgentId } from "./session-store-key.js";
 import {
   archiveSessionTranscriptsDetailed,
   resolveStableSessionEndTranscript,
@@ -68,12 +71,54 @@ import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   readSessionMessagesAsync,
-  resolveGatewaySessionStoreTarget,
   resolveSessionStoreKey,
+  resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+
+function resolveRequestedResetAgentId(
+  cfg: OpenClawConfig,
+  key: string,
+  explicitAgentId?: string,
+): { ok: true; agentId?: string } | { ok: false; error: ReturnType<typeof errorShape> } {
+  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
+  const parsed = parseAgentSessionKey(key);
+  const requestedAgentId = normalizeOptionalString(explicitAgentId);
+  if (requestedAgentId) {
+    const agentId = normalizeAgentId(requestedAgentId);
+    if (!listAgentIds(cfg).includes(agentId)) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${requestedAgentId}"`),
+      };
+    }
+    if (parsed?.agentId && normalizeAgentId(parsed.agentId) !== agentId) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+      };
+    }
+    if (canonicalKey !== "global") {
+      const keyAgentId = parsed?.agentId
+        ? normalizeAgentId(parsed.agentId)
+        : normalizeAgentId(resolveSessionStoreAgentId(cfg, canonicalKey));
+      if (keyAgentId !== agentId) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+        };
+      }
+    }
+    return { ok: true, agentId };
+  }
+  if (!parsed?.agentId) {
+    return { ok: true };
+  }
+  const agentId = normalizeAgentId(parsed.agentId);
+  return { ok: true, agentId: canonicalKey === "global" ? agentId : undefined };
+}
 
 function resolveResetSessionFile(params: {
   nextSessionId: string;
@@ -748,61 +793,98 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     });
 }
 
+const resetSessionsInFlight = new Set<string>();
+
 export async function performGatewaySessionReset(params: {
   key: string;
   agentId?: string;
   reason: "new" | "reset";
   commandSource: string;
 }): Promise<
-  | { ok: true; key: string; entry: SessionEntry; agentId: string }
+  | { ok: true; key: string; entry: SessionEntry }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
-  const resetTarget = (() => {
-    const cfg = getRuntimeConfig();
-    const explicitAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const parsedKey = parseAgentSessionKey(params.key);
-    const inferredGlobalAgentId =
-      !explicitAgentId &&
-      parsedKey &&
-      resolveSessionStoreKey({ cfg, sessionKey: params.key }) === "global"
-        ? normalizeAgentId(parsedKey.agentId)
-        : undefined;
-    const requestedAgentId = explicitAgentId ?? inferredGlobalAgentId;
-    if (requestedAgentId && !listAgentIds(cfg).includes(requestedAgentId)) {
-      return {
-        ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${requestedAgentId}`),
-      };
-    }
-    if (
-      explicitAgentId &&
-      parsedKey?.agentId &&
-      normalizeAgentId(parsedKey.agentId) !== explicitAgentId
-    ) {
-      return {
-        ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      };
-    }
-    const target = resolveGatewaySessionStoreTarget({
-      cfg,
-      key: params.key,
-      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-    });
-    return { ok: true as const, cfg, target, storePath: target.storePath, requestedAgentId };
-  })();
-  if (!resetTarget.ok) {
-    return resetTarget;
+  const cfg = getRuntimeConfig();
+  const requestedAgent = resolveRequestedResetAgentId(cfg, params.key, params.agentId);
+  if (!requestedAgent.ok) {
+    return requestedAgent;
   }
-  const { cfg, target, storePath, requestedAgentId } = resetTarget;
-  const { entry, legacyKey, canonicalKey } = loadSessionEntry(
-    params.key,
-    requestedAgentId ? { agentId: requestedAgentId } : undefined,
-  );
+  const target = resolveGatewaySessionStoreTarget({
+    cfg,
+    key: params.key,
+    ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
+  });
+  const parsedRequestedKey = parseAgentSessionKey(params.key);
+  const parsedRequestedAgentId = normalizeOptionalString(parsedRequestedKey?.agentId)
+    ? normalizeAgentId(parsedRequestedKey?.agentId)
+    : undefined;
+  const resolvedTargetAgentId =
+    target.canonicalKey === "global"
+      ? target.agentId
+      : normalizeAgentId(resolveSessionStoreAgentId(cfg, target.canonicalKey));
+  const requestedUnknownAgentId =
+    parsedRequestedAgentId &&
+    !listAgentIds(cfg).includes(parsedRequestedAgentId) &&
+    (!resolvedTargetAgentId ||
+      !listAgentIds(cfg).includes(resolvedTargetAgentId) ||
+      resolvedTargetAgentId === parsedRequestedAgentId)
+      ? parsedRequestedAgentId
+      : undefined;
+  if (requestedUnknownAgentId) {
+    const { entry } = loadSessionEntry(params.key, {
+      cfg,
+      ...(target.canonicalKey === "global" && target.agentId ? { agentId: target.agentId } : {}),
+    });
+    if (!entry) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Unknown agent id: ${requestedUnknownAgentId}`,
+        ),
+      };
+    }
+  }
+  const { storePath } = target;
+
+  const lockKey = `${storePath}\0${target.canonicalKey}`;
+  if (resetSessionsInFlight.has(lockKey)) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `session reset already in progress for key: ${lockKey}`,
+      ),
+    };
+  }
+  resetSessionsInFlight.add(lockKey);
+  try {
+    return await performGatewaySessionResetInner({ cfg, target, storePath, params });
+  } finally {
+    resetSessionsInFlight.delete(lockKey);
+  }
+}
+
+async function performGatewaySessionResetInner(ctx: {
+  cfg: OpenClawConfig;
+  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  storePath: string;
+  params: { key: string; reason: "new" | "reset"; commandSource: string };
+}): Promise<
+  | { ok: true; key: string; entry: SessionEntry }
+  | { ok: false; error: ReturnType<typeof errorShape> }
+> {
+  const { cfg, target, storePath, params } = ctx;
+  // Use the same cfg snapshot for entry resolution to avoid config drift.
+  const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key, {
+    cfg,
+    ...(target.canonicalKey === "global" && target.agentId ? { agentId: target.agentId } : {}),
+  });
   const hadExistingEntry = Boolean(entry);
   const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   let pendingAcpResetMeta: { sessionKey: string; meta: SessionAcpMeta } | undefined;
+  let resetSessionKey = target.canonicalKey ?? params.key;
   const hookEvent = createInternalHookEvent(
     "command",
     params.reason,
@@ -840,13 +922,14 @@ export async function performGatewaySessionReset(params: {
       cfg,
       key: params.key,
       store,
-      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+      ...(target.agentId ? { agentId: target.agentId } : {}),
     });
+    resetSessionKey = primaryKey;
     const currentEntry = store[primaryKey];
     resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
     const parsed = parseAgentSessionKey(primaryKey);
     const sessionAgentId = normalizeAgentId(
-      parsed?.agentId ?? target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg),
+      parsed?.agentId ?? target.agentId ?? resolveDefaultAgentId(cfg),
     );
     const resetPreservedSelection = resolveResetPreservedSelection({
       entry: currentEntry,
@@ -990,7 +1073,7 @@ export async function performGatewaySessionReset(params: {
   }
   emitGatewaySessionEndPluginHook({
     cfg,
-    sessionKey: target.canonicalKey ?? params.key,
+    sessionKey: resetSessionKey,
     sessionId: oldSessionId,
     storePath,
     sessionFile: oldSessionFile,
@@ -1001,7 +1084,7 @@ export async function performGatewaySessionReset(params: {
   });
   emitGatewaySessionStartPluginHook({
     cfg,
-    sessionKey: target.canonicalKey ?? params.key,
+    sessionKey: resetSessionKey,
     sessionId: next.sessionId,
     resumedFrom: oldSessionId,
     storePath,
@@ -1010,9 +1093,17 @@ export async function performGatewaySessionReset(params: {
   });
   if (hadExistingEntry) {
     await emitSessionUnboundLifecycleEvent({
-      targetSessionKey: target.canonicalKey ?? params.key,
+      targetSessionKey: resetSessionKey,
       reason: "session-reset",
     });
   }
-  return { ok: true, key: target.canonicalKey, entry: next, agentId: target.agentId };
+  emitSessionLifecycleEvent({
+    sessionKey: resetSessionKey,
+    ...(resetSessionKey === "global" && target.agentId ? { agentId: target.agentId } : {}),
+    reason: params.reason,
+    parentSessionKey: next.parentSessionKey,
+    label: next.label,
+    displayName: next.displayName,
+  });
+  return { ok: true, key: resetSessionKey, entry: next };
 }

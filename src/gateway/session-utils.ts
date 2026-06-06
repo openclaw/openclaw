@@ -933,8 +933,11 @@ export function resolveDeletedAgentIdFromSessionKey(
   return agentId;
 }
 
-export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; clone?: boolean }) {
-  const cfg = getRuntimeConfig();
+export function loadSessionEntry(
+  sessionKey: string,
+  opts?: { agentId?: string; cfg?: OpenClawConfig; clone?: boolean },
+) {
+  const cfg = opts?.cfg ?? getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg,
@@ -1073,11 +1076,17 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     store: params.store,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  const primaryKey = target.canonicalKey;
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
     params.store,
     target.storeKeys,
   );
+  const preserveLegacyUnknownAgentMainKey =
+    target.canonicalKey === "global" &&
+    typeof target.agentId === "string" &&
+    !listAgentIds(params.cfg).includes(normalizeAgentId(target.agentId)) &&
+    freshestMatch?.key &&
+    freshestMatch.key !== "global";
+  const primaryKey = preserveLegacyUnknownAgentMainKey ? freshestMatch.key : target.canonicalKey;
   if (freshestMatch) {
     const currentPrimary = params.store[primaryKey];
     if (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0)) {

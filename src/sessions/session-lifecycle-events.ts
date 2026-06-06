@@ -1,6 +1,7 @@
 /** Session lifecycle event broadcast to observers when a session is created or linked. */
 export type SessionLifecycleEvent = {
   sessionKey: string;
+  agentId?: string;
   reason: string;
   parentSessionKey?: string;
   label?: string;
