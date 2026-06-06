@@ -928,10 +928,12 @@ function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): bool
   );
 }
 
-function isMicrosoftFoundryProvider(provider?: string): boolean {
-  if (!provider) return false;
+const isMicrosoftFoundryProvider = (provider?: string): boolean => {
+  if (!provider) {
+    return false;
+  }
   return provider === "microsoft-foundry" || provider.startsWith("microsoft-foundry-");
-}
+};
 
 const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
   "mimo-v2-pro",
