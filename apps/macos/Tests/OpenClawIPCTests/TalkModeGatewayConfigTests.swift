@@ -45,4 +45,72 @@ struct TalkModeGatewayConfigTests {
         #expect(parsed.voiceId == "unused-voice")
         #expect(parsed.speechLocaleID == "ru-RU")
     }
+
+    @Test func `parses configured realtime gateway relay`() {
+        let snapshot = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: [
+                "talk": AnyCodable([
+                    "provider": "relay-speech",
+                    "realtime": [
+                        "mode": "realtime",
+                        "transport": "gateway-relay",
+                        "brain": "agent-consult",
+                        "provider": "relay-provider",
+                        "model": "voice-model",
+                        "voice": "voice-a",
+                    ],
+                ]),
+            ],
+            issues: nil)
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            snapshot: snapshot,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultSilenceTimeoutMs: TalkDefaults.silenceTimeoutMs,
+            envVoice: nil,
+            sagVoice: nil,
+            envApiKey: nil)
+
+        #expect(parsed.realtimeRelayConfig?.provider == "relay-provider")
+        #expect(parsed.realtimeRelayConfig?.model == "voice-model")
+        #expect(parsed.realtimeRelayConfig?.voice == "voice-a")
+    }
+
+    @Test func `ignores non relay realtime transports on macOS`() {
+        let snapshot = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: [
+                "talk": AnyCodable([
+                    "realtime": [
+                        "mode": "realtime",
+                        "transport": "managed-room",
+                        "provider": "relay-provider",
+                    ],
+                ]),
+            ],
+            issues: nil)
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            snapshot: snapshot,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultSilenceTimeoutMs: TalkDefaults.silenceTimeoutMs,
+            envVoice: nil,
+            sagVoice: nil,
+            envApiKey: nil)
+
+        #expect(parsed.realtimeRelayConfig == nil)
+    }
 }

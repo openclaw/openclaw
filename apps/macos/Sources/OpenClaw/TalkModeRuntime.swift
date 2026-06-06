@@ -78,6 +78,8 @@ actor TalkModeRuntime {
     private var apiKey: String?
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
+    private var realtimeRelayConfig: TalkRealtimeRelayConfig?
+    private var realtimeRelaySession: TalkRealtimeRelaySession?
 
     private var silenceWindow: TimeInterval = .init(TalkModeRuntime.defaultSilenceTimeoutMs) / 1000
     private let minSpeechRMS: Double = 1e-3
@@ -112,7 +114,12 @@ actor TalkModeRuntime {
             self.lastTranscript = ""
             self.lastHeard = nil
             self.lastSpeechEnergyAt = nil
+            await self.stopRealtimeRelaySession()
             await self.stopRecognition()
+            return
+        }
+
+        if await self.startRealtimeRelayIfNeeded(generation: self.lifecycleGeneration) {
             return
         }
 
@@ -146,6 +153,9 @@ actor TalkModeRuntime {
             }
             return
         }
+        if await self.startRealtimeRelayIfNeeded(generation: gen) {
+            return
+        }
         await self.startRecognition()
         guard self.isCurrent(gen) else { return }
         self.phase = .listening
@@ -166,6 +176,7 @@ actor TalkModeRuntime {
         self.lastHeard = nil
         self.lastSpeechEnergyAt = nil
         self.phase = .idle
+        await self.stopRealtimeRelaySession()
         await self.stopRecognition()
         await MainActor.run {
             TalkModeController.shared.updateLevel(0)
@@ -365,17 +376,82 @@ actor TalkModeRuntime {
 
     // MARK: - Gateway + TTS
 
+    private func startRealtimeRelayIfNeeded(generation: Int) async -> Bool {
+        guard let realtimeRelayConfig else { return false }
+        if self.realtimeRelaySession != nil {
+            self.phase = .listening
+            await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
+            return true
+        }
+
+        let sessionKey = await self.currentTalkSessionKey()
+        let options = realtimeRelayConfig.options(
+            sessionKey: sessionKey,
+            interruptOnSpeech: self.interruptOnSpeech)
+        let session = await MainActor.run {
+            TalkRealtimeRelaySession(
+                options: options,
+                onPhaseChanged: { phase in
+                    Task { await TalkModeRuntime.shared.applyRealtimePhase(phase) }
+                },
+                onLevelChanged: { level in
+                    TalkModeController.shared.updateLevel(level)
+                })
+        }
+        self.realtimeRelaySession = session
+        self.logger.info(
+            "talk realtime relay start session=\(sessionKey, privacy: .public) " +
+                "provider=\(options.provider ?? "default", privacy: .public)")
+        do {
+            try await session.start()
+            guard self.isCurrent(generation) else {
+                await MainActor.run { session.stop() }
+                self.realtimeRelaySession = nil
+                return true
+            }
+            self.phase = .listening
+            await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
+            return true
+        } catch {
+            self.realtimeRelaySession = nil
+            self.logger.error(
+                "talk realtime relay failed; falling back to speech pipeline: " +
+                    "\(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    private func stopRealtimeRelaySession() async {
+        guard let session = self.realtimeRelaySession else { return }
+        self.realtimeRelaySession = nil
+        await MainActor.run { session.stop() }
+    }
+
+    private func currentTalkSessionKey() async -> String {
+        let activeSessionKey = await MainActor.run { WebChatManager.shared.activeSessionKey }
+        if let activeSessionKey {
+            return activeSessionKey
+        }
+        return await GatewayConnection.shared.mainSessionKey()
+    }
+
+    private func applyRealtimePhase(_ phase: TalkModePhase) async {
+        guard self.realtimeRelaySession != nil || phase == .idle else { return }
+        self.phase = phase
+        await MainActor.run {
+            TalkModeController.shared.updatePhase(phase)
+            if phase == .idle {
+                TalkModeController.shared.updateLevel(0)
+            }
+        }
+    }
+
     private func sendAndSpeak(_ transcript: String) async {
         let gen = self.lifecycleGeneration
         await self.reloadConfig()
         guard self.isCurrent(gen) else { return }
         let prompt = self.buildPrompt(transcript: transcript)
-        let activeSessionKey = await MainActor.run { WebChatManager.shared.activeSessionKey }
-        let sessionKey: String = if let activeSessionKey {
-            activeSessionKey
-        } else {
-            await GatewayConnection.shared.mainSessionKey()
-        }
+        let sessionKey = await self.currentTalkSessionKey()
         let runId = UUID().uuidString
         let startedAt = Date().timeIntervalSince1970
         self.logger.info(
@@ -967,6 +1043,23 @@ actor TalkModeRuntime {
     }
 
     func stopSpeaking(reason: TalkStopReason) async {
+        if let session = self.realtimeRelaySession {
+            let cancelReason = switch reason {
+            case .manual:
+                "manual"
+            case .speech:
+                "speech"
+            case .userTap:
+                "user"
+            }
+            await MainActor.run { session.cancelOutput(reason: cancelReason) }
+            if reason == .manual {
+                return
+            }
+            await self.applyRealtimePhase(.listening)
+            return
+        }
+
         let usePCM = self.lastPlaybackWasPCM
         let remoteInterruptedAt = usePCM ? await self.stopPCM() : await self.stopMP3()
         _ = usePCM ? await self.stopMP3() : await self.stopPCM()
@@ -1093,7 +1186,8 @@ extension TalkModeRuntime {
 
     // MARK: - Config
 
-    private func reloadConfig() async {
+    @discardableResult
+    private func reloadConfig() async -> TalkModeGatewayConfigState {
         let cfg = await self.fetchTalkConfig()
         self.defaultVoiceId = cfg.voiceId
         self.voiceAliases = cfg.voiceAliases
@@ -1107,6 +1201,7 @@ extension TalkModeRuntime {
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
         self.activeTalkProvider = cfg.activeProvider
+        self.realtimeRelayConfig = cfg.realtimeRelayConfig
         let configuredSilenceMs = cfg.silenceTimeoutMs
         let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
         let isCJKLocale = locale.hasPrefix("ko") || locale.hasPrefix("ja") || locale.hasPrefix("zh")
@@ -1132,6 +1227,7 @@ extension TalkModeRuntime {
                     "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
                     "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public) " +
                     "speechLocale=\(cfg.speechLocaleID ?? "device", privacy: .public)")
+        return cfg
     }
 
     static func selectTalkProviderConfig(
