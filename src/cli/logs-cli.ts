@@ -49,15 +49,7 @@ type LogCursorState = {
   gateway?: number;
   journal?: string;
   journalSince?: string;
-  forceJournal?: boolean;
 };
-
-class JournalFallbackUnavailableError extends Error {
-  constructor() {
-    super("Active systemd journal unavailable for logs follow fallback");
-    this.name = "JournalFallbackUnavailableError";
-  }
-}
 
 async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
   return await import("./logs-cli.runtime.js");
@@ -104,18 +96,6 @@ async function fetchLogs(
   params: { limit: number; maxBytes: number },
 ): Promise<LogsTailPayload> {
   const { limit, maxBytes } = params;
-  if (cursors.forceJournal) {
-    const journalPayload = await readSystemdJournalFallback({
-      cursor: cursors.journal,
-      since: cursors.journalSince,
-      limit,
-      maxBytes,
-    });
-    if (journalPayload) {
-      return journalPayload;
-    }
-    throw new JournalFallbackUnavailableError();
-  }
   try {
     const payload = await callGatewayFromCli(
       "logs.tail",
@@ -333,9 +313,6 @@ const FOLLOW_BACKOFF_POLICY = { initialMs: 1_000, maxMs: 30_000, factor: 2, jitt
 // Auth errors (4xxx), policy violations (1008), and pairing-required messages are
 // non-recoverable without user action and must not loop.
 function isTransientFollowError(error: unknown): boolean {
-  if (error instanceof JournalFallbackUnavailableError) {
-    return true;
-  }
   if (isGatewayTransportError(error)) {
     if (error.kind === "timeout") {
       return true;
@@ -508,7 +485,6 @@ export function registerLogsCli(program: Command) {
     let gatewayCursor: number | undefined;
     let journalCursor: string | undefined;
     let journalSince: string | undefined;
-    let forceJournal = false;
     let first = true;
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
@@ -524,14 +500,11 @@ export function registerLogsCli(program: Command) {
       try {
         payload = await fetchLogs(
           opts,
-          { gateway: gatewayCursor, journal: journalCursor, journalSince, forceJournal },
+          { gateway: gatewayCursor, journal: journalCursor, journalSince },
           showProgress,
           { limit, maxBytes },
         );
       } catch (err) {
-        if (err instanceof JournalFallbackUnavailableError) {
-          forceJournal = false;
-        }
         if (opts.follow && followRetryAttempt < MAX_FOLLOW_RETRIES && isTransientFollowError(err)) {
           followRetryAttempt += 1;
           const backoffMs = computeBackoff(FOLLOW_BACKOFF_POLICY, followRetryAttempt);
@@ -670,7 +643,10 @@ export function registerLogsCli(program: Command) {
         }
       }
       if (payload.sourceKind === "journal") {
-        forceJournal = true;
+        // Journal fallback is a temporary bridge for transient local RPC outages.
+        // Keep the journal cursor so repeated outages do not duplicate journal lines,
+        // but keep probing logs.tail on the next follow iteration so recovered RPC
+        // switches back to the Gateway's normal file/log formatting.
         if (typeof payload.cursor === "string" && payload.cursor.trim().length > 0) {
           journalCursor = payload.cursor;
         }
