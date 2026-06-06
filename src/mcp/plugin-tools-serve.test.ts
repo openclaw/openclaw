@@ -180,6 +180,39 @@ describe("plugin tools MCP server", () => {
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 
+  it("serializes image tool content with MCP base64 source blocks", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [
+        { type: "text", text: "browser screenshot" },
+        { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+      ],
+    });
+    const tool = {
+      name: "browser_screenshot",
+      description: "Capture a browser screenshot",
+      parameters: { type: "object", properties: {} },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "browser_screenshot",
+      arguments: {},
+    });
+
+    expect(result.content).toEqual([
+      { type: "text", text: "browser screenshot" },
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: "iVBORw0KGgo=",
+        },
+      },
+    ]);
+  });
+
   it("serializes plugin tool results that do not use the MCP content envelope", async () => {
     const execute = vi.fn().mockResolvedValue({
       provider: "kitchen-sink-search",

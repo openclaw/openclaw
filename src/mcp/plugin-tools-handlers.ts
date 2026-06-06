@@ -13,6 +13,42 @@ type CallPluginToolParams = {
   arguments?: unknown;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function toMcpContentBlock(block: unknown): unknown {
+  if (!isRecord(block)) {
+    return { type: "text", text: coerceChatContentText(block) };
+  }
+  if (block.type !== "image") {
+    return block;
+  }
+
+  const source = block.source;
+  if (
+    isRecord(source) &&
+    source.type === "base64" &&
+    typeof source.data === "string" &&
+    typeof source.media_type === "string"
+  ) {
+    return block;
+  }
+
+  if (typeof block.data === "string" && typeof block.mimeType === "string") {
+    return {
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: block.mimeType,
+        data: block.data,
+      },
+    };
+  }
+
+  return { type: "text", text: coerceChatContentText(block) };
+}
+
 function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
   const params = tool.parameters;
   if (params && typeof params === "object" && "type" in params) {
@@ -59,7 +95,7 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
             : result;
         return {
           content: Array.isArray(rawContent)
-            ? rawContent
+            ? rawContent.map(toMcpContentBlock)
             : [{ type: "text", text: coerceChatContentText(rawContent) }],
         };
       } catch (err) {
