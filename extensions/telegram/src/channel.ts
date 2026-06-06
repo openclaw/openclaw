@@ -95,6 +95,10 @@ import {
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 import { resolveTelegramToken } from "./token.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
+import {
+  compileTelegramAcpConversation,
+  matchTelegramAcpConversation,
+} from "./acp-binding-conversation.js";
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramUpdateOffsetRuntime = typeof import("../update-offset-runtime-api.js");
@@ -293,43 +297,6 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
     return await telegramMessageActionsImpl.handleAction(ctx);
   },
 };
-
-function normalizeTelegramAcpConversationId(conversationId: string) {
-  const parsed = parseTelegramTopicConversation({ conversationId });
-  if (!parsed || !parsed.chatId.startsWith("-")) {
-    return null;
-  }
-  return {
-    conversationId: parsed.canonicalConversationId,
-    parentConversationId: parsed.chatId,
-  };
-}
-
-function matchTelegramAcpConversation(params: {
-  bindingConversationId: string;
-  conversationId: string;
-  parentConversationId?: string;
-}) {
-  const binding = normalizeTelegramAcpConversationId(params.bindingConversationId);
-  if (!binding) {
-    return null;
-  }
-  const incoming = parseTelegramTopicConversation({
-    conversationId: params.conversationId,
-    parentConversationId: params.parentConversationId,
-  });
-  if (!incoming || !incoming.chatId.startsWith("-")) {
-    return null;
-  }
-  if (binding.conversationId !== incoming.canonicalConversationId) {
-    return null;
-  }
-  return {
-    conversationId: incoming.canonicalConversationId,
-    parentConversationId: incoming.chatId,
-    matchPriority: 2,
-  };
-}
 
 function shouldTreatTelegramDeliveredTextAsVisible(params: {
   kind: "tool" | "block" | "final";
@@ -702,10 +669,14 @@ export const telegramPlugin = createChatChannelPlugin({
     }),
     bindings: {
       selfParentConversationByDefault: true,
-      compileConfiguredBinding: ({ conversationId }) =>
-        normalizeTelegramAcpConversationId(conversationId),
-      matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+      compileConfiguredBinding: ({ binding, conversationId }) =>
+        compileTelegramAcpConversation({
+          peerKind: binding.match?.peer?.kind,
+          conversationId,
+        }),
+      matchInboundConversation: ({ binding, compiledBinding, conversationId, parentConversationId }) =>
         matchTelegramAcpConversation({
+          peerKind: binding.match?.peer?.kind,
           bindingConversationId: compiledBinding.conversationId,
           conversationId,
           parentConversationId,
