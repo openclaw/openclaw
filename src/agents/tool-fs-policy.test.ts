@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  resolveToolFsConfig,
   resolveEffectiveToolFsRootExpansionAllowed,
   resolveEffectiveToolFsWorkspaceOnly,
 } from "./tool-fs-policy.js";
@@ -51,6 +52,43 @@ describe("resolveEffectiveToolFsWorkspaceOnly", () => {
       },
     };
     expect(resolveEffectiveToolFsWorkspaceOnly({ cfg, agentId: "main" })).toBe(true);
+  });
+});
+
+describe("resolveToolFsConfig", () => {
+  it("uses global workspaceAliases when no agent override exists", () => {
+    const aliases = [{ path: "memory", target: "/home/alice/.openclaw/workspace/memory" }];
+    const cfg: OpenClawConfig = {
+      tools: { fs: { workspaceOnly: true, workspaceAliases: aliases } },
+    };
+
+    expect(resolveToolFsConfig({ cfg, agentId: "main" })).toStrictEqual({
+      workspaceOnly: true,
+      workspaceAliases: aliases,
+    });
+  });
+
+  it("prefers agent-specific workspaceAliases over global aliases", () => {
+    const globalAliases = [{ path: "global-memory", target: "/home/alice/global-memory" }];
+    const agentAliases = [{ path: "memory", target: "/home/alice/main-memory" }];
+    const cfg: OpenClawConfig = {
+      tools: { fs: { workspaceOnly: true, workspaceAliases: globalAliases } },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              fs: { workspaceAliases: agentAliases },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveToolFsConfig({ cfg, agentId: "main" })).toStrictEqual({
+      workspaceOnly: true,
+      workspaceAliases: agentAliases,
+    });
   });
 });
 
