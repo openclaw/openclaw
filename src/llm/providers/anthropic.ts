@@ -733,16 +733,18 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
  * Check if a model supports adaptive thinking (Opus 4.6+, Sonnet 4.6)
  */
 function supportsAdaptiveThinking(modelId: string): boolean {
+  const id = modelId.toLowerCase();
   // Adaptive-thinking model IDs (with or without date suffix)
   return (
-    modelId.includes("opus-4-6") ||
-    modelId.includes("opus-4.6") ||
-    modelId.includes("opus-4-8") ||
-    modelId.includes("opus-4.8") ||
-    modelId.includes("opus-4-7") ||
-    modelId.includes("opus-4.7") ||
-    modelId.includes("sonnet-4-6") ||
-    modelId.includes("sonnet-4.6")
+    id.includes("opus-4-6") ||
+    id.includes("opus-4.6") ||
+    id.includes("opus-4-8") ||
+    id.includes("opus-4.8") ||
+    id.includes("opus-4-7") ||
+    id.includes("opus-4.7") ||
+    id.includes("sonnet-4-6") ||
+    id.includes("sonnet-4.6") ||
+    id.includes("minimax-m3")
   );
 }
 

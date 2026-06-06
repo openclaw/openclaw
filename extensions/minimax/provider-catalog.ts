@@ -35,6 +35,7 @@ function buildMinimaxModel(params: {
   input: ModelDefinitionConfig["input"];
   cost: ModelDefinitionConfig["cost"];
   contextWindow: number;
+  thinkingLevelMap?: ModelDefinitionConfig["thinkingLevelMap"];
 }): ModelDefinitionConfig {
   return {
     id: params.id,
@@ -44,6 +45,7 @@ function buildMinimaxModel(params: {
     cost: params.cost,
     contextWindow: params.contextWindow,
     maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+    ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
   };
 }
 
@@ -54,6 +56,7 @@ function buildMinimaxTextModel(params: {
   input: ModelDefinitionConfig["input"];
   cost: ModelDefinitionConfig["cost"];
   contextWindow: number;
+  thinkingLevelMap?: ModelDefinitionConfig["thinkingLevelMap"];
 }): ModelDefinitionConfig {
   return buildMinimaxModel(params);
 }
@@ -68,6 +71,9 @@ function buildMinimaxCatalog(): ModelDefinitionConfig[] {
       input: [...model.input],
       cost: resolveMinimaxApiCost(id),
       contextWindow: model.contextWindow,
+      thinkingLevelMap: (model as unknown as Record<string, unknown>).thinkingLevelMap as
+        | ModelDefinitionConfig["thinkingLevelMap"]
+        | undefined,
     });
   });
 }

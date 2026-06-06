@@ -16,6 +16,15 @@ export const MINIMAX_TEXT_MODEL_CATALOG = {
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 1_000_000,
+    thinkingLevelMap: {
+      off: null,
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "high",
+      max: "max",
+    },
   },
   "MiniMax-M2.7": {
     name: "MiniMax M2.7",
