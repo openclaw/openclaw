@@ -83,6 +83,29 @@ function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+/** Snapshot of an active assistant run still streaming on the gateway. */
+export type SessionHistoryInFlightRun = {
+  runId: string;
+  text: string;
+};
+
+/**
+ * Resolver hook the gateway runtime supplies so HTTP session-history responses
+ * can surface a run still streaming for `sessionKey`. The runtime owns the
+ * abort-controller/run-buffer maps; the SSE handler stays decoupled from them
+ * and just forwards whatever snapshot the resolver returns.
+ *
+ * Used to fix issue #90755: reconnecting to a running session previously showed
+ * only the last user message because the SSE replay had no view into the active
+ * stream. Forwarding the resolved snapshot lets the Control UI restore the
+ * in-progress assistant response on switch-back.
+ */
+export type SessionHistoryInFlightRunResolver = (params: {
+  requestedSessionKey: string;
+  canonicalSessionKey: string;
+  agentId?: string;
+}) => SessionHistoryInFlightRun | undefined;
+
 /** Handle `/sessions/:sessionKey/history` JSON/SSE requests. */
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
@@ -93,6 +116,7 @@ export async function handleSessionHistoryHttpRequest(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
+    resolveInFlightRun?: SessionHistoryInFlightRunResolver;
   },
 ): Promise<boolean> {
   const sessionKey = resolveSessionHistoryPath(req);
@@ -171,10 +195,20 @@ export async function handleSessionHistoryHttpRequest(
   });
   const history = historySnapshot.history;
 
+  // Surface a run still streaming on the gateway so a client that reconnects
+  // mid-stream (issue #90755) can restore the in-progress assistant response
+  // instead of seeing only the last committed user message.
+  const inFlightRun = opts.resolveInFlightRun?.({
+    requestedSessionKey: sessionKey,
+    canonicalSessionKey: target.canonicalKey,
+    ...(target.agentId ? { agentId: target.agentId } : {}),
+  });
+
   if (!shouldStreamSse(req)) {
     sendJson(res, 200, {
       sessionKey: target.canonicalKey,
       ...history,
+      ...(inFlightRun ? { inFlightRun } : {}),
     });
     return true;
   }
@@ -212,6 +246,7 @@ export async function handleSessionHistoryHttpRequest(
   sseWrite(res, "history", {
     sessionKey: target.canonicalKey,
     ...sentHistory,
+    ...(inFlightRun ? { inFlightRun } : {}),
   });
 
   let cleanedUp = false;
