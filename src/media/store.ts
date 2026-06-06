@@ -27,14 +27,9 @@ const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 /** Default per-file media-store byte cap used by inbound staging and plugin SDK callers. */
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_BYTES = MEDIA_MAX_BYTES;
-const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 // Files are intentionally readable by non-owner UIDs so Docker sandbox containers can access
 // inbound media. The containing state/media directories remain 0o700, which is the trust boundary.
 const MEDIA_FILE_MODE = 0o644;
-type CleanOldMediaOptions = {
-  recursive?: boolean;
-  pruneEmptyDirs?: boolean;
-};
 type RequestImpl = typeof httpRequest;
 type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 
@@ -189,14 +184,14 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
   }
 }
 
-/** Prunes expired media files, optionally recursing into scoped media subdirectories. */
-export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
-  await openMediaStore().pruneExpired({
-    maxDepth: options.recursive ? undefined : 1,
-    ttlMs,
-    recursive: options.recursive ?? true,
-    pruneEmptyDirs: options.pruneEmptyDirs,
-  });
+/**
+ * Recursively prunes media files older than ttlMs across the full media tree and removes the
+ * directories emptied by the sweep. This is the single media-cleanup path; it is driven by the
+ * gateway maintenance timer using the configured `media.ttlHours`. Media writes never trigger
+ * cleanup, so callers must opt into retention pruning by configuring that timer.
+ */
+export async function cleanOldMedia(ttlMs: number) {
+  await openMediaStore().pruneExpired({ ttlMs, recursive: true, pruneEmptyDirs: true });
 }
 
 function looksLikeUrl(src: string) {
@@ -525,7 +520,6 @@ export async function saveMediaSource(
 ): Promise<SavedMedia> {
   const dir = resolveMediaScopedDir(subdir, "saveMediaSource");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  await cleanOldMedia(DEFAULT_TTL_MS, { recursive: false });
   const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
     return await saveMediaSiblingTempFile({

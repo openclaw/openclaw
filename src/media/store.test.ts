@@ -617,27 +617,6 @@ describe("media store", () => {
         });
       },
     },
-    {
-      name: "cleans old media files in first-level subdirectories",
-      run: async () => {
-        await withTempStore(async (storeInner) => {
-          const saved = await storeInner.saveMediaBuffer(
-            Buffer.from("nested"),
-            "text/plain",
-            "inbound",
-          );
-          const inboundDir = path.dirname(saved.path);
-          const past = Date.now() - 10_000;
-          await fs.utimes(saved.path, past / 1000, past / 1000);
-
-          await storeInner.cleanOldMedia(1);
-
-          await expectPathMissing(saved.path);
-          const inboundStat = await fs.stat(inboundDir);
-          expect(inboundStat.isDirectory()).toBe(true);
-        });
-      },
-    },
   ] as const)("$name", async ({ run }) => {
     await expectTempStoreCase(run);
   });
@@ -773,25 +752,7 @@ describe("media store", () => {
           removedDirs: [path.dirname(oldNested.path)],
         };
       },
-      run: async (storeItem: typeof import("./store.js")) =>
-        await storeItem.cleanOldMedia(1_000, { recursive: true, pruneEmptyDirs: true }),
-    },
-    {
-      name: "keeps nested remote-cache files during shallow cleanup",
-      setup: async (storeCandidate: typeof import("./store.js")) => {
-        const nested = await storeCandidate.saveMediaBuffer(
-          Buffer.from("old nested"),
-          "text/plain",
-          path.join("remote-cache", "session-1", "images"),
-        );
-        const past = Date.now() - 10_000;
-        await fs.utimes(nested.path, past / 1000, past / 1000);
-        return {
-          removedFiles: [],
-          preservedFiles: [nested.path],
-        };
-      },
-      run: async (storeEntry: typeof import("./store.js")) => await storeEntry.cleanOldMedia(1_000),
+      run: async (storeItem: typeof import("./store.js")) => await storeItem.cleanOldMedia(1_000),
     },
     {
       name: "prunes empty directory chains after recursive cleanup",
@@ -813,8 +774,7 @@ describe("media store", () => {
           preservedDirs: [remoteCacheDir, mediaDir],
         };
       },
-      run: async (storeValue: typeof import("./store.js")) =>
-        await storeValue.cleanOldMedia(1_000, { recursive: true, pruneEmptyDirs: true }),
+      run: async (storeValue: typeof import("./store.js")) => await storeValue.cleanOldMedia(1_000),
     },
   ] as const)("$name", async ({ setup, run }) => {
     await expectCleanupBehaviorCase({ setup, run });
@@ -834,7 +794,7 @@ describe("media store", () => {
         await fs.utimes(outsideFile, past / 1000, past / 1000);
         await fs.symlink(outsideDir, symlinkPath);
 
-        await storeLocal.cleanOldMedia(1_000, { recursive: true, pruneEmptyDirs: true });
+        await storeLocal.cleanOldMedia(1_000);
 
         const outsideStat = await fs.stat(outsideFile);
         const symlinkStat = await fs.lstat(symlinkPath);
