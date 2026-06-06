@@ -1498,6 +1498,59 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answer.mediaUrls).toEqual(["https://example.com/chart.png"]);
   });
 
+  it("flushes the stream-off persisted progress set even for a media-only final answer", async () => {
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      delivery: { messageId: 9002 },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "c1",
+          progressText: "Generating the chart.",
+        });
+        await replyOptions?.onToolStart?.({
+          name: "Read",
+          phase: "start",
+          args: { file_path: "/x.md" },
+        });
+        // Media-only final answer (no text). This never produces an answer-text
+        // segment, so before the common-path flush it skipped the progress set.
+        await dispatcherOptions.deliver(
+          { mediaUrls: ["https://example.com/chart.png"] },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      telegramCfg: {
+        streaming: {
+          mode: "off",
+          progress: { persistProgress: true, commentary: true, toolProgress: true },
+        },
+      },
+    });
+
+    // The accumulated progress set is still delivered (as a text-only message), even
+    // though the final answer carries only media and no text.
+    const progressCalls = deliverInboundReplyWithMessageSendContext.mock.calls.filter((call) => {
+      const text = (call[0] as { payload?: { text?: string } })?.payload?.text;
+      return typeof text === "string" && text.includes("💭");
+    });
+    expect(progressCalls.length).toBe(1);
+    const progress = (
+      progressCalls[0][0] as { payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] } }
+    ).payload;
+    expect(progress.text).toContain("Read");
+    expect(progress.mediaUrl).toBeUndefined();
+    expect(progress.mediaUrls).toBeUndefined();
+  });
+
   it("suppresses text-only tool payloads delivered after the final answer", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {

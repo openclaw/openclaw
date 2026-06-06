@@ -1807,8 +1807,6 @@ export const dispatchTelegramMessage = async ({
                       if (finalAnswerDelivered) {
                         return deliverPostFinalFollowUpText();
                       }
-                      // Stream-OFF persist: land the progress set before the answer (barrier).
-                      await emitPersistedProgressSet();
                       if (streamMode === "progress") {
                         return deliverProgressModeFinalAnswer(answerPayload, finalText);
                       }
@@ -1840,6 +1838,16 @@ export const dispatchTelegramMessage = async ({
                       );
                       reasoningStepState.resetForNextStep();
                     };
+
+                    // Stream-OFF persist: flush the accumulated progress set on the COMMON
+                    // final-delivery path, before any final content. Text finals route through
+                    // the segment loop (deliverFinalAnswerText) but media-only finals produce no
+                    // answer-text segment, so flushing here (not inside deliverFinalAnswerText)
+                    // ensures the set still lands before a media-only answer. Idempotent: it
+                    // clears the accumulated log, so repeated final deliveries don't re-emit.
+                    if (info.kind === "final") {
+                      await emitPersistedProgressSet();
+                    }
 
                     let blockDelivered = false;
                     for (const segment of segments) {
