@@ -314,6 +314,7 @@ async function processMessageWithPipeline(params: {
       originatingTo: `googlechat:${spaceId}`,
       replyToId: replyThreadName,
       replyToIdFull: replyThreadName,
+      messageThreadId: replyThreadName,
     },
     message: {
       body,
@@ -375,6 +376,9 @@ async function processMessageWithPipeline(params: {
     }
   }
 
+  const inboundMessageId = message.name;
+  const inboundThreadId = replyThreadName;
+
   await core.channel.inbound.run({
     channel: "googlechat",
     accountId: route.accountId,
@@ -417,6 +421,8 @@ async function processMessageWithPipeline(params: {
               config,
               statusSink,
               typingMessageName,
+              inboundMessageId,
+              inboundThreadId,
             });
             // Only use typing message for first delivery
             typingMessageName = undefined;

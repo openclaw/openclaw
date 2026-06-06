@@ -7,11 +7,31 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   deleteGoogleChatMessage,
+  isGoogleChatMessageResourceName,
+  isGoogleChatThreadResourceName,
   sendGoogleChatMessage,
   updateGoogleChatMessage,
   uploadGoogleChatAttachment,
 } from "./api.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
+
+function resolveOutboundThread(
+  payloadReplyToId: string | undefined,
+  inboundMessageId: string | undefined,
+  inboundThreadId: string | undefined,
+): string | undefined {
+  if (isGoogleChatThreadResourceName(payloadReplyToId)) {
+    return payloadReplyToId;
+  }
+  if (
+    isGoogleChatMessageResourceName(payloadReplyToId) &&
+    payloadReplyToId === inboundMessageId &&
+    isGoogleChatThreadResourceName(inboundThreadId)
+  ) {
+    return inboundThreadId;
+  }
+  return undefined;
+}
 
 export async function deliverGoogleChatReply(params: {
   payload: {
@@ -27,8 +47,15 @@ export async function deliverGoogleChatReply(params: {
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
+  inboundMessageId: string | undefined;
+  inboundThreadId: string | undefined;
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink } = params;
+  const outboundThread = resolveOutboundThread(
+    payload.replyToId,
+    params.inboundMessageId,
+    params.inboundThreadId,
+  );
   // Clear this whenever the typing message is deleted or unavailable; otherwise
   // text delivery can keep retrying a dead message and drop content.
   let typingMessageName = params.typingMessageName;
@@ -76,7 +103,7 @@ export async function deliverGoogleChatReply(params: {
       account,
       space: spaceId,
       text: chunk,
-      thread: payload.replyToId,
+      thread: outboundThread,
     });
   };
   await deliverTextOrMediaReply({
@@ -131,7 +158,7 @@ export async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: outboundThread,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],

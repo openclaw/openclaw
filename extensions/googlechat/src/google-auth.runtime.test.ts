@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     hostnameAllowlist: hosts,
   })),
   fetchWithSsrFGuard: vi.fn(),
+  directGaxiosCtor: vi.fn(),
   gaxiosCtor: vi.fn(
     function MockGaxios(
       this: {
@@ -35,14 +36,29 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
 }));
 
+vi.mock("google-auth-library", () => ({
+  GoogleAuth: function MockGoogleAuth() {},
+  OAuth2Client: function MockOAuth2Client() {},
+  gaxios: {
+    Gaxios: mocks.gaxiosCtor,
+  },
+}));
+
 vi.mock("gaxios", () => ({
-  Gaxios: mocks.gaxiosCtor,
+  Gaxios: mocks.directGaxiosCtor,
 }));
 
 let testing: typeof import("./google-auth.runtime.js").testing;
 let createGoogleAuthFetch: typeof import("./google-auth.runtime.js").createGoogleAuthFetch;
 let getGoogleAuthTransport: typeof import("./google-auth.runtime.js").getGoogleAuthTransport;
 let resolveValidatedGoogleChatCredentials: typeof import("./google-auth.runtime.js").resolveValidatedGoogleChatCredentials;
+
+type MockGoogleAuthTransport = {
+  interceptors: {
+    request: { add: ReturnType<typeof vi.fn> };
+    response: { add: ReturnType<typeof vi.fn> };
+  };
+};
 
 beforeAll(async () => {
   ({
@@ -57,6 +73,7 @@ beforeEach(() => {
   testing.resetGoogleAuthRuntimeForTests();
   mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist.mockClear();
   mocks.fetchWithSsrFGuard.mockReset();
+  mocks.directGaxiosCtor.mockClear();
   mocks.gaxiosCtor.mockClear();
 });
 
@@ -69,6 +86,7 @@ afterEach(() => {
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.doUnmock("gaxios");
+  vi.doUnmock("google-auth-library");
   vi.resetModules();
 });
 
@@ -396,6 +414,7 @@ describe("googlechat google auth runtime", () => {
         | undefined;
 
       expect(mocks.gaxiosCtor).toHaveBeenCalledOnce();
+      expect(mocks.directGaxiosCtor).not.toHaveBeenCalled();
       expect(typeof transportDefaults.fetchImplementation).toBe("function");
       expect(requestInterceptorAdd).toHaveBeenCalledOnce();
       expect(typeof requestInterceptor?.resolved).toBe("function");
@@ -412,13 +431,16 @@ describe("googlechat google auth runtime", () => {
   it("keeps auth transports isolated from google-auth interceptor mutations", async () => {
     const first = await getGoogleAuthTransport();
     const second = await getGoogleAuthTransport();
+    const firstMockTransport = first as unknown as MockGoogleAuthTransport;
+    const secondMockTransport = second as unknown as MockGoogleAuthTransport;
 
     expect(first).not.toBe(second);
     expect(mocks.gaxiosCtor).toHaveBeenCalledTimes(2);
-    expect(first.interceptors.request["add"]).toHaveBeenCalledOnce();
-    expect(first.interceptors.response["add"]).toHaveBeenCalledOnce();
-    expect(second.interceptors.request["add"]).toHaveBeenCalledOnce();
-    expect(second.interceptors.response["add"]).toHaveBeenCalledOnce();
+    expect(mocks.directGaxiosCtor).not.toHaveBeenCalled();
+    expect(firstMockTransport.interceptors.request.add.mock.calls).toHaveLength(1);
+    expect(firstMockTransport.interceptors.response.add.mock.calls).toHaveLength(1);
+    expect(secondMockTransport.interceptors.request.add.mock.calls).toHaveLength(1);
+    expect(secondMockTransport.interceptors.response.add.mock.calls).toHaveLength(1);
   });
 
   it("normalizes Google auth request headers before upstream interceptors run", () => {
