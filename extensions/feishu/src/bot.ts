@@ -977,7 +977,6 @@ export async function handleFeishuMessage(params: {
       return;
     }
 
-    let mediaPayload = buildAgentMediaPayload(mediaList);
     const audioTranscript = await resolveFeishuAudioPreflightTranscript({
       cfg: effectiveCfg,
       mediaList,
@@ -1089,7 +1088,6 @@ export async function handleFeishuMessage(params: {
             });
             if (quotedMediaList.length > 0) {
               mediaList.push(...quotedMediaList);
-              mediaPayload = buildAgentMediaPayload(mediaList);
               log(
                 `feishu[${account.accountId}]: attached ${quotedMediaList.length} quoted media item(s) to agent context`,
               );

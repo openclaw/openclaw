@@ -268,8 +268,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return `> 💭 **Thinking**\n${lines.join("\n")}`;
   };
 
-  const convertTablesForFeishuCard = (text: string): string =>
-    core.channel.text.convertMarkdownTables(text, tableMode);
   const hasMarkdownTable = (text: string): boolean =>
     /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 
