@@ -4,6 +4,27 @@ import { describe, expect, it, vi } from "vitest";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
 
+vi.mock("../session-utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-utils.js")>(
+    "../session-utils.js",
+  );
+  const cfg = {
+    agents: { list: [{ id: "main", default: true }] },
+    session: { mainKey: "main" },
+  };
+  return {
+    ...actual,
+    loadSessionEntry: (sessionKey: string) => ({
+      cfg,
+      storePath: "/tmp/openclaw-chat-error-broadcast-sessions.json",
+      store: {},
+      entry: undefined,
+      canonicalKey: sessionKey,
+      legacyKey: undefined,
+    }),
+  };
+});
+
 function createMockContext() {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
@@ -17,7 +38,10 @@ function createMockContext() {
     chatAbortControllers,
     agentRunSeq,
     dedupe,
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    getRuntimeConfig: () => ({
+      agents: { list: [{ id: "main", default: true }] },
+      session: { mainKey: "main" },
+    }),
     logGateway: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
