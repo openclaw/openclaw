@@ -12,6 +12,8 @@ import {
   requestChatSend,
   requestSkillWorkshopRevisionChatSend,
   sendChatMessage,
+  sendDetachedChatMessage,
+  sendSteerChatMessage,
   type ChatEventPayload,
   type ChatState,
 } from "./chat.ts";
@@ -1983,6 +1985,32 @@ describe("sendChatMessage", () => {
     });
 
     expect(result).toEqual({ runId: "run-revision", status: "timeout" });
+  });
+
+  it("preserves terminal failure acks from generated-run sends", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-detached", status: "error" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await expect(sendDetachedChatMessage(state, "/btw summarize this")).resolves.toEqual({
+      runId: "run-detached",
+      status: "error",
+    });
+  });
+
+  it("preserves terminal ok acks from generated-run steer sends", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-steer-ok", status: "ok" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await expect(sendSteerChatMessage(state, "tighten the plan")).resolves.toEqual({
+      runId: "run-steer-ok",
+      status: "ok",
+    });
   });
 
   it("serializes non-image chat attachments as files", async () => {
