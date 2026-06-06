@@ -24,8 +24,8 @@ import {
 import { normalizeProviderId } from "./model-selection.js";
 
 // Builds concise auth labels for UI/status surfaces without exposing credential
-// values. Resolution follows profile override, provider profiles, env, CLI, then
-// custom provider config.
+// values. Resolution follows profile override, provider profiles, per-entry
+// provider apiKey bindings, env, CLI, then custom provider config.
 /** Resolve the display label that describes how a provider is authenticated. */
 export function resolveModelAuthLabel(params: {
   provider?: string;
@@ -121,14 +121,6 @@ export function resolveModelAuthLabel(params: {
     return "api-key (models.json)";
   }
 
-  const customKey = resolveUsableCustomProviderApiKey({
-    cfg: params.cfg,
-    provider: providerKey,
-  });
-  if (customKey) {
-    return `api-key (models.json)`;
-  }
-
   const envKey = resolveEnvApiKey(providerKey, process.env, {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -151,6 +143,14 @@ export function resolveModelAuthLabel(params: {
     readClaudeCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
   ) {
     return "oauth (claude-cli)";
+  }
+
+  const customKey = resolveUsableCustomProviderApiKey({
+    cfg: params.cfg,
+    provider: providerKey,
+  });
+  if (customKey) {
+    return `api-key (models.json)`;
   }
 
   return "unknown";
