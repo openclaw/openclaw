@@ -16,6 +16,7 @@ import {
 } from "../config/sessions/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { resolveTrajectoryFilePath } from "../trajectory/paths.js";
 
 type ArchiveFileReason = SessionArchiveReason;
 export type ArchivedSessionTranscript = {
@@ -207,6 +208,38 @@ export function archiveSessionTranscriptsDetailed(opts: {
       });
     } catch (err) {
       opts.onArchiveError?.(err, candidatePath);
+    }
+  }
+  // Also archive the trajectory file if it exists. Unlike the primary
+  // transcript, the trajectory is not discovered by resolveSessionTranscriptCandidates
+  // because it is not considered a primary session transcript artifact.
+  const trajectoryPath = resolveTrajectoryFilePath({
+    sessionId: opts.sessionId,
+    sessionFile: opts.sessionFile,
+  });
+  const trajectoryPathCanonical = canonicalizePathForComparison(trajectoryPath);
+  if (storeDir) {
+    const relative = path.relative(storeDir, trajectoryPathCanonical);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      // Skip trajectory files outside the store directory when restricted.
+    } else if (fs.existsSync(trajectoryPathCanonical)) {
+      try {
+        archived.push({
+          sourcePath: trajectoryPathCanonical,
+          archivedPath: archiveFileOnDisk(trajectoryPathCanonical, opts.reason),
+        });
+      } catch (err) {
+        opts.onArchiveError?.(err, trajectoryPathCanonical);
+      }
+    }
+  } else if (fs.existsSync(trajectoryPathCanonical)) {
+    try {
+      archived.push({
+        sourcePath: trajectoryPathCanonical,
+        archivedPath: archiveFileOnDisk(trajectoryPathCanonical, opts.reason),
+      });
+    } catch (err) {
+      opts.onArchiveError?.(err, trajectoryPathCanonical);
     }
   }
   return archived;

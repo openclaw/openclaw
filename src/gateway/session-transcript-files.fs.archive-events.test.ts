@@ -134,6 +134,61 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
     }
   });
 
+  it("archives the matching trajectory file alongside the primary transcript on reset", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-archive-trajectory-"));
+    try {
+      const sessionId = "44444444-4444-4444-8444-444444444444";
+      const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+      const trajectoryFile = path.join(tmpDir, `${sessionId}.trajectory.jsonl`);
+      fs.writeFileSync(sessionFile, '{"type":"session-meta","agentId":"main"}\n');
+      fs.writeFileSync(trajectoryFile, '{"type":"tool-call","tool":"message.send"}\n');
+
+      const archived = archiveSessionTranscriptsDetailed({
+        sessionId,
+        storePath: path.join(tmpDir, "store.json"),
+        sessionFile,
+        agentId: "main",
+        reason: "reset",
+      });
+
+      const primary = archived.find((a) => a.sourcePath === sessionFile);
+      const trajectory = archived.find((a) => a.sourcePath === trajectoryFile);
+
+      expect(primary).toBeDefined();
+      expect(trajectory).toBeDefined();
+      expect(primary?.archivedPath).toContain(".jsonl.reset.");
+      expect(trajectory?.archivedPath).toContain(".trajectory.jsonl.reset.");
+      expect(fs.existsSync(sessionFile)).toBe(false);
+      expect(fs.existsSync(trajectoryFile)).toBe(false);
+      expect(fs.existsSync(primary?.archivedPath ?? "")).toBe(true);
+      expect(fs.existsSync(trajectory?.archivedPath ?? "")).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fail when the trajectory file is absent", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-archive-no-trajectory-"));
+    try {
+      const sessionId = "55555555-5555-5555-8555-555555555555";
+      const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(sessionFile, '{"type":"session-meta","agentId":"main"}\n');
+
+      const archived = archiveSessionTranscriptsDetailed({
+        sessionId,
+        storePath: path.join(tmpDir, "store.json"),
+        sessionFile,
+        agentId: "main",
+        reason: "reset",
+      });
+
+      expect(archived.length).toBe(1);
+      expect(archived[0].sourcePath).toBe(sessionFile);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces real chmod archive failures through onArchiveError", () => {
     if (process.platform === "win32" || process.getuid?.() === 0) {
       return;
