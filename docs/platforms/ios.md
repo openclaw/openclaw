@@ -7,7 +7,9 @@ read_when:
 title: "iOS app"
 ---
 
-Availability: iPhone app builds are distributed through Apple channels when enabled for a release. Local development builds can also run from source.
+<Note>
+There is currently no official OpenClaw app on the App Store. Similarly named apps in App Store search results are not official OpenClaw builds. The iOS app is super-alpha and is distributed only through internal TestFlight beta or by building from source. It is a companion node and requires a running OpenClaw Gateway. The source code lives in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/ios`; see [apps/ios/README.md](https://github.com/openclaw/openclaw/blob/main/apps/ios/README.md) for build instructions.
+</Note>
 
 ## What it does
 
