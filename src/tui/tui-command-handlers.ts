@@ -80,6 +80,19 @@ function isSlashStopCommand(text: string): boolean {
   return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
 }
 
+function normalizedChatSendAckStatus(status: unknown): string {
+  return typeof status === "string" ? status.trim().toLowerCase() : "";
+}
+
+function isTerminalChatSendAckFailure(status: unknown): boolean {
+  const normalized = normalizedChatSendAckStatus(status);
+  return normalized === "timeout" || normalized === "error";
+}
+
+function isTerminalChatSendAckSuccess(status: unknown): boolean {
+  return normalizedChatSendAckStatus(status) === "ok";
+}
+
 function goalContinuationPrompt(text: string): string | null {
   const parsed = parseGoalCommand(text);
   if (!parsed) {
@@ -773,22 +786,48 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       });
       if (!isBtw) {
         const acceptedRunId = sendResult.runId || runId;
+        const terminalAckFailure = isTerminalChatSendAckFailure(sendResult.status);
+        const terminalAckSuccess = isTerminalChatSendAckSuccess(sendResult.status);
+        const terminalAck = terminalAckFailure || terminalAckSuccess;
         const acceptedRunAlreadyCompleted =
-          acceptedRunId !== runId && (consumeCompletedRunForPendingSend?.(acceptedRunId) ?? false);
+          acceptedRunId !== runId &&
+          !terminalAck &&
+          (consumeCompletedRunForPendingSend?.(acceptedRunId) ?? false);
         if (acceptedRunId !== runId) {
           forgetLocalRunId?.(runId);
-          if (!acceptedRunAlreadyCompleted) {
+          if (!acceptedRunAlreadyCompleted && !terminalAck) {
             noteLocalRunId?.(acceptedRunId);
           }
           if (state.pendingSubmitDraft?.runId === runId) {
-            // If the accepted run already emitted events, it is registered;
-            // re-arming the draft would let a later abort drop a row whose
-            // reply already rendered.
-            state.pendingSubmitDraft = isRunObserved?.(acceptedRunId)
-              ? null
-              : { runId: acceptedRunId, text };
+            // If the accepted run already emitted events or the ACK is already terminal,
+            // re-arming the draft would let a later abort drop a row whose lifecycle ended.
+            state.pendingSubmitDraft =
+              isRunObserved?.(acceptedRunId) || terminalAck ? null : { runId: acceptedRunId, text };
           }
           chatLog.rekeyPendingUser(runId, acceptedRunId);
+        }
+        if (terminalAck) {
+          if (state.pendingSubmitDraft?.runId === acceptedRunId) {
+            state.pendingSubmitDraft = null;
+          }
+          forgetLocalRunId?.(acceptedRunId);
+          if (terminalAckFailure) {
+            chatLog.dropPendingUser(acceptedRunId);
+          }
+          if (state.activeChatRunId === acceptedRunId) {
+            state.activeChatRunId = null;
+          }
+          state.pendingOptimisticUserMessage = false;
+          state.pendingChatRunId = null;
+          if (normalizedChatSendAckStatus(sendResult.status) === "error") {
+            chatLog.addSystem("send failed: Chat failed before the run started; try again.");
+            setActivityStatus("error");
+          } else {
+            setActivityStatus("idle");
+          }
+          await loadHistory();
+          tui.requestRender();
+          return;
         }
         if (state.pendingOptimisticUserMessage) {
           if (acceptedRunAlreadyCompleted) {

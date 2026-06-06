@@ -644,6 +644,49 @@ describe("tui command handlers", () => {
     expect(noteLocalRunId).toHaveBeenCalledWith("run-accepted");
   });
 
+  it("clears optimistic state when chat send returns a terminal timeout ack", async () => {
+    const sendChat = vi.fn().mockImplementation(async (opts: { runId: string }) => ({
+      runId: opts.runId,
+      status: "timeout",
+    }));
+    const loadHistory = vi.fn().mockResolvedValue(undefined) as LoadHistoryMock;
+    const { handleCommand, state, dropPendingUser, setActivityStatus } = createHarness({
+      sendChat,
+      loadHistory,
+    });
+
+    await handleCommand("hello");
+
+    const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+    expect(dropPendingUser).toHaveBeenCalledWith(sentRunId);
+    expect(state.pendingSubmitDraft).toBeNull();
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes history without waiting when chat send returns a terminal ok ack", async () => {
+    const sendChat = vi.fn().mockImplementation(async (opts: { runId: string }) => ({
+      runId: opts.runId,
+      status: "ok",
+    }));
+    const loadHistory = vi.fn().mockResolvedValue(undefined) as LoadHistoryMock;
+    const { handleCommand, state, dropPendingUser, setActivityStatus } = createHarness({
+      sendChat,
+      loadHistory,
+    });
+
+    await handleCommand("hello");
+
+    expect(dropPendingUser).not.toHaveBeenCalled();
+    expect(state.pendingSubmitDraft).toBeNull();
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
   it("does not reintroduce a backend-accepted runId after an early terminal event", async () => {
     const sendChat = vi.fn().mockResolvedValue({ runId: "run-accepted" });
     const consumeCompletedRunForPendingSend = vi.fn((runId: string) => runId === "run-accepted");
