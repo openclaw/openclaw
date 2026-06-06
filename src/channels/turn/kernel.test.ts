@@ -838,6 +838,74 @@ describe("channel turn kernel", () => {
     ]);
   });
 
+  it("does not warn for observed-path deliveries with zero queued counts", async () => {
+    const events: string[] = [];
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession(events);
+    // Observed-delivery path: queuedFinal false and all counts zero, but the reply was
+    // delivered via observedReplyDelivery and must not trip the silent-drop sentinel.
+    const runDispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      observedReplyDelivery: true,
+    }));
+
+    const result = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      log,
+      messageId: "msg-observed",
+      record: {
+        onRecordError: vi.fn(),
+      },
+    });
+
+    expect(result.dispatchResult?.observedReplyDelivery).toBe(true);
+    expect(log.mock.calls).not.toContainEqual([
+      expect.objectContaining({ reason: "zero-count-visible-dispatch" }),
+    ]);
+  });
+
+  it("still warns when a visible turn has zero counts and no observed delivery", async () => {
+    const events: string[] = [];
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession(events);
+    // Guard against over-suppression: a genuinely empty visible dispatch must still warn.
+    const runDispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      observedReplyDelivery: false,
+    }));
+
+    const result = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      log,
+      messageId: "msg-empty",
+      record: {
+        onRecordError: vi.fn(),
+      },
+    });
+
+    expect(result.dispatchResult?.observedReplyDelivery).toBe(false);
+    expect(log.mock.calls).toContainEqual([
+      expect.objectContaining({
+        stage: "dispatch",
+        event: "warning",
+        messageId: "msg-empty",
+        reason: "zero-count-visible-dispatch",
+      }),
+    ]);
+  });
+
   it("drops direct prepared turns with bot-loop protection before record and dispatch", async () => {
     const events: string[] = [];
     const log = vi.fn();
