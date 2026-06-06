@@ -1,7 +1,7 @@
 // Outbound attachment helpers prepare media attachments for channel delivery.
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "./load-options.js";
 import { saveMediaBuffer } from "./store.js";
-import { loadWebMedia } from "./web-media.js";
+import { loadWebMedia, markTrustedGeneratedHtmlPath } from "./web-media.js";
 
 /** Loads a remote/local media URL and stages it into the outbound media store. */
 export async function resolveOutboundAttachmentFromUrl(
@@ -30,6 +30,13 @@ export async function resolveOutboundAttachmentFromUrl(
     maxBytes,
     media.fileName,
   );
+  // When the source was a trusted-generated HTML path (under the OpenClaw temp
+  // root), persist a provenance sidecar next to the staged copy so a later
+  // host-read of this outbound path remains trusted. Without the sidecar, the
+  // staged file is treated as an arbitrary outbound HTML and rejected.
+  if (media.trustedGeneratedHtmlSource) {
+    await markTrustedGeneratedHtmlPath(saved.path);
+  }
   return { path: saved.path, contentType: saved.contentType };
 }
 
