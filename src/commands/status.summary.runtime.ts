@@ -1,4 +1,5 @@
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { parseModelRef } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -7,20 +8,7 @@ function parseStatusModelRef(
   raw: string,
   defaultProvider: string,
 ): { provider: string; model: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash === -1) {
-    return { provider: defaultProvider, model: trimmed };
-  }
-  const provider = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
-  if (!provider || !model) {
-    return null;
-  }
-  return { provider, model };
+  return parseModelRef(raw, defaultProvider);
 }
 
 function resolveStatusModelRefFromRaw(params: {
