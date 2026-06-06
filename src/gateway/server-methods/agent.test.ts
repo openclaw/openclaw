@@ -3558,6 +3558,7 @@ describe("gateway agent handler", () => {
         {
           message: "background cli task",
           sessionKey: "agent:main:main",
+          sourceCliLaneBusyRejection: true,
           idempotencyKey: "task-registry-agent-run-lane-busy",
         },
         { context, reqId: "task-registry-agent-run-lane-busy" },
@@ -3583,8 +3584,44 @@ describe("gateway agent handler", () => {
           queueAhead: 1,
           activeAhead: 1,
         });
+        expectRecordFields(readLastAgentCommandCall(), {
+          failOnSessionLaneWait: true,
+        });
       });
     });
+  });
+
+  it("does not opt non-CLI gateway agent calls into lane-busy rejection", async () => {
+    await withTempDir(
+      { prefix: "openclaw-gateway-agent-task-non-cli-lane-busy-" },
+      async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskRegistryForTests();
+        primeMainAgentRun();
+
+        await invokeAgent(
+          {
+            message: "background sdk task",
+            sessionKey: "agent:main:main",
+            idempotencyKey: "task-registry-agent-run-non-cli-lane-busy",
+          },
+          {
+            client: backendGatewayClient(),
+            reqId: "task-registry-agent-run-non-cli-lane-busy",
+          },
+        );
+
+        await waitForAssertion(() => {
+          expectRecordFields(findTaskByRunId("task-registry-agent-run-non-cli-lane-busy"), {
+            runtime: "cli",
+            childSessionKey: "agent:main:main",
+            status: "succeeded",
+          });
+          const call = readLastAgentCommandCall();
+          expect(call).not.toHaveProperty("failOnSessionLaneWait");
+        });
+      },
+    );
   });
 
   it("does not overwrite operator-cancelled async gateway agent tasks after late completion", async () => {

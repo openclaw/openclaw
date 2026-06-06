@@ -719,6 +719,7 @@ async function agentViaGatewayCommand(
             timeout: timeoutSeconds,
             lane: opts.lane,
             extraSystemPrompt: opts.extraSystemPrompt,
+            sourceCliLaneBusyRejection: true,
             idempotencyKey,
           },
           expectFinal: true,

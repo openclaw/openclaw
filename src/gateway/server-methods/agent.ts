@@ -1072,6 +1072,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       acpTurnSource?: "manual_spawn";
       internalRuntimeHandoffId?: string;
       internalEvents?: AgentInternalEvent[];
+      sourceCliLaneBusyRejection?: boolean;
       suppressPromptPersistence?: boolean;
       sessionEffects?: "visible" | "internal";
       idempotencyKey: string;
@@ -2529,7 +2530,9 @@ export const agentHandlers: GatewayRequestHandlers = {
               messageChannel: originMessageChannel,
               runId,
               lane: request.lane,
-              failOnSessionLaneWait: dispatchTaskTrackingMode === "cli",
+              ...(request.sourceCliLaneBusyRejection === true
+                ? { failOnSessionLaneWait: true }
+                : {}),
               modelRun: request.modelRun === true,
               promptMode: request.promptMode,
               extraSystemPrompt: request.extraSystemPrompt,

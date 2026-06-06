@@ -214,6 +214,8 @@ export const AgentParamsSchema = Type.Object(
     acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
     internalRuntimeHandoffId: Type.Optional(NonEmptyString),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
+    // Internal source-entrypoint CLI opt-in for same-session lane busy rejection.
+    sourceCliLaneBusyRejection: Type.Optional(Type.Boolean()),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     suppressPromptPersistence: Type.Optional(Type.Boolean()),
     sessionEffects: Type.Optional(Type.Union([Type.Literal("visible"), Type.Literal("internal")])),
