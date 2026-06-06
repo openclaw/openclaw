@@ -494,12 +494,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   protected isRequiredProviderUnavailable(): boolean {
-    return (
-      this.providerRequirement.mode === "required" &&
-      !this.provider &&
-      this.providerLifecycle.mode === "fts-only" &&
-      this.providerLifecycle.attemptedProviderId === this.settings.provider
-    );
+    return this.providerRequirement.mode === "required" && !this.provider;
   }
 
   protected buildRequiredProviderUnavailableError(operation: "search" | "sync"): Error {

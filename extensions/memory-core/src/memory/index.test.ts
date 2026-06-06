@@ -1606,6 +1606,12 @@ describe("memory index", () => {
     const status = manager.status();
     expect(status.chunks).toBeGreaterThan(0);
     expect(embedBatchCalls).toBe(0);
+    expect(status.custom?.providerUnavailableReason).toBe("No API key found for provider");
+    expect(status.custom?.providerState).toEqual({
+      mode: "fts-only",
+      reason: "No API key found for provider",
+      attemptedProviderId: "openai",
+    });
 
     const results = await manager.search("Alpha");
     expect(results.length).toBeGreaterThan(0);
@@ -1636,6 +1642,30 @@ describe("memory index", () => {
       await manager.sync({ reason: "test", force: true });
       const results = await manager.search("Alpha");
       expect(results.length).toBeGreaterThan(0);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("fails fast instead of returning FTS when an explicit provider is lost at runtime", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-required-provider-runtime-missing.sqlite"),
+      provider: "openai",
+      minScore: 0.35,
+      hybrid: { enabled: true },
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test", force: true });
+      (
+        manager as unknown as {
+          provider: null;
+        }
+      ).provider = null;
+
+      await expect(manager.search("Alpha")).rejects.toThrow(
+        /Memory search unavailable: embedding provider "openai" is configured but unavailable\./,
+      );
     } finally {
       await manager.close?.();
     }
