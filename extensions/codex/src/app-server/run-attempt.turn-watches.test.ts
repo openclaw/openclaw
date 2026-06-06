@@ -20,6 +20,7 @@ import type { CodexServerNotification } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import {
   createParams,
+  createResumeHarness,
   extractRelayIdFromThreadRequest,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
@@ -34,7 +35,11 @@ import {
   turnStartResult,
 } from "./run-attempt-test-harness.js";
 import { testing } from "./run-attempt.js";
-import { resolveCodexAppServerBindingPath } from "./session-binding.js";
+import {
+  readCodexAppServerBinding,
+  resolveCodexAppServerBindingPath,
+  writeCodexAppServerBinding,
+} from "./session-binding.js";
 
 setupRunAttemptTestHooks();
 
@@ -2863,6 +2868,54 @@ describe("runCodexAppServerAttempt turn watches", () => {
         turnId: "turn-1",
       }),
     );
+  });
+
+  it("clears the thread binding after a completion-idle timeout so the next turn starts fresh", async () => {
+    // Regression for openclaw#89974. The "user interrupted the previous turn on
+    // purpose" wording is Codex's generic <turn_aborted> rollout marker, written
+    // whenever a turn is interrupted (including OpenClaw's own watchdog abort).
+    // OpenClaw cannot change that text (turn/interrupt carries no reason); it can
+    // only avoid replaying it. This proves a turn_completion_idle_timeout clears
+    // the timed-out thread's binding so the next turn starts a fresh thread
+    // rather than resuming the thread that may hold that marker.
+    vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const sessionFile = path.join(tempDir, "session-89974.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-89974");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+
+    // Turn 1: resume an existing thread, then never deliver turn/completed.
+    const firstHarness = createResumeHarness();
+    const firstParams = createParams(sessionFile, workspaceDir);
+    firstParams.timeoutMs = 200;
+    const firstRun = runCodexAppServerAttempt(firstParams, { turnCompletionIdleTimeoutMs: 15 });
+    await firstHarness.waitForMethod("turn/start");
+    expect(firstHarness.requests.some((entry) => entry.method === "thread/resume")).toBe(true);
+
+    const firstResult = await firstRun;
+    expect(firstResult.timedOut).toBe(true);
+    expect(firstResult.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    expect(firstResult.codexAppServerFailure?.kind).toBe("turn_completion_idle_timeout");
+    expect(firstResult.codexAppServerFailure?.turnWatchTimeoutKind).toBe("completion");
+    // The timed-out thread's binding is gone, so it cannot be resumed.
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+
+    // Turn 2: with no binding, OpenClaw starts a brand-new thread instead of
+    // resuming the timed-out one, so Codex's interrupt marker never replays.
+    const secondHarness = createStartedThreadHarness();
+    const secondRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await secondHarness.waitForMethod("turn/start");
+    expect(secondHarness.requests.some((entry) => entry.method === "thread/start")).toBe(true);
+    expect(secondHarness.requests.some((entry) => entry.method === "thread/resume")).toBe(false);
+    await secondHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await secondRun;
   });
 
   it("yields a macrotask before processing queued app-server notifications", async () => {
