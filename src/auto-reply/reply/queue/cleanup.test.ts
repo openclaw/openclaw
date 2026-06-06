@@ -1,3 +1,4 @@
+// Tests queue cleanup behavior for expired state and dedupe records.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing, clearSessionQueues } from "./cleanup.js";
 
@@ -22,7 +23,7 @@ vi.mock("../../../process/command-queue.js", () => ({
   clearCommandLane: commandQueueMocks.clearCommandLane,
 }));
 
-vi.mock("../../../agents/pi-embedded-runner/lanes.js", () => ({
+vi.mock("../../../agents/embedded-agent-runner/lanes.js", () => ({
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 

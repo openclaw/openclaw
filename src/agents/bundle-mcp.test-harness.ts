@@ -1,3 +1,6 @@
+/**
+ * Claude CLI fixture generators used by bundle MCP integration tests.
+ */
 import { createRequire } from "node:module";
 import {
   writeBundleProbeMcpServer,
@@ -11,6 +14,7 @@ const SDK_CLIENT_STDIO_PATH = require.resolve("@modelcontextprotocol/sdk/client/
 
 export { writeBundleProbeMcpServer, writeClaudeBundle };
 
+/** Writes a long-lived fake Claude CLI that reads bundle MCP config per prompt. */
 export async function writeFakeClaudeLiveCli(params: {
   filePath: string;
   pidPath?: string;
@@ -72,7 +76,7 @@ async function readBundleProbeText(mcpConfigPath) {
           .join("\\n")
       : "";
   } finally {
-    await transport.close();
+    await client.close();
   }
 }
 
@@ -112,6 +116,7 @@ try {
   );
 }
 
+/** Writes a fake one-shot Claude CLI that calls the bundled MCP probe tool. */
 export async function writeFakeClaudeCli(filePath: string): Promise<void> {
   await writeExecutable(
     filePath,
@@ -180,7 +185,7 @@ const result = await (async () => {
     }
     return await client.callTool({ name: "bundle_probe", arguments: {} });
   } finally {
-    await transport.close();
+    await client.close();
   }
 })();
 

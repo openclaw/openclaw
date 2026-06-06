@@ -1,3 +1,4 @@
+// Context-engine host compatibility checks prevent engines from running on unsupported harnesses.
 import type {
   ContextEngine,
   ContextEngineHostCapability,
@@ -18,9 +19,9 @@ export const GENERIC_CLI_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "maintain",
 ] as const satisfies readonly ContextEngineHostCapability[];
 
-export const PI_EMBEDDED_CONTEXT_ENGINE_HOST = {
-  id: "pi-embedded",
-  label: "Pi embedded runner",
+export const OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST = {
+  id: "openclaw-embedded",
+  label: "OpenClaw embedded runner",
   capabilities: [
     "bootstrap",
     "assemble-before-prompt",
@@ -81,6 +82,7 @@ export function evaluateContextEngineHostSupport(params: {
   }
 
   const supported = new Set(params.host.capabilities);
+  // Capabilities are host-advertised facts; requirements stay engine-authored per operation.
   const missingCapabilities = requirements.requiredCapabilities.filter(
     (capability) => !supported.has(capability),
   );

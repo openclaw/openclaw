@@ -1,3 +1,6 @@
+/**
+ * Tests approval renderer payload and text formatting.
+ */
 import { describe, expect, it } from "vitest";
 import {
   buildApprovalPendingReplyPayload,
@@ -23,16 +26,28 @@ describe("plugin-sdk/approval-renderers", () => {
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin:approval-123 allow-once",
+                },
                 value: "/approve plugin:approval-123 allow-once",
                 style: "success",
               },
               {
                 label: "Allow Always",
+                action: {
+                  type: "command",
+                  command: "/approve plugin:approval-123 allow-always",
+                },
                 value: "/approve plugin:approval-123 allow-always",
                 style: "primary",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin:approval-123 deny",
+                },
                 value: "/approve plugin:approval-123 deny",
                 style: "danger",
               },
@@ -70,16 +85,28 @@ describe("plugin-sdk/approval-renderers", () => {
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 allow-once",
+                },
                 value: "/approve plugin-approval-123 allow-once",
                 style: "success",
               },
               {
                 label: "Allow Always",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 allow-always",
+                },
                 value: "/approve plugin-approval-123 allow-always",
                 style: "primary",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 deny",
+                },
                 value: "/approve plugin-approval-123 deny",
                 style: "danger",
               },
@@ -118,7 +145,7 @@ describe("plugin-sdk/approval-renderers", () => {
         nowMs: 1_000,
       }),
       textExpected: (text: string) =>
-        expect(text).toContain("Reply with: /approve <id> allow-once|deny"),
+        expect(text).toContain("Reply with: /approve plugin-approval-123 allow-once|deny"),
       presentationExpected: {
         blocks: [
           {
@@ -126,11 +153,19 @@ describe("plugin-sdk/approval-renderers", () => {
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 allow-once",
+                },
                 value: "/approve plugin-approval-123 allow-once",
                 style: "success",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 deny",
+                },
                 value: "/approve plugin-approval-123 deny",
                 style: "danger",
               },

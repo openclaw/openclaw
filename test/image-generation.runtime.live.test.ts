@@ -1,13 +1,14 @@
+// Live image generation runtime tests cover image provider runtime behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import { resolveDefaultAgentDir } from "../src/agents/agent-scope.js";
+import { isBillingErrorMessage } from "../src/agents/embedded-agent-helpers/failover-matches.js";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
-import { isBillingErrorMessage } from "../src/agents/pi-embedded-helpers/failover-matches.js";
 import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
 import {
   DEFAULT_LIVE_IMAGE_MODELS,
@@ -156,6 +157,29 @@ function resolveProviderModelForLiveTest(providerId: string, modelRef: string): 
   return modelRef.slice(0, slash) === providerId ? modelRef.slice(slash + 1) : modelRef;
 }
 
+function formatProviderFilter(filter: Set<string> | null): string {
+  return filter ? [...filter].toSorted((a, b) => a.localeCompare(b)).join(", ") : "";
+}
+
+function expectImageLiveSweepPassed(params: {
+  attempted: string[];
+  failures: string[];
+  providerFilter: Set<string> | null;
+  skipped: string[];
+}): void {
+  if (params.attempted.length === 0) {
+    expect(params.failures).toStrictEqual([]);
+    if (params.providerFilter && params.providerFilter.size > 0) {
+      throw new Error(
+        `[live:image-generation] requested provider filter produced no live attempts: ${formatProviderFilter(params.providerFilter)}; skipped=${params.skipped.join(", ") || "none"}`,
+      );
+    }
+    console.warn("[live:image-generation] no provider had usable auth; skipping assertions");
+    return;
+  }
+  expect(params.failures).toStrictEqual([]);
+}
+
 function buildLiveCases(params: {
   providerId: string;
   modelRef: string;
@@ -175,12 +199,16 @@ function buildLiveCases(params: {
     },
   ];
   if (params.editEnabled) {
+    const providerModel = resolveProviderModelForLiveTest(params.providerId, params.modelRef);
+    const useReferenceResolution = !(
+      params.providerId === "fal" && providerModel.startsWith("krea/v2/")
+    );
     cases.push({
       id: `${params.providerId}:edit`,
       providerId: params.providerId,
       modelRef: params.modelRef,
       prompt: editPrompt,
-      resolution: "1K",
+      ...(useReferenceResolution ? { resolution: "1K" as const } : {}),
       inputImages: [
         {
           buffer: createEditReferencePng(),
@@ -221,7 +249,7 @@ describeLive("image generation live (provider sweep)", () => {
           requireProfileKeys: REQUIRE_PROFILE_KEYS,
           hasLiveKeys,
         });
-        let authLabel = "unresolved";
+        let authLabel;
         try {
           const auth = await resolveApiKeyForProvider({
             provider: providerCase.providerId,
@@ -299,13 +327,21 @@ describeLive("image generation live (provider sweep)", () => {
         `[live:image-generation] attempted=${attempted.join(", ") || "none"} skipped=${skipped.join(", ") || "none"} failures=${failures.join(" | ") || "none"} shellEnv=${getShellEnvAppliedKeys().join(", ") || "none"}`,
       );
 
-      if (attempted.length === 0) {
-        expect(failures).toStrictEqual([]);
-        console.warn("[live:image-generation] no provider had usable auth; skipping assertions");
-        return;
-      }
-      expect(failures).toStrictEqual([]);
+      expectImageLiveSweepPassed({ attempted, failures, providerFilter, skipped });
     },
     15 * 60_000,
   );
+});
+
+describe("image generation live provider filter coverage", () => {
+  it("fails filtered sweeps when no requested provider is attempted", () => {
+    expect(() =>
+      expectImageLiveSweepPassed({
+        attempted: [],
+        failures: [],
+        providerFilter: new Set(["openai"]),
+        skipped: ["openai: no usable auth"],
+      }),
+    ).toThrow(/requested provider filter produced no live attempts: openai/u);
+  });
 });

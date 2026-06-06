@@ -1,6 +1,9 @@
+// Filesystem session transcript helpers.
+// Resolves, archives, and cleans up transcript files owned by Gateway sessions.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
@@ -117,11 +120,13 @@ export function resolveSessionTranscriptCandidates(
     }
   }
 
+  // Keep the legacy global sessions directory as a final candidate so tagged
+  // upgrades can still find transcripts created before per-agent paths.
   const home = resolveRequiredHomeDir(process.env, os.homedir);
   const legacyDir = path.join(home, ".openclaw", "sessions");
   pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
 
-  return Array.from(new Set(candidates));
+  return uniqueStrings(candidates);
 }
 
 export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
@@ -257,7 +262,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   }
   const now = opts.nowMs ?? Date.now();
   const reason: ArchiveFileReason = opts.reason ?? "deleted";
-  const directories = Array.from(new Set(opts.directories.map((dir) => path.resolve(dir))));
+  const directories = uniqueStrings(opts.directories.map((dir) => path.resolve(dir)));
   let removed = 0;
   let scanned = 0;
 

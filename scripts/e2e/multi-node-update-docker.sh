@@ -22,10 +22,15 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="openclaw-multi-node-update-e2e"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_MULTI_NODE_DOCKER_TIMEOUT:-300s}"
-ARTIFACT_DIR="${OPENCLAW_MULTI_NODE_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/multi-node-update}"
+RUN_ID="${OPENCLAW_MULTI_NODE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+ARTIFACT_DIR="${OPENCLAW_MULTI_NODE_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/multi-node-update/$RUN_ID}"
 
 mkdir -p "$ARTIFACT_DIR"
 chmod -R a+rwX "$ARTIFACT_DIR" || true
+cleanup() {
+  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
+}
+trap cleanup EXIT
 
 # Build the bare e2e image and prepare the package tarball.
 docker_e2e_build_or_reuse "$IMAGE_NAME" multi-node-update "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "${OPENCLAW_SKIP_DOCKER_BUILD:-0}"
@@ -49,8 +54,9 @@ docker_e2e_run_with_harness \
   --user root \
   -e HOME=/root \
   "$IMAGE_NAME" \
-  timeout "$DOCKER_RUN_TIMEOUT" bash -lc '
+  timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc '
 set -euo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
 
 ARTIFACTS=/tmp/artifacts
 exec > >(tee "$ARTIFACTS/run.log") 2>&1
@@ -102,7 +108,7 @@ export npm_config_audit=false
 export PATH="$NPM_PREFIX_A/bin:$NODE_A_DIR:$PATH"
 
 echo "Installing OpenClaw package under node-A prefix: $NPM_PREFIX_A"
-npm install -g /tmp/openclaw-current.tgz --no-fund --no-audit >"$ARTIFACTS/install-a.log" 2>&1
+openclaw_e2e_install_package "$ARTIFACTS/install-a.log" "OpenClaw package under node-A prefix" "$NPM_PREFIX_A"
 echo "Installed. Checking openclaw location..."
 
 OPENCLAW_A="$(command -v openclaw)"

@@ -1,3 +1,4 @@
+// Telegram tests cover channel.gateway plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -228,19 +229,6 @@ function sendMessageOptionsAt(index: number): Record<string, unknown> {
   }
   return options;
 }
-
-async function waitForCondition(check: () => boolean, message: string, timeoutMs = 5_000) {
-  vi.useRealTimers();
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (check()) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-  throw new Error(message);
-}
-
 async function waitForMicrotaskCondition(check: () => boolean, message: string, attempts = 100) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (check()) {
@@ -406,7 +394,46 @@ describe("telegramPlugin gateway startup", () => {
     ).resolves.toMatchObject({ botInfo: startupBotInfo });
   });
 
-  it("uses cached startup botInfo without calling getMe", async () => {
+  it("refreshes cached startup botInfo before monitor startup", async () => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    const refreshedBotInfo = {
+      ...startupBotInfo,
+      username: "fresh_openclaw_bot",
+      has_topics_enabled: true,
+    };
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+    probeTelegram.mockResolvedValue({
+      ok: true,
+      status: null,
+      error: null,
+      elapsedMs: 12,
+      bot: {
+        id: refreshedBotInfo.id,
+        username: refreshedBotInfo.username,
+      },
+      botInfo: refreshedBotInfo,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount("ops");
+
+    await expect(task).resolves.toBeUndefined();
+    expect(probeTelegram).toHaveBeenCalledOnce();
+    expect(latestMonitorOptions().botInfo).toEqual(refreshedBotInfo);
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toMatchObject({ botInfo: refreshedBotInfo });
+  });
+
+  it("falls back to cached startup botInfo when refresh fails without auth failure", async () => {
     await useTempStateDir();
     installTelegramRuntime();
     await writeCachedTelegramBotInfo({
@@ -414,12 +441,18 @@ describe("telegramPlugin gateway startup", () => {
       botToken: "123456:bad-token",
       botInfo: startupBotInfo,
     });
+    probeTelegram.mockResolvedValue({
+      ok: false,
+      status: 500,
+      error: "Bad Gateway",
+      elapsedMs: 12,
+    });
     monitorTelegramProvider.mockResolvedValue(undefined);
 
     const { task } = startTelegramAccount("ops");
 
     await expect(task).resolves.toBeUndefined();
-    expect(probeTelegram).not.toHaveBeenCalled();
+    expect(probeTelegram).toHaveBeenCalledOnce();
     expect(latestMonitorOptions().botInfo).toEqual(startupBotInfo);
   });
 

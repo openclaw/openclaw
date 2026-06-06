@@ -1,3 +1,4 @@
+/** Tests Chutes OAuth token exchange and refresh HTTP flows. */
 import { describe, expect, it } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
@@ -30,6 +31,8 @@ function expectRefreshedCredential(
   refreshed: Awaited<ReturnType<typeof refreshChutesTokens>>,
   now: number,
 ) {
+  // Refresh responses may omit refresh_token; the stored token remains valid and
+  // expiry keeps the safety skew applied.
   expect(refreshed.access).toBe("at_new");
   expect(refreshed.refresh).toBe("rt_old");
   expect(refreshed.expires).toBe(now + 1800 * 1000 - 5 * 60 * 1000);
@@ -84,6 +87,33 @@ describe("chutes-oauth", () => {
     expect((creds as unknown as { accountId?: string }).accountId).toBe("sub_1");
     expect((creds as unknown as { clientId?: string }).clientId).toBe("cid_test");
     expect(creds.expires).toBe(now + 3600 * 1000 - 5 * 60 * 1000);
+  });
+
+  it("rejects unsafe exchange token lifetimes", async () => {
+    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = urlToString(input);
+      if (url !== CHUTES_TOKEN_ENDPOINT) {
+        return new Response("not found", { status: 404 });
+      }
+      return new Response(
+        '{"access_token":"at_unsafe","refresh_token":"rt_unsafe","expires_in":1e309}',
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    await expect(
+      exchangeChutesCodeForTokens({
+        app: {
+          clientId: "cid_test",
+          redirectUri: "http://127.0.0.1:1456/oauth-callback",
+          scopes: ["openid"],
+        },
+        code: "code_unsafe",
+        codeVerifier: "verifier_unsafe",
+        fetchFn,
+        now: 1_000_000,
+      }),
+    ).rejects.toThrow("Chutes token exchange returned invalid expires_in");
   });
 
   it("refreshes tokens using stored client id and falls back to old refresh token", async () => {
@@ -141,5 +171,26 @@ describe("chutes-oauth", () => {
     });
 
     expectRefreshedCredential(refreshed, now);
+  });
+
+  it("rejects unsafe refresh token lifetimes", async () => {
+    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = urlToString(input);
+      if (url !== CHUTES_TOKEN_ENDPOINT) {
+        return new Response("not found", { status: 404 });
+      }
+      return new Response('{"access_token":"at_new","expires_in":1e309}', {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await expect(
+      refreshChutesTokens({
+        credential: createStoredCredential(4_000_000),
+        fetchFn,
+        now: 4_000_000,
+      }),
+    ).rejects.toThrow("Chutes token refresh returned invalid expires_in");
   });
 });

@@ -1,3 +1,4 @@
+// Memory Core tests cover manager sync yield plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -13,14 +14,18 @@ const { buildSessionEntryMock } = vi.hoisted(() => ({
   buildSessionEntryMock: vi.fn(),
 }));
 
-vi.mock("undici", () => ({
-  Agent: vi.fn(),
-  EnvHttpProxyAgent: vi.fn(),
-  ProxyAgent: vi.fn(),
-  fetch: vi.fn(),
-  getGlobalDispatcher: vi.fn(),
-  setGlobalDispatcher: vi.fn(),
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    Agent: vi.fn(),
+    EnvHttpProxyAgent: vi.fn(),
+    ProxyAgent: vi.fn(),
+    fetch: vi.fn(),
+    getGlobalDispatcher: vi.fn(),
+    setGlobalDispatcher: vi.fn(),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
   const basename = (filePath: string) => filePath.split(/[\\/]/).pop() ?? filePath;
@@ -34,6 +39,9 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
 });
 
 vi.mock("./embeddings.js", () => ({
+  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
+  resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
+    providerId === "local" ? "local" : "remote",
   createEmbeddingProvider: vi.fn(),
 }));
 
@@ -123,6 +131,10 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   }
 
   protected pruneEmbeddingCacheIfNeeded(): void {}
+
+  protected resetProviderInitializationForRetry(): void {}
+
+  protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(
     entry: MemoryIndexEntry,

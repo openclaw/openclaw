@@ -1,3 +1,5 @@
+// Image runtime tests cover model-backed image routing, auth/profile handling,
+// provider payload transforms, and MiniMax/Copilot special paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -55,6 +57,8 @@ function requireMockCallAt<const Calls extends readonly unknown[][]>(
   index: number,
   label: string,
 ): Calls[number] {
+  // Tests inspect exact dependency calls because image runtime behavior is
+  // mostly provider/auth orchestration.
   const call = mock.mock.calls[index];
   if (!call) {
     throw new Error(`Expected ${label} call ${index}`);
@@ -76,9 +80,8 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-vi.mock("@earendil-works/pi-ai", async () => {
-  const actual =
-    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+vi.mock("../llm/stream.js", async () => {
+  const actual = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
   return {
     ...actual,
     complete: completeMock,
@@ -102,7 +105,7 @@ vi.mock("../agents/provider-stream.js", () => ({
   registerProviderStreamForModel: registerProviderStreamForModelMock,
 }));
 
-vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
+vi.mock("../agents/agent-model-discovery.js", () => ({
   discoverAuthStorage: () => ({
     setRuntimeApiKey: setRuntimeApiKeyMock,
   }),
@@ -116,7 +119,7 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
   prepareProviderDynamicModel: prepareProviderDynamicModelMock,
 }));
 
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
 }));
 
@@ -505,7 +508,7 @@ describe("describeImageWithModel", () => {
       {},
       {
         allowBundledStaticCatalogFallback: true,
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
         workspaceDir: "/tmp/openclaw-workspace",
       },
@@ -581,7 +584,7 @@ describe("describeImageWithModel", () => {
       {},
       {
         allowBundledStaticCatalogFallback: true,
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
       },
     );
@@ -593,7 +596,7 @@ describe("describeImageWithModel", () => {
       {},
       {
         allowBundledStaticCatalogFallback: true,
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
       },
     );
     const [completeModel] = requireFirstMockCall(completeMock, "complete");
@@ -766,7 +769,7 @@ describe("describeImageWithModel", () => {
   it("passes image prompt as system instructions for codex image requests", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.4",
         input: ["text", "image"],
         baseUrl: "https://chatgpt.com/backend-api",
@@ -774,8 +777,8 @@ describe("describeImageWithModel", () => {
     });
     completeMock.mockResolvedValue({
       role: "assistant",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       model: "gpt-5.4",
       stopReason: "stop",
       timestamp: Date.now(),
@@ -785,7 +788,7 @@ describe("describeImageWithModel", () => {
     const result = await describeImageWithModel({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       buffer: Buffer.from("png-bytes"),
       fileName: "image.png",
@@ -802,7 +805,7 @@ describe("describeImageWithModel", () => {
     const firstCall = requireFirstMockCall(completeMock, "image completion");
     const [completionModel, context, options] = firstCall;
     expect(completionModel).toEqual({
-      provider: "openai-codex",
+      provider: "openai",
       id: "gpt-5.4",
       input: ["text", "image"],
       baseUrl: "https://chatgpt.com/backend-api",
@@ -1030,7 +1033,7 @@ describe("describeImageWithModel", () => {
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
     const firstCall = requireFirstMockCall(completeMock, "timed image completion");
-    const [, , options] = firstCall;
+    const options = firstCall[2];
     if (!options?.signal) {
       throw new Error("Expected image completion abort signal");
     }
@@ -1105,13 +1108,13 @@ describe("describeImageWithModel", () => {
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
 
-  it("normalizes gemini 3.1 flash-lite ids before lookup and keeps profile auth selection", async () => {
+  it("keeps stable GA gemini 3.1 flash-lite ids during lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");
-      expect(modelId).toBe("gemini-3.1-flash-lite-preview");
+      expect(modelId).toBe("gemini-3.1-flash-lite");
       return {
         provider: "google",
-        id: "gemini-3.1-flash-lite-preview",
+        id: "gemini-3.1-flash-lite",
         input: ["text", "image"],
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       };
@@ -1121,7 +1124,7 @@ describe("describeImageWithModel", () => {
       role: "assistant",
       api: "google-generative-ai",
       provider: "google",
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-3.1-flash-lite",
       stopReason: "stop",
       timestamp: Date.now(),
       content: [{ type: "text", text: "flash lite ok" }],
@@ -1142,7 +1145,7 @@ describe("describeImageWithModel", () => {
 
     expect(result).toEqual({
       text: "flash lite ok",
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-3.1-flash-lite",
     });
     expect(findMock).toHaveBeenCalled();
     const authRequest = getApiKeyForModelCall();
@@ -1323,7 +1326,7 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    const [, , options] = requireFirstMockCall(completeMock, "image completion");
+    const options = requireFirstMockCall(completeMock, "image completion")[2];
     expect(options.maxTokens).toBe(4096);
   });
 
@@ -1360,7 +1363,7 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    const [, , options] = requireFirstMockCall(completeMock, "image completion");
+    const options = requireFirstMockCall(completeMock, "image completion")[2];
     expect(options.maxTokens).toBe(1024);
   });
 });

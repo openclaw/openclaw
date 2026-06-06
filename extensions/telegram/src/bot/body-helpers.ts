@@ -1,3 +1,4 @@
+// Telegram helper module supports body helpers behavior.
 import type { Chat, Message, MessageOrigin, User } from "grammy/types";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -139,6 +140,15 @@ function hasStandaloneTelegramMention(text: string, mention: string): boolean {
   return false;
 }
 
+function isBotCommandAddressedToMention(command: string, mention: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(command);
+  if (!normalized.startsWith("/") || !normalized.endsWith(mention)) {
+    return false;
+  }
+  const atIndex = normalized.lastIndexOf(mention);
+  return atIndex > 1;
+}
+
 export function hasBotMention(msg: Message, botUsername: string) {
   const { text, entities } = getTelegramTextParts(msg);
   const mention = normalizeLowercaseStringOrEmpty(`@${botUsername}`);
@@ -146,11 +156,11 @@ export function hasBotMention(msg: Message, botUsername: string) {
     return true;
   }
   for (const ent of entities) {
-    if (ent.type !== "mention") {
-      continue;
-    }
     const slice = text.slice(ent.offset, ent.offset + ent.length);
-    if (normalizeLowercaseStringOrEmpty(slice) === mention) {
+    if (ent.type === "mention" && normalizeLowercaseStringOrEmpty(slice) === mention) {
+      return true;
+    }
+    if (ent.type === "bot_command" && isBotCommandAddressedToMention(slice, mention)) {
       return true;
     }
   }

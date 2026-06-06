@@ -1,5 +1,11 @@
+// Update gateway methods run self-update flows, report status, write restart
+// sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
+import {
+  validateUpdateRunParams,
+  validateUpdateStatusParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
@@ -10,23 +16,22 @@ import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
 import {
+  buildManagedServiceHandoffUnavailableMessage,
+  formatManagedServiceUpdateCommand,
+  startManagedServiceUpdateHandoff,
+} from "../../infra/update-managed-service-handoff.js";
+import {
   buildUpdateRestartSentinelPayload,
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
 import { resolveUpdateInstallSurface, runGatewayUpdate } from "../../infra/update-runner.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
-import { validateUpdateRunParams, validateUpdateStatusParams } from "../protocol/index.js";
 import {
   getLatestUpdateRestartSentinel,
   recordLatestUpdateRestartSentinel,
 } from "../server-restart-sentinel.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import {
-  buildManagedServiceHandoffUnavailableMessage,
-  formatManagedServiceUpdateCommand,
-  startManagedServiceUpdateHandoff,
-} from "./update-managed-service-handoff.js";
 import { assertValidParams } from "./validation.js";
 
 const SYSTEMD_HANDOFF_RESTART_GRACE_MS = 2000;
@@ -53,6 +58,8 @@ function resolveManagedServiceHandoffRestartDelayMs(
   if (supervisor !== "systemd") {
     return restartDelayMs;
   }
+  // systemd needs a short grace period after the handoff process starts before
+  // the gateway exits, otherwise the service can restart before handoff state is durable.
   return Math.max(
     restartDelayMs ?? SYSTEMD_HANDOFF_RESTART_GRACE_MS,
     SYSTEMD_HANDOFF_RESTART_GRACE_MS,
@@ -123,6 +130,9 @@ export const updateHandlers: GatewayRequestHandlers = {
       });
       supervisor = detectRespawnSupervisor(process.env, process.platform);
       if (!isRestartEnabled(config) && !supervisor) {
+        // Package updates need a restart path to finish safely. Dev/git installs
+        // can report the disabled restart directly, but global installs must not
+        // mutate files if this process cannot come back.
         const beforeVersion = installSurface.root
           ? await readPackageVersion(installSurface.root)
           : null;
@@ -136,15 +146,21 @@ export const updateHandlers: GatewayRequestHandlers = {
           durationMs: 0,
         };
       } else if (installSurface.kind === "global") {
-        const command = formatManagedServiceUpdateCommand(timeoutMs);
+        const command = formatManagedServiceUpdateCommand({
+          timeoutMs,
+          channel: configChannel ?? undefined,
+        });
         if (supervisor) {
           try {
             const startedAt = Date.now();
             const handoffId = randomUUID();
             sentinelMeta.handoffId = handoffId;
+            // Managed services update from a detached helper so the running
+            // gateway does not replace its own package while still serving RPCs.
             const started = await startManagedServiceUpdateHandoff({
               root,
               timeoutMs,
+              channel: configChannel ?? undefined,
               restartDelayMs,
               meta: sentinelMeta,
               handoffId,
@@ -230,7 +246,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       meta: sentinelMeta,
     });
 
-    let sentinelPath: string | null = null;
+    let sentinelPath: string | null;
     try {
       sentinelPath = await writeRestartSentinel(payload);
       recordLatestUpdateRestartSentinel(payload);
@@ -252,6 +268,8 @@ export const updateHandlers: GatewayRequestHandlers = {
                   ? 0
                   : restartDelayMs,
             reason: "update.run",
+            // Package swaps and managed handoffs should restart without waiting
+            // for normal deferral/cooldown windows; the new code is already staged.
             skipDeferral: updateWasPackageSwap || handoff?.status === "started",
             skipCooldown: updateWasPackageSwap || handoff?.status === "started",
             audit: {

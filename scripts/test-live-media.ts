@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Test Live Media script supports OpenClaw repository automation.
 
 import type { ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
@@ -33,13 +34,13 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
     id: "image",
     testFile: "test/image-generation.runtime.live.test.ts",
     providerEnvVar: "OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS",
-    providers: ["deepinfra", "fal", "google", "minimax", "openai", "vydra", "xai"],
+    providers: ["deepinfra", "fal", "google", "minimax", "openai", "openrouter", "vydra", "xai"],
   },
   music: {
     id: "music",
     testFile: "extensions/music-generation-providers.live.test.ts",
     providerEnvVar: "OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS",
-    providers: ["google", "minimax"],
+    providers: ["fal", "google", "minimax", "openrouter"],
   },
   video: {
     id: "video",
@@ -53,6 +54,7 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
       "google",
       "minimax",
       "openai",
+      "openrouter",
       "qwen",
       "runway",
       "together",
@@ -66,6 +68,7 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
       "google",
       "minimax",
       "openai",
+      "openrouter",
       "qwen",
       "runway",
       "together",
@@ -92,6 +95,10 @@ export type SuiteRunPlan = {
   providers: string[];
   skippedReason?: string;
 };
+
+function formatProviderList(providers: Iterable<string>): string {
+  return [...providers].toSorted().join(", ");
+}
 
 function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }): ChildProcess {
   return _spawnPnpmRunner({
@@ -204,7 +211,7 @@ export function parseArgs(argv: string[]): CliOptions {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return {
+  const options = {
     suites: (suites.size ? [...suites] : DEFAULT_SUITES).toSorted(),
     globalProviders,
     suiteProviders,
@@ -213,6 +220,60 @@ export function parseArgs(argv: string[]): CliOptions {
     passthroughArgs: [...passthroughArgs, ...separatorPassthroughArgs],
     help,
   };
+  validateProviderFilters(options);
+  return options;
+}
+
+function validateProviderFilters(options: CliOptions): void {
+  if (options.globalProviders) {
+    const selectedProviders = new Set(
+      options.suites.flatMap((suiteId) => MEDIA_SUITES[suiteId].providers),
+    );
+    const unknown = [...options.globalProviders].filter(
+      (provider) => !selectedProviders.has(provider),
+    );
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown provider(s) for selected media suite(s): ${formatProviderList(unknown)}`,
+      );
+    }
+  }
+
+  for (const [suiteId, providers] of Object.entries(options.suiteProviders) as [
+    MediaSuiteId,
+    Set<string>,
+  ][]) {
+    const suite = MEDIA_SUITES[suiteId];
+    const supported = new Set(suite.providers);
+    const unknown = [...providers].filter((provider) => !supported.has(provider));
+    if (unknown.length > 0) {
+      throw new Error(`Unknown ${suiteId} provider(s): ${formatProviderList(unknown)}`);
+    }
+  }
+}
+
+function hasExplicitProviderSelection(options: CliOptions): boolean {
+  return options.globalProviders !== null || Object.keys(options.suiteProviders).length > 0;
+}
+
+function hasExplicitProviderSelectionForSuite(options: CliOptions, suiteId: MediaSuiteId): boolean {
+  if (Object.hasOwn(options.suiteProviders, suiteId)) {
+    return true;
+  }
+  if (!options.globalProviders) {
+    return false;
+  }
+  return MEDIA_SUITES[suiteId].providers.some((provider) => options.globalProviders?.has(provider));
+}
+
+export function findSkippedExplicitProviderSelections(
+  options: CliOptions,
+  plan: SuiteRunPlan[],
+): SuiteRunPlan[] {
+  return plan.filter(
+    (entry) =>
+      entry.providers.length === 0 && hasExplicitProviderSelectionForSuite(options, entry.suite.id),
+  );
 }
 
 function selectProviders(params: {
@@ -355,8 +416,19 @@ export async function runCli(argv: string[]): Promise<number> {
       `[live:media] skip ${entry.suite.id}: ${entry.skippedReason ?? "no providers selected"}`,
     );
   }
+  const skippedExplicit = findSkippedExplicitProviderSelections(options, plan);
+  if (skippedExplicit.length > 0) {
+    console.error(
+      `[live:media] no runnable providers matched explicit provider selection for: ${skippedExplicit.map((entry) => entry.suite.id).join(", ")}`,
+    );
+    return 1;
+  }
   if (runnable.length === 0) {
     console.log("[live:media] nothing to run");
+    if (hasExplicitProviderSelection(options)) {
+      console.error("[live:media] no runnable providers matched the explicit provider selection");
+      return 1;
+    }
     return 0;
   }
 
@@ -376,7 +448,7 @@ export async function runCli(argv: string[]): Promise<number> {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   runCli(process.argv.slice(2))
     .then((code) => process.exit(code))
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exit(1);
     });

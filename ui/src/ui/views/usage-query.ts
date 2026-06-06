@@ -1,4 +1,6 @@
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+// Control UI view renders usage query screen content.
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty, uniqueStrings } from "../string-coerce.ts";
 import { extractQueryTerms } from "../usage-helpers.ts";
 import type { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./usageTypes.ts";
 
@@ -63,7 +65,7 @@ const buildSessionsCsv = (sessions: UsageSessionEntry[]): string => {
         session.channel ?? "",
         session.modelProvider ?? session.providerOverride ?? "",
         session.model ?? session.modelOverride ?? "",
-        session.updatedAt ? new Date(session.updatedAt).toISOString() : "",
+        timestampMsToIsoString(session.updatedAt) ?? "",
         usage?.durationMs ?? "",
         usage?.messageCounts?.total ?? "",
         usage?.messageCounts?.errors ?? "",
@@ -143,13 +145,7 @@ const buildQuerySuggestions = (
   const value = normalizeLowercaseStringOrEmpty(rawValue);
 
   const unique = (items: Array<string | undefined>): string[] => {
-    const set = new Set<string>();
-    for (const item of items) {
-      if (item) {
-        set.add(item);
-      }
-    }
-    return Array.from(set);
+    return uniqueStrings(items.filter((item): item is string => Boolean(item)));
   };
 
   const agents = unique(sessions.map((s) => s.agentId)).slice(0, 6);

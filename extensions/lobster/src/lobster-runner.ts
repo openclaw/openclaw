@@ -1,3 +1,4 @@
+// Lobster plugin module implements lobster runner behavior.
 import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -286,9 +287,9 @@ async function withTimeout<T>(
         clearTimeout(timer);
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         clearTimeout(timer);
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -297,13 +298,13 @@ async function withTimeout<T>(
 export async function loadEmbeddedToolRuntimeFromPackage(
   options: LoadEmbeddedToolRuntimeFromPackageOptions = {},
 ): Promise<EmbeddedToolRuntime> {
-  installLobsterAjvCompileCache();
-
   const importModule =
     options.importModule ??
     (async (specifier: string) => (await import(specifier)) as Partial<EmbeddedToolRuntime>);
   const resolvePackageEntry =
     options.resolvePackageEntry ?? ((specifier: string) => lobsterRequire.resolve(specifier));
+  const packageEntryPath = resolvePackageEntry("@clawdbot/lobster");
+  await installLobsterAjvCompileCache(packageEntryPath);
 
   let coreLoadError: unknown;
   try {
@@ -315,7 +316,6 @@ export async function loadEmbeddedToolRuntimeFromPackage(
 
   let fallbackLoadError: unknown;
   try {
-    const packageEntryPath = resolvePackageEntry("@clawdbot/lobster");
     const packageRoot = findLobsterPackageRoot(packageEntryPath);
     const coreRuntimeUrl = pathToFileURL(path.join(packageRoot, "dist/src/core/index.js")).href;
     return toEmbeddedToolRuntime(await importModule(coreRuntimeUrl), coreRuntimeUrl);
@@ -392,4 +392,18 @@ export function createEmbeddedLobsterRunner(options?: {
       });
     },
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

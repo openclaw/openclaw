@@ -1,3 +1,4 @@
+// Verifies provider API family helpers gate GPT parallel tool-call payloads.
 import { describe, expect, it } from "vitest";
 import { supportsGptParallelToolCallsPayload } from "./provider-api-families.js";
 
@@ -5,7 +6,7 @@ describe("provider api families", () => {
   it.each([
     "openai-completions",
     "openai-responses",
-    "openai-codex-responses",
+    "openai-chatgpt-responses",
     "azure-openai-responses",
   ])("classifies %s as supporting the GPT parallel_tool_calls payload patch", (api) => {
     expect(supportsGptParallelToolCallsPayload(api)).toBe(true);

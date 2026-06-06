@@ -1,8 +1,12 @@
-import fs, { readFileSync } from "node:fs";
+// Test Live Shard tests cover test live shard script behavior.
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   LIVE_TEST_SHARDS,
   RELEASE_LIVE_TEST_SHARDS,
+  buildLiveShardPnpmArgs,
+  buildLiveShardSpawnParams,
   collectAllLiveTestFiles,
   parseLiveShardArgs,
   selectLiveShardFiles,
@@ -79,6 +83,7 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).toEqual([
       "src/crestodian/rescue-channel.live.test.ts",
       "src/gateway/android-node.capabilities.live.test.ts",
+      "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
       "src/gateway/gateway-trajectory-export.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-src-infra", allFiles)).toEqual([
@@ -119,6 +124,9 @@ describe("scripts/test-live-shard", () => {
 
   it("rejects unknown shard names", () => {
     expect(() => selectLiveShardFiles("native-live-missing")).toThrow(/Unknown live test shard/u);
+    expect(() => selectLiveShardFiles("native-live-extensions-l-z")).toThrow(
+      /Unknown live test shard/u,
+    );
   });
 
   it("parses list mode and rejects unknown live shard options", () => {
@@ -133,11 +141,42 @@ describe("scripts/test-live-shard", () => {
     );
   });
 
+  it("prints CLI help before validating shard options", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-live-shard.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/test-live-shard.mjs");
+  });
+
   it("preserves Vitest passthrough args after the live shard separator", () => {
     expect(parseLiveShardArgs(["native-live-test", "--", "-t", "smoke"])).toEqual({
       shard: "native-live-test",
       listOnly: false,
       passthroughArgs: ["-t", "smoke"],
+    });
+    expect(buildLiveShardPnpmArgs(["test/foo.live.test.ts"], ["-t", "smoke"])).toEqual([
+      "test:live",
+      "--",
+      "test/foo.live.test.ts",
+      "-t",
+      "smoke",
+    ]);
+  });
+
+  it("spawns live shard children in a cleanup-friendly process group", () => {
+    expect(buildLiveShardSpawnParams({ PATH: "/usr/bin" }, "darwin")).toEqual({
+      detached: true,
+      env: { PATH: "/usr/bin" },
+      stdio: "inherit",
+    });
+    expect(buildLiveShardSpawnParams({ PATH: "/usr/bin" }, "win32")).toEqual({
+      detached: false,
+      env: { PATH: "/usr/bin" },
+      stdio: "inherit",
     });
   });
 });

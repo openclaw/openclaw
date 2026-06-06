@@ -1,3 +1,10 @@
+/**
+ * Heartbeat response tool.
+ *
+ * Auto-reply heartbeat turns use this tool to record the agent's outcome,
+ * notification decision, and next-check metadata exactly once per turn.
+ */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
@@ -23,10 +30,6 @@ const HeartbeatResponseToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function readRequiredBoolean(params: Record<string, unknown>, key: string): boolean {
   const raw = readSnakeCaseParamRaw(params, key);
   if (typeof raw !== "boolean") {
@@ -35,6 +38,7 @@ function readRequiredBoolean(params: Record<string, unknown>, key: string): bool
   return raw;
 }
 
+/** Creates the one-shot heartbeat response recording tool for an auto-reply turn. */
 export function createHeartbeatResponseTool(): AnyAgentTool {
   let recorded = false;
   return {
@@ -56,6 +60,8 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
         );
       }
       if (recorded) {
+        // One heartbeat turn should produce one decision; repeated calls can
+        // otherwise overwrite the notify/no-notify choice.
         throw new ToolInputError("heartbeat_respond already recorded for this turn");
       }
       recorded = true;

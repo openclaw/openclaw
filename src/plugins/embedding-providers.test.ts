@@ -1,3 +1,4 @@
+// Covers plugin embedding provider registration and lookup.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearEmbeddingProviders,
@@ -37,7 +38,11 @@ describe("embedding provider registry", () => {
     registerEmbeddingProvider(alpha);
     registerEmbeddingProvider(beta);
 
-    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["alpha", "beta"]);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
+      "alpha",
+      "beta",
+    ]);
     expect(getEmbeddingProvider("alpha")).toBe(alpha);
   });
 
@@ -50,19 +55,43 @@ describe("embedding provider registry", () => {
 
     expect(getEmbeddingProvider("alpha")).toBeUndefined();
     expect(getEmbeddingProvider("beta")).toBe(beta);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
+      "beta",
+    ]);
   });
 
   it("preserves owner metadata in registered snapshots", () => {
-    const adapter = createAdapter("openai-compatible");
+    const adapter = createAdapter("local-compatible");
     const entry = {
       adapter,
-      ownerPluginId: "openai-compatible",
+      ownerPluginId: "local-compatible",
     };
 
     restoreRegisteredEmbeddingProviders([entry]);
 
-    expect(getRegisteredEmbeddingProvider("openai-compatible")).toEqual(entry);
-    expect(listRegisteredEmbeddingProviders()).toEqual([entry]);
+    expect(getRegisteredEmbeddingProvider("local-compatible")).toEqual(entry);
+    expect(listRegisteredEmbeddingProviders()).toEqual([
+      INITIAL_REGISTERED_EMBEDDING_PROVIDERS[0],
+      entry,
+    ]);
+  });
+
+  it("keeps core providers from being shadowed by restored snapshots", () => {
+    const adapter = createAdapter("openai-compatible");
+
+    expect(() =>
+      restoreRegisteredEmbeddingProviders([
+        {
+          adapter,
+          ownerPluginId: "shadow",
+        },
+      ]),
+    ).toThrow("embedding provider already registered: openai-compatible (owner: core)");
+
+    expect(getRegisteredEmbeddingProvider("openai-compatible")).toEqual(
+      INITIAL_REGISTERED_EMBEDDING_PROVIDERS[0],
+    );
   });
 
   it("stores adapters in a process-global singleton map", () => {

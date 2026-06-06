@@ -1,4 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// Slack plugin module implements action runtime behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -11,7 +12,7 @@ import {
   createActionGate,
   imageResultFromFile,
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
   type OpenClawConfig,
@@ -429,9 +430,9 @@ export async function handleSlackAction(
       case "readMessages": {
         const channelId = resolveChannelId();
         assertSlackReadTargetAllowed({ account, cfg, channelId });
-        const limitRaw = params.limit;
-        const limit =
-          typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
+        const limit = readPositiveIntegerParam(params, "limit", {
+          message: "limit must be a positive integer.",
+        });
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
@@ -572,10 +573,12 @@ export async function handleSlackAction(
     if (!isActionEnabled("emojiList")) {
       throw new Error("Slack emoji list is disabled.");
     }
+    const limit = readPositiveIntegerParam(params, "limit", {
+      message: "limit must be a positive integer.",
+    });
     const result = readOpts
       ? await slackActionRuntime.listSlackEmojis(readOpts)
       : await slackActionRuntime.listSlackEmojis();
-    const limit = readNumberParam(params, "limit", { integer: true });
     if (limit != null && limit > 0 && result.emoji != null) {
       const entries = Object.entries(result.emoji).toSorted(([a], [b]) => a.localeCompare(b));
       if (entries.length > limit) {

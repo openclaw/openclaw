@@ -1,3 +1,4 @@
+// Inbound reply dispatch tests cover plugin reply routing from inbound channel messages.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
@@ -284,6 +285,13 @@ describe("recordInboundSessionAndDispatchReply", () => {
       }),
     ).toBe(true);
     expect(
+      hasVisibleInboundReplyDispatch({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+        observedReplyDelivery: true,
+      }),
+    ).toBe(true);
+    expect(
       hasFinalInboundReplyDispatch({
         queuedFinal: false,
         counts: { tool: 0, block: 1, final: 0 },
@@ -301,7 +309,7 @@ describe("recordInboundSessionAndDispatchReply", () => {
     });
   });
 
-  it("exposes channel-message dispatch names as the canonical helpers for new channel code", () => {
+  it("keeps deprecated channel-message dispatch names as aliases for focused helpers", () => {
     expect(createChannelMessageReplyPipeline).toBe(createChannelReplyPipeline);
     expect(resolveChannelMessageSourceReplyDeliveryMode).toBe(
       resolveChannelSourceReplyDeliveryMode,

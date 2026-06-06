@@ -19,8 +19,45 @@ openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing
 probe="scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs"
 runtime_smoke="scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs"
 node "$probe" select > /tmp/bundled-plugin-sweep-ids
+sweep_command_timeout="${OPENCLAW_BUNDLED_PLUGIN_SWEEP_COMMAND_TIMEOUT:-300s}"
 
-mapfile -t plugin_entries < /tmp/bundled-plugin-sweep-ids
+now_ms() {
+  node -e 'process.stdout.write(String(Date.now()))'
+}
+
+run_logged_sweep_command() {
+  local label="$1"
+  local log_file="$2"
+  shift 2
+  if openclaw_e2e_maybe_timeout "$sweep_command_timeout" "$@" >"$log_file" 2>&1; then
+    return 0
+  else
+    local status=$?
+    cat "$log_file"
+    if [ "$status" -eq 124 ]; then
+      echo "Bundled plugin sweep command timed out after $sweep_command_timeout: $label" >&2
+    else
+      echo "Bundled plugin sweep command failed with status $status: $label" >&2
+    fi
+    return "$status"
+  fi
+}
+
+lifecycle_trace_enabled() {
+  case "${OPENCLAW_PLUGIN_LIFECYCLE_TRACE:-}" in
+    1 | true | TRUE | yes | YES)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+plugin_entries=()
+while IFS= read -r plugin_entry; do
+  plugin_entries+=("$plugin_entry")
+done < /tmp/bundled-plugin-sweep-ids
 selected_labels=()
 for plugin_entry in "${plugin_entries[@]}"; do
   IFS=$'\t' read -r plugin_id plugin_dir _requires_config _plugin_root <<<"$plugin_entry"
@@ -33,14 +70,16 @@ for plugin_entry in "${plugin_entries[@]}"; do
   IFS=$'\t' read -r plugin_id plugin_dir requires_config plugin_root <<<"$plugin_entry"
   install_log="/tmp/openclaw-install-${plugin_index}.log"
   uninstall_log="/tmp/openclaw-uninstall-${plugin_index}.log"
-  plugin_started_at="$(date +%s)"
+  plugin_started_at="$(now_ms)"
   echo "Installing bundled plugin: $plugin_id ($plugin_dir)"
-  node "$OPENCLAW_ENTRY" plugins install "$plugin_id" >"$install_log" 2>&1 || {
+  run_logged_sweep_command "install $plugin_id" "$install_log" \
+    node "$OPENCLAW_ENTRY" plugins install "$plugin_id"
+  if lifecycle_trace_enabled; then
     cat "$install_log"
-    exit 1
-  }
-  install_finished_at="$(date +%s)"
+  fi
+  install_finished_at="$(now_ms)"
   node "$probe" assert-installed "$plugin_id" "$plugin_dir" "$requires_config"
+  installed_asserted_at="$(now_ms)"
   if [[ "${OPENCLAW_BUNDLED_PLUGIN_RUNTIME_SMOKE:-1}" != "0" ]]; then
     echo "Running bundled plugin runtime smoke: $plugin_id ($plugin_dir)"
     node "$runtime_smoke" plugin "$plugin_id" "$plugin_dir" "$requires_config" "$plugin_index" "$plugin_root"
@@ -49,15 +88,18 @@ for plugin_entry in "${plugin_entries[@]}"; do
       node "$runtime_smoke" tts-openai-live "$plugin_id" "$plugin_dir" "$requires_config" "$plugin_index"
     fi
   fi
+  runtime_finished_at="$(now_ms)"
 
   echo "Uninstalling bundled plugin: $plugin_id ($plugin_dir)"
-  node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force >"$uninstall_log" 2>&1 || {
+  run_logged_sweep_command "uninstall $plugin_id" "$uninstall_log" \
+    node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force
+  if lifecycle_trace_enabled; then
     cat "$uninstall_log"
-    exit 1
-  }
-  uninstall_finished_at="$(date +%s)"
+  fi
+  uninstall_finished_at="$(now_ms)"
   node "$probe" assert-uninstalled "$plugin_id" "$plugin_dir"
-  echo "Bundled plugin lifecycle timing: $plugin_id install=$((install_finished_at - plugin_started_at))s uninstall=$((uninstall_finished_at - install_finished_at))s total=$((uninstall_finished_at - plugin_started_at))s"
+  uninstalled_asserted_at="$(now_ms)"
+  echo "Bundled plugin lifecycle timing: $plugin_id install_ms=$((install_finished_at - plugin_started_at)) install_assert_ms=$((installed_asserted_at - install_finished_at)) runtime_ms=$((runtime_finished_at - installed_asserted_at)) uninstall_ms=$((uninstall_finished_at - runtime_finished_at)) uninstall_assert_ms=$((uninstalled_asserted_at - uninstall_finished_at)) total_ms=$((uninstalled_asserted_at - plugin_started_at))"
   plugin_index=$((plugin_index + 1))
 done
 

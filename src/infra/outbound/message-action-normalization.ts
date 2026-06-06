@@ -1,8 +1,10 @@
+// Message-action input normalization infers channel/target context and rewrites
+// legacy target fields before dispatch validation.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -10,6 +12,7 @@ import {
 import { applyTargetToParams } from "./channel-target.js";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 
+/** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
@@ -29,6 +32,7 @@ export function normalizeMessageActionInput(params: {
     (normalizeOptionalString(normalizedArgs.channelId) ?? "").length > 0;
 
   if (explicitTarget && hasLegacyTargetFields) {
+    // Canonical `target` wins over old `to`/`channelId` aliases before validation.
     delete normalizedArgs.to;
     delete normalizedArgs.channelId;
   }

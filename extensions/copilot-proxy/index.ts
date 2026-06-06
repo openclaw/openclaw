@@ -1,3 +1,5 @@
+// Copilot Proxy plugin entrypoint registers its OpenClaw integration.
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   definePluginEntry,
   type ProviderAuthContext,
@@ -43,11 +45,8 @@ function validateBaseUrl(value: string): string | undefined {
 }
 
 function parseModelIds(input: string): string[] {
-  const parsed = input
-    .split(/[\n,]/)
-    .map((model) => model.trim())
-    .filter(Boolean);
-  return Array.from(new Set(parsed));
+  const parsed = normalizeStringEntries(input.split(/[\n,]/));
+  return uniqueStrings(parsed);
 }
 
 function buildModelDefinition(modelId: string) {

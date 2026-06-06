@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements e2ee client behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -339,8 +340,8 @@ export async function createMatrixQaE2eeScenarioClient(
     async requestVerification(opts) {
       return await requireCrypto().requestVerification(opts);
     },
-    async resetRoomKeyBackup(params) {
-      return await client.resetRoomKeyBackup(params);
+    async resetRoomKeyBackup(paramsLocal) {
+      return await client.resetRoomKeyBackup(paramsLocal);
     },
     async restoreRoomKeyBackup(opts) {
       return await client.restoreRoomKeyBackup(opts);

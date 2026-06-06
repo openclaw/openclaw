@@ -1,3 +1,4 @@
+// Covers npm install source packing and archive path resolution.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,9 +9,18 @@ import {
   withTempDir,
 } from "./install-source-utils.js";
 
+const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 const runCommandWithTimeoutMock = vi.fn();
 const TEMP_DIR_PREFIX = "openclaw-install-source-utils-";
 const tempDirs = createTrackedTempDirs();
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: execFileSyncMock,
+  };
+});
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -112,6 +122,7 @@ function expectPackError(result: { ok: boolean; error?: string }, expected: stri
 }
 
 beforeEach(() => {
+  execFileSyncMock.mockClear();
   runCommandWithTimeoutMock.mockClear();
 });
 

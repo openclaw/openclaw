@@ -4,6 +4,14 @@
     "target": "OpenClaw"
   },
   {
+    "source": "macOS platform notes",
+    "target": "macOS 平台说明"
+  },
+  {
+    "source": "Logging",
+    "target": "日志"
+  },
+  {
     "source": "iMessage",
     "target": "iMessage"
   },
@@ -166,6 +174,26 @@
   {
     "source": "Agent harness plugins",
     "target": "Agent harness plugins"
+  },
+  {
+    "source": "Agent harness plugins (SDK reference)",
+    "target": "Agent harness plugins (SDK reference)"
+  },
+  {
+    "source": "Copilot SDK harness",
+    "target": "Copilot SDK harness"
+  },
+  {
+    "source": "Copilot plugin",
+    "target": "Copilot plugin"
+  },
+  {
+    "source": "GitHub Copilot agent runtime",
+    "target": "GitHub Copilot agent runtime"
+  },
+  {
+    "source": "copilot",
+    "target": "copilot"
   },
   {
     "source": "Agent loop",
@@ -704,6 +732,14 @@
     "target": "OC Path 插件"
   },
   {
+    "source": "Parallel plugin",
+    "target": "Parallel 插件"
+  },
+  {
+    "source": "Parallel search",
+    "target": "Parallel 搜索"
+  },
+  {
     "source": "CLI reference",
     "target": "CLI 参考"
   },
@@ -1052,7 +1088,243 @@
     "target": "插件架构"
   },
   {
+    "source": "Agent runtime architecture",
+    "target": "Agent runtime architecture"
+  },
+  {
+    "source": "OpenClaw agent runtime workflow",
+    "target": "OpenClaw agent runtime workflow"
+  },
+  {
+    "source": "OpenClaw agent runtime architecture",
+    "target": "OpenClaw agent runtime architecture"
+  },
+  {
+    "source": "Install and Configure Plugins",
+    "target": "安装和配置插件"
+  },
+  {
+    "source": "Building Plugins",
+    "target": "Building Plugins"
+  },
+  {
+    "source": "Plugin Manifest",
+    "target": "Plugin Manifest"
+  },
+  {
+    "source": "Workboard plugin",
+    "target": "Workboard 插件"
+  },
+  {
+    "source": "workboard",
+    "target": "workboard"
+  },
+  {
+    "source": "Control UI",
+    "target": "Control UI"
+  },
+  {
     "source": "Z.AI (GLM)",
     "target": "Z.AI (GLM)"
+  },
+  {
+    "source": "SMS",
+    "target": "SMS"
+  },
+  {
+    "source": "ClawHub CLI",
+    "target": "ClawHub CLI"
+  },
+  {
+    "source": "Transcripts CLI",
+    "target": "Transcripts CLI"
+  },
+  {
+    "source": "Goal",
+    "target": "Goal"
+  },
+  {
+    "source": "Workboard CLI",
+    "target": "Workboard CLI"
+  },
+  {
+    "source": "Slash commands",
+    "target": "Slash commands"
+  },
+  {
+    "source": "Channel inbound API",
+    "target": "Channel inbound API"
+  },
+  {
+    "source": "npm shrinkwrap",
+    "target": "npm shrinkwrap"
+  },
+  {
+    "source": "Windows Hub",
+    "target": "Windows Hub"
+  },
+  {
+    "source": "Node.js setup",
+    "target": "Node.js setup"
+  },
+  {
+    "source": "Nodes",
+    "target": "Nodes"
+  },
+  {
+    "source": "Gateway configuration",
+    "target": "Gateway configuration"
+  },
+  {
+    "source": "Codex Supervisor plugin",
+    "target": "Codex Supervisor plugin"
+  },
+  {
+    "source": "Diffs Language Pack plugin",
+    "target": "Diffs Language Pack plugin"
+  },
+  {
+    "source": "Gmi plugin",
+    "target": "Gmi plugin"
+  },
+  {
+    "source": "gmi",
+    "target": "gmi"
+  },
+  {
+    "source": "Novita plugin",
+    "target": "Novita plugin"
+  },
+  {
+    "source": "novita",
+    "target": "novita"
+  },
+  {
+    "source": "ollama-cloud",
+    "target": "ollama-cloud"
+  },
+  {
+    "source": "PixVerse plugin",
+    "target": "PixVerse plugin"
+  },
+  {
+    "source": "pixverse",
+    "target": "pixverse"
+  },
+  {
+    "source": "qwen-oauth",
+    "target": "qwen-oauth"
+  },
+  {
+    "source": "Sms plugin",
+    "target": "Sms plugin"
+  },
+  {
+    "source": "sms",
+    "target": "sms"
+  },
+  {
+    "source": "Channel outbound API",
+    "target": "Channel outbound API"
+  },
+  {
+    "source": "Channel turn",
+    "target": "Channel turn"
+  },
+  {
+    "source": "GMI Cloud",
+    "target": "GMI Cloud"
+  },
+  {
+    "source": "All providers",
+    "target": "All providers"
+  },
+  {
+    "source": "NovitaAI",
+    "target": "NovitaAI"
+  },
+  {
+    "source": "Ollama Cloud",
+    "target": "Ollama Cloud"
+  },
+  {
+    "source": "Qwen OAuth / Portal",
+    "target": "Qwen OAuth / Portal"
+  },
+  {
+    "source": "Ollama",
+    "target": "Ollama"
+  },
+  {
+    "source": "PixVerse",
+    "target": "PixVerse"
+  },
+  {
+    "source": "Alibaba Model Studio",
+    "target": "Alibaba Model Studio"
+  },
+  {
+    "source": "Database-first state refactor",
+    "target": "Database-first state refactor"
+  },
+  {
+    "source": "Release performance sweep",
+    "target": "Release performance sweep"
+  },
+  {
+    "source": "Full release validation",
+    "target": "Full release validation"
+  },
+  {
+    "source": "Claw Supervisor",
+    "target": "Claw Supervisor"
+  },
+  {
+    "source": "TUI",
+    "target": "TUI"
+  },
+  {
+    "source": "Session tool",
+    "target": "Session tool"
+  },
+  {
+    "source": "Compaction",
+    "target": "Compaction"
+  },
+  {
+    "source": "Task Flow",
+    "target": "Task Flow"
+  },
+  {
+    "source": "Standing orders",
+    "target": "Standing orders"
+  },
+  {
+    "source": "Skill Workshop",
+    "target": "Skill Workshop"
+  },
+  {
+    "source": "Web Search overview",
+    "target": "Web Search overview"
+  },
+  {
+    "source": "Exa search",
+    "target": "Exa search"
+  },
+  {
+    "source": "Perplexity Search",
+    "target": "Perplexity Search"
+  },
+  {
+    "source": "Permission modes",
+    "target": "Permission modes"
+  },
+  {
+    "source": "Exec approvals - advanced",
+    "target": "Exec approvals - advanced"
+  },
+  {
+    "source": "Skills CLI",
+    "target": "Skills CLI"
   }
 ]

@@ -1,3 +1,5 @@
+// Shared Gateway service CLI helpers: status styles, env filtering, port parsing, and hints.
+import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -10,7 +12,7 @@ import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
-import { colorize, isRich, theme } from "../../terminal/theme.js";
+import { parseInlineOptionToken } from "../../infra/inline-option-token.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
 import { createDaemonActionContext } from "./response.js";
@@ -19,6 +21,7 @@ export { formatRuntimeStatus };
 export { parsePort };
 export { resolveDaemonContainerContext };
 
+/** Create install action context with JSON flag normalization. */
 export function createDaemonInstallActionContext(jsonFlag: unknown) {
   const json = Boolean(jsonFlag);
   return {
@@ -27,6 +30,7 @@ export function createDaemonInstallActionContext(jsonFlag: unknown) {
   };
 }
 
+/** Block service installation in Nix mode, where managed service install is unsupported. */
 export function failIfNixDaemonInstallMode(
   fail: (message: string, hints?: string[]) => void,
   env: NodeJS.ProcessEnv = process.env,
@@ -38,6 +42,7 @@ export function failIfNixDaemonInstallMode(
   return true;
 }
 
+/** Build terminal style helpers for status output with no-color fallback. */
 export function createCliStatusTextStyles() {
   const rich = isRich();
   return {
@@ -51,6 +56,7 @@ export function createCliStatusTextStyles() {
   };
 }
 
+/** Pick the color function for a runtime status label. */
 export function resolveRuntimeStatusColor(status: string | undefined): (value: string) => string {
   const runtimeStatus = status ?? "unknown";
   return runtimeStatus === "running"
@@ -62,6 +68,7 @@ export function resolveRuntimeStatusColor(status: string | undefined): (value: s
         : theme.warn;
 }
 
+/** Extract `--port` from service ProgramArguments. */
 export function parsePortFromArgs(programArguments: string[] | undefined): number | null {
   if (!programArguments?.length) {
     return null;
@@ -76,7 +83,8 @@ export function parsePortFromArgs(programArguments: string[] | undefined): numbe
       }
     }
     if (arg?.startsWith("--port=")) {
-      const parsed = parsePort(arg.split("=", 2)[1]);
+      const option = parseInlineOptionToken(arg);
+      const parsed = parsePort(option.hasInlineValue ? option.inlineValue : undefined);
       if (parsed) {
         return parsed;
       }
@@ -85,6 +93,7 @@ export function parsePortFromArgs(programArguments: string[] | undefined): numbe
   return null;
 }
 
+/** Pick the best local probe host for a configured Gateway bind mode. */
 export function pickProbeHostForBind(
   bindMode: string,
   tailnetIPv4: string | undefined,
@@ -113,6 +122,7 @@ const SAFE_DAEMON_ENV_KEYS = [
   "OPENCLAW_NIX_MODE",
 ];
 
+/** Keep only daemon env keys safe to print in diagnostics. */
 export function filterDaemonEnv(env: Record<string, string> | undefined): Record<string, string> {
   if (!env) {
     return {};
@@ -128,11 +138,13 @@ export function filterDaemonEnv(env: Record<string, string> | undefined): Record
   return filtered;
 }
 
+/** Format safe daemon env entries for status output. */
 export function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
   const filtered = filterDaemonEnv(env);
   return Object.entries(filtered).map(([key, value]) => `${key}=${value}`);
 }
 
+/** Normalize listener address strings from platform socket tools. */
 export function normalizeListenerAddress(raw: string): string {
   let value = raw.trim();
   if (!value) {
@@ -143,6 +155,7 @@ export function normalizeListenerAddress(raw: string): string {
   return value.trim();
 }
 
+/** Render platform-specific hints for missing/stopped Gateway runtimes. */
 export function renderRuntimeHints(
   runtime: { missingUnit?: boolean; missingSupervision?: boolean; status?: string } | undefined,
   env: NodeJS.ProcessEnv = process.env,
@@ -184,6 +197,7 @@ export function renderRuntimeHints(
   return hints;
 }
 
+/** Render install/start hints for the current service platform/container context. */
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const profile = env.OPENCLAW_PROFILE;
   const container = resolveDaemonContainerContext(env);
@@ -200,6 +214,7 @@ export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.
   return [`Restart the container or the service that manages it for ${container}.`];
 }
 
+/** Drop generic systemd hints when a container-specific hint is clearer. */
 export function filterContainerGenericHints(
   hints: string[],
   env: NodeJS.ProcessEnv = process.env,

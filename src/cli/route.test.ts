@@ -1,3 +1,4 @@
+// Route CLI tests cover route command registration, channel routing, and output.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
@@ -83,10 +84,19 @@ describe("tryRouteCli", () => {
     }
   });
 
-  it("skips config guard for routed status --json commands", async () => {
+  it("keeps config guard for routed status --json commands", async () => {
     await expect(tryRouteCli(["node", "openclaw", "status", "--json"])).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
+    expect(firstConfigReadyCall()?.commandPath).toEqual(["status"]);
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps config guard for the parent tasks JSON list alias", async () => {
+    await expect(tryRouteCli(["node", "openclaw", "tasks", "--json"])).resolves.toBe(true);
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
+    expect(firstConfigReadyCall()?.commandPath).toEqual(["tasks"]);
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 

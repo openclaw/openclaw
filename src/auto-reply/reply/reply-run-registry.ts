@@ -1,9 +1,11 @@
+// Tracks active reply runs so stop, queue, and status commands can coordinate.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 
 export type ReplyRunKey = string;
 
@@ -49,6 +51,7 @@ export type ReplyOperationResult =
 export type ReplyOperation = {
   readonly key: ReplyRunKey;
   readonly sessionId: string;
+  readonly routeThreadId?: string | number;
   readonly abortSignal: AbortSignal;
   readonly resetTriggered: boolean;
   readonly phase: ReplyOperationPhase;
@@ -73,6 +76,7 @@ export type ReplyRunRegistry = {
     sessionKey: string;
     sessionId: string;
     resetTriggered: boolean;
+    routeThreadId?: string | number;
     upstreamAbortSignal?: AbortSignal;
   }): ReplyOperation;
   get(sessionKey: string): ReplyOperation | undefined;
@@ -109,6 +113,8 @@ const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STATE_KEY,
   waitKeysBySessionId: new Map<string, string>(),
   waitersByKey: new Map<string, Set<ReplyRunWaiter>>(),
 }));
+
+export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
 
 export class ReplyRunAlreadyActiveError extends Error {
   constructor(sessionKey: string) {
@@ -224,6 +230,7 @@ export function createReplyOperation(params: {
   sessionKey: string;
   sessionId: string;
   resetTriggered: boolean;
+  routeThreadId?: string | number;
   upstreamAbortSignal?: AbortSignal;
 }): ReplyOperation {
   const sessionKey = normalizeOptionalString(params.sessionKey);
@@ -295,6 +302,9 @@ export function createReplyOperation(params: {
     },
     get sessionId() {
       return currentSessionId;
+    },
+    get routeThreadId() {
+      return params.routeThreadId;
     },
     get abortSignal() {
       return controller.signal;
@@ -440,7 +450,6 @@ export const replyRunRegistry: ReplyRunRegistry = {
     return true;
   },
   waitForIdle(sessionKey, timeoutMs, opts) {
-    const effectiveTimeoutMs = timeoutMs ?? 15_000;
     const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey || !replyRunState.activeRunsByKey.has(normalizedSessionKey)) {
       return Promise.resolve(true);
@@ -471,8 +480,11 @@ export const replyRunRegistry: ReplyRunRegistry = {
           resolve(ended);
         },
       };
-      if (Number.isFinite(effectiveTimeoutMs)) {
-        waiter.timer = setTimeout(() => waiter.finish(false), Math.max(100, effectiveTimeoutMs));
+      if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
+        waiter.timer = setTimeout(
+          () => waiter.finish(false),
+          resolveTimerTimeoutMs(timeoutMs, 100, 100),
+        );
       }
       if (opts?.signal) {
         abortHandler = () => waiter.finish(false);
@@ -496,6 +508,10 @@ export const replyRunRegistry: ReplyRunRegistry = {
 
 export function resolveActiveReplyRunSessionId(sessionKey: string): string | undefined {
   return replyRunRegistry.resolveSessionId(sessionKey);
+}
+
+export function resolveActiveReplyRunThreadId(sessionKey: string): string | number | undefined {
+  return replyRunRegistry.get(sessionKey)?.routeThreadId;
 }
 
 export function isReplyRunActiveForSessionId(sessionId: string): boolean {
@@ -543,7 +559,7 @@ export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown
 
 export function waitForReplyRunEndBySessionId(
   sessionId: string,
-  timeoutMs = 15_000,
+  timeoutMs: number,
 ): Promise<boolean> {
   const waitKey = resolveReplyRunWaitKey(sessionId);
   if (!waitKey) {

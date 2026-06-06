@@ -1,3 +1,4 @@
+// Feishu helper module supports config schema behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { z } from "zod";
 export { z };
@@ -117,6 +118,8 @@ const FeishuToolsConfigSchema = z
     drive: z.boolean().optional(), // Cloud storage operations (default: true)
     perm: z.boolean().optional(), // Permission management (default: false, sensitive)
     scopes: z.boolean().optional(), // App scopes diagnostic (default: true)
+    bitable: z.boolean().optional(), // Bitable/Base operations (default: true)
+    base: z.boolean().optional(), // Alias for bitable tools (default: true)
   })
   .strict()
   .optional();
@@ -258,7 +261,7 @@ export const FeishuConfigSchema = z
     const defaultAccount = value.defaultAccount?.trim();
     if (defaultAccount && value.accounts && Object.keys(value.accounts).length > 0) {
       const normalizedDefaultAccount = normalizeAccountId(defaultAccount);
-      if (!Object.prototype.hasOwnProperty.call(value.accounts, normalizedDefaultAccount)) {
+      if (!Object.hasOwn(value.accounts, normalizedDefaultAccount)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["defaultAccount"],

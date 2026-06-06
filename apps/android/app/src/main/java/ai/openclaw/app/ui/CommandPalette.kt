@@ -50,6 +50,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/** Full-screen command palette for navigation and recent-session search. */
 @Composable
 internal fun CommandPalette(
   viewModel: MainViewModel,
@@ -158,6 +159,7 @@ private data class CommandItem(
   val icon: ImageVector,
   val onClick: () -> Unit,
 ) {
+  /** Matches palette queries against both action title and explanatory subtitle. */
   fun matches(query: String): Boolean = query.isEmpty() || title.lowercase().contains(query) || subtitle.lowercase().contains(query)
 }
 
@@ -295,20 +297,21 @@ private fun CommandSectionLabel(title: String) {
   }
 }
 
-private fun providerCommandSubtitle(
+internal fun providerCommandSubtitle(
   isConnected: Boolean,
   providers: List<GatewayModelProviderSummary>,
   models: List<GatewayModelSummary>,
 ): String {
-  if (!isConnected) return "Connect Gateway to load models"
-  val readyProviderCount = providers.count { modelProviderReady(it.status) }
+  if (!isConnected) return "Connect Gateway to view providers"
+  val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
   if (readyProviderCount > 0) return "$readyProviderCount providers ready"
-  if (models.isNotEmpty()) return "${models.size} models available"
-  return "Configure model access"
+  return "No ready providers"
 }
 
+/** Falls back to the canonical main-session label when gateway display names are blank. */
 private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: "Main session"
 
+/** Formats command-palette session timestamps for compact rows. */
 private fun commandRelativeTime(updatedAtMs: Long): String {
   val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L

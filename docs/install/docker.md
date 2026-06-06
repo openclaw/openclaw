@@ -109,7 +109,9 @@ docker compose up -d openclaw-gateway
 <Note>
 Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS`
 or `OPENCLAW_HOME_VOLUME`, the setup script writes `docker-compose.extra.yml`;
-include it with `-f docker-compose.yml -f docker-compose.extra.yml`.
+include it after any standard override file, for example
+`-f docker-compose.yml -f docker-compose.override.yml -f docker-compose.extra.yml`
+when both override files exist.
 </Note>
 
 <Note>
@@ -294,8 +296,8 @@ replacement. Gateway startup does not generate bundled-plugin dependency trees.
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
-**Disk growth hotspots:** watch `media/`, session JSONL files,
-`cron/runs/*.jsonl`, installed plugin package roots, and rolling file logs
+**Disk growth hotspots:** watch `media/`, session JSONL files, the shared
+SQLite state database, installed plugin package roots, and rolling file logs
 under `/tmp/openclaw/`.
 
 ### Shell helpers (optional)

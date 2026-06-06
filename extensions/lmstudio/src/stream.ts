@@ -1,9 +1,11 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
+// Lmstudio plugin module implements stream behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { createPlainTextToolCallPromotionWrapper } from "openclaw/plugin-sdk/provider-stream-runtime-internal";
+import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -13,6 +15,7 @@ const log = createSubsystemLogger("extensions/lmstudio/stream");
 
 type StreamOptions = Parameters<StreamFn>[2];
 type StreamModel = Parameters<StreamFn>[0];
+
 const preloadInFlight = new Map<string, Promise<void>>();
 
 /**
@@ -87,19 +90,12 @@ function normalizeLmstudioModelKey(modelId: string): string {
 
 function resolveRequestedContextLength(model: StreamModel): number | undefined {
   const withContextTokens = model as StreamModel & { contextTokens?: unknown };
-  const contextTokens =
-    typeof withContextTokens.contextTokens === "number" &&
-    Number.isFinite(withContextTokens.contextTokens)
-      ? Math.floor(withContextTokens.contextTokens)
-      : undefined;
-  if (contextTokens && contextTokens > 0) {
+  const contextTokens = asPositiveSafeInteger(withContextTokens.contextTokens);
+  if (contextTokens !== undefined) {
     return contextTokens;
   }
-  const contextWindow =
-    typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
-      ? Math.floor(model.contextWindow)
-      : undefined;
-  if (contextWindow && contextWindow > 0) {
+  const contextWindow = asPositiveSafeInteger(model.contextWindow);
+  if (contextWindow !== undefined) {
     return contextWindow;
   }
   return undefined;
@@ -179,7 +175,7 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
 
 export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): StreamFn {
   const underlying = ctx.streamFn ?? streamSimple;
-  const streamWithPlainTextToolCalls = createPlainTextToolCallPromotionWrapper(underlying);
+  const streamWithPlainTextToolCalls = createPlainTextToolCallCompatWrapper(underlying);
   return (model, context, options) => {
     if (model.provider !== LMSTUDIO_PROVIDER_ID) {
       return underlying(model, context, options);
@@ -222,7 +218,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
                 () => {
                   recordPreloadSuccess(preloadKey);
                 },
-                (error) => {
+                (error: unknown) => {
                   const entry = recordPreloadFailure(preloadKey, Date.now());
                   throw Object.assign(new Error("preload-failed"), {
                     cause: error,

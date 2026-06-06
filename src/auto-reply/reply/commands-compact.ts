@@ -1,20 +1,21 @@
-import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveContextTokensForModel } from "../../agents/context.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
-import {
-  OPENAI_CODEX_PROVIDER_ID,
-  OPENAI_PROVIDER_ID,
-  resolveContextConfigProviderForRuntime,
-} from "../../agents/openai-codex-routing.js";
-import { normalizeProviderId } from "../../agents/provider-id.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { logVerbose } from "../../globals.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+// Implements compaction commands for session context and model state.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
+  resolveContextConfigProviderForRuntime,
+} from "../../agents/openai-routing.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logVerbose } from "../../globals.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -53,9 +54,12 @@ function extractCompactInstructions(params: {
 
 function isCompactionSkipReason(reason?: string): boolean {
   const text = normalizeOptionalLowercaseString(reason) ?? "";
+  // Manual /compact mirrors preflight semantics: already-small sessions are a
+  // successful no-op, not a failed compaction.
   return (
     text.includes("nothing to compact") ||
     text.includes("below threshold") ||
+    text.includes("already under target") ||
     text.includes("already compacted") ||
     text.includes("no real conversation messages")
   );
@@ -73,6 +77,9 @@ function formatCompactionReason(reason?: string): string | undefined {
   }
   if (lower.includes("below threshold")) {
     return "context is below the compaction threshold";
+  }
+  if (lower.includes("already under target")) {
+    return "context is already under the compaction target";
   }
   if (lower.includes("already compacted")) {
     return "session was already compacted recently";
@@ -128,6 +135,7 @@ function resolveManualCompactContextTokenBudget(params: {
   const contextConfigProvider = resolveContextConfigProviderForRuntime({
     provider,
     runtimeId: harnessPolicy.runtime,
+    config: params.cfg,
   });
   const configuredContextTokens = resolveContextTokensForModel({
     cfg: params.cfg,
@@ -211,9 +219,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   const runtime = await loadCompactRuntime();
   const sessionId = targetSessionEntry.sessionId;
-  if (runtime.isEmbeddedPiRunActive(sessionId)) {
-    runtime.abortEmbeddedPiRun(sessionId);
-    await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
+  if (runtime.isEmbeddedAgentRunActive(sessionId)) {
+    runtime.abortEmbeddedAgentRun(sessionId);
+    await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
   }
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
@@ -239,7 +247,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
-  const result = await runtime.compactEmbeddedPiSession({
+  const result = await runtime.compactEmbeddedAgentSession({
     sessionId,
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,
@@ -266,6 +274,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     skillsSnapshot: targetSessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
+    authProfileId: targetSessionEntry.authProfileOverride,
     contextTokenBudget,
     agentHarnessId:
       targetSessionEntry.sessionId === sessionId ? targetSessionEntry.agentHarnessId : undefined,

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Ensures CLI startup benchmark assets are built before checks.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -7,13 +8,44 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const entryCandidates = ["dist/entry.js", "dist/entry.mjs"];
+const startupMetadataPath = "dist/cli-startup-metadata.json";
+const DEFAULT_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 
+function positiveEnvInt(name, env, fallback) {
+  const raw = env[name]?.trim();
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  if (!/^[1-9]\d*$/.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  return value;
+}
+
+/**
+ * Resolves the CLI startup build timeout from environment.
+ */
+export function resolveCliStartupBuildTimeoutMs(env = process.env) {
+  return positiveEnvInt("OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS", env, DEFAULT_BUILD_TIMEOUT_MS);
+}
+
+/**
+ * Reports whether required CLI startup build outputs exist.
+ */
 export function hasCliStartupBuild(params = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   const exists = params.existsSync ?? existsSync;
-  return entryCandidates.some((relativePath) => exists(path.join(rootDir, relativePath)));
+  const hasEntry = entryCandidates.some((relativePath) => exists(path.join(rootDir, relativePath)));
+  return hasEntry && exists(path.join(rootDir, startupMetadataPath));
 }
 
+/**
+ * Builds CLI startup assets when required outputs are missing.
+ */
 export function ensureCliStartupBuild(params = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   if (hasCliStartupBuild({ rootDir, existsSync: params.existsSync })) {
@@ -24,12 +56,19 @@ export function ensureCliStartupBuild(params = {}) {
   const spawn = params.spawnSync ?? spawnSync;
   const buildScript = path.join(rootDir, "scripts", "build-all.mjs");
 
-  console.error("[cli-startup-build] dist/entry missing; running cliStartup build profile");
+  console.error(
+    "[cli-startup-build] dist startup entry or metadata missing; running cliStartup build profile",
+  );
   const result = spawn(nodeExecPath, [buildScript, "cliStartup"], {
     cwd: rootDir,
     env: params.env ?? process.env,
+    killSignal: params.killSignal ?? "SIGKILL",
     stdio: params.stdio ?? "inherit",
+    timeout: params.timeoutMs ?? resolveCliStartupBuildTimeoutMs(params.env ?? process.env),
   });
+  if (result.error) {
+    throw result.error;
+  }
   const status = result.status ?? (result.signal ? 1 : 0);
   if (status !== 0) {
     throw new Error(`cliStartup build profile failed with exit code ${status}`);

@@ -1,3 +1,5 @@
+// Telegram tests cover request timeouts plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
 import {
   resolveTelegramLongPollTimeoutSeconds,
@@ -31,6 +33,15 @@ describe("resolveTelegramRequestTimeoutMs", () => {
     expect(resolveTelegramRequestTimeoutMs("sendchataction", 90)).toBe(90_000);
     expect(resolveTelegramRequestTimeoutMs("editmessagetext", 90)).toBe(90_000);
     expect(resolveTelegramRequestTimeoutMs("getupdates", 90)).toBe(45_000);
+  });
+
+  it("caps oversized configured timeoutSeconds before outbound timers use them", () => {
+    expect(resolveTelegramRequestTimeoutMs("sendmessage", Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    expect(resolveTelegramRequestTimeoutMs("sendmessage", Number.MAX_VALUE)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
   });
 
   it("does not let low timeoutSeconds shorten method guards", () => {
@@ -69,5 +80,12 @@ describe("resolveTelegramStartupProbeTimeoutMs", () => {
 
   it("honors higher configured timeoutSeconds", () => {
     expect(resolveTelegramStartupProbeTimeoutMs(60)).toBe(60_000);
+  });
+
+  it("caps oversized configured timeoutSeconds before startup probe timers use them", () => {
+    expect(resolveTelegramStartupProbeTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    expect(resolveTelegramStartupProbeTimeoutMs(Number.MAX_VALUE)).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 });

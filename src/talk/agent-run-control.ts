@@ -1,9 +1,15 @@
-import type { EmbeddedPiQueueMessageOutcome } from "../agents/pi-embedded-runner/runs.js";
+/**
+ * Runtime adapter for realtime voice control of active OpenClaw agent runs.
+ *
+ * The shared module owns classification and message contracts; this adapter
+ * binds those contracts to embedded-run abort, status, and steering primitives.
+ */
+import type { EmbeddedAgentQueueMessageOutcome } from "../agents/embedded-agent-runner/runs.js";
 import {
-  abortEmbeddedPiRun,
-  queueEmbeddedPiMessageWithOutcomeAsync,
+  abortEmbeddedAgentRun,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
-} from "../agents/pi-embedded-runner/runs.js";
+} from "../agents/embedded-agent-runner/runs.js";
 import { getDiagnosticSessionActivitySnapshot } from "../logging/diagnostic-run-activity.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
@@ -35,12 +41,12 @@ export {
 } from "./agent-run-control-shared.js";
 
 type RealtimeVoiceAgentControlDeps = {
-  abortEmbeddedPiRun: (sessionId: string) => boolean;
-  queueEmbeddedPiMessageWithOutcomeAsync: (
+  abortEmbeddedAgentRun: (sessionId: string) => boolean;
+  queueEmbeddedAgentMessageWithOutcomeAsync: (
     sessionId: string,
     text: string,
     options?: { steeringMode?: "all"; debounceMs?: number },
-  ) => Promise<EmbeddedPiQueueMessageOutcome>;
+  ) => Promise<EmbeddedAgentQueueMessageOutcome>;
   getDiagnosticSessionActivitySnapshot: (params: {
     sessionId?: string;
     sessionKey?: string;
@@ -49,12 +55,13 @@ type RealtimeVoiceAgentControlDeps = {
 };
 
 const defaultDeps: RealtimeVoiceAgentControlDeps = {
-  abortEmbeddedPiRun,
+  abortEmbeddedAgentRun,
   getDiagnosticSessionActivitySnapshot,
-  queueEmbeddedPiMessageWithOutcomeAsync,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 };
 
+/** Apply a spoken status, cancel, steer, or follow-up request to an active run. */
 export async function controlRealtimeVoiceAgentRun(
   params: {
     sessionKey: string;
@@ -72,6 +79,8 @@ export async function controlRealtimeVoiceAgentRun(
   const activity = deps.getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
   const active = Boolean(sessionId || activity.activeWorkKind || activity.hasActiveEmbeddedRun);
 
+  // Status is read-only and can answer from diagnostic activity even when the
+  // active embedded run id has already disappeared.
   if (mode === "status") {
     return {
       ok: true,
@@ -90,6 +99,8 @@ export async function controlRealtimeVoiceAgentRun(
     };
   }
 
+  // Cancellation requires a concrete embedded-run id; activity-only snapshots
+  // are not abortable and should return an explicit no-active-run response.
   if (mode === "cancel") {
     if (!sessionId) {
       return {
@@ -105,7 +116,7 @@ export async function controlRealtimeVoiceAgentRun(
         suppress: false,
       };
     }
-    const aborted = deps.abortEmbeddedPiRun(sessionId);
+    const aborted = deps.abortEmbeddedAgentRun(sessionId);
     const message = aborted
       ? "Cancelled the active OpenClaw run."
       : "OpenClaw could not cancel the active run.";
@@ -140,8 +151,10 @@ export async function controlRealtimeVoiceAgentRun(
     };
   }
 
+  // Steering and follow-up both enqueue to the active run; follow-up is wrapped
+  // so the runner treats it as deferred context instead of an immediate pivot.
   const steerText = mode === "followup" ? buildRealtimeVoiceAgentFollowupSteeringText(text) : text;
-  const outcome = await deps.queueEmbeddedPiMessageWithOutcomeAsync(sessionId, steerText, {
+  const outcome = await deps.queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, steerText, {
     steeringMode: "all",
     debounceMs: 0,
   });

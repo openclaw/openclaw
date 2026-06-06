@@ -1,3 +1,21 @@
+// Device pairing runtime commands for gateway and loopback-local fallback operations.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  readConnectPairingRequiredMessage,
+  type ConnectPairingRequiredDetails,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   buildGatewayConnectionDetails,
   callGateway,
@@ -5,11 +23,6 @@ import {
 } from "../gateway/call.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
 import { isLoopbackHost } from "../gateway/net.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
-import {
-  readConnectPairingRequiredMessage,
-  type ConnectPairingRequiredDetails,
-} from "../gateway/protocol/connect-error-details.js";
 import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
@@ -25,15 +38,8 @@ import {
   type DevicePairingAccessSummary,
   type PendingDeviceApprovalKind,
 } from "../shared/device-pairing-access.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
+import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
 
 type DevicesRpcOpts = {
@@ -126,7 +132,7 @@ const callGatewayCli = async (
         password: opts.password,
         method,
         params,
-        timeoutMs: Number(opts.timeout ?? DEFAULT_DEVICES_TIMEOUT_MS),
+        timeoutMs: parseTimeoutMsWithFallback(opts.timeout, DEFAULT_DEVICES_TIMEOUT_MS),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
         scopes: callOpts?.scopes,
@@ -150,6 +156,7 @@ function resolveLocalPairingFallback(
   opts: DevicesRpcOpts,
   error: unknown,
 ): { details: ConnectPairingRequiredDetails } | null {
+  // Local fallback is only safe for implicit loopback gateway URLs.
   const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
   const details = readConnectPairingRequiredMessage(message);
   if (!details) {
@@ -403,7 +410,7 @@ function resolveOriginalReplacementScopes(
 ): string[] {
   const requestedScopes = normalizeDeviceAuthScopes(original.scopes);
   const inferredOperatorScopes = resolvePendingOperatorApprovalScopes(original, paired);
-  return [...new Set([...requestedScopes, ...inferredOperatorScopes])];
+  return uniqueStrings([...requestedScopes, ...inferredOperatorScopes]);
 }
 
 function replacementScopesCoverOriginal(

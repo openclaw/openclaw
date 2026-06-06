@@ -1,7 +1,20 @@
+// Media-understanding runner resolves providers/models, local roots, auth, and
+// per-capability execution decisions for message attachments.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { mergeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import {
   buildModelAliasIndex,
@@ -9,7 +22,6 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
-import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
   resolveAgentModelFallbackValues,
@@ -24,15 +36,13 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
-import { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
+import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
   buildMediaUnderstandingRegistry,
@@ -80,22 +90,32 @@ function resolveLiteralProviderApiKey(
   cfg: OpenClawConfig | undefined,
   providerId: string,
 ): string | null {
-  const value = findNormalizedProviderValue(cfg?.models?.providers, providerId)?.apiKey;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return normalizeNullableString(
+    findNormalizedProviderValue(cfg?.models?.providers, providerId)?.apiKey,
+  );
 }
 
 async function hasProviderAuthAvailable(params: {
+  capability: MediaUnderstandingCapability;
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
 }): Promise<boolean> {
+  // Literal config keys are cheap to detect; defer loading model-auth until
+  // profile/env discovery is actually needed.
   if (resolveLiteralProviderApiKey(params.cfg, params.provider)) {
     return true;
   }
   cachedHasAvailableAuthForProvider ??= (await import("../agents/model-auth.js"))
     .hasAvailableAuthForProvider;
-  return await cachedHasAvailableAuthForProvider(params);
+  return await cachedHasAvailableAuthForProvider({
+    ...params,
+    modelApi: resolveOpenAiAudioAuthModelApi({
+      capability: params.capability,
+      providerId: params.provider,
+    }),
+  });
 }
 
 function resolveConfiguredKeyProviderOrder(params: {
@@ -106,16 +126,14 @@ function resolveConfiguredKeyProviderOrder(params: {
 }): string[] {
   const configuredProviders = Object.keys(params.cfg.models?.providers ?? {})
     .map((providerId) => normalizeMediaExecutionProviderId(providerId))
-    .filter(Boolean)
-    .filter((providerId, index, values) => values.indexOf(providerId) === index)
-    .filter((providerId) =>
-      providerSupportsCapability(
-        params.providerRegistry.get(normalizeMediaProviderId(providerId)),
-        params.capability,
-      ),
-    );
-
-  return [...new Set([...configuredProviders, ...params.fallbackProviders])];
+    .filter(Boolean);
+  const supportedProviders = uniqueStrings(configuredProviders).filter((providerId) =>
+    providerSupportsCapability(
+      params.providerRegistry.get(normalizeMediaProviderId(providerId)),
+      params.capability,
+    ),
+  );
+  return uniqueStrings([...supportedProviders, ...params.fallbackProviders]);
 }
 
 function resolveConfiguredImageModelId(params: {
@@ -213,6 +231,8 @@ async function explicitImageModelVisionStatus(params: {
   providerId: string;
   model: string;
 }): Promise<"supported" | "unsupported" | "unknown"> {
+  // Explicit model overrides should survive unknown catalog state, but known
+  // text-only models must not be routed into image understanding.
   if (
     isMinimaxVlmProvider(params.providerId) &&
     !isMinimaxVlmModel(params.providerId, params.model)
@@ -343,13 +363,10 @@ function candidateBinaryNames(name: string): string[] {
   if (ext) {
     return [name];
   }
-  const pathext = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-    .split(";")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((item) => (item.startsWith(".") ? item : `.${item}`));
-  const unique = Array.from(new Set(pathext));
-  return [name, ...unique.map((item) => `${name}${item}`)];
+  const pathext = normalizeStringEntries(
+    (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";"),
+  ).map((item) => (item.startsWith(".") ? item : `.${item}`));
+  return [name, ...uniqueStrings(pathext).map((item) => `${name}${item}`)];
 }
 
 async function isExecutable(filePath: string): Promise<boolean> {
@@ -597,6 +614,7 @@ async function resolveKeyEntry(params: {
     }
     if (
       !(await hasProviderAuthAvailable({
+        capability,
         provider: providerId,
         cfg,
         agentDir,
@@ -834,6 +852,7 @@ async function resolveActiveModelEntry(params: {
     return null;
   }
   const hasAuth = await hasProviderAuthAvailable({
+    capability: params.capability,
     provider: providerId,
     cfg: params.cfg,
     agentDir: params.agentDir,

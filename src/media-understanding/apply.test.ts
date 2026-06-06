@@ -1,3 +1,5 @@
+// Media-understanding apply tests cover attachment transcription/description,
+// local binary probing, file text extraction, and context mutation.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -27,6 +29,7 @@ const hasAvailableAuthForProviderMock = vi.hoisted(() =>
 );
 const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
+const convertHeicToJpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
@@ -34,6 +37,7 @@ let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").cle
 const mockedResolveApiKey = resolveApiKeyForProviderMock;
 const mockedReadRemoteMediaBuffer = readRemoteMediaBufferMock;
 const mockedRunFfmpeg = runFfmpegMock;
+const mockedConvertHeicToJpeg = convertHeicToJpegMock;
 const mockedRunExec = runExecMock;
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
@@ -158,6 +162,8 @@ function createMediaDisabledConfigWithAllowedMimes(allowedMimes: string[]): Open
 }
 
 async function createTempMediaFile(params: { fileName: string; content: Buffer | string }) {
+  // Many tests reuse identical fixture buffers; cache by content hash to keep
+  // setup cheap while each case still gets a stable local path.
   const normalizedContent =
     typeof params.content === "string" ? Buffer.from(params.content) : params.content;
   const contentHash = crypto.createHash("sha1").update(normalizedContent).digest("hex");
@@ -195,7 +201,6 @@ async function withMediaAutoDetectEnv<T>(
       GEMINI_API_KEY: undefined,
       OPENCLAW_ANTIGRAVITY_CLI: undefined,
       OPENCLAW_AGENT_DIR: undefined,
-      PI_CODING_AGENT_DIR: undefined,
       ...env,
     },
     run,
@@ -270,13 +275,20 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../agents/model-auth.js", () => ({
       resolveApiKeyForProvider: resolveApiKeyForProviderMock,
       hasAvailableAuthForProvider: hasAvailableAuthForProviderMock,
+      isProviderAuthError: (err: unknown, code?: string) =>
+        err instanceof Error &&
+        "code" in err &&
+        (code === undefined || (err as { code?: unknown }).code === code),
       requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
         if (auth?.apiKey) {
           return auth.apiKey;
         }
-        throw new Error(
+        const err = new Error(
           `No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`,
         );
+        (err as { code?: string; provider?: string }).code = "missing-api-key";
+        (err as { code?: string; provider?: string }).provider = provider;
+        throw err;
       },
     }));
     vi.doMock("../media/fetch.js", () => ({
@@ -284,6 +296,7 @@ describe("applyMediaUnderstanding", () => {
     }));
     vi.doMock("../media/media-services.js", () => ({
       runFfmpeg: runFfmpegMock,
+      convertHeicToJpeg: convertHeicToJpegMock,
     }));
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
@@ -336,6 +349,8 @@ describe("applyMediaUnderstanding", () => {
     hasAvailableAuthForProviderMock.mockClear();
     mockedReadRemoteMediaBuffer.mockClear();
     mockedRunFfmpeg.mockReset();
+    mockedConvertHeicToJpeg.mockReset();
+    mockedConvertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
     mockedRunExec.mockReset();
     mockedReadRemoteMediaBuffer.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
@@ -361,7 +376,6 @@ describe("applyMediaUnderstanding", () => {
       cfg: createGroqAudioConfig(),
       providers: createGroqProviders(),
     });
-
     expect(result.appliedAudio).toBe(true);
     expectTranscriptApplied({
       ctx,
@@ -924,7 +938,6 @@ describe("applyMediaUnderstanding", () => {
       {
         PATH: emptyBinDir,
         OPENCLAW_AGENT_DIR: isolatedAgentDir,
-        PI_CODING_AGENT_DIR: isolatedAgentDir,
       },
       async () => {
         const result = await applyMediaUnderstanding({ ctx, cfg });
@@ -957,7 +970,6 @@ describe("applyMediaUnderstanding", () => {
       {
         PATH: binDir,
         OPENCLAW_AGENT_DIR: isolatedAgentDir,
-        PI_CODING_AGENT_DIR: isolatedAgentDir,
       },
       async () => {
         const result = await applyMediaUnderstanding({ ctx, cfg });
@@ -1158,6 +1170,53 @@ describe("applyMediaUnderstanding", () => {
         model: "gpt-5.4",
       }),
     );
+  });
+
+  it("normalizes HEIC images before tools.media.image provider execution", async () => {
+    const imagePath = await createTempMediaFile({
+      fileName: "photo.heic",
+      content: "heic-source",
+    });
+    const describeImage = vi.fn(async () => ({ text: "normalized image" }));
+    const ctx: MsgContext = {
+      Body: "<media:image>",
+      MediaPath: imagePath,
+      MediaType: "image/heic",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: {
+            enabled: true,
+            models: [{ provider: "openai", model: "gpt-5.4" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+      providers: {
+        openai: {
+          id: "openai",
+          capabilities: ["image"],
+          describeImage,
+        },
+      },
+    });
+
+    expect(result.appliedImage).toBe(true);
+    expect(mockedConvertHeicToJpeg).toHaveBeenCalledWith(Buffer.from("heic-source"));
+    expect(describeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: Buffer.from("jpeg-normalized"),
+        fileName: "photo.heic",
+        mime: "image/jpeg",
+      }),
+    );
+    expect(ctx.Body).toBe("[Image]\nDescription:\nnormalized image");
   });
 
   it("uses active model when enabled and models are missing", async () => {

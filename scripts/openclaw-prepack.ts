@@ -1,16 +1,19 @@
 #!/usr/bin/env -S node --import tsx
+// Openclaw Prepack script supports OpenClaw repository automation.
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { writePackageDistInventory } from "../src/infra/package-dist-inventory.ts";
+import { preparePackageChangelog } from "./package-changelog.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 const requiredPreparedPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/control-ui/index.html"],
 ];
 const requiredControlUiAssetPrefix = "dist/control-ui/assets/";
+const DEFAULT_PREPACK_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 
 type PreparedFileReader = {
   existsSync: typeof existsSync;
@@ -91,14 +94,51 @@ function ensurePreparedArtifacts(): void {
   process.exit(1);
 }
 
-function run(command: string, args: string[], options: SpawnSyncOptions = {}): void {
-  const result = spawnSync(command, args, {
+function positiveEnvInt(name: string, env: NodeJS.ProcessEnv, fallback: number): number {
+  const raw = env[name]?.trim();
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  if (!/^[1-9]\d*$/u.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  return value;
+}
+
+export function resolvePrepackCommandTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  return positiveEnvInt(
+    "OPENCLAW_PREPACK_COMMAND_TIMEOUT_MS",
+    env,
+    DEFAULT_PREPACK_COMMAND_TIMEOUT_MS,
+  );
+}
+
+export function runPrepackCommand(
+  command: string,
+  args: string[],
+  options: SpawnSyncOptions = {},
+): ReturnType<typeof spawnSync> {
+  const env = options.env ?? process.env;
+  return spawnSync(command, args, {
     stdio: "inherit",
-    env: process.env,
     ...options,
+    env,
+    killSignal: options.killSignal ?? "SIGKILL",
+    timeout: options.timeout ?? resolvePrepackCommandTimeoutMs(env),
   });
+}
+
+function run(command: string, args: string[], options: SpawnSyncOptions = {}): void {
+  const result = runPrepackCommand(command, args, options);
   if (result.status === 0) {
     return;
+  }
+  if (result.error) {
+    console.error(`prepack: ${command} failed: ${formatErrorMessage(result.error)}`);
   }
   process.exit(result.status ?? 1);
 }
@@ -126,6 +166,7 @@ async function main(): Promise<void> {
   ensurePreparedArtifacts();
   await writeDistInventory();
   runBuildSmoke();
+  await preparePackageChangelog();
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

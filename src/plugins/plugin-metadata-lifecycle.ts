@@ -1,14 +1,19 @@
+/** Coordinates plugin metadata snapshot and process memo cache lifecycle resets. */
 import { clearCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
 
-let clearPluginMetadataProcessMemo: (() => void) | undefined;
+const pluginMetadataProcessMemoClears = new Set<() => void>();
 
+/** Registers a process-local plugin metadata memo clear hook. */
 export function registerPluginMetadataProcessMemoLifecycleClear(
   clearProcessMemo: () => void,
 ): void {
-  clearPluginMetadataProcessMemo = clearProcessMemo;
+  pluginMetadataProcessMemoClears.add(clearProcessMemo);
 }
 
+/** Clears plugin metadata snapshots and registered process memo caches. */
 export function clearPluginMetadataLifecycleCaches(): void {
   clearCurrentPluginMetadataSnapshotState();
-  clearPluginMetadataProcessMemo?.();
+  for (const clearProcessMemo of pluginMetadataProcessMemoClears) {
+    clearProcessMemo();
+  }
 }

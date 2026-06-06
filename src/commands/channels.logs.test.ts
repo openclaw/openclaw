@@ -1,3 +1,4 @@
+// Channels logs tests cover gateway log path resolution and channel log tailing.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -214,5 +215,11 @@ describe("channelsLogsCommand", () => {
     const payload = readJsonPayload();
     expect(payload.file).toBe(configuredFile);
     expect(payload.lines).toStrictEqual([]);
+  });
+
+  it("rejects partial line limits", async () => {
+    await expect(channelsLogsCommand({ lines: "2x", json: true }, runtime)).rejects.toThrow(
+      "--lines must be a positive integer.",
+    );
   });
 });

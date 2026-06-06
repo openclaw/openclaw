@@ -1,11 +1,95 @@
+// Assertions for plugin install/runtime E2E scenarios.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readPositiveIntEnv } from "../env-limits.mjs";
+import {
+  readPluginInstallIndex,
+  readPluginInstallRecords,
+  writePluginInstallIndexForE2E,
+} from "../plugin-index-sqlite.mjs";
 
 const command = process.argv[2];
 const scratchRoot = process.env.OPENCLAW_PLUGINS_TMP_DIR || os.tmpdir();
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
+
+function readClawHubPreflightLimits() {
+  return {
+    bodyMaxBytes: readPositiveIntEnv(
+      "OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES",
+      1024 * 1024,
+    ),
+    timeoutMs: readPositiveIntEnv("OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS", 30_000),
+  };
+}
+
+function createTimeoutError(label, timeoutMs) {
+  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
+  error.code = "ETIMEDOUT";
+  return error;
+}
+
+async function withTimeout(label, timeoutMs, run) {
+  const controller = new AbortController();
+  const timeoutError = createTimeoutError(label, timeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timeout.unref?.();
+  });
+  try {
+    return await Promise.race([run(controller.signal), timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function bodyTooLargeError(label, byteLimit) {
+  return Object.assign(new Error(`${label} response body exceeded ${byteLimit} bytes`), {
+    code: "ETOOBIG",
+  });
+}
+
+async function readBoundedResponseText(response, label, byteLimit) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
+      await response.body?.cancel().catch(() => {});
+      throw bodyTooLargeError(label, byteLimit);
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteCount = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return text + decoder.decode();
+      }
+      byteCount += value.byteLength;
+      if (byteCount > byteLimit) {
+        await reader.cancel().catch(() => {});
+        throw bodyTooLargeError(label, byteLimit);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 function resolveHomePath(value) {
   if (value === "~") {
@@ -17,18 +101,31 @@ function resolveHomePath(value) {
   return value;
 }
 
+function comparablePath(value) {
+  const resolved = path.resolve(resolveHomePath(value));
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function pathsEqual(left, right) {
+  return comparablePath(left) === comparablePath(right);
+}
+
 function getInstallRecords() {
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const config = fs.existsSync(configPath) ? readJson(configPath) : {};
   const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
+  const index = readPluginInstallIndex({
+    configPath,
+    fallbackRecords: allowLegacyCompat ? (config.plugins?.installs ?? {}) : {},
+  });
   if (!allowLegacyCompat && !index.installRecords) {
     throw new Error("expected modern installRecords in installed plugin index");
   }
-  return allowLegacyCompat
-    ? (index.installRecords ?? index.records ?? config.plugins?.installs ?? {})
-    : (index.installRecords ?? {});
+  return index.installRecords ?? {};
 }
 
 function readOpenClawConfig() {
@@ -67,7 +164,7 @@ function rememberPluginInstallPath(params) {
   if (params.source && record.source !== params.source) {
     throw new Error(`unexpected source for ${params.pluginId}: ${record.source}`);
   }
-  if (params.sourcePath && record.sourcePath !== params.sourcePath) {
+  if (params.sourcePath && !pathsEqual(record.sourcePath, params.sourcePath)) {
     throw new Error(
       `unexpected source path for ${params.pluginId}: ${record.sourcePath}, expected ${params.sourcePath}`,
     );
@@ -96,7 +193,8 @@ function assertManagedInstallRemoved(params) {
   if (sourcePath && !fs.existsSync(sourcePath)) {
     throw new Error(`${params.pluginId} source path was deleted during uninstall: ${sourcePath}`);
   }
-  if (installPath !== sourcePath && fs.existsSync(installPath)) {
+  const installPathIsSourcePath = sourcePath ? pathsEqual(installPath, sourcePath) : false;
+  if (!installPathIsSourcePath && fs.existsSync(installPath)) {
     throw new Error(
       `${params.pluginId} managed install path still exists after uninstall: ${installPath}`,
     );
@@ -119,25 +217,14 @@ function recordFixturePluginTrust() {
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 
-  const ledgerPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const ledger = fs.existsSync(ledgerPath)
-    ? readJson(ledgerPath)
-    : {
-        version: 1,
-        warning:
-          "DO NOT EDIT. This file is generated by OpenClaw plugin install/update/uninstall commands. Use `openclaw plugins install/update/uninstall` instead.",
-        records: {},
-      };
-  ledger.updatedAtMs = Date.now();
-  ledger.records ??= {};
-  ledger.records[pluginId] = {
-    ...ledger.records[pluginId],
+  const installRecords = readPluginInstallRecords();
+  installRecords[pluginId] = {
+    ...installRecords[pluginId],
     source: "path",
     installPath: pluginRoot,
     sourcePath: pluginRoot,
   };
-  fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
-  fs.writeFileSync(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`, "utf8");
+  writePluginInstallIndexForE2E({ installRecords });
 }
 
 function assertDemoPlugin() {
@@ -406,12 +493,18 @@ function assertGitPlugin() {
   }
   assertRealPathInside(installPath, dependencyPackagePath, "git plugin installed dependency");
   fs.writeFileSync(scratchFile("plugins-git-install-path.txt"), installPath, "utf8");
-  fs.writeFileSync(scratchFile("plugins-git-install-parent.txt"), path.dirname(installPath), "utf8");
+  fs.writeFileSync(
+    scratchFile("plugins-git-install-parent.txt"),
+    path.dirname(installPath),
+    "utf8",
+  );
 }
 
 function assertGitPluginRemoved() {
   const installPath = fs.readFileSync(scratchFile("plugins-git-install-path.txt"), "utf8").trim();
-  const installParent = fs.readFileSync(scratchFile("plugins-git-install-parent.txt"), "utf8").trim();
+  const installParent = fs
+    .readFileSync(scratchFile("plugins-git-install-parent.txt"), "utf8")
+    .trim();
   assertPluginRemoved({
     pluginId: "demo-plugin-git",
     listFile: scratchFile("plugins-git-uninstalled.json"),
@@ -496,7 +589,7 @@ function assertPluginDirDeps() {
   if (record.source !== "path") {
     throw new Error(`unexpected local dependency plugin source: ${record.source}`);
   }
-  if (record.sourcePath !== sourceDir) {
+  if (!pathsEqual(record.sourcePath, sourceDir)) {
     throw new Error(`unexpected local dependency plugin source path: ${record.sourcePath}`);
   }
   const installPath = resolveHomePath(record.installPath);
@@ -583,7 +676,10 @@ function assertNpmPlugin() {
 }
 
 function assertNpmPluginUpdateUnchanged() {
-  assertUpdateOutput(scratchFile("plugins-npm-update.log"), "demo-plugin-npm is up to date (0.0.1).");
+  assertUpdateOutput(
+    scratchFile("plugins-npm-update.log"),
+    "demo-plugin-npm is up to date (0.0.1).",
+  );
   assertNpmPlugin();
 }
 
@@ -723,6 +819,7 @@ async function assertClawHubPreflight() {
     throw new Error(`expected clawhub: spec, got ${spec}`);
   }
 
+  const limits = readClawHubPreflightLimits();
   const packageName = parseClawHubPackageName(spec);
   const baseUrl = (
     process.env.OPENCLAW_CLAWHUB_URL ||
@@ -734,16 +831,46 @@ async function assertClawHubPreflight() {
     process.env.CLAWHUB_TOKEN ||
     process.env.CLAWHUB_AUTH_TOKEN ||
     "";
-  const response = await fetch(`${baseUrl}/api/v1/packages/${encodeURIComponent(packageName)}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  });
+  const preflightUrl = `${baseUrl}/api/v1/packages/${encodeURIComponent(packageName)}`;
+  const response = await withTimeout(
+    `ClawHub package preflight for ${packageName}`,
+    limits.timeoutMs,
+    (signal) =>
+      fetch(preflightUrl, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        signal,
+      }),
+  );
   if (!response.ok) {
-    const body = await response.text().catch(() => "");
+    const body = await withTimeout(
+      `ClawHub package preflight response for ${packageName}`,
+      limits.timeoutMs,
+      () =>
+        readBoundedResponseText(
+          response,
+          `ClawHub package preflight response for ${packageName}`,
+          limits.bodyMaxBytes,
+        ),
+    );
     throw new Error(
       `ClawHub package preflight failed for ${packageName}: ${response.status} ${body}`,
     );
   }
-  const detail = await response.json();
+  const rawDetail = await withTimeout(
+    `ClawHub package preflight response for ${packageName}`,
+    limits.timeoutMs,
+    () =>
+      readBoundedResponseText(
+        response,
+        `ClawHub package preflight response for ${packageName}`,
+        limits.bodyMaxBytes,
+      ),
+  );
+  const detail = await withTimeout(
+    `ClawHub package preflight JSON for ${packageName}`,
+    limits.timeoutMs,
+    () => JSON.parse(rawDetail),
+  );
   const family = detail.package?.family;
   if (family !== "code-plugin" && family !== "bundle-plugin") {
     throw new Error(`ClawHub package ${packageName} is not installable as a plugin: ${family}`);
@@ -773,17 +900,17 @@ function assertClawHubInstalled() {
     throw new Error(`unexpected ClawHub inspect plugin id: ${inspect.plugin?.id}`);
   }
 
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = readJson(indexPath);
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const config = fs.existsSync(configPath) ? readJson(configPath) : {};
   const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
+  const index = readPluginInstallIndex({
+    configPath,
+    fallbackRecords: allowLegacyCompat ? (config.plugins?.installs ?? {}) : {},
+  });
   if (!allowLegacyCompat && !index.installRecords) {
     throw new Error("expected modern installRecords in installed plugin index");
   }
-  const installRecords = allowLegacyCompat
-    ? (index.installRecords ?? index.records ?? config.plugins?.installs ?? {})
-    : (index.installRecords ?? {});
+  const installRecords = index.installRecords ?? {};
   const record = installRecords[pluginId];
   if (!record) {
     throw new Error(`missing ClawHub install record for ${pluginId}`);
@@ -820,17 +947,20 @@ function assertClawHubInstalled() {
 
 function assertClawHubRemoved() {
   const pluginId = process.env.CLAWHUB_PLUGIN_ID;
-  const installPath = fs.readFileSync(scratchFile("plugins-clawhub-install-path.txt"), "utf8").trim();
+  const installPath = fs
+    .readFileSync(scratchFile("plugins-clawhub-install-path.txt"), "utf8")
+    .trim();
   const list = readJson(scratchFile("plugins-clawhub-uninstalled.json"));
   if ((list.plugins || []).some((entry) => entry.id === pluginId)) {
     throw new Error(`ClawHub plugin still listed after uninstall: ${pluginId}`);
   }
 
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const config = fs.existsSync(configPath) ? readJson(configPath) : {};
-  const installRecords = index.installRecords ?? index.records ?? config.plugins?.installs ?? {};
+  const installRecords = readPluginInstallRecords({
+    configPath,
+    fallbackRecords: config.plugins?.installs ?? {},
+  });
   if (installRecords[pluginId]) {
     throw new Error(`ClawHub install record still present after uninstall: ${pluginId}`);
   }

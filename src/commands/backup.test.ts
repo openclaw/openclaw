@@ -1,3 +1,4 @@
+// Backup command tests cover backup create, verify, and runtime output paths.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -462,7 +463,7 @@ describe("backup commands", () => {
       const workspaceLink = path.join(linkParent, "workspace-link");
       try {
         await fs.symlink(workspaceDir, workspaceLink);
-        vi.mocked(process.cwd).mockReturnValue(workspaceLink);
+        vi.mocked(process["cwd"]).mockReturnValue(workspaceLink);
         const symlinkNowMs = Date.UTC(2026, 2, 9, 1, 3, 4);
         await mockWorkspaceBackupPlan(stateDir, workspaceDir, symlinkNowMs);
         const symlinkResult = await backupCreateCommand(createBackupTestRuntime(), {

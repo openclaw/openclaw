@@ -1,6 +1,12 @@
+// CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
 import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -15,11 +21,6 @@ import {
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { isRich, theme } from "../terminal/theme.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
@@ -132,6 +133,7 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   targetLabel: string;
   baseHash: string;
 }> {
+  // Writes carry the base hash so gateway/node updates can reject stale snapshots.
   const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
   if (source === "local") {
     defaultRuntime.log(theme.muted("Writing local approvals."));

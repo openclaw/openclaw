@@ -1,9 +1,16 @@
+// Qa Lab plugin module implements suite behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  renderQaMarkdownReport,
+  type QaReportCheck,
+  type QaReportScenario,
+} from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
@@ -28,7 +35,6 @@ import {
   type QaTransportId,
 } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { defaultQaModelForMode } from "./run-config.js";
 import {
   captureRuntimeParityCell,
@@ -64,6 +70,15 @@ type QaSuiteStep = {
   name: string;
   run: () => Promise<string | void>;
 };
+
+function resolveQaSuiteControlUiEnabled(params: {
+  explicit?: boolean;
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+}) {
+  return (
+    params.explicit ?? params.scenarios.some((scenario) => scenarioRequiresControlUi(scenario))
+  );
+}
 
 export type QaSuiteScenarioResult = {
   name: string;
@@ -139,11 +154,11 @@ function resolveQaSuiteTransportReadyTimeoutMs(
   if (!raw) {
     return 120_000;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 1) {
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
     return 120_000;
   }
-  return Math.floor(parsed);
+  return parsed;
 }
 
 function writeQaSuiteProgress(enabled: boolean, message: string) {
@@ -235,16 +250,6 @@ function shouldRunQaSuiteWithIsolatedScenarioWorkers(params: {
   }
 
   return true;
-}
-
-function resolveQaSuiteControlUiEnabled(params: {
-  explicit?: boolean;
-  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
-}) {
-  if (typeof params.explicit === "boolean") {
-    return params.explicit;
-  }
-  return params.scenarios.some((scenario) => scenarioRequiresControlUi(scenario));
 }
 
 const QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
@@ -372,18 +377,17 @@ function buildRuntimeParityScenarioResult(params: {
   result: RuntimeParityResult;
 }): QaSuiteScenarioResult {
   const driftStepStatus = isRuntimeParityPass(params.result) ? "pass" : "fail";
+  const openclawCell = params.result.cells.openclaw;
   return {
     name: params.scenarioName,
     status: driftStepStatus,
     details: params.result.driftDetails ?? `runtime drift classified as ${params.result.drift}`,
     steps: [
       {
-        name: params.result.cells.pi.runtime,
+        name: openclawCell.runtime,
         status:
-          params.result.cells.pi.runtimeErrorClass || params.result.cells.pi.transportErrorClass
-            ? "fail"
-            : "pass",
-        details: formatRuntimeParityCellDetails(params.result.cells.pi),
+          openclawCell.runtimeErrorClass || openclawCell.transportErrorClass ? "fail" : "pass",
+        details: formatRuntimeParityCellDetails(openclawCell),
       },
       {
         name: params.result.cells.codex.runtime,
@@ -1025,7 +1029,9 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     ...new Set([
       ...collectQaSuitePluginIds(selectedCatalogScenarios),
       ...(params?.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
-      ...(params?.forcedRuntime && params.forcedRuntime !== "pi" ? [params.forcedRuntime] : []),
+      ...(params?.forcedRuntime && params.forcedRuntime !== "openclaw"
+        ? [params.forcedRuntime]
+        : []),
     ]),
   ];
   const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
@@ -1046,10 +1052,6 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     concurrency,
     lab: params?.lab,
     startLab: params?.startLab,
-  });
-  const controlUiEnabled = resolveQaSuiteControlUiEnabled({
-    explicit: params?.controlUiEnabled,
-    scenarios: selectedCatalogScenarios,
   });
 
   if (params?.runtimePair) {
@@ -1141,7 +1143,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
             generatedAt: partialFinishedAt.toISOString(),
           } satisfies QaLabLatestReport);
         })
-        .catch((error) => {
+        .catch((error: unknown) => {
           writeQaSuiteProgress(
             progressEnabled,
             `partial artifact write failed: ${sanitizeQaSuiteProgressValue(formatErrorMessage(error))}`,
@@ -1345,7 +1347,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     fastMode,
     thinkingDefault: params?.thinkingDefault,
     claudeCliAuthMode: params?.claudeCliAuthMode,
-    controlUiEnabled,
+    controlUiEnabled: params?.controlUiEnabled ?? true,
     enabledPluginIds,
     forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
     mutateConfig: gatewayConfigPatch
@@ -1364,12 +1366,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     progressEnabled,
     `gateway ready: ${sanitizeQaSuiteProgressValue(gateway.baseUrl)}`,
   );
-  if (controlUiEnabled) {
-    lab.setControlUi({
-      controlUiProxyTarget: gateway.baseUrl,
-      controlUiProxyToken: gateway.token,
-    });
-  }
+  lab.setControlUi({
+    controlUiProxyTarget: gateway.baseUrl,
+    controlUiProxyToken: gateway.token,
+  });
   const env: QaSuiteEnvironment = {
     lab,
     mock,
@@ -1596,6 +1596,7 @@ export const qaSuiteProgressTesting = {
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,
   resolveQaSuiteControlUiEnabled,
+  scenarioRequiresControlUi,
   resolveQaSuiteTransportReadyTimeoutMs,
   sanitizeQaSuiteProgressValue,
   shouldRunQaSuiteWithIsolatedScenarioWorkers,

@@ -1,3 +1,4 @@
+// Whatsapp tests cover ack reaction plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WhatsAppSendResult } from "../../inbound/send-result.js";
@@ -134,6 +135,39 @@ describe("maybeSendAckReaction", () => {
 
     expect(ackReaction?.ackReactionValue).toBe("👀");
     expectAckReactionSent("work", cfg);
+  });
+
+  it("uses the agent identity emoji when WhatsApp ackReaction has no emoji", async () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "agent", identity: { emoji: "🔥" } }],
+      },
+      channels: {
+        whatsapp: {
+          reactionLevel: "ack",
+          ackReaction: {
+            direct: true,
+            group: "mentions",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const ackReaction = await runAckReaction({ cfg });
+
+    expect(ackReaction?.ackReactionValue).toBe("🔥");
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+      "15551234567@s.whatsapp.net",
+      "msg-1",
+      "🔥",
+      {
+        verbose: false,
+        fromMe: false,
+        accountId: "default",
+        cfg,
+      },
+    );
   });
 
   it("returns a handle that removes the ack with an empty reaction", async () => {

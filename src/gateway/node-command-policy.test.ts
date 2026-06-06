@@ -1,4 +1,11 @@
+/**
+ * Node command policy regression tests.
+ */
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -8,7 +15,6 @@ import {
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 
 describe("gateway/node-command-policy", () => {
   afterEach(() => {

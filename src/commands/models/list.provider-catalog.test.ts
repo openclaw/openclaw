@@ -1,3 +1,4 @@
+// Provider catalog list tests cover provider catalog integration for model listing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hasProviderStaticCatalogForFilter,
@@ -27,6 +28,7 @@ vi.mock("../../plugins/providers.js", () => ({
   resolveBundledProviderCompatPluginIds:
     providerDiscoveryMocks.resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProvider: providerDiscoveryMocks.resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef: providerDiscoveryMocks.resolveOwningPluginIdsForProvider,
 }));
 
 vi.mock("../../plugins/contracts/registry.js", () => ({

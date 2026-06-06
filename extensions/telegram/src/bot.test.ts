@@ -1,3 +1,4 @@
+// Telegram tests cover bot plugin behavior.
 import { rm } from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -9,6 +10,7 @@ import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
+import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 const {
   answerCallbackQuerySpy,
   commandSpy,
@@ -26,7 +28,7 @@ const {
   replySpy,
   resolveExecApprovalSpy,
   sendMessageSpy,
-  setSessionStoreEntriesForTest,
+  setSessionStoreEntriesForTest: _setSessionStoreEntriesForTest,
   setMyCommandsSpy,
   telegramBotDepsForTest,
   telegramBotRuntimeForTest,
@@ -636,7 +638,7 @@ describe("createTelegramBot", () => {
     await callbackHandler({
       callbackQuery: {
         id: "cbq-approve-capability-free",
-        data: "/approve 138e9b8c allow-once",
+        data: "tgcmd:/approve 138e9b8c allow-once",
         from: { id: 9, first_name: "Ada", username: "ada_bot" },
         message: {
           chat: { id: 1234, type: "private" },
@@ -653,7 +655,7 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-capability-free");
   });
 
-  it("resolves plugin approval callbacks through the shared approval resolver", async () => {
+  it("resolves opaque plugin approval callbacks through the shared approval resolver", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
@@ -710,6 +712,53 @@ describe("createTelegramBot", () => {
     expect(approvalCall.senderId).toBe("9");
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve");
+  });
+
+  it("does not resolve opaque approval-shaped plugin callbacks", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-opaque-plugin-approve",
+        data: buildTelegramOpaqueCallbackData("/approve plugin:138e9b8c allow-once"),
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 25,
+          text: "Plugin callback.",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-opaque-plugin-approve");
   });
 
   it("blocks approval callbacks from telegram users who are not exec approvers", async () => {
@@ -1136,6 +1185,38 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores unsafe command pagination pages", async () => {
+    onSpy.mockClear();
+    listSkillCommandsForAgents.mockClear();
+    editMessageTextSpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-unsafe-page",
+        data: "commands_page_9007199254740993:main",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 16,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(listSkillCommandsForAgents).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
+  });
+
   it("blocks pagination callbacks when allowlist rejects sender", async () => {
     onSpy.mockClear();
     editMessageTextSpy.mockClear();
@@ -1178,7 +1259,7 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-4");
   });
 
-  it("routes compact model callbacks by inferring provider", async () => {
+  it("routes compact model callbacks against the configured provider", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
     editMessageTextSpy.mockClear();
@@ -1188,7 +1269,7 @@ describe("createTelegramBot", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
-          model: `bedrock/${modelId}`,
+          model: `amazon-bedrock/${modelId}`,
         },
       },
       channels: {
@@ -2498,6 +2579,47 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("omits Date-invalid forwarded origin timestamps without dropping forwarded context", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    replySpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "Thoughts?",
+        date: 1736380800,
+        external_reply: {
+          message_id: 9004,
+          text: "forwarded text",
+          from: { first_name: "Ada" },
+          forward_origin: {
+            type: "user",
+            sender_user: {
+              id: 999,
+              first_name: "Bob",
+              last_name: "Smith",
+              username: "bobsmith",
+              is_bot: false,
+            },
+            date: 8_700_000_000_000,
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.ReplyToForwardedFrom).toBe("Bob Smith (@bobsmith)");
+    expect(payload.Body).toContain("[Forwarded from Bob Smith (@bobsmith)]");
+    expect(payload.Body).not.toContain("+275760");
+  });
+
   it("redacts forwarded origin inside reply targets when context visibility is allowlist", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
@@ -3020,6 +3142,49 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
     expect(payload.CommandTargetSessionKey).toBe("agent:main:main");
+  });
+
+  it("uses bot topic capability for native dm topic command target sessions", async () => {
+    onSpy.mockClear();
+    sendMessageSpy.mockClear();
+    commandSpy.mockClear();
+    replySpy.mockClear();
+    replySpy.mockResolvedValue({ text: "response" });
+
+    loadConfig.mockReturnValue({
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+        },
+      },
+    });
+    readChannelAllowFromStore.mockResolvedValueOnce(["12345"]);
+
+    createTelegramBot({ token: "tok" });
+    const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
+      | ((ctx: Record<string, unknown>) => Promise<void>)
+      | undefined;
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
+
+    await handler({
+      message: {
+        chat: { id: 12345, type: "private" },
+        from: { id: 12345, username: "testuser" },
+        text: "/status",
+        date: 1736380800,
+        message_id: 42,
+        message_thread_id: 99,
+      },
+      me: { has_topics_enabled: true },
+      match: "",
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.CommandTargetSessionKey).toBe("agent:main:main:thread:12345:99");
   });
 
   it("allows native DM commands for paired users", async () => {

@@ -1,6 +1,7 @@
+// Discord plugin module implements runtime.messaging.messages behavior.
 import {
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "../runtime-api.js";
@@ -101,7 +102,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       const channelId = ctx.resolveChannelId();
       await ctx.assertReadTargetAllowed({ channelId });
       const query = {
-        limit: readNumberParam(ctx.params, "limit"),
+        limit: readPositiveIntegerParam(ctx.params, "limit"),
         before: readStringParam(ctx.params, "before"),
         after: readStringParam(ctx.params, "after"),
         around: readStringParam(ctx.params, "around"),
@@ -193,7 +194,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       const channelIds = readStringArrayParam(ctx.params, "channelIds");
       const authorId = readStringParam(ctx.params, "authorId");
       const authorIds = readStringArrayParam(ctx.params, "authorIds");
-      const limit = readNumberParam(ctx.params, "limit");
+      const limit = readPositiveIntegerParam(ctx.params, "limit");
       const channelIdList = [...(channelIds ?? []), ...(channelId ? [channelId] : [])];
       if (channelIdList.length > 0) {
         for (const targetChannelId of channelIdList) {

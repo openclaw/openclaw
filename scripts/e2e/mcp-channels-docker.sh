@@ -12,7 +12,7 @@ CONTAINER_NAME="openclaw-mcp-e2e-$$"
 CLIENT_LOG="$(mktemp -t openclaw-mcp-client-log.XXXXXX)"
 
 cleanup() {
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   rm -f "$CLIENT_LOG"
 }
 trap cleanup EXIT
@@ -65,7 +65,7 @@ docker_e2e_run_with_harness \
     openclaw_e2e_wait_mock_openai \"\$mock_port\"
     tsx scripts/e2e/mcp-channels-seed.ts >/tmp/mcp-channels-seed.log
     gateway_pid=\"\$(openclaw_e2e_start_gateway \"\$entry\" $PORT /tmp/mcp-channels-gateway.log)\"
-    openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/mcp-channels-gateway.log 480
+    openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/mcp-channels-gateway.log 480 $PORT
     tsx scripts/e2e/mcp-channels-docker-client.ts
   " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}
@@ -77,4 +77,5 @@ if [ "$status" -ne 0 ]; then
   exit "$status"
 fi
 
+cat "$CLIENT_LOG"
 echo "OK"

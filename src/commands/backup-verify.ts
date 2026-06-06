@@ -1,10 +1,12 @@
+// Verifies backup archives by validating their manifest, payload entries, and hardlink targets.
 import path from "node:path";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import * as tar from "tar";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { readStringValue } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const MAX_MANIFEST_BYTES = 1024 * 1024;
 
 type BackupManifestAsset = {
   kind: string;
@@ -193,7 +195,7 @@ async function extractManifest(params: {
   archivePath: string;
   manifestEntryPath: string;
 }): Promise<string> {
-  let manifestContentPromise: Promise<string> | undefined;
+  let manifestContentPromise: Promise<{ content?: string; error?: Error }> | undefined;
   await tar.t({
     file: params.archivePath,
     gzip: true,
@@ -203,14 +205,44 @@ async function extractManifest(params: {
         return;
       }
 
-      manifestContentPromise = new Promise<string>((resolve, reject) => {
+      manifestContentPromise = new Promise<{ content?: string; error?: Error }>((resolve) => {
         const chunks: Buffer[] = [];
+        let totalBytes = 0;
+        let exceededLimit = false;
+        let settled = false;
+        const settle = (result: { content?: string; error?: Error }) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve(result);
+        };
         entry.on("data", (chunk: Buffer | string) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          if (exceededLimit) {
+            return;
+          }
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          totalBytes += buffer.byteLength;
+          if (totalBytes > MAX_MANIFEST_BYTES) {
+            exceededLimit = true;
+            chunks.length = 0;
+            return;
+          }
+          chunks.push(buffer);
         });
-        entry.on("error", reject);
+        entry.on("error", (error) => {
+          settle({
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
+        });
         entry.on("end", () => {
-          resolve(Buffer.concat(chunks).toString("utf8"));
+          if (exceededLimit) {
+            settle({
+              error: new Error(`Backup manifest exceeds ${MAX_MANIFEST_BYTES} byte limit.`),
+            });
+            return;
+          }
+          settle({ content: Buffer.concat(chunks, totalBytes).toString("utf8") });
         });
       });
     },
@@ -219,7 +251,11 @@ async function extractManifest(params: {
   if (!manifestContentPromise) {
     throw new Error(`Archive is missing manifest entry: ${params.manifestEntryPath}`);
   }
-  return await manifestContentPromise;
+  const result = await manifestContentPromise;
+  if (result.error) {
+    throw result.error;
+  }
+  return result.content ?? "";
 }
 
 function isRootManifestEntry(entryPath: string): boolean {
@@ -266,14 +302,20 @@ function verifyHardlinkTargetsAgainstArchiveRoot(
 ): void {
   const normalizedRoot = normalizeArchiveRoot(archiveRoot);
   for (const target of hardlinkTargets) {
-    if (!isArchivePathWithin(target.normalized, normalizedRoot)) {
+    // Older backup archives may store hardlink linkpath values relative to the
+    // archive root instead of including the root segment. Accept that form only
+    // when it resolves to a real entry inside this archive.
+    const normalizedTarget = isArchivePathWithin(target.normalized, normalizedRoot)
+      ? target.normalized
+      : path.posix.join(normalizedRoot, target.normalized);
+    if (!isArchivePathWithin(normalizedTarget, normalizedRoot)) {
       throw new Error(
-        `Archive hardlink target is outside the declared archive root: ${target.entryPath} -> ${target.normalized}`,
+        `Archive hardlink target is outside the declared archive root: ${target.entryPath} -> ${normalizedTarget}`,
       );
     }
-    if (!entries.has(target.normalized)) {
+    if (!entries.has(normalizedTarget)) {
       throw new Error(
-        `Archive hardlink target is missing from archive entries: ${target.entryPath} -> ${target.normalized}`,
+        `Archive hardlink target is missing from archive entries: ${target.entryPath} -> ${normalizedTarget}`,
       );
     }
   }
@@ -303,6 +345,7 @@ function findDuplicateNormalizedEntryPath(
   return undefined;
 }
 
+/** Verify a backup archive without extracting payload files to disk. */
 export async function backupVerifyCommand(
   runtime: RuntimeEnv,
   opts: BackupVerifyOptions,

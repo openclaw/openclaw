@@ -1,9 +1,11 @@
+// Run Vitest Profile tests cover run vitest profile script behavior.
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildVitestProfileSpawnSpec,
   buildVitestProfileCommand,
+  buildVitestProfileCommandWithArgs,
   parseArgs,
   resolveVitestProfileDir,
 } from "../../scripts/run-vitest-profile.mjs";
@@ -83,6 +85,30 @@ describe("scripts/run-vitest-profile", () => {
     expect(parseArgs(["runner", "--output-dir", "/tmp/out"])).toEqual({
       mode: "runner",
       outputDir: "/tmp/out",
+      vitestArgs: [],
+    });
+  });
+
+  it("passes vitest args after a separator", () => {
+    expect(parseArgs(["main", "--output-dir", "/tmp/out", "--", "--config", "custom.ts"])).toEqual({
+      mode: "main",
+      outputDir: "/tmp/out",
+      vitestArgs: ["--config", "custom.ts"],
+    });
+    expect(
+      buildVitestProfileCommandWithArgs({
+        mode: "runner",
+        outputDir: "/tmp/profile-runner",
+        vitestArgs: ["src/example.test.ts"],
+      }).args,
+    ).toContain("src/example.test.ts");
+  });
+
+  it("allows a package-script separator before script flags", () => {
+    expect(parseArgs(["main", "--", "--output-dir", "/tmp/out"])).toEqual({
+      mode: "main",
+      outputDir: "/tmp/out",
+      vitestArgs: [],
     });
   });
 });

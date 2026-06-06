@@ -1,3 +1,4 @@
+// Completion CLI tests cover shell completion command generation and install output.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -100,6 +101,17 @@ describe("completion-cli", () => {
     expect(script).not.toContain("if ($commandPath -eq 'openclaw gateway') {");
     expect(script).toContain("$completions = @('status','restart','--force','--token')");
     expect(script).not.toContain("'-t,'");
+  });
+
+  it("generates valid PowerShell root arrays when commands or options are empty", () => {
+    const commandsOnly = new Command().name("openclaw");
+    commandsOnly.command("status");
+    const optionsOnly = new Command().name("openclaw").option("--json", "JSON output");
+    const empty = new Command().name("openclaw");
+
+    expect(getCompletionScript("powershell", commandsOnly)).toContain("$completions = @('status')");
+    expect(getCompletionScript("powershell", optionsOnly)).toContain("$completions = @('--json')");
+    expect(getCompletionScript("powershell", empty)).toContain("$completions = @()");
   });
 
   it("generates fish completions for root and nested command contexts", () => {

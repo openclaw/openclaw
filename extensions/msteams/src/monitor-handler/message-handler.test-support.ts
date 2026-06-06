@@ -1,3 +1,4 @@
+// Msteams plugin module implements message handler support behavior.
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
@@ -68,7 +69,7 @@ export function createMessageHandlerDeps(
     cfg,
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
     appId: "test-app",
-    adapter: {} as MSTeamsMessageHandlerDeps["adapter"],
+    app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {
       getAccessToken: vi.fn(async () => "token"),
     },

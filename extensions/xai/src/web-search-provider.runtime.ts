@@ -1,3 +1,4 @@
+// Xai provider module implements model/runtime integration.
 import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -13,7 +14,7 @@ import {
   mergeScopedSearchConfig,
   normalizeCacheKey,
   readCache,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
   resolveCacheTtlMs,
   resolveProviderWebSearchPluginConfig,
@@ -372,7 +373,10 @@ export async function executeXaiWebSearchProviderTool(
   }
 
   const query = readStringParam(args, "query", { required: true });
-  void readNumberParam(args, "count", { integer: true });
+  void readPositiveIntegerParam(args, "count", {
+    max: 10,
+    message: "count must be an integer from 1 to 10.",
+  });
 
   const request = {
     query,

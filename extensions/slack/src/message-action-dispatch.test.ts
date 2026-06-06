@@ -1,3 +1,4 @@
+// Slack tests cover message action dispatch plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 
@@ -381,6 +382,26 @@ describe("handleSlackMessageAction", () => {
     expect(action.channelId).toBe("C1");
     expect(action.messageId).toBe("1712345678.654321");
     expect(firstInvokeCall(invoke)[1]).toEqual({});
+  });
+
+  it("rejects fractional read limits before invoking Slack actions", async () => {
+    const invoke = createInvokeSpy();
+
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "read",
+          cfg: {},
+          params: {
+            channelId: "C1",
+            limit: 2.5,
+          },
+        } as never,
+        invoke: invoke as never,
+      }),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("requires filePath, path, or media for upload-file", async () => {

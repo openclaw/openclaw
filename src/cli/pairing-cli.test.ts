@@ -1,6 +1,7 @@
+// Pairing CLI tests cover pairing command registration and pairing status output.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { theme } from "../terminal/theme.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { registerPairingCli } from "./pairing-cli.js";
 
 const mocks = vi.hoisted(() => ({

@@ -1,9 +1,11 @@
+// Qa Matrix plugin module implements scenario catalog behavior.
+import type { QaProviderModeInput } from "../../run-config.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "../../shared/live-transport-scenarios.js";
-import { type MatrixQaConfigOverrides } from "../../substrate/config.js";
+import type { MatrixQaConfigOverrides } from "../../substrate/config.js";
 import {
   buildDefaultMatrixQaTopologySpec,
   findMatrixQaProvisionedRoom,
@@ -30,6 +32,7 @@ type MatrixQaScenarioId =
   | "matrix-room-image-understanding-attachment"
   | "matrix-room-generated-image-delivery"
   | "matrix-media-type-coverage"
+  | "matrix-voice-preflight-mention"
   | "matrix-attachment-only-ignored"
   | "matrix-unsupported-media-safe"
   | "matrix-dm-reply-shape"
@@ -113,6 +116,7 @@ export type MatrixQaE2eeScenarioId = Extract<MatrixQaScenarioId, `matrix-e2ee-${
 
 export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQaScenarioId> & {
   configOverrides?: MatrixQaConfigOverrides;
+  providerMode?: QaProviderModeInput;
   topology?: MatrixQaTopologySpec;
 };
 
@@ -454,6 +458,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     timeoutMs: 75_000,
     title: "Matrix block streaming preserves completed quiet preview blocks",
     topology: MATRIX_QA_BLOCK_ROOM_TOPOLOGY,
+    providerMode: "mock-openai",
     configOverrides: {
       agentDefaults: {
         blockStreamingChunk: {
@@ -491,6 +496,19 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-media-type-coverage",
     timeoutMs: 90_000,
     title: "Matrix media attachments cover image, audio, video, PDF, and EPUB transport",
+    topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
+  },
+  {
+    id: "matrix-voice-preflight-mention",
+    configOverrides: {
+      audio: {
+        enabled: true,
+      },
+      groupMentionPatterns: ["\\S"],
+    },
+    providerMode: "live-frontier",
+    timeoutMs: 180_000,
+    title: "Matrix voice notes can trigger mention gating through transcription",
     topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
   },
   {
@@ -1221,12 +1239,14 @@ const MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS = [
   "matrix-room-image-understanding-attachment",
   "matrix-room-generated-image-delivery",
   "matrix-media-type-coverage",
+  "matrix-voice-preflight-mention",
   "matrix-attachment-only-ignored",
   "matrix-unsupported-media-safe",
   "matrix-e2ee-media-image",
 ] satisfies MatrixQaScenarioId[];
 
 const MATRIX_QA_EXPLICIT_ONLY_SCENARIO_IDS = new Set<MatrixQaScenarioId>([
+  "matrix-room-block-streaming",
   "matrix-subagent-thread-spawn",
 ]);
 

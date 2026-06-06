@@ -1,4 +1,7 @@
-import { spawnSync } from "node:child_process";
+// Ui tests cover ui script behavior.
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -7,6 +10,38 @@ import {
   resolveSpawnCall,
   shouldUseCmdExeForCommand,
 } from "../../scripts/ui.js";
+
+async function waitFor(predicate: () => boolean, label: string, timeoutMs = 3_000): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`timed out waiting for ${label}`);
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+}
+
+async function waitForExit(
+  child: ChildProcess,
+  timeoutMs = 3_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("timed out waiting for child exit"));
+    }, timeoutMs);
+    child.once("exit", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
 
 describe("scripts/ui windows spawn behavior", () => {
   it("wraps Windows command launchers with cmd.exe without enabling shell mode", () => {
@@ -77,39 +112,41 @@ describe("scripts/ui windows spawn behavior", () => {
   });
 
   it("routes Windows Corepack pnpm entrypoints through node", () => {
-    expect(
-      resolvePnpmSpawnCall(
-        ["run", "build"],
-        {
-          npm_execpath:
-            "C:\\Users\\runner\\AppData\\Local\\node\\corepack\\v1\\pnpm\\11.2.2\\bin\\pnpm.mjs",
-          ComSpec: "C:\\Windows\\System32\\cmd.exe",
-        },
-        {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.mjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
+
+    try {
+      expect(
+        resolvePnpmSpawnCall(
+          ["run", "build"],
+          {
+            npm_execpath: npmExecPath,
+            ComSpec: "C:\\Windows\\System32\\cmd.exe",
+          },
+          {
+            cwd: "C:\\repo\\ui",
+            nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+            platform: "win32",
+          },
+        ),
+      ).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [npmExecPath, "run", "build"],
+        options: {
           cwd: "C:\\repo\\ui",
-          nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-          platform: "win32",
+          stdio: "inherit",
+          env: {
+            npm_execpath: npmExecPath,
+            ComSpec: "C:\\Windows\\System32\\cmd.exe",
+          },
+          shell: false,
+          windowsVerbatimArguments: undefined,
         },
-      ),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: [
-        "C:\\Users\\runner\\AppData\\Local\\node\\corepack\\v1\\pnpm\\11.2.2\\bin\\pnpm.mjs",
-        "run",
-        "build",
-      ],
-      options: {
-        cwd: "C:\\repo\\ui",
-        stdio: "inherit",
-        env: {
-          npm_execpath:
-            "C:\\Users\\runner\\AppData\\Local\\node\\corepack\\v1\\pnpm\\11.2.2\\bin\\pnpm.mjs",
-          ComSpec: "C:\\Windows\\System32\\cmd.exe",
-        },
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("keeps non-Windows launches direct even with shell metacharacters", () => {
@@ -156,4 +193,54 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(output).not.toContain("Missing UI runner");
     expect(output).toContain("vite");
   });
+
+  it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP"] as const)(
+    "terminates the pnpm child on wrapper %s",
+    async (signal) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-wrapper-signals-"));
+      const runnerPath = path.join(tempDir, "pnpm.mjs");
+      const readyFile = path.join(tempDir, "ready");
+      const signaledFile = path.join(tempDir, "signaled");
+      const handlerLines = ["SIGTERM", "SIGHUP"].flatMap((handledSignal) => [
+        `process.on('${handledSignal}', () => {`,
+        `  fs.writeFileSync(process.env.SIGNALED_FILE, '${handledSignal}');`,
+        "  setTimeout(() => process.exit(0), 25);",
+        "});",
+      ]);
+
+      fs.writeFileSync(
+        runnerPath,
+        [
+          "import fs from 'node:fs';",
+          ...handlerLines,
+          "fs.writeFileSync(process.env.READY_FILE, process.argv.slice(2).join(' '));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+
+      const wrapper = spawn(process.execPath, ["scripts/ui.js", "install"], {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          npm_execpath: runnerPath,
+          READY_FILE: readyFile,
+          SIGNALED_FILE: signaledFile,
+        },
+        stdio: "ignore",
+      });
+
+      try {
+        await waitFor(() => fs.existsSync(readyFile), "UI runner readiness");
+        expect(fs.readFileSync(readyFile, "utf8")).toBe("install");
+        wrapper.kill(signal);
+
+        const exit = await waitForExit(wrapper);
+        expect(exit).toEqual({ code: null, signal });
+        expect(fs.readFileSync(signaledFile, "utf8")).toBe(signal);
+      } finally {
+        wrapper.kill("SIGKILL");
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
 });

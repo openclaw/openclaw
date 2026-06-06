@@ -1,3 +1,4 @@
+// Collects plugin manifest and metric observations for gateway gauntlet reports.
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
@@ -123,12 +124,14 @@ function collectOnboardingScopes(manifest) {
 
 function buildPluginMatrixEntry(params) {
   const { repoRoot, manifestPath, manifest } = params;
+  const pluginDir = path.dirname(manifestPath);
   const relativeManifestPath = path.relative(repoRoot, manifestPath);
   const commandAliases = collectCommandAliasRecords(manifest);
   return {
     id: manifest.id,
+    buildId: path.basename(pluginDir),
     name: normalizeString(manifest.name) || manifest.id,
-    dir: path.relative(repoRoot, path.dirname(manifestPath)),
+    dir: path.relative(repoRoot, pluginDir),
     manifestPath: relativeManifestPath,
     enabledByDefault: manifest.enabledByDefault === true,
     activation: isPlainObject(manifest.activation) ? manifest.activation : {},
@@ -223,11 +226,13 @@ function collectMetricObservations(rows, thresholds = {}) {
   const wallAnomalyMultiplier = thresholds.wallAnomalyMultiplier ?? 3;
   const maxRssWarnMb = thresholds.maxRssWarnMb ?? null;
   const rssAnomalyMultiplier = thresholds.rssAnomalyMultiplier ?? 2.5;
+  const firstWorkRow = rows.find((row) => row.phase !== "prebuild");
   const observations = [];
   for (const [phase, phaseRows] of groupByPhase(rows)) {
     const wallMedianMs = median(phaseRows.map((row) => row.wallMs));
     const rssMedianMb = median(phaseRows.map((row) => row.maxRssMb));
     for (const row of phaseRows) {
+      const coldStart = row === firstWorkRow;
       const cpuCoreRatio =
         phase === "qa:rpc" && typeof row.qaMetrics?.gatewayCpuCoreRatio === "number"
           ? row.qaMetrics.gatewayCpuCoreRatio
@@ -248,6 +253,7 @@ function collectMetricObservations(rows, thresholds = {}) {
           phase,
           cpuCoreRatio,
           wallMs,
+          ...(coldStart ? { coldStart } : {}),
         });
       }
       if (
@@ -263,6 +269,7 @@ function collectMetricObservations(rows, thresholds = {}) {
           wallMs: row.wallMs,
           medianWallMs: wallMedianMs,
           multiplier: wallAnomalyMultiplier,
+          ...(coldStart ? { coldStart } : {}),
         });
       }
       if (
@@ -276,6 +283,7 @@ function collectMetricObservations(rows, thresholds = {}) {
           phase,
           maxRssMb: row.maxRssMb,
           thresholdMb: maxRssWarnMb,
+          ...(coldStart ? { coldStart } : {}),
         });
       }
       if (
@@ -292,6 +300,7 @@ function collectMetricObservations(rows, thresholds = {}) {
           maxRssMb: row.maxRssMb,
           medianRssMb: rssMedianMb,
           multiplier: rssAnomalyMultiplier,
+          ...(coldStart ? { coldStart } : {}),
         });
       }
     }
@@ -347,13 +356,45 @@ function collectQaBaselineRegressionObservations(rows, thresholds = {}) {
 }
 
 function buildGauntletPrebuildEnv(env, options = {}) {
+  const buildIds = new Set(normalizeStringArray(options.buildIds));
+  const runtimeOnlyPrebuildEnv = options.skipDeclarationBuild
+    ? { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }
+    : {};
+  const hasRuntimeOnlyPrebuildEnv = Object.keys(runtimeOnlyPrebuildEnv).length > 0;
+  if (options.includePrivateQa) {
+    for (const pluginId of NON_PACKAGED_BUNDLED_PLUGIN_DIRS) {
+      buildIds.add(pluginId);
+    }
+  }
   if (!options.includePrivateQa) {
-    return env;
+    return buildIds.size === 0 && !hasRuntimeOnlyPrebuildEnv
+      ? env
+      : {
+          ...env,
+          PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: env.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN ?? "false",
+          ...runtimeOnlyPrebuildEnv,
+          ...(buildIds.size > 0
+            ? {
+                OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: [...buildIds]
+                  .toSorted((left, right) => left.localeCompare(right))
+                  .join(","),
+              }
+            : {}),
+        };
   }
   return {
     ...env,
+    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: env.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN ?? "false",
+    ...runtimeOnlyPrebuildEnv,
     OPENCLAW_BUILD_PRIVATE_QA: "1",
     OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+    ...(buildIds.size > 0
+      ? {
+          OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: [...buildIds]
+            .toSorted((left, right) => left.localeCompare(right))
+            .join(","),
+        }
+      : {}),
   };
 }
 
@@ -402,6 +443,67 @@ function collectGatewayCpuObservations(params) {
   return observations;
 }
 
+function readQaSuiteSummary(summaryPath) {
+  if (!fs.existsSync(summaryPath)) {
+    return {
+      diagnosticFailure: "qa-summary-missing",
+      diagnosticDetail: `expected QA suite summary at ${summaryPath}`,
+      summary: null,
+    };
+  }
+  try {
+    const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+    const invalidReason = validateQaSuiteSummary(summary);
+    if (invalidReason) {
+      return {
+        diagnosticFailure: "qa-summary-invalid",
+        diagnosticDetail: invalidReason,
+        summary: null,
+      };
+    }
+    if (summary.counts.failed > 0) {
+      return {
+        diagnosticFailure: "qa-summary-failed-scenarios",
+        diagnosticDetail: `QA suite reported ${summary.counts.failed} failed scenario(s)`,
+        summary,
+      };
+    }
+    return {
+      diagnosticFailure: null,
+      diagnosticDetail: null,
+      summary,
+    };
+  } catch (error) {
+    return {
+      diagnosticFailure: "qa-summary-invalid",
+      diagnosticDetail: error instanceof Error ? error.message : String(error),
+      summary: null,
+    };
+  }
+}
+
+function validateQaSuiteSummary(summary) {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return "QA suite summary must be a JSON object";
+  }
+  if (!Array.isArray(summary.scenarios)) {
+    return "QA suite summary missing scenarios array";
+  }
+  if (
+    !summary.counts ||
+    typeof summary.counts !== "object" ||
+    !Number.isFinite(summary.counts.total) ||
+    !Number.isFinite(summary.counts.passed) ||
+    !Number.isFinite(summary.counts.failed)
+  ) {
+    return "QA suite summary missing numeric counts";
+  }
+  if (!summary.run || typeof summary.run !== "object" || Array.isArray(summary.run)) {
+    return "QA suite summary missing run metadata";
+  }
+  return null;
+}
+
 export {
   collectQaBaselineRegressionObservations,
   collectGatewayCpuObservations,
@@ -409,6 +511,7 @@ export {
   buildGauntletPrebuildEnv,
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
+  readQaSuiteSummary,
   schemaHasRequiredFields,
   selectPluginEntries,
 };

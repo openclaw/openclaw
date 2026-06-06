@@ -1,3 +1,4 @@
+// Legacy web-search migration tests cover doctor repair of old web search config.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -60,6 +61,32 @@ describe("legacy web search config", () => {
       "Moved tools.web.search.grok → plugins.entries.xai.config.webSearch.",
       "Moved tools.web.search.kimi → plugins.entries.moonshot.config.webSearch.",
     ]);
+  });
+
+  it("does not mutate the caller's original config", () => {
+    const input = {
+      tools: {
+        web: {
+          search: {
+            provider: "grok",
+            apiKey: "brave-key",
+            grok: {
+              apiKey: "xai-key",
+              model: "grok-4-search",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const original = structuredClone(input);
+
+    const res = migrateLegacyWebSearchConfig<OpenClawConfig>(input);
+
+    expect(res.config.plugins?.entries?.xai?.config?.webSearch).toEqual({
+      apiKey: "xai-key",
+      model: "grok-4-search",
+    });
+    expect(input).toEqual(original);
   });
 
   it("preserves unrelated record-valued web search config", () => {

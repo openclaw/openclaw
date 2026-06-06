@@ -5,7 +5,7 @@ description: "OpenClaw Tideclaw alpha/nightly release automation: isolated branc
 
 # Nightly Release
 
-Use for Tideclaw/OpenClaw alpha/nightly release automation, manual alpha triggers, beta prep, release-branch repair, and post-release forward-port.
+Use for Tideclaw/OpenClaw alpha/nightly release automation, manual alpha triggers, beta prep, release-branch repair, and post-release forward-port. Load `$release-private` if it exists before using Tideclaw host paths, cron ids, or Discord routing ids.
 
 ## Policy
 
@@ -36,7 +36,7 @@ This is good for auditability if commits are clearly machine-authored and gated 
 - Branch prefix: `tideclaw/alpha/`
 - Branch name: `tideclaw/alpha/YYYY-MM-DD-HHMMZ`
 - Base: current `origin/main` SHA at trigger time.
-- State file: `/root/tideclaw-workspace/.tideclaw-alpha-state.json`
+- State file: resolve from `$release-private` on the Tideclaw host.
 - Release tag: `vYYYY.M.D-alpha.N`
 - npm dist-tag: `alpha`
 
@@ -44,7 +44,7 @@ Do not reuse old alpha branches for a new run. If rerunning the same base SHA, c
 
 ## Start
 
-1. Work in `/root/tideclaw-workspace/openclaw`.
+1. Work in the Tideclaw host checkout from `$release-private`.
 2. Fetch first:
 
 ```bash
@@ -66,7 +66,8 @@ git switch -c "$BRANCH" "$BASE_SHA"
 Manual trigger:
 
 ```bash
-OPENCLAW_ALLOW_ROOT=1 openclaw cron run 8cfc76f6-d1b4-4608-85ec-1a659e76c0cd --expect-final --timeout 21600000
+CRON_ID="<from release-private>"
+OPENCLAW_ALLOW_ROOT=1 openclaw cron run "$CRON_ID" --expect-final --timeout 21600000
 ```
 
 ## Discord Alpha Trigger
@@ -88,7 +89,7 @@ Rules:
 3. Follow the normal alpha workflow: reuse prior fixes, run local checks, fix on the alpha branch, run release CI, publish alpha after green gates, then forward-port reusable fixes via fixes-only PR.
 4. If another alpha/beta/stable release run is already active, report the active branch/run and stop.
 5. `#maintainers` trigger requires an explicit Tideclaw mention; do not react to unmentioned release chatter there.
-6. Discord currently resolves `@Tideclaw` in `#maintainers` to managed role `<@&1505299068748824609>`. The live host hotfix treats that role mention as addressing bot user `1505297171623186432`; if the hotfix is absent, the message is dropped before this skill runs and must be resent after fixing preflight.
+6. Resolve Discord role/user ids and live host hotfix notes from `$release-private`.
 
 ## Discord Beta Trigger
 
@@ -119,7 +120,7 @@ Rules:
 
 Before running checks, mine recent Tideclaw alpha branches for fixes already made during previous release attempts:
 
-1. Read `/root/tideclaw-workspace/.tideclaw-alpha-state.json` for the last successful alpha branch and fix commit SHAs.
+1. Read the Tideclaw state file from `$release-private` for the last successful alpha branch and fix commit SHAs.
 2. List recent remote branches:
 
 ```bash
@@ -224,7 +225,7 @@ Release is not done until all are true:
 - Release body links npm version page, registry tarball, integrity, and CI/proof.
 - `npm view openclaw@<version>` shows the exact version, dist-tag `alpha`, tarball, integrity, and publish time.
 - Installed/package smoke follows repo release docs.
-- `/root/tideclaw-workspace/.tideclaw-alpha-state.json` records version, tag, base SHA, branch, fix commit SHAs, workflow run IDs, npm integrity, and timestamp.
+- The Tideclaw state file from `$release-private` records version, tag, base SHA, branch, fix commit SHAs, workflow run IDs, npm integrity, and timestamp.
 
 Final Discord summary in `#releases`:
 

@@ -1,8 +1,10 @@
+// Session transcript hit helpers describe and load matched transcript snippets for plugins.
 import path from "node:path";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
@@ -38,6 +40,7 @@ function normalizeQmdSessionStem(stem: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/** Canonical session identity parsed from a transcript search-hit path. */
 export type SessionTranscriptHitIdentity = {
   stem: string;
   liveStem?: string;
@@ -69,6 +72,7 @@ export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): str
   return extractTranscriptIdentityFromSessionsMemoryHit(hitPath)?.stem ?? null;
 }
 
+/** Parse live/archive ownership metadata from a sessions-memory hit path. */
 export function extractTranscriptIdentityFromSessionsMemoryHit(
   hitPath: string,
 ): SessionTranscriptHitIdentity | null {
@@ -94,9 +98,9 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
       }
       const restoredArchiveName = restoreQmdNormalizedArchiveName(mdStem);
       if (restoredArchiveName) {
-        const archivedStem = parseUsageCountedSessionIdFromFileName(restoredArchiveName);
-        if (archivedStem && restoredArchiveName !== `${archivedStem}.jsonl`) {
-          return { stem: archivedStem, liveStem: mdStem, ownerAgentId, archived: true };
+        const archivedStemLocal = parseUsageCountedSessionIdFromFileName(restoredArchiveName);
+        if (archivedStemLocal && restoredArchiveName !== `${archivedStemLocal}.jsonl`) {
+          return { stem: archivedStemLocal, liveStem: mdStem, ownerAgentId, archived: true };
         }
       }
     }
@@ -135,7 +139,7 @@ export function resolveTranscriptStemToSessionKeys(params: {
       matches.push(sessionKey);
     }
   }
-  const deduped = [...new Set(matches)];
+  const deduped = uniqueStrings(matches);
   if (deduped.length > 0) {
     return deduped;
   }
@@ -151,12 +155,13 @@ export function resolveTranscriptStemToSessionKeys(params: {
           continue;
         }
       }
-      if (normalizeQmdSessionStem(entry.sessionId) === normalizedStem) {
+      const entrySessionId = normalizeOptionalString(entry.sessionId);
+      if (entrySessionId && normalizeQmdSessionStem(entrySessionId) === normalizedStem) {
         matches.push(sessionKey);
       }
     }
   }
-  const normalizedDeduped = [...new Set(matches)];
+  const normalizedDeduped = uniqueStrings(matches);
   if (normalizedDeduped.length > 0) {
     return normalizedDeduped.length === 1 ? normalizedDeduped : [];
   }

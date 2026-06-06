@@ -1,3 +1,4 @@
+// Session model override tests cover model override parsing and validation.
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -229,6 +230,31 @@ describe("applyModelOverrideToSessionEntry", () => {
     });
     expect(withFlag.updated).toBe(true);
     expect(withFlagEntry.liveModelSwitchPending).toBe(true);
+  });
+
+  it("marks profile-only switches as pending when requested", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-profile-switch",
+      updatedAt: Date.now() - 5_000,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      authProfileOverride: "oldprofile",
+      authProfileOverrideSource: "user",
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+      profileOverride: "newprofile",
+      markLiveSwitchPending: true,
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.authProfileOverride).toBe("newprofile");
+    expect(entry.liveModelSwitchPending).toBe(true);
   });
 });
 

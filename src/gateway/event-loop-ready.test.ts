@@ -1,9 +1,33 @@
+/**
+ * Gateway event-loop readiness tests.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForEventLoopReady } from "./event-loop-ready.js";
 
 describe("waitForEventLoopReady", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("falls back when maxWaitMs is non-finite instead of shortening the deadline", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const promise = waitForEventLoopReady({
+      maxWaitMs: Number.NaN,
+      intervalMs: 25,
+      consecutiveReadyChecks: 2,
+    });
+
+    expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 25);
+
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(promise).resolves.toMatchObject({
+      ready: true,
+      checks: 2,
+    });
   });
 
   it("resolves ready after consecutive low-drift timer checks", async () => {

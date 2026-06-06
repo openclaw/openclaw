@@ -1,3 +1,5 @@
+// Runtime boundary for resolving provider plugins from metadata and config.
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { withActivatedPluginIds } from "./activation-context.js";
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
@@ -9,7 +11,7 @@ import {
   loadOpenClawPlugins,
   type PluginLoadOptions,
 } from "./loader.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { hasExplicitPluginIdScope } from "./plugin-scope.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
@@ -19,8 +21,8 @@ import {
   resolveDiscoveredProviderPluginIds,
   resolveEnabledProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
-  resolveOwningPluginIdsForProvider,
   resolveOwningPluginIdsForModelRefs,
+  resolveOwningPluginIdsForProviderRef,
   withBundledProviderVitestCompat,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
@@ -31,7 +33,7 @@ import {
 import type { ProviderPlugin } from "./types.js";
 
 function dedupeSortedPluginIds(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(values);
 }
 
 function resolveExplicitProviderOwnerPluginIds(
@@ -76,21 +78,9 @@ function resolveExplicitProviderOwnerPluginIds(
         if (apiOwnerPluginIds.length > 0) {
           return apiOwnerPluginIds;
         }
-        const legacyApiOwnerPluginIds = resolveOwningPluginIdsForProvider({
-          provider: apiOwnerHint,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          manifestRegistry: snapshot.manifestRegistry,
-        });
-        if (legacyApiOwnerPluginIds?.length) {
-          return legacyApiOwnerPluginIds;
-        }
       }
-      // Keep legacy provider/CLI-backend ownership working until every owner is
-      // expressible through activation descriptors.
       return (
-        resolveOwningPluginIdsForProvider({
+        resolveOwningPluginIdsForProviderRef({
           provider,
           config: params.config,
           workspaceDir: params.workspaceDir,
@@ -151,13 +141,11 @@ function resolvePluginProviderLoadBase(
     params.modelRefs?.length ||
     providerOwnedPluginIds.length > 0 ||
     modelOwnedPluginIds.length > 0
-      ? [
-          ...new Set([
-            ...(params.onlyPluginIds ?? []),
-            ...providerOwnedPluginIds,
-            ...modelOwnedPluginIds,
-          ]),
-        ].toSorted((left, right) => left.localeCompare(right))
+      ? dedupeSortedPluginIds([
+          ...(params.onlyPluginIds ?? []),
+          ...providerOwnedPluginIds,
+          ...modelOwnedPluginIds,
+        ])
       : undefined;
   const explicitOwnerPluginIds = dedupeSortedPluginIds([
     ...providerOwnedPluginIds,
@@ -170,6 +158,24 @@ function resolvePluginProviderLoadBase(
     explicitOwnerPluginIds,
     rawConfig: params.config,
   };
+}
+
+function resolveProviderMetadataLookup(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
+}) {
+  const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
+  const snapshot =
+    params.pluginMetadataSnapshot ??
+    resolvePluginMetadataSnapshot({
+      config: params.config ?? {},
+      workspaceDir,
+      env,
+    });
+  return { env, workspaceDir, snapshot };
 }
 
 function resolveSetupProviderPluginLoadState(
@@ -253,8 +259,6 @@ function resolveRuntimeProviderPluginLoadState(
     onlyPluginIds: runtimeRequestedPluginIds,
     applyAutoEnable: params.applyAutoEnable ?? true,
     compatMode: {
-      allowlist: params.bundledProviderAllowlistCompat,
-      enablement: "allowlist",
       vitest: params.bundledProviderVitestCompat,
     },
     resolveCompatPluginIds: (compatParams) =>
@@ -305,15 +309,7 @@ function resolveRuntimeProviderPluginLoadState(
 export function isPluginProvidersLoadInFlight(
   params: Parameters<typeof resolvePluginProviders>[0],
 ): boolean {
-  const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
-  const snapshot =
-    params.pluginMetadataSnapshot ??
-    loadPluginMetadataSnapshot({
-      config: params.config ?? {},
-      workspaceDir,
-      env,
-    });
+  const { env, workspaceDir, snapshot } = resolveProviderMetadataLookup(params);
   const base = resolvePluginProviderLoadBase({ ...params, workspaceDir, env }, snapshot);
   const loadState =
     params.mode === "setup"
@@ -330,7 +326,6 @@ export function resolvePluginProviders(params: {
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: PluginLoadOptions["env"];
-  bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
   providerRefs?: readonly string[];
@@ -342,20 +337,16 @@ export function resolvePluginProviders(params: {
   mode?: "runtime" | "setup";
   includeUntrustedWorkspacePlugins?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  skipIfLoadInFlight?: boolean;
 }): ProviderPlugin[] {
-  const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
-  const snapshot =
-    params.pluginMetadataSnapshot ??
-    loadPluginMetadataSnapshot({
-      config: params.config ?? {},
-      workspaceDir,
-      env,
-    });
+  const { env, workspaceDir, snapshot } = resolveProviderMetadataLookup(params);
   const base = resolvePluginProviderLoadBase({ ...params, workspaceDir, env }, snapshot);
   if (params.mode === "setup") {
     const loadState = resolveSetupProviderPluginLoadState(params, base, snapshot);
     if (!loadState) {
+      return [];
+    }
+    if (params.skipIfLoadInFlight && isPluginRegistryLoadInFlight(loadState.loadOptions)) {
       return [];
     }
     const registry = loadOpenClawPlugins(loadState.loadOptions);
@@ -364,6 +355,9 @@ export function resolvePluginProviders(params: {
     );
   }
   const loadState = resolveRuntimeProviderPluginLoadState(params, base, snapshot);
+  if (params.skipIfLoadInFlight && isPluginRegistryLoadInFlight(loadState.loadOptions)) {
+    return [];
+  }
   const registry =
     loadState.loadOptions.onlyPluginIds?.length === 0
       ? undefined

@@ -59,7 +59,6 @@ if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
 fi
 MIN_NODE_VERSION="22.19.0"
 APK_NODE_BIN_DIR="/usr/bin"
-SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
 GIT_DIR="${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}"
@@ -85,7 +84,6 @@ Usage: install-cli.sh [options]
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
 
 Environment variables:
-  SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 1 (avoid sharp building against global libvips)
   OPENCLAW_NPM_LOGLEVEL=error|warn|notice  Default: error (hide npm deprecation noise)
   OPENCLAW_INSTALL_METHOD=git|npm
   OPENCLAW_HOME=...
@@ -257,19 +255,31 @@ parse_args() {
         shift
         ;;
       --prefix)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         PREFIX="$2"
         shift 2
         ;;
       --version)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         OPENCLAW_VERSION="$2"
         shift 2
         ;;
       --node-version)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         NODE_VERSION="$2"
         NODE_VERSION_REQUESTED=1
         shift 2
         ;;
       --install-method|--method)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         INSTALL_METHOD="$2"
         shift 2
         ;;
@@ -282,6 +292,9 @@ parse_args() {
         shift
         ;;
       --git-dir|--dir)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         GIT_DIR="$2"
         shift 2
         ;;
@@ -736,7 +749,6 @@ install_node() {
   local url
   local tmp
   local dir
-  local current_major
   local base_url
   local tarball
   local expected_sha
@@ -751,12 +763,9 @@ install_node() {
     return
   fi
 
-  if [[ -x "$(node_bin)" ]]; then
-    current_major="$("$(node_bin)" -v 2>/dev/null | tr -d 'v' | cut -d'.' -f1 || echo "")"
-    if [[ -n "$current_major" && "$current_major" -ge 22 ]]; then
-      emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"skip\",\"path\":\"${dir//\"/\\\\\\\"}\"}"
-      return
-    fi
+  if linked_node_is_usable; then
+    emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"skip\",\"path\":\"${dir//\"/\\\\\\\"}\"}"
+    return
   fi
 
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"start\",\"version\":\"${NODE_VERSION}\"}"
@@ -790,8 +799,12 @@ install_node() {
 
   ln -sfn "$dir" "${PREFIX}/tools/node"
 
-  if ! "$(node_bin)" -e "require('node:sqlite')" >/dev/null 2>&1; then
-    fail "Installed Node ${NODE_VERSION} is missing node:sqlite; re-run with --node-version 22.22.0 (or newer)"
+  if ! linked_node_is_usable; then
+    local installed_version
+    local required_version
+    installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
+    required_version="$(required_node_version)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with node:sqlite; found ${installed_version}. Re-run with --node-version 22.22.0 (or newer)"
   fi
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"version\":\"${NODE_VERSION}\"}"
 }
@@ -819,7 +832,7 @@ ensure_pnpm() {
 
   emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"start\",\"method\":\"npm\"}"
   log "Installing pnpm via npm..."
-  SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$PREFIX" pnpm@11
+  "$(npm_bin)" install -g --prefix "$PREFIX" pnpm@11
   detect_pnpm_cmd || true
   emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"ok\"}"
   return 0
@@ -967,14 +980,14 @@ install_openclaw() {
   fi
 
   if [[ "${requested}" == "latest" ]]; then
-    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
+    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
       log "npm install openclaw@latest failed; retrying openclaw@next"
       emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"retry\",\"version\":\"next\"}"
-      env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
+      env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
       requested="next"
     fi
   else
-    env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
+    env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
   fi
 
   mkdir -p "${PREFIX}/bin"
@@ -1070,7 +1083,7 @@ install_openclaw_from_git() {
 
   local install_lockfile_flag
   install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
-  CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
+  CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
   if ! run_pnpm -C "$repo_dir" ui:build; then
     log "UI build failed; continuing (CLI may still work)"

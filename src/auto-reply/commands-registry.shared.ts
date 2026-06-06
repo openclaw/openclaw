@@ -1,4 +1,6 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+/** Shared command registry builders used by browser-safe and runtime command lists. */
+import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -40,6 +42,7 @@ type DefineChatCommandInput = {
   tier?: CommandTier;
 };
 
+/** Defines one command with normalized aliases, scope, and argument parsing defaults. */
 export function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
   const aliases = (command.textAliases ?? (command.textAlias ? [command.textAlias] : []))
     .map((alias) => alias.trim())
@@ -51,7 +54,9 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
   return {
     key: command.key,
     nativeName: command.nativeName,
-    nativeAliases: command.nativeAliases?.map((alias) => alias.trim()).filter(Boolean),
+    nativeAliases: command.nativeAliases
+      ? normalizeStringEntries(command.nativeAliases)
+      : undefined,
     description: command.description,
     acceptsArgs,
     args: command.args,
@@ -94,6 +99,7 @@ function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliase
   }
 }
 
+/** Validates command registry uniqueness and text/native surface invariants. */
 export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   const keys = new Set<string>();
   const nativeNames = new Set<string>();
@@ -144,6 +150,7 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   }
 }
 
+/** Builds the built-in command list with context-aware thinking choices. */
 export function buildBuiltinChatCommands(
   params: { listThinkingLevels?: ListThinkingLevels } = {},
 ): ChatCommandDefinition[] {
@@ -216,6 +223,29 @@ export function buildBuiltinChatCommands(
       textAlias: "/status",
       category: "status",
       tier: "essential",
+    }),
+    defineChatCommand({
+      key: "goal",
+      nativeName: "goal",
+      description: "Show or control the current goal.",
+      textAlias: "/goal",
+      category: "status",
+      tier: "standard",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "action",
+          description: "status, start, pause, resume, complete, block, clear",
+          type: "string",
+          choices: ["status", "start", "pause", "resume", "complete", "block", "clear"],
+        },
+        {
+          name: "text",
+          description: "Goal objective or note",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
     }),
     defineChatCommand({
       key: "diagnostics",

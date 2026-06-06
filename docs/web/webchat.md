@@ -24,8 +24,9 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 - The UI connects to the Gateway WebSocket and uses `chat.history`, `chat.send`, and `chat.inject`.
 - `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`.
+- When a visible assistant message was truncated in `chat.history`, Control UI can open a side reader and fetch the full display-normalized entry on demand through `chat.message.get` without increasing the default history payload.
 - `chat.history` follows the active transcript branch for modern append-only session files, so abandoned rewrite branches and superseded prompt copies are not rendered in WebChat.
-- Compaction entries render as an explicit compacted-history divider. The divider explains that earlier turns are preserved in a checkpoint and links to the Sessions checkpoint controls, where operators can branch or restore the pre-compaction view when their permissions allow it.
+- Compaction entries render as an explicit compacted-history divider. The divider explains that the compacted transcript is preserved as a checkpoint and links to the Sessions checkpoint controls, where operators can branch or restore from that compacted view when their permissions allow it.
 - Control UI remembers the backing Gateway `sessionId` returned by `chat.history` and includes it on follow-up `chat.send` calls, so reconnects and page refreshes continue the same stored conversation unless the user starts or resets a session.
 - Control UI coalesces duplicate in-flight submits for the same session, message, and attachments before generating a new `chat.send` run id; the Gateway still dedupes repeated requests that reuse the same idempotency key.
 - Workspace startup files and pending `BOOTSTRAP.md` instructions are supplied through the agent system prompt's Project Context, not copied into the WebChat user message. Bootstrap truncation only adds a concise system-prompt recovery notice; detailed counts and config knobs stay on diagnostic surfaces.
@@ -49,23 +50,27 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 WebChat has two separate data paths:
 
-- The session JSONL file is the durable model/runtime transcript. For normal agent runs, Pi persists model-visible `user`, `assistant`, and `toolResult` messages through its session manager. WebChat does not write arbitrary delivery, status, or helper text into that transcript.
+- The session JSONL file is the durable model/runtime transcript. For normal agent runs, the embedded OpenClaw runtime persists model-visible `user`, `assistant`, and `toolResult` messages through its session manager. WebChat does not write arbitrary delivery, status, or helper text into that transcript.
 - Gateway `ReplyPayload` events are the live delivery projection. They can be normalized for WebChat/channel display, block streaming, directive tags, media embedding, TTS/audio flags, and UI fallback behavior. They are not themselves the canonical session log.
 - Harnesses that require visible replies through `tools.message` still use WebChat as a current-run internal source reply sink. A targetless `message.send` from that active WebChat run is projected into the same chat and mirrored to the session transcript; WebChat does not become a reusable outbound channel and never inherits `lastChannel`.
-- WebChat injects assistant transcript entries only when the Gateway owns a displayed message outside a normal Pi assistant turn: `chat.inject`, non-agent command replies, aborted partial output, and WebChat-managed media transcript supplements.
+- WebChat injects assistant transcript entries only when the Gateway owns a displayed message outside a normal embedded agent turn: `chat.inject`, non-agent command replies, aborted partial output, and WebChat-managed media transcript supplements.
 - `chat.history` reads the stored session transcript and applies WebChat display projection. If live assistant text appears during a run but disappears after history reload, first check whether the raw JSONL contains the assistant text, then whether `chat.history` projection stripped it, then whether the Control UI optimistic-tail merge replaced local delivery state with the persisted snapshot.
+- `chat.message.get` uses the same transcript branch and display projection rules as `chat.history`, including active-agent scoping, but targets one transcript entry by `messageId` and returns an honest unavailable reason when the full content can no longer be returned.
 
-Normal agent-run final answers should be durable because Pi writes the assistant `message_end`. Any fallback that mirrors a delivered final payload into the transcript must first avoid duplicating an assistant turn that Pi already wrote.
+Normal agent-run final answers should be durable because the embedded runtime writes the assistant `message_end`. Any fallback that mirrors a delivered final payload into the transcript must first avoid duplicating an assistant turn that the embedded runtime already wrote.
 
 ## Control UI agents tools panel
 
 - The Control UI `/agents` Tools panel has two separate views:
-  - **Available Right Now** uses `tools.effective(sessionKey=...)` and shows what the current
-    session can actually use at runtime, including core, plugin, and channel-owned tools.
+  - **Available Right Now** uses `tools.effective(sessionKey=...)` and shows a server-derived
+    read-only projection of the current session inventory, including core, plugin, channel-owned,
+    and already-discovered MCP server tools.
   - **Tool Configuration** uses `tools.catalog` and stays focused on profiles, overrides, and
     catalog semantics.
 - Runtime availability is session-scoped. Switching sessions on the same agent can change the
-  **Available Right Now** list.
+  **Available Right Now** list. If configured MCP servers have not been connected or were changed
+  since the last discovery, the panel shows a notice instead of silently starting MCP transports
+  from the read path.
 - The config editor does not imply runtime availability; effective access still follows policy
   precedence (`allow`/`deny`, per-agent and provider/channel overrides).
 
@@ -78,9 +83,7 @@ Normal agent-run final answers should be durable because Pi writes the assistant
 
 Full configuration: [Configuration](/gateway/configuration)
 
-WebChat options:
-
-- `gateway.webchat.chatHistoryMaxChars`: maximum character count for text fields in `chat.history` responses. When a transcript entry exceeds this limit, Gateway truncates long text fields and may replace oversized messages with a placeholder. Per-request `maxChars` can also be sent by the client to override this default for a single `chat.history` call.
+WebChat has no persisted config section. Gateway uses the built-in `chat.history` display limit; API clients can send per-request `maxChars` to override it for a single `chat.history` call. Legacy `channels.webchat` and `gateway.webchat` config is retired; run `openclaw doctor --fix` to remove it.
 
 Related global options:
 

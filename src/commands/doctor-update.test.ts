@@ -1,3 +1,4 @@
+// Doctor update tests cover pre-doctor update prompts, state files, and declined update flows.
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
@@ -18,7 +19,7 @@ vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: mocks.runGatewayUpdate,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 

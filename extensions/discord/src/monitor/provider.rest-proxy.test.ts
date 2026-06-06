@@ -1,3 +1,4 @@
+// Discord tests cover provider.rest proxy plugin behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,16 +6,16 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 const { undiciFetchMock, agentSpy, envHttpProxyAgentSpy, proxyAgentSpy, createMockUndiciRuntime } =
   vi.hoisted(() => {
-    const undiciFetchMock = vi.fn();
-    const agentSpy = vi.fn();
-    const envHttpProxyAgentSpy = vi.fn();
-    const proxyAgentSpy = vi.fn();
-    const createMockUndiciRuntime = () => {
+    const undiciFetchMockLocal = vi.fn();
+    const agentSpyLocal = vi.fn();
+    const envHttpProxyAgentSpyLocal = vi.fn();
+    const proxyAgentSpyLocal = vi.fn();
+    const createMockUndiciRuntimeLocal = () => {
       class Agent {
         options: unknown;
         constructor(options?: unknown) {
           this.options = options;
-          agentSpy(options);
+          agentSpyLocal(options);
         }
       }
       class EnvHttpProxyAgent {
@@ -31,7 +32,7 @@ const { undiciFetchMock, agentSpy, envHttpProxyAgentSpy, proxyAgentSpy, createMo
             }
           }
           this.options = options;
-          envHttpProxyAgentSpy(options);
+          envHttpProxyAgentSpyLocal(options);
         }
       }
       class ProxyAgent {
@@ -44,28 +45,31 @@ const { undiciFetchMock, agentSpy, envHttpProxyAgentSpy, proxyAgentSpy, createMo
           }
           this.options = resolved;
           this.uri = resolved.uri;
-          proxyAgentSpy(resolved);
+          proxyAgentSpyLocal(resolved);
         }
       }
       return {
         Agent,
         EnvHttpProxyAgent,
         ProxyAgent,
-        fetch: undiciFetchMock,
+        fetch: undiciFetchMockLocal,
       };
     };
     return {
-      undiciFetchMock,
-      agentSpy,
-      envHttpProxyAgentSpy,
-      proxyAgentSpy,
-      createMockUndiciRuntime,
+      undiciFetchMock: undiciFetchMockLocal,
+      agentSpy: agentSpyLocal,
+      envHttpProxyAgentSpy: envHttpProxyAgentSpyLocal,
+      proxyAgentSpy: proxyAgentSpyLocal,
+      createMockUndiciRuntime: createMockUndiciRuntimeLocal,
     };
   });
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
-vi.mock("undici", () => createMockUndiciRuntime());
+vi.mock("undici", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("undici")>()),
+  ...createMockUndiciRuntime(),
+}));
 
 let resolveDiscordRestFetch: typeof import("./rest-fetch.js").resolveDiscordRestFetch;
 

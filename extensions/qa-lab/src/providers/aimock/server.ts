@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements server behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   LLMock,
@@ -107,7 +108,7 @@ function countImageInputs(value: unknown): number {
 function resolveProviderVariant(model: string): AimockRequestSnapshot["providerVariant"] {
   const normalized = model.trim().toLowerCase();
   const provider = /^([^/:]+)[/:]/.exec(normalized)?.[1] ?? normalized;
-  if (provider === "openai" || provider === "aimock" || provider === "openai-codex") {
+  if (provider === "openai" || provider === "aimock" || provider === "openai") {
     return "openai";
   }
   if (provider === "anthropic" || provider === "claude-cli") {

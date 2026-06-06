@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for persisted session JSONL repair.
+ * Exercises malformed lines, blank turns, empty assistant errors, and missing tool results.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -106,9 +110,9 @@ describe("repairSessionFileIfNeeded", () => {
 
     expect(result.repaired).toBe(true);
     expect(result.backupPath).toMatch(/session\.jsonl\.bak-/);
-    expect(debug.mock.calls.some(([message]) => String(message).includes("cleanup failed"))).toBe(
-      true,
-    );
+    expect(
+      debug.mock.calls.some(([messageLocal]) => String(messageLocal).includes("cleanup failed")),
+    ).toBe(true);
     const siblings = await fs.readdir(path.dirname(file));
     expect(siblings.filter((name) => name.includes(".bak-"))).toHaveLength(1);
   });
@@ -532,9 +536,9 @@ describe("repairSessionFileIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: {
         role: "assistant",
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.5",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         content: [
           { type: "text", text: "Process List" },
           {
@@ -593,9 +597,9 @@ describe("repairSessionFileIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: {
         role: "assistant",
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.5",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         content: [{ type: "toolCall", id: "call_exec|fc_1", name: "exec", arguments: {} }],
         stopReason: "toolUse",
       },
@@ -636,9 +640,9 @@ describe("repairSessionFileIfNeeded", () => {
         timestamp: new Date().toISOString(),
         message: {
           role: "assistant",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.5",
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           content: [
             { type: "toolCall", id: `call_${stopReason}|fc_1`, name: "exec", arguments: {} },
           ],

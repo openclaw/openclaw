@@ -1,3 +1,4 @@
+// Defines Discord channel configuration types.
 import type {
   ChannelPreviewStreamingConfig,
   ContextVisibilityMode,
@@ -11,12 +12,17 @@ import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channel-health.js";
-import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type {
+  DmConfig,
+  MentionPatternsPolicyConfig,
+  ProviderCommandsConfig,
+} from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
+export type DiscordChannelStreamingConfig = ChannelPreviewStreamingConfig;
 
 export type DiscordPluralKitConfig = {
   enabled?: boolean;
@@ -149,7 +155,11 @@ export type DiscordVoiceRealtimeConfig = {
   provider?: string;
   /** Provider realtime session model, for example "gpt-realtime-2". */
   model?: string;
-  /** Provider realtime output voice, for example "cedar". */
+  /** Provider realtime output voice name, for example "cedar". */
+  speakerVoice?: string;
+  /** Provider realtime output voice id. */
+  speakerVoiceId?: string;
+  /** @deprecated Use speakerVoice. */
   voice?: string;
   /** System instructions passed to the realtime provider. */
   instructions?: string;
@@ -207,7 +217,7 @@ export type DiscordVoiceConfig = {
   connectTimeoutMs?: number;
   /** Grace period for Discord voice reconnect signalling after a disconnect (default: 15000). */
   reconnectGraceMs?: number;
-  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2500). */
+  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2000). */
   captureSilenceGraceMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
@@ -365,6 +375,8 @@ export type DiscordAccountConfig = {
    * - "allowlist": only allow channels present in discord.guilds.*.channels
    */
   groupPolicy?: GroupPolicy;
+  /** Scope configured groupChat mentionPatterns to selected Discord channel IDs. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
   contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 2000. */
@@ -375,7 +387,7 @@ export type DiscordAccountConfig = {
    */
   suppressEmbeds?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
-  streaming?: ChannelPreviewStreamingConfig;
+  streaming?: DiscordChannelStreamingConfig;
   /**
    * Soft max line count per Discord message.
    * Discord clients can clip/collapse very tall messages; splitting by lines

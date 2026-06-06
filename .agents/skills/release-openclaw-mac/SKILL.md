@@ -5,22 +5,19 @@ description: "Run or recover OpenClaw macOS release signing, notarization, appca
 
 # OpenClaw Mac Release
 
-Use with `$release-openclaw-maintainer`, `$release-openclaw-ci`, and `$one-password` when stable macOS assets, private mac preflight, notarization, appcast promotion, or mac release recovery is involved.
+Use with `$release-openclaw-maintainer`, `$release-openclaw-ci`, `$one-password`, and `$release-private` if it exists when stable macOS assets, private mac preflight, notarization, appcast promotion, or mac release recovery is involved.
 
 ## Credentials
 
-- Canonical ASC item: vault `Molty`, title `API Key - App Store Connect - Personal - Release`.
+- Resolve Peter-owned ASC item refs, key ids, issuer ids, and service-token provenance from `$release-private`.
 - Fields: `private_key_p8`, `key_id`, `issuer_id`.
-- Current known good key id: `AKVLXW849T`.
-- Legacy mirror: vault `Private`, title `API Key - App Store Connect - Personal`; keep it synced for older refs.
 - Stale/revoked key symptom: `xcrun notarytool submit` fails with `HTTP status code: 401. Unauthenticated`.
 - Validate candidate ASC credentials with `xcrun notarytool history` before setting GitHub secrets.
 
 ## 1Password
 
 - Use `$one-password`: all `op` work inside one persistent tmux session, no secret output.
-- Prefer `OP_SERVICE_ACCOUNT_TOKEN` from `~/.profile` for Molty reads.
-- Do not assume `MOLTY_OP_SERVICE_ACCOUNT_TOKEN` is alive; it has previously pointed at a deleted service account.
+- Use the service-token guidance from `$release-private` when available.
 - If a service token fails, run status-only checks: token present/length and `op whoami`; never print token values.
 - If desktop app auth is needed but Touch ID is unavailable, set `OP_BIOMETRIC_UNLOCK_ENABLED=false` for the manual `op account add --signin` path.
 

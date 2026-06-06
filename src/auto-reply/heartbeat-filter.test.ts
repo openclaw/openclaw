@@ -1,3 +1,4 @@
+/** Tests heartbeat filtering and skip behavior for empty heartbeat context. */
 import { describe, expect, it } from "vitest";
 import {
   filterHeartbeatTranscriptArtifacts,
@@ -157,32 +158,37 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
   });
 
   it("removes OpenAI Responses input/output text heartbeat pairs", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: `Delivery: to send a message, use the \`message\` tool. ${HEARTBEAT_TRANSCRIPT_PROMPT}`,
-          },
-        ],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "output_text", text: "HEARTBEAT_OK" }],
-      },
-      {
-        role: "user",
-        content: [{ type: "input_text", text: "what model are you" }],
-      },
-    ];
+    for (const deliveryHint of [
+      "Delivery: to send a message, use the `message` tool.",
+      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+    ]) {
+      const messages = [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: `${deliveryHint} ${HEARTBEAT_TRANSCRIPT_PROMPT}`,
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "HEARTBEAT_OK" }],
+        },
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "what model are you" }],
+        },
+      ];
 
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      {
-        role: "user",
-        content: [{ type: "input_text", text: "what model are you" }],
-      },
-    ]);
+      expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "what model are you" }],
+        },
+      ]);
+    }
   });
 
   it("removes prompt-only interrupted heartbeat spans", () => {

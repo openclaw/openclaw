@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Telegram tests cover helpers plugin behavior.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTelegramInboundOriginTarget,
   buildTelegramRoutingTarget,
@@ -11,6 +12,7 @@ import {
   normalizeForwardedContext,
   renderTelegramTextEntities,
   resolveTelegramDirectPeerId,
+  resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resetTelegramForumFlagCacheForTest,
@@ -39,6 +41,10 @@ describe("resolveTelegramForumThreadId", () => {
 describe("resolveTelegramForumFlag", () => {
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("keeps explicit forum metadata when Telegram already provides it", async () => {
@@ -125,6 +131,35 @@ describe("resolveTelegramForumFlag", () => {
     expect(getChat).toHaveBeenCalledTimes(1);
   });
 
+  it("drops cached forum metadata when the current clock is not a valid date timestamp", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100655,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    nowSpy.mockReturnValue(Number.NaN);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache forum metadata when the expiry timestamp would exceed the valid date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100656,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledTimes(2);
+  });
+
   it("returns false when forum lookup is unavailable", async () => {
     const getChat = vi.fn(async () => {
       throw new Error("lookup failed");
@@ -158,29 +193,40 @@ describe("buildTelegramThreadParams", () => {
 });
 
 describe("shouldUseTelegramDmThreadSession", () => {
-  it("keeps incidental DM thread ids flat by default", () => {
-    expect(shouldUseTelegramDmThreadSession({ dmThreadId: 42 })).toBe(false);
+  it("requires a DM thread id", () => {
+    expect(
+      shouldUseTelegramDmThreadSession({
+        botHasTopicsEnabled: true,
+      }),
+    ).toBe(false);
   });
 
-  it("uses DM thread sessions for explicit or topic-required configs", () => {
+  it("keeps DM thread ids flat when bot topics are not enabled", () => {
+    expect(shouldUseTelegramDmThreadSession({ dmThreadId: 42 })).toBe(false);
     expect(
       shouldUseTelegramDmThreadSession({
         dmThreadId: 42,
-        directConfig: { threadReplies: "inbound" },
+        botHasTopicsEnabled: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("uses DM thread sessions when Telegram reports bot topics enabled", () => {
     expect(
       shouldUseTelegramDmThreadSession({
         dmThreadId: 42,
-        directConfig: { requireTopic: true },
+        botHasTopicsEnabled: true,
       }),
     ).toBe(true);
-    expect(
-      shouldUseTelegramDmThreadSession({
-        dmThreadId: 42,
-        topicConfig: { agentId: "support" },
-      }),
-    ).toBe(true);
+  });
+});
+
+describe("resolveTelegramBotHasTopicsEnabled", () => {
+  it("trusts only Telegram getMe has_topics_enabled=true", () => {
+    expect(resolveTelegramBotHasTopicsEnabled({ has_topics_enabled: true })).toBe(true);
+    expect(resolveTelegramBotHasTopicsEnabled({ has_topics_enabled: false })).toBe(false);
+    expect(resolveTelegramBotHasTopicsEnabled({ has_topics_enabled: "true" })).toBe(false);
+    expect(resolveTelegramBotHasTopicsEnabled(null)).toBe(false);
   });
 });
 
@@ -752,6 +798,36 @@ describe("hasBotMention", () => {
         "gaian",
       ),
     ).toBe(true);
+  });
+
+  it("matches bot command entities addressed to this bot", () => {
+    const text = "/deploy@gaian check status";
+
+    expect(
+      hasBotMention(
+        {
+          text,
+          entities: [{ type: "bot_command", offset: 0, length: "/deploy@gaian".length }],
+          chat: { id: 1, type: "supergroup" },
+        } as any,
+        "gaian",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match bot command entities addressed to another bot", () => {
+    const text = "/deploy@other_bot check status";
+
+    expect(
+      hasBotMention(
+        {
+          text,
+          entities: [{ type: "bot_command", offset: 0, length: "/deploy@other_bot".length }],
+          chat: { id: 1, type: "supergroup" },
+        } as any,
+        "gaian",
+      ),
+    ).toBe(false);
   });
 
   it("matches mention followed by punctuation", () => {

@@ -1,80 +1,31 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SecretInput } from "../config/types.secrets.js";
+/** Registry for plugin-contributed embedding providers. */
+import type {
+  EmbeddingProviderAdapter,
+  RegisteredEmbeddingProvider,
+} from "./embedding-provider-types.js";
+import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
-export type EmbeddingInput =
-  | string
-  | {
-      text: string;
-      parts?: Array<
-        { type: "text"; text: string } | { type: "inline-data"; mimeType: string; data: string }
-      >;
-    };
-
-export type EmbeddingProviderCallOptions = {
-  signal?: AbortSignal;
-  inputType?: "query" | "document" | "semantic" | "classification" | "clustering";
-};
-
-export type EmbeddingProviderRuntime = {
-  id: string;
-  cacheKeyData?: Record<string, unknown>;
-  inlineQueryTimeoutMs?: number;
-  inlineBatchTimeoutMs?: number;
-};
-
-export type EmbeddingProvider = {
-  id: string;
-  model: string;
-  dimensions?: number;
-  maxInputTokens?: number;
-  embed: (input: EmbeddingInput, options?: EmbeddingProviderCallOptions) => Promise<number[]>;
-  embedBatch: (
-    inputs: EmbeddingInput[],
-    options?: EmbeddingProviderCallOptions,
-  ) => Promise<number[][]>;
-  close?: () => Promise<void> | void;
-};
-
-export type EmbeddingProviderCreateOptions = {
-  config: OpenClawConfig;
-  agentDir?: string;
-  provider?: string;
-  remote?: {
-    baseUrl?: string;
-    apiKey?: SecretInput;
-    headers?: Record<string, string>;
-  };
-  model: string;
-  local?: {
-    modelPath?: string;
-    modelCacheDir?: string;
-  };
-  dimensions?: number;
-  taskType?: string;
-};
-
-export type EmbeddingProviderCreateResult = {
-  provider: EmbeddingProvider | null;
-  runtime?: EmbeddingProviderRuntime;
-};
-
-export type EmbeddingProviderAdapter = {
-  id: string;
-  defaultModel?: string;
-  transport?: "local" | "remote";
-  authProviderId?: string;
-  create: (options: EmbeddingProviderCreateOptions) => Promise<EmbeddingProviderCreateResult>;
-  formatSetupError?: (err: unknown) => string;
-};
-
-export type RegisteredEmbeddingProvider = {
-  adapter: EmbeddingProviderAdapter;
-  ownerPluginId?: string;
-};
+export type {
+  EmbeddingInput,
+  EmbeddingProvider,
+  EmbeddingProviderAdapter,
+  EmbeddingProviderCallOptions,
+  EmbeddingProviderCreateOptions,
+  EmbeddingProviderCreateResult,
+  EmbeddingProviderRuntime,
+  RegisteredEmbeddingProvider,
+} from "./embedding-provider-types.js";
 
 const EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.embeddingProviders");
+const CORE_EMBEDDING_PROVIDERS: RegisteredEmbeddingProvider[] = [
+  {
+    adapter: openAICompatibleEmbeddingProviderAdapter,
+    ownerPluginId: "core",
+  },
+];
 
 function getEmbeddingProviders(): Map<string, RegisteredEmbeddingProvider> {
+  // The registry is global so tests and lazy-loaded plugin modules share one provider table.
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   const existing = globalStore[EMBEDDING_PROVIDERS_KEY];
   if (existing instanceof Map) {
@@ -85,34 +36,61 @@ function getEmbeddingProviders(): Map<string, RegisteredEmbeddingProvider> {
   return created;
 }
 
+function getCoreEmbeddingProvider(id: string): RegisteredEmbeddingProvider | undefined {
+  return CORE_EMBEDDING_PROVIDERS.find((entry) => entry.adapter.id === id);
+}
+
+/** Registers an embedding provider adapter for plugin and built-in memory callers. */
 export function registerEmbeddingProvider(
   adapter: EmbeddingProviderAdapter,
   options?: { ownerPluginId?: string },
 ): void {
+  const coreEntry = getCoreEmbeddingProvider(adapter.id);
+  if (coreEntry) {
+    if (adapter !== coreEntry.adapter) {
+      throw new Error(`embedding provider already registered: ${adapter.id} (owner: core)`);
+    }
+    getEmbeddingProviders().delete(adapter.id);
+    return;
+  }
+
   getEmbeddingProviders().set(adapter.id, {
     adapter,
     ownerPluginId: options?.ownerPluginId,
   });
 }
 
+/** Looks up the registered embedding provider entry, including owner metadata. */
 export function getRegisteredEmbeddingProvider(
   id: string,
 ): RegisteredEmbeddingProvider | undefined {
-  return getEmbeddingProviders().get(id);
+  return getCoreEmbeddingProvider(id) ?? getEmbeddingProviders().get(id);
 }
 
+/** Returns only the embedding provider adapter for callers that do not need ownership metadata. */
 export function getEmbeddingProvider(id: string): EmbeddingProviderAdapter | undefined {
-  return getEmbeddingProviders().get(id)?.adapter;
+  return getRegisteredEmbeddingProvider(id)?.adapter;
 }
 
+/** Lists registered embedding providers with core defaults merged first. */
 export function listRegisteredEmbeddingProviders(): RegisteredEmbeddingProvider[] {
-  return Array.from(getEmbeddingProviders().values());
+  const merged = new Map<string, RegisteredEmbeddingProvider>(
+    CORE_EMBEDDING_PROVIDERS.map((entry) => [entry.adapter.id, entry]),
+  );
+  for (const entry of getEmbeddingProviders().values()) {
+    if (!merged.has(entry.adapter.id)) {
+      merged.set(entry.adapter.id, entry);
+    }
+  }
+  return Array.from(merged.values());
 }
 
+/** Lists embedding provider adapters without registration metadata. */
 export function listEmbeddingProviders(): EmbeddingProviderAdapter[] {
   return listRegisteredEmbeddingProviders().map((entry) => entry.adapter);
 }
 
+/** Replaces non-core embedding providers with adapter-only test/runtime state. */
 export function restoreEmbeddingProviders(adapters: EmbeddingProviderAdapter[]): void {
   getEmbeddingProviders().clear();
   for (const adapter of adapters) {
@@ -120,6 +98,7 @@ export function restoreEmbeddingProviders(adapters: EmbeddingProviderAdapter[]):
   }
 }
 
+/** Replaces non-core embedding providers while preserving registration metadata. */
 export function restoreRegisteredEmbeddingProviders(entries: RegisteredEmbeddingProvider[]): void {
   getEmbeddingProviders().clear();
   for (const entry of entries) {
@@ -129,6 +108,7 @@ export function restoreRegisteredEmbeddingProviders(entries: RegisteredEmbedding
   }
 }
 
+/** Clears non-core embedding providers from the process registry. */
 export function clearEmbeddingProviders(): void {
   getEmbeddingProviders().clear();
 }

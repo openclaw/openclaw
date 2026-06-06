@@ -1,3 +1,4 @@
+// Discord tests cover outbound session route plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
 
@@ -38,5 +39,22 @@ describe("resolveDiscordOutboundSessionRoute", () => {
       to: "channel:123",
     });
     expect(route?.threadId).toBeUndefined();
+  });
+
+  it("treats bare numeric outbound targets as channel routes", () => {
+    const route = resolveDiscordOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      target: "123",
+    });
+
+    expect(route).toMatchObject({
+      baseSessionKey: "agent:main:discord:channel:123",
+      chatType: "channel",
+      from: "discord:channel:123",
+      peer: { kind: "channel", id: "123" },
+      sessionKey: "agent:main:discord:channel:123",
+      to: "channel:123",
+    });
   });
 });

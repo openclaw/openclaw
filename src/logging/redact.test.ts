@@ -1,7 +1,9 @@
+// Redaction tests cover secret, token, and identifier scrubbing rules.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import {
   getDefaultRedactPatterns,
   redactSecrets,
@@ -12,7 +14,7 @@ import {
 } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
-const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+const originalEnv = captureEnv(["OPENCLAW_CONFIG_PATH"]);
 let tempDirs: string[] = [];
 
 function writeConfig(source: string): void {
@@ -24,11 +26,7 @@ function writeConfig(source: string): void {
 }
 
 afterEach(() => {
-  if (originalConfigPath === undefined) {
-    delete process.env.OPENCLAW_CONFIG_PATH;
-  } else {
-    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
-  }
+  originalEnv.restore();
   for (const dir of tempDirs) {
     fs.rmSync(dir, { force: true, recursive: true });
   }
@@ -43,6 +41,49 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe("OPENAI_API_KEY=sk-123…cdef");
+  });
+
+  it("preserves shell env references in assignments", () => {
+    const input = [
+      'DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"',
+      "OPENAI_API_KEY=$OPENAI_API_KEY",
+      "API_KEY=$API_KEY",
+      "TOKEN=${TOKEN}",
+      "PASSWORD=${PASSWORD:-}",
+      "GITHUB_TOKEN=${GITHUB_TOKEN}",
+    ].join("\n");
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe(input);
+  });
+
+  it("masks shell env references that do not match the assignment key", () => {
+    const output = redactSensitiveText("DISCORD_BOT_TOKEN=$SUPERSECRET123", {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("DISCORD_BOT_TOKEN=***");
+  });
+
+  it("masks literal shell env expansion defaults in assignments", () => {
+    const fallback = "discordliteral1234567890";
+    const input = `DISCORD_BOT_TOKEN="\${DISCORD_BOT_TOKEN:-${fallback}}"`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).not.toContain(fallback);
+    expect(output).toBe('DISCORD_BOT_TOKEN="${DISC…890}"');
+  });
+
+  it("does not bypass explicit user redaction patterns for shell references", () => {
+    const output = redactSensitiveText("FOO_TOKEN=$FOO_TOKEN", {
+      mode: "tools",
+      patterns: [String.raw`/FOO_TOKEN=(\$FOO_TOKEN)/g`],
+    });
+    expect(output).toBe("FOO_TOKEN=***");
   });
 
   it("masks JSON-escaped quoted env assignments while keeping the key", () => {
@@ -211,6 +252,18 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveFieldValue("openai_api_key", "abcdefghijklmnopqrstuvwx1234567890")).toBe(
       "abcdef…7890",
     );
+    expect(redactSensitiveFieldValue("DISCORD_BOT_TOKEN", "${DISCORD_BOT_TOKEN:-}")).toBe(
+      "${DISCORD_BOT_TOKEN:-}",
+    );
+    expect(redactSensitiveFieldValue("apiKey", "${OPENAI_API_KEY:-}")).toBe("${OPEN…Y:-}");
+    expect(redactSensitiveFieldValue("password", "$SUPERSECRET123")).toBe("***");
+    expect(redactSensitiveFieldValue("apiKey", "${SECRET_TOKEN}")).toBe("***");
+    expect(
+      redactSensitiveFieldValue(
+        "DISCORD_BOT_TOKEN",
+        "${DISCORD_BOT_TOKEN:-discordliteral1234567890}",
+      ),
+    ).toBe("${DISCORD_BOT_TOKEN:-disco…890}");
     expect(redactSensitiveFieldValue("MONKEY", "banana")).toBe("banana");
   });
 
@@ -508,6 +561,38 @@ describe("redactSensitiveText", () => {
 
     expect(resolved.patterns).toHaveLength(1);
     expect(resolved.patterns[0]).toBe(pattern);
+  });
+
+  it("keeps custom redaction patterns active for text outside default markers", () => {
+    const output = redactSensitiveText("ticket internal-12345 should hide", {
+      mode: "tools",
+      patterns: [/internal-\d+/g],
+    });
+
+    expect(output).toBe("ticket *** should hide");
+  });
+
+  it("keeps configured redaction patterns active for text outside default markers", () => {
+    writeConfig(`{
+      logging: {
+        redactPatterns: ["/internal-\\\\d+/g"],
+      },
+    }`);
+
+    expect(redactSensitiveText("ticket internal-12345 should hide")).toBe("ticket *** should hide");
+  });
+
+  it("redacts built-in query parameters after the default prefilter", () => {
+    expect(redactSensitiveText("https://example.test/callback?pass=opensesamevalue")).toBe(
+      "https://example.test/callback?pass=***",
+    );
+    expect(redactSensitiveText("https://example.test/callback?security_code=123456")).toBe(
+      "https://example.test/callback?security_code=***",
+    );
+  });
+
+  it("redacts standalone bearer tokens after the default prefilter", () => {
+    expect(redactSensitiveText("Bearer abcdef1234567890ghij")).toBe("Bearer abcdef…ghij");
   });
 });
 

@@ -1,3 +1,4 @@
+// Isolated agent session identity tests cover stable session ids for cron runs.
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -24,7 +25,7 @@ import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-h
 import {
   dispatchCronDeliveryMock,
   mockRunCronFallbackPassthrough,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
   updateSessionStoreMock,
 } from "./isolated-agent/run.test-harness.js";
 import { normalizeCronJobCreate } from "./normalize.js";
@@ -40,14 +41,14 @@ function lastEmbeddedAgentCall(): {
   workspaceDir?: string;
   sessionFile?: string;
 } {
-  const calls = runEmbeddedPiAgentMock.mock.calls;
+  const calls = runEmbeddedAgentMock.mock.calls;
   const call = calls[calls.length - 1];
   if (!call) {
-    throw new Error("expected runEmbeddedPiAgent call");
+    throw new Error("expected runEmbeddedAgent call");
   }
   const value = call[0];
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("expected runEmbeddedPiAgent call payload");
+    throw new Error("expected runEmbeddedAgent call payload");
   }
   return value as {
     agentDir?: string;
@@ -62,11 +63,11 @@ function lastEmbeddedAgentCall(): {
 describe("runCronIsolatedAgentTurn session identity", () => {
   beforeEach(() => {
     vi.spyOn(modelThinkingDefault, "resolveThinkingDefault").mockReturnValue("off");
-    runEmbeddedPiAgentMock.mockClear();
+    runEmbeddedAgentMock.mockClear();
     mockRunCronFallbackPassthrough();
   });
 
-  it("passes resolved agentDir to runEmbeddedPiAgent", async () => {
+  it("passes resolved agentDir to runEmbeddedAgent", async () => {
     await withTempHome(async (home) => {
       const { res } = await runCronTurn(home, {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
@@ -167,7 +168,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
           systemSent: true,
         },
       });
-      runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "ok" }],
         meta: {
           durationMs: 5,
@@ -214,7 +215,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       const finalPersist = updateSessionStoreMock.mock.calls.at(-1);
       expect(finalPersist?.[0]).toBe(storePath);
       const persistedStore: Record<string, { [key: string]: unknown }> = {};
-      (finalPersist?.[1] as (store: typeof persistedStore) => void)(persistedStore);
+      (finalPersist![1] as (store: typeof persistedStore) => void)(persistedStore);
       expect(persistedStore[boundSessionKey]).toEqual(
         expect.objectContaining({
           sessionId: "bound-session-rotated",

@@ -1,4 +1,8 @@
-import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
+// Migrate Hermes plugin module implements secrets behavior.
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  resolveAuthStorePathForDisplay,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -7,7 +11,7 @@ import {
   hasCurrentAuthProfileConfigConflict,
   type HermesAuthProfileConfig,
 } from "./auth-config.js";
-import { parseEnv, readText } from "./helpers.js";
+import { isRecord, parseEnv, readString, readText } from "./helpers.js";
 import {
   createHermesSecretItem,
   HERMES_REASON_AUTH_PROFILE_EXISTS,
@@ -129,6 +133,10 @@ type SecretCandidate = {
   secretField?: string;
 };
 
+function authProfileTarget(agentDir: string, profileId: string): string {
+  return `${resolveAuthStorePathForDisplay(agentDir)}#${profileId}`;
+}
+
 function secretAuthProfileConfig(details: {
   provider: string;
   profileId: string;
@@ -140,14 +148,6 @@ function secretAuthProfileConfig(details: {
     mode: details.mode ?? "api_key",
     displayName: "Hermes import",
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function secretMode(mapping: SecretMapping): SecretCredentialMode {
@@ -297,7 +297,7 @@ export async function buildSecretItems(params: {
       createHermesSecretItem({
         id: candidate.id,
         source: candidate.source,
-        target: `${params.targets.agentDir}/auth-profiles.json#${candidate.profileId}`,
+        target: authProfileTarget(params.targets.agentDir, candidate.profileId),
         includeSecrets: params.ctx.includeSecrets,
         existsAlready: (existsAlready && !params.ctx.overwrite) || configConflict,
         details: {

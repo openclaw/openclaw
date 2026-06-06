@@ -1,3 +1,6 @@
+/**
+ * Public option and metadata types for agent command execution.
+ */
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
@@ -16,6 +19,7 @@ export type ImageContent = {
 };
 export type { AgentStreamParams } from "./shared-types.js";
 
+/** Metadata overrides for trusted internal agent command callers. */
 export type AgentCommandResultMetaOverrides = {
   transport?: "embedded";
   fallbackFrom?: "gateway";
@@ -24,8 +28,10 @@ export type AgentCommandResultMetaOverrides = {
   fallbackSessionKey?: string;
 };
 
+/** ACP turn source markers accepted by trusted command callsites. */
 export type AcpTurnSource = "manual_spawn";
 
+/** Channel/account/thread context carried into an agent run. */
 export type AgentRunContext = {
   messageChannel?: string;
   accountId?: string;
@@ -34,10 +40,12 @@ export type AgentRunContext = {
   groupSpace?: string | null;
   currentChannelId?: string;
   currentThreadTs?: string;
+  currentInboundAudio?: boolean;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
 };
 
+/** Full trusted option surface for running an agent command. */
 export type AgentCommandOpts = {
   message: string;
   /** User-visible transcript body; defaults to message and excludes runtime-only context. */
@@ -114,10 +122,14 @@ export type AgentCommandOpts = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
   disableMessageTool?: boolean;
+  /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
+  skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
+  /** Explicit task working directory for this run. Bootstrap still uses workspaceDir. */
+  cwd?: string;
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Force long-lived CLI live session teardown when a one-shot local run completes. */
@@ -136,6 +148,7 @@ export type AgentCommandOpts = {
   suppressPromptPersistence?: boolean;
 };
 
+/** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
   "senderIsOwner" | "allowModelOverride" | "resultMetaOverrides"

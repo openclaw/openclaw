@@ -1,3 +1,10 @@
+/**
+ * Chrome DevTools Protocol URL, fetch, and socket helpers.
+ *
+ * Handles CDP URL normalization, SSRF-guarded HTTP discovery, credential
+ * redaction/headers, and request/response correlation over WebSocket.
+ */
+import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -6,7 +13,6 @@ import {
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import {
   getDirectAgentForCdp,
   withManagedProxyForCdpUrl,
@@ -16,100 +22,10 @@ import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import { withAllowedHostname } from "./ssrf-policy-helpers.js";
+import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 export { isLoopbackHost };
-
-/**
- * Detects whether a raw URL string contains an explicitly written port.
- *
- * WHATWG `URL` normalizes default ports (e.g. `:80` for http, `:443` for
- * https) to an empty `.port` string, making it impossible to distinguish
- * "user wrote :80" from "user omitted the port". This helper inspects the
- * raw string to preserve that intent.
- *
- * Handles IPv6 bracket notation and userinfo (user:pass@host) correctly.
- */
-function hasRawExplicitPort(raw: string): boolean {
-  // Strip scheme (e.g. "http://") and take only the authority portion
-  // (everything before the first /, ?, or #).
-  const authority = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split(/[/?#]/, 1)[0] ?? "";
-
-  // Strip userinfo (user:pass@); the colon there is not a port separator.
-  const hostPort = authority.includes("@")
-    ? authority.slice(authority.lastIndexOf("@") + 1)
-    : authority;
-
-  // IPv6: [::1]:9222 has a port after the closing bracket.
-  if (hostPort.startsWith("[")) {
-    return /^\[[^\]]+\]:\d+$/.test(hostPort);
-  }
-
-  // IPv4 / hostname: host:port
-  return /:\d+$/.test(hostPort);
-}
-
-export function parseBrowserHttpUrl(raw: string, label: string) {
-  const trimmed = raw.trim();
-  const parsed = new URL(trimmed);
-  const allowed = ["http:", "https:", "ws:", "wss:"];
-  if (!allowed.includes(parsed.protocol)) {
-    throw new Error(`${label} must be http(s) or ws(s), got: ${parsed.protocol.replace(":", "")}`);
-  }
-
-  const isSecure = parsed.protocol === "https:" || parsed.protocol === "wss:";
-  const port =
-    parsed.port && Number.parseInt(parsed.port, 10) > 0
-      ? Number.parseInt(parsed.port, 10)
-      : isSecure
-        ? 443
-        : 80;
-
-  // WHATWG URL rejects invalid ports (non-numeric, negative, >65535), and
-  // the ternary above falls back to 80/443 for empty or zero parsed.port,
-  // so this defensive guard is unreachable at runtime. Kept as a
-  // belt-and-braces check against parser drift.
-  /* c8 ignore next 3 */
-  if (Number.isNaN(port) || port <= 0 || port > 65535) {
-    throw new Error(`${label} has invalid port: ${parsed.port}`);
-  }
-
-  const normalized = parsed.toString().replace(/\/$/, "");
-  const hasExplicitPort = hasRawExplicitPort(trimmed);
-
-  // When the user explicitly wrote a default port (e.g. :80 for http),
-  // WHATWG normalization drops it from the URL string. Rebuild a
-  // port-preserving normalized form so callers don't need raw-string hacks.
-  // Note: the URL .port setter silently discards protocol-default ports,
-  // so we must inject the port via string surgery on the normalized form.
-  let normalizedWithPort: string;
-  if (hasExplicitPort && !parsed.port) {
-    const proto = parsed.protocol + "//";
-    const rest = normalized.slice(proto.length);
-    // Skip userinfo (user:pass@) if present
-    const atIdx = rest.indexOf("@");
-    const hostStart = atIdx >= 0 ? atIdx + 1 : 0;
-    const hostPart = rest.slice(hostStart);
-    // Find the end of the host: IPv6 brackets, a path slash, or a port colon.
-    const hostLen = hostPart.startsWith("[")
-      ? hostPart.indexOf("]") + 1
-      : (() => {
-          const idx = hostPart.search(/[:/]/);
-          return idx < 0 ? hostPart.length : idx;
-        })();
-    const insertAt = hostStart + hostLen;
-    normalizedWithPort = proto + rest.slice(0, insertAt) + ":" + port + rest.slice(insertAt);
-  } else {
-    normalizedWithPort = normalized;
-  }
-
-  return {
-    parsed,
-    port,
-    hasExplicitPort,
-    normalized,
-    normalizedWithPort,
-  };
-}
+export { parseBrowserHttpUrl, redactCdpUrl };
 
 /**
  * Returns true when the URL uses a WebSocket protocol (ws: or wss:).
@@ -179,24 +95,6 @@ export async function assertCdpEndpointAllowed(
   }
 }
 
-export function redactCdpUrl(cdpUrl: string | null | undefined): string | null | undefined {
-  if (typeof cdpUrl !== "string") {
-    return cdpUrl;
-  }
-  const trimmed = cdpUrl.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    parsed.username = "";
-    parsed.password = "";
-    return redactSensitiveText(parsed.toString().replace(/\/$/, ""));
-  } catch {
-    return redactSensitiveText(trimmed);
-  }
-}
-
 type CdpResponse = {
   id: number;
   result?: unknown;
@@ -231,6 +129,7 @@ function rawCdpMessageToString(data: WebSocket.RawData): string {
   return Buffer.from(data).toString("utf8");
 }
 
+/** Merge URL basic-auth credentials into headers without overriding explicit auth. */
 export function getHeadersWithAuth(url: string, headers: Record<string, string> = {}) {
   const mergedHeaders = { ...headers };
   try {
@@ -265,6 +164,7 @@ function stripUrlCredentials(url: string): string {
   }
 }
 
+/** Append a JSON endpoint path to a CDP HTTP base URL. */
 export function appendCdpPath(cdpUrl: string, path: string): string {
   const url = new URL(cdpUrl);
   const basePath = url.pathname.replace(/\/$/, "");
@@ -273,6 +173,7 @@ export function appendCdpPath(cdpUrl: string, path: string): string {
   return url.toString();
 }
 
+/** Normalize ws/wss and direct devtools URLs back to the HTTP JSON endpoint base. */
 export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
   try {
     const url = new URL(cdpUrl);
@@ -305,7 +206,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
   const pending = new Map<number, Pending>();
   const commandTimeoutMs =
     typeof opts?.commandTimeoutMs === "number" && Number.isFinite(opts.commandTimeoutMs)
-      ? Math.max(1, Math.floor(opts.commandTimeoutMs))
+      ? normalizeBrowserTimerDelayMs(opts.commandTimeoutMs)
       : undefined;
 
   const clearPendingTimer = (p: Pending) => {
@@ -328,6 +229,8 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
       }
       const entry: Pending = { resolve, reject };
       if (commandTimeoutMs !== undefined) {
+        // A timed-out command closes the whole socket so pending calls do not
+        // hang on a connection whose CDP command stream is no longer reliable.
         entry.timer = setTimeout(() => {
           closeWithError(new Error(`CDP command ${method} timed out after ${commandTimeoutMs}ms`));
         }, commandTimeoutMs);
@@ -394,6 +297,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
   return { send, closeWithError };
 }
 
+/** Fetch and parse a CDP JSON endpoint through the configured SSRF guard. */
 export async function fetchJson<T>(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
@@ -408,6 +312,7 @@ export async function fetchJson<T>(
   }
 }
 
+/** Fetch a CDP endpoint and return the response with an idempotent release hook. */
 export async function fetchCdpChecked(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
@@ -415,7 +320,7 @@ export async function fetchCdpChecked(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<CdpFetchResult> {
   const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
+  const t = setTimeout(ctrl.abort.bind(ctrl), normalizeBrowserTimerDelayMs(timeoutMs));
   let guardedRelease: (() => Promise<void>) | undefined;
   let released = false;
   const release = async () => {
@@ -432,6 +337,8 @@ export async function fetchCdpChecked(
     const res = await withManagedProxyForCdpUrl(fetchUrl, () =>
       withNoProxyForCdpUrl(url, async () => {
         const parsedUrl = new URL(fetchUrl);
+        // Loopback CDP is an OpenClaw control plane, not page navigation. Allow
+        // its exact host while preserving the caller's policy for remote hosts.
         const policy = isLoopbackHost(parsedUrl.hostname)
           ? withAllowedHostname(ssrfPolicy, parsedUrl.hostname)
           : (ssrfPolicy ?? { allowPrivateNetwork: true });
@@ -463,6 +370,7 @@ export async function fetchCdpChecked(
   }
 }
 
+/** Probe that a CDP endpoint responds with an OK HTTP status. */
 export async function fetchOk(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
@@ -473,6 +381,7 @@ export async function fetchOk(
   await release();
 }
 
+/** Open a CDP WebSocket with URL basic-auth and proxy bypass handling. */
 export function openCdpWebSocket(
   wsUrl: string,
   opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
@@ -505,7 +414,9 @@ type CdpSocketOptions = {
 };
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function normalizeRetryCount(value: number | undefined, fallback: number): number {
@@ -526,6 +437,8 @@ function computeHandshakeRetryDelayMs(attempt: number, opts?: CdpSocketOptions):
       ? Math.max(baseDelayMs, Math.floor(opts.handshakeMaxRetryDelayMs))
       : 3000;
   const raw = Math.min(maxDelayMs, baseDelayMs * 2 ** Math.max(0, attempt - 1));
+  // Jitter keeps several browser sessions from retrying handshakes in lockstep
+  // after a shared Chrome or network hiccup.
   const jitterScale = 0.8 + Math.random() * 0.4;
   return Math.max(1, Math.floor(raw * jitterScale));
 }
@@ -594,6 +507,8 @@ export async function withCdpSocket<T>(
       if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
         throw err;
       }
+      // Retry only handshake failures. Once CDP commands are flowing, callers
+      // own retry semantics because commands may already have side effects.
       await sleep(computeHandshakeRetryDelayMs(attempt + 1, opts));
       continue;
     }

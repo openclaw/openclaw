@@ -1,3 +1,4 @@
+// Install Sh tests cover install sh script behavior.
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,14 +8,22 @@ import { describe, expect, it } from "vitest";
 const SCRIPT_PATH = "scripts/install.sh";
 
 function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
-  return spawnSync("bash", ["-c", script], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      OPENCLAW_INSTALL_SH_NO_RUN: "1",
-      ...env,
-    },
-  });
+  const home = mkdtempSync(join(tmpdir(), "openclaw-install-home-"));
+  try {
+    return spawnSync("bash", ["-c", script], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: home,
+        ...env,
+        BASH_ENV: "",
+        ENV: "",
+        OPENCLAW_INSTALL_SH_NO_RUN: "1",
+      },
+    });
+  } finally {
+    rmSync(home, { force: true, recursive: true });
+  }
 }
 
 function writeNpmFreshnessConflictFixture(path: string, argsLog: string) {
@@ -88,6 +97,23 @@ function writeNpmBeforePolicyFixture(path: string, argsLog: string) {
 describe("install.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("runs installer snippets without inherited shell startup files", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-shell-env-"));
+    const bashEnvPath = join(tmp, "bash_env");
+    writeFileSync(bashEnvPath, "export OPENCLAW_BASH_ENV_LEAKED=1\n");
+
+    try {
+      const result = runInstallShell('printf "leaked=%s\\n" "${OPENCLAW_BASH_ENV_LEAKED:-0}"', {
+        BASH_ENV: bashEnvPath,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("leaked=0\n");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("runs apt-get through noninteractive wrappers", () => {
     expect(script).toContain("apt_get()");
     expect(script).toContain('DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"');
@@ -102,6 +128,28 @@ describe("install.sh", () => {
     expect(rawAptInstalls).toStrictEqual([]);
   });
 
+  it("rejects unknown installer options", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      parse_args --bogus
+    `);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout + result.stderr).toContain("Unknown option: --bogus");
+  });
+
+  it("rejects installer options with missing values", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      parse_args --version --no-onboard
+    `);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout + result.stderr).toContain("Missing value for --version");
+  });
+
   it("accepts GNU and musl Linux shells in OS detection", () => {
     expect(script).toContain('[[ "$OSTYPE" == "linux"* ]]');
     expect(script).not.toContain('[[ "$OSTYPE" == "linux-gnu"* ]]');
@@ -109,14 +157,19 @@ describe("install.sh", () => {
 
   it("installs Node.js with apk on Alpine before falling back to NodeSource", () => {
     expect(script).toContain("finish_linux_node_install()");
+    expect(script).toContain("is_alpine_linux()");
+    expect(script).toContain("install_node_with_apk()");
     expect(script).toContain('ui_info "Installing Node.js via apk (Alpine Linux detected)"');
     expect(script).toContain('run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm');
     expect(script).toContain(
       'run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm',
     );
+    expect(script).toContain(
+      'run_quiet_step "Installing nodejs-current" apk add --no-cache nodejs-current npm',
+    );
     expect(script).toContain("if ! node_is_at_least_required; then");
 
-    const apkIndex = script.indexOf("if command -v apk &> /dev/null; then");
+    const apkIndex = script.indexOf("if command -v apk &> /dev/null && is_alpine_linux; then");
     const nodeSourceIndex = script.indexOf('ui_info "Installing Node.js via NodeSource"');
     expect(apkIndex).toBeGreaterThan(-1);
     expect(nodeSourceIndex).toBeGreaterThan(apkIndex);
@@ -130,10 +183,12 @@ describe("install.sh", () => {
       require_sudo() { :; }
       install_build_tools_linux() { return 0; }
       is_root() { return 0; }
+      is_alpine_linux() { return 0; }
       ui_info() { printf 'info:%s\\n' "$*"; }
       ui_success() { printf 'success:%s\\n' "$*"; }
       run_quiet_step() { printf 'step:%s|%s\\n' "$1" "\${*:2}"; }
       apk() { :; }
+      node_is_at_least_required() { return 0; }
       finish_linux_node_install() { printf 'finish-linux-node\\n'; }
       install_node
     `);
@@ -143,6 +198,188 @@ describe("install.sh", () => {
     expect(result.stdout).toContain("step:Installing Node.js|apk add --no-cache nodejs npm");
     expect(result.stdout).toContain("finish-linux-node");
     expect(result.stdout).not.toContain("Installing Node.js via NodeSource");
+  });
+
+  it("tries nodejs-current when Alpine nodejs is below the runtime floor", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=linux
+      NODE_FAKE_VERSION=v20.15.1
+      require_sudo() { :; }
+      install_build_tools_linux() { return 0; }
+      is_root() { return 0; }
+      is_alpine_linux() { return 0; }
+      ui_info() { printf 'info:%s\\n' "$*"; }
+      ui_success() { printf 'success:%s\\n' "$*"; }
+      ui_warn() { printf 'warn:%s\\n' "$*"; }
+      run_quiet_step() {
+        printf 'step:%s|%s\\n' "$1" "\${*:2}"
+        "\${@:2}"
+      }
+      apk() {
+        printf 'apk:%s\\n' "$*"
+        if [[ "$*" == *"nodejs-current"* ]]; then
+          NODE_FAKE_VERSION=v22.22.2
+        fi
+      }
+      node() {
+        if [[ "\${1:-}" == "-v" ]]; then
+          printf '%s\\n' "$NODE_FAKE_VERSION"
+        fi
+      }
+      activate_supported_node_on_path() { :; }
+      finish_linux_node_install() { printf 'finish-linux-node\\n'; }
+      install_node
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("step:Installing Node.js|apk add --no-cache nodejs npm");
+    expect(result.stdout).toContain("warn:Alpine nodejs package installed v20.15.1");
+    expect(result.stdout).toContain(
+      "step:Installing nodejs-current|apk add --no-cache nodejs-current npm",
+    );
+    expect(result.stdout).toContain("finish-linux-node");
+  });
+
+  it("fails with Alpine version guidance when apk cannot provide the runtime floor", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=linux
+      NODE_FAKE_VERSION=v20.15.1
+      require_sudo() { :; }
+      install_build_tools_linux() { return 0; }
+      is_root() { return 0; }
+      is_alpine_linux() { return 0; }
+      ui_info() { printf 'info:%s\\n' "$*"; }
+      ui_success() { printf 'success:%s\\n' "$*"; }
+      ui_warn() { printf 'warn:%s\\n' "$*"; }
+      ui_error() { printf 'error:%s\\n' "$*"; }
+      run_quiet_step() {
+        printf 'step:%s|%s\\n' "$1" "\${*:2}"
+        "\${@:2}"
+      }
+      apk() {
+        printf 'apk:%s\\n' "$*"
+        if [[ "$*" == *"nodejs-current"* ]]; then
+          NODE_FAKE_VERSION=v21.7.3
+        fi
+      }
+      node() {
+        if [[ "\${1:-}" == "-v" ]]; then
+          printf '%s\\n' "$NODE_FAKE_VERSION"
+        fi
+      }
+      activate_supported_node_on_path() { :; }
+      install_node
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("warn:Alpine nodejs package installed v20.15.1");
+    expect(result.stdout).toContain(
+      "step:Installing nodejs-current|apk add --no-cache nodejs-current npm",
+    );
+    expect(result.stdout).toContain(
+      "error:Alpine apk repositories did not provide Node.js v22.19+",
+    );
+    expect(result.stdout).toContain("Use Alpine 3.21+ or install Node.js 24 manually");
+  });
+
+  it("installs Git with apk on Alpine", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-git-apk-"));
+    const bin = join(tmp, "bin");
+    const apkLog = join(tmp, "apk-args.txt");
+    mkdirSync(bin, { recursive: true });
+    const fakeApk = join(bin, "apk");
+    writeFileSync(
+      fakeApk,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        `printf '%s\\n' "$*" >> ${JSON.stringify(apkLog)}`,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeApk, 0o755);
+
+    try {
+      const result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        PATH=${JSON.stringify(`${bin}:/bin`)}
+        OS=linux
+        require_sudo() { :; }
+        is_root() { return 0; }
+        is_alpine_linux() { return 0; }
+        ui_success() { printf 'success:%s\\n' "$*"; }
+        ui_error() { printf 'error:%s\\n' "$*"; }
+        run_quiet_step() {
+          printf 'step:%s|%s\\n' "$1" "\${*:2}"
+          "\${@:2}"
+        }
+        install_git
+      `);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("step:Installing Git|apk add --no-cache git");
+      expect(result.stdout).toContain("success:Git installed");
+      expect(readFileSync(apkLog, "utf8").trim()).toBe("add --no-cache git");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not select apk Git on non-Alpine hosts", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-git-native-"));
+    const bin = join(tmp, "bin");
+    const apkLog = join(tmp, "apk-args.txt");
+    mkdirSync(bin, { recursive: true });
+    const fakeApk = join(bin, "apk");
+    const fakeApt = join(bin, "apt-get");
+    writeFileSync(apkLog, "");
+    writeFileSync(
+      fakeApk,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        `printf '%s\\n' "$*" >> ${JSON.stringify(apkLog)}`,
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(fakeApt, "#!/usr/bin/env bash\nexit 0\n");
+    chmodSync(fakeApk, 0o755);
+    chmodSync(fakeApt, 0o755);
+
+    try {
+      const result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        PATH=${JSON.stringify(`${bin}:/bin`)}
+        OS=linux
+        require_sudo() { :; }
+        is_root() { return 0; }
+        is_alpine_linux() { return 1; }
+        apt_get_update() { printf 'apt-update\\n'; }
+        apt_get_install() { printf 'apt-install:%s\\n' "$*"; }
+        ui_success() { printf 'success:%s\\n' "$*"; }
+        ui_error() { printf 'error:%s\\n' "$*"; }
+        run_quiet_step() {
+          printf 'step:%s|%s\\n' "$1" "\${*:2}"
+          "\${@:2}"
+        }
+        install_git
+      `);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("step:Updating package index|apt_get_update");
+      expect(result.stdout).toContain("apt-update");
+      expect(result.stdout).toContain("step:Installing Git|apt_get_install git");
+      expect(result.stdout).toContain("apt-install:git");
+      expect(readFileSync(apkLog, "utf8")).toBe("");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("clears npm freshness filters for package installs", () => {
@@ -158,10 +395,12 @@ describe("install.sh", () => {
   it("does not emit --before when raw user npmrc config contains min-release-age", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npmrc-"));
     const bin = join(tmp, "bin");
+    const home = join(tmp, "home");
     const npmrc = join(tmp, "user.npmrc");
     const calls = join(tmp, "npm-calls.txt");
     const installArgs = join(tmp, "npm-install-args.txt");
     mkdirSync(bin, { recursive: true });
+    mkdirSync(home, { recursive: true });
     writeFileSync(npmrc, "min-release-age=7\n");
     const fakeNpm = join(bin, "npm");
     writeFileSync(
@@ -196,10 +435,11 @@ describe("install.sh", () => {
           'printf "cmd=%s\\n" "$LAST_NPM_INSTALL_CMD"',
         ].join("\n"),
         {
+          HOME: home,
           NPM_CONFIG_USERCONFIG: npmrc,
           NPM_FAKE_CALLS: calls,
           NPM_FAKE_INSTALL_ARGS: installArgs,
-          PATH: `${bin}:${process.env.PATH}`,
+          PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
         },
       );
 
@@ -465,7 +705,7 @@ describe("install.sh", () => {
     writeNpmFreshnessConflictFixture(join(bin, "npm"), argsLog);
 
     let result: ReturnType<typeof runInstallShell> | undefined;
-    let argsOutput = "";
+    let argsOutput;
     try {
       result = runInstallShell(
         [
@@ -475,7 +715,6 @@ describe("install.sh", () => {
           `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
           "NPM_LOGLEVEL=error",
           "NPM_SILENT_FLAG=",
-          "SHARP_IGNORE_GLOBAL_LIBVIPS=1",
           `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
         ].join("\n"),
       );
@@ -503,7 +742,7 @@ describe("install.sh", () => {
     writeNpmBeforePolicyFixture(join(bin, "npm"), argsLog);
 
     let result: ReturnType<typeof runInstallShell> | undefined;
-    let argsOutput = "";
+    let argsOutput;
     try {
       result = runInstallShell(
         [
@@ -514,7 +753,6 @@ describe("install.sh", () => {
           `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
           "NPM_LOGLEVEL=error",
           "NPM_SILENT_FLAG=",
-          "SHARP_IGNORE_GLOBAL_LIBVIPS=1",
           `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
         ].join("\n"),
       );
@@ -556,9 +794,67 @@ describe("install.sh", () => {
     expect(result.stdout).not.toContain("[4/3] Verifying installation");
   });
 
+  it("bounds installer npm prefix probes during finalization helpers", () => {
+    const result = runInstallShell(
+      [
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "npm() {",
+        '  if [[ "$1" == "prefix" && "$2" == "-g" ]]; then sleep 2; return 0; fi',
+        '  if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then printf "/tmp/openclaw-npm\\n"; return 0; fi',
+        "  return 1",
+        "}",
+        "npm_global_bin_dir",
+      ].join("\n"),
+      { OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "0.1" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("/tmp/openclaw-npm/bin");
+    expect(result.stderr).toContain("timed out during installer finalization probe: npm prefix -g");
+  });
+
+  it("bounds daemon status probes during finalization helpers", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-probe-"));
+    const claw = join(tmp, "openclaw");
+    writeFileSync(
+      claw,
+      [
+        "#!/usr/bin/env bash",
+        'if [[ "$1" == "daemon" && "$2" == "status" && "$3" == "--json" ]]; then',
+        "  sleep 2",
+        "  exit 0",
+        "fi",
+        "exit 1",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(claw, 0o755);
+    try {
+      const result = runInstallShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `if is_gateway_daemon_loaded ${JSON.stringify(claw)}; then`,
+          '  printf "loaded\\n"',
+          "else",
+          '  printf "not-loaded\\n"',
+          "fi",
+        ].join("\n"),
+        { OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "0.1" },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe("not-loaded");
+      expect(result.stderr).toContain(
+        "timed out during installer finalization probe: openclaw daemon status --json",
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("loads nvm before checking Node.js so stale system Node does not win", () => {
     expect(script).toMatch(
-      /# Step 2: Node\.js\s+load_nvm_for_node_detection\s+if ! check_node; then/,
+      /# Step 1: Node\.js[\s\S]*?load_nvm_for_node_detection\s+if ! check_node; then/,
     );
 
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nvm-"));
@@ -622,6 +918,22 @@ describe("install.sh", () => {
     expect(output).toContain("version=v22.22.1");
   });
 
+  it("installs Homebrew lazily before macOS Git installs", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=macos
+      install_homebrew() { echo "install_homebrew"; }
+      run_quiet_step() { echo "run_quiet_step:$*"; return 0; }
+      install_git
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(
+      /install_homebrew\s+run_quiet_step:Installing Git brew install git/,
+    );
+  });
+
   it("promotes a supported Linux Node binary over stale PATH entries", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-node-promote-"));
     const staleBin = join(tmp, "usr-local-bin");
@@ -642,6 +954,13 @@ describe("install.sh", () => {
         [
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "type() {",
+          '  if [[ "$*" == "-P -a node" ]]; then',
+          `    printf '%s\\n' ${JSON.stringify(staleNode)} ${JSON.stringify(supportedNode)}`,
+          "    return 0",
+          "  fi",
+          '  builtin type "$@"',
+          "}",
           "set +e",
           "OS=linux",
           "promote_supported_node_binary",
@@ -666,6 +985,64 @@ describe("install.sh", () => {
     expect(output).toContain("active=0");
     expect(output).toContain(`path=${supportedNode}`);
     expect(output).toContain("version=v22.22.0");
+  });
+
+  it("uses the package engine floor when accepting existing Node runtimes", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+      engines?: { node?: string };
+    };
+    const engineMatch = /^>=22\.(\d+)\.0$/.exec(pkg.engines?.node ?? "");
+    expect(engineMatch).not.toBeNull();
+
+    const minMinor = Number(engineMatch?.[1]);
+    expect(script).toContain(`NODE_MIN_MINOR=${minMinor}`);
+
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-node-floor-"));
+    const bin = join(tmp, "bin");
+    mkdirSync(bin, { recursive: true });
+
+    const nodePath = join(bin, "node");
+    writeFileSync(
+      nodePath,
+      ["#!/bin/sh", 'printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"', ""].join("\n"),
+    );
+    chmodSync(nodePath, 0o755);
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    try {
+      result = runInstallShell(
+        [
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "set +e",
+          `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
+          "export PATH",
+          "unset -f node 2>/dev/null || true",
+          "unalias node 2>/dev/null || true",
+          'node() { printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"; }',
+          `FAKE_NODE_VERSION="v22.${minMinor - 1}.0"`,
+          "export FAKE_NODE_VERSION",
+          "node_is_at_least_required",
+          "node_below_floor=$?",
+          `FAKE_NODE_VERSION="v22.${minMinor}.0"`,
+          "export FAKE_NODE_VERSION",
+          "node_is_at_least_required",
+          "node_at_floor=$?",
+          'printf "node_below_floor=%s\\nnode_at_floor=%s\\n" "$node_below_floor" "$node_at_floor"',
+          "exit 0",
+        ].join("\n"),
+        {
+          PATH: `${bin}:/usr/bin:/bin`,
+          TERM: "dumb",
+        },
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(result?.stdout).toContain("node_below_floor=1");
+    expect(result?.stdout).toContain("node_at_floor=0");
   });
 
   it("persists a supported Linux Node path before noninteractive shell guards", () => {
@@ -928,7 +1305,7 @@ describe("install.sh", () => {
     expect(result.stdout).toContain("branch=--no-frozen-lockfile");
     expect(result.stdout).toContain("tag=--frozen-lockfile");
     expect(script).toContain(
-      'CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
+      'CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
     );
   });
 

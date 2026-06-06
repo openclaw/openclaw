@@ -1,3 +1,7 @@
+// Signal plugin module implements monitor behavior.
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -34,6 +38,7 @@ import {
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount } from "./accounts.js";
+import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
 import { signalRpcRequest, signalCheck } from "./client-adapter.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
@@ -53,6 +58,7 @@ export type MonitorSignalOpts = {
   accountId?: string;
   config?: OpenClawConfig;
   baseUrl?: string;
+  channelRuntime?: ChannelRuntimeSurface;
   autoStart?: boolean;
   startupTimeoutMs?: number;
   cliPath?: string;
@@ -80,7 +86,7 @@ function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
     runEventTask(task: () => Promise<void>): void {
       const trackedTask = Promise.resolve()
         .then(task)
-        .catch((err) => runtime.error?.(`event handler failed: ${String(err)}`))
+        .catch((err: unknown) => runtime.error?.(`event handler failed: ${String(err)}`))
         .finally(() => inFlight.delete(trackedTask));
       inFlight.add(trackedTask);
     },
@@ -502,6 +508,25 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         throw daemonExitError;
       }
     }
+
+    registerChannelRuntimeContext({
+      channelRuntime: opts.channelRuntime,
+      channelId: "signal",
+      accountId: accountInfo.accountId,
+      capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+      context: isSignalNativeApprovalHandlerConfigured({
+        cfg,
+        accountId: accountInfo.accountId,
+      })
+        ? {
+            accountId: accountInfo.accountId,
+            baseUrl,
+            account,
+            accountUuid: accountInfo.config.accountUuid,
+          }
+        : null,
+      abortSignal: opts.abortSignal,
+    });
 
     const handleEvent = createSignalEventHandler({
       runtime,

@@ -1,3 +1,4 @@
+/** Tests ACP client permission handling, env sanitization, and spawn invocation resolution. */
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
@@ -6,6 +7,11 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   listKnownProviderAuthEnvVarNames: () => ["OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN"],
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
   omitEnvKeysCaseInsensitive: (
     baseEnv: NodeJS.ProcessEnv,
     keys: Iterable<string>,

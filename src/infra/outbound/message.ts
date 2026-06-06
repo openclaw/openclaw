@@ -1,3 +1,5 @@
+// Outbound message entrypoint resolves channel/target, durable capability
+// requirements, payload plans, gateway fallback, and optional mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
@@ -5,12 +7,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
@@ -20,6 +16,10 @@ import {
   type OutboundDeliveryQueuePolicy,
   type OutboundSendDeps,
 } from "./deliver.js";
+import {
+  resolveOutboundMessageGatewayOptions,
+  type OutboundMessageGatewayOptionsInput,
+} from "./message-gateway-options.js";
 import type { OutboundMirror } from "./mirror.js";
 import {
   createOutboundPayloadPlan,
@@ -35,6 +35,8 @@ let messageGatewayRuntimePromise: Promise<typeof import("./message.gateway.runti
   null;
 
 function loadMessageConfigRuntime() {
+  // Keep config/runtime loading lazy so importing message helpers does not
+  // bootstrap plugin registries or gateway clients.
   messageConfigRuntimePromise ??= import("./message.config.runtime.js");
   return messageConfigRuntimePromise;
 }
@@ -44,14 +46,7 @@ function loadMessageGatewayRuntime() {
   return messageGatewayRuntimePromise;
 }
 
-export type MessageGatewayOptions = {
-  url?: string;
-  token?: string;
-  timeoutMs?: number;
-  clientName?: GatewayClientName;
-  clientDisplayName?: string;
-  mode?: GatewayClientMode;
-};
+export type MessageGatewayOptions = OutboundMessageGatewayOptionsInput;
 
 type MessageSendParams = {
   to: string;
@@ -254,28 +249,14 @@ async function assertRequiredMessageSendDurability(params: {
     support.reason === "capability_mismatch" && support.capability
       ? `missing ${support.capability}`
       : support.reason;
-  throw new Error(`Required durable message send is unsupported for ${params.channel}: ${suffix}`);
+  throw new Error(
+    `Required durable message send is unsupported for ${params.channel}: ${suffix}. ` +
+      'Use queuePolicy:"best_effort" for best-effort delivery, omit bestEffort:false in message-tool calls, or use a channel with required durable delivery support.',
+  );
 }
 
 function resolveGatewayOptions(opts?: MessageGatewayOptions) {
-  // Security: backend callers (tools/agents) must not accept user-controlled gateway URLs.
-  // Use config-derived gateway target only.
-  const url =
-    opts?.mode === GATEWAY_CLIENT_MODES.BACKEND ||
-    opts?.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
-      ? undefined
-      : opts?.url;
-  return {
-    url,
-    token: opts?.token,
-    timeoutMs:
-      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-        ? Math.max(1, Math.floor(opts.timeoutMs))
-        : 10_000,
-    clientName: opts?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-    clientDisplayName: opts?.clientDisplayName,
-    mode: opts?.mode ?? GATEWAY_CLIENT_MODES.CLI,
-  };
+  return resolveOutboundMessageGatewayOptions(opts);
 }
 
 async function callMessageGateway<T>(params: {

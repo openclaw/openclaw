@@ -1,3 +1,5 @@
+// Approval-policy command analysis normalizes shell and argv inputs into the
+// shared exec segment shape consumed by risk checks.
 import {
   analyzeArgvCommand,
   analyzeShellCommand,
@@ -6,6 +8,7 @@ import {
 } from "../exec-approvals-analysis.js";
 import { detectInlineEvalInSegments } from "./risks.js";
 
+/** Normalized policy analysis result for argv and shell commands. */
 export type CommandPolicyAnalysis =
   | {
       ok: true;
@@ -21,6 +24,7 @@ export type CommandPolicyAnalysis =
       segments: [];
     };
 
+/** Parses a shell or argv command into command segments for approval policy checks. */
 export function analyzeCommandForPolicy(
   params:
     | {

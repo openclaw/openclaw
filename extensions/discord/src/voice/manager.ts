@@ -1,3 +1,4 @@
+// Discord plugin module implements manager behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -79,6 +80,14 @@ const DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS = [
   "permission denied",
   "forbidden",
 ];
+
+function logFollowUserReconcileVerbose(reason: string, message: string): void {
+  if (reason === "interval") {
+    logger.trace(`discord voice: ${message}`);
+    return;
+  }
+  logVoiceVerbose(message);
+}
 
 type DiscordVoiceSdk = ReturnType<typeof loadDiscordVoiceSdk>;
 type DiscordVoiceConnection = ReturnType<DiscordVoiceSdk["joinVoiceChannel"]>;
@@ -213,7 +222,9 @@ function isUnknownDiscordVoiceStateError(err: unknown): boolean {
 function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
   void manager
     .autoJoin()
-    .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
+    .catch((err: unknown) =>
+      logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`),
+    );
 }
 
 function resolveDiscordVoiceAgentRoute(params: {
@@ -419,7 +430,7 @@ export class DiscordVoiceManager {
     params: { guildId: string; channelId: string },
     options?: {
       preserveFollowState?: boolean;
-      meetingNotes?: VoiceSessionEntry["meetingNotes"];
+      transcripts?: VoiceSessionEntry["transcripts"];
     },
   ): Promise<VoiceOperationResult> {
     if (this.destroyed) {
@@ -484,7 +495,7 @@ export class DiscordVoiceManager {
     params: { guildId: string; channelId: string },
     options?: {
       preserveFollowState?: boolean;
-      meetingNotes?: VoiceSessionEntry["meetingNotes"];
+      transcripts?: VoiceSessionEntry["transcripts"];
     },
   ): Promise<VoiceOperationResult> {
     const { guildId, channelId } = params;
@@ -493,10 +504,10 @@ export class DiscordVoiceManager {
 
     const existing = this.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
-      if (options?.meetingNotes) {
-        existing.meetingNotes = options.meetingNotes;
+      if (options?.transcripts) {
+        existing.transcripts = options.transcripts;
       }
-      if (!options?.meetingNotes && isDiscordRealtimeVoiceMode(voiceMode) && !existing.realtime) {
+      if (!options?.transcripts && isDiscordRealtimeVoiceMode(voiceMode) && !existing.realtime) {
         const realtimeResult = await this.attachRealtimeSession(existing, voiceMode, {
           requireLiveEntry: true,
         });
@@ -666,12 +677,6 @@ export class DiscordVoiceManager {
 
     const player = voiceSdk.createAudioPlayer();
     connection.subscribe(player);
-
-    let speakingHandler: ((userId: string) => void) | undefined;
-    let speakingEndHandler: ((userId: string) => void) | undefined;
-    let disconnectedHandler: (() => Promise<void>) | undefined;
-    let destroyedHandler: (() => void) | undefined;
-    let playerErrorHandler: ((err: Error) => void) | undefined;
     let stopped = false;
     const clearSessionIfCurrent = () => {
       const active = this.sessions.get(guildId);
@@ -681,7 +686,7 @@ export class DiscordVoiceManager {
     };
     const stopEntry = (
       entry: VoiceSessionEntry,
-      options: { destroyConnection: boolean; reason: string },
+      optionsLocal: { destroyConnection: boolean; reason: string },
     ) => {
       if (stopped) {
         return;
@@ -708,11 +713,11 @@ export class DiscordVoiceManager {
       entry.realtime?.close();
       entry.realtime = undefined;
       player.stop();
-      if (options.destroyConnection) {
+      if (optionsLocal.destroyConnection) {
         destroyVoiceConnectionSafely({
           connection,
           voiceSdk,
-          reason: options.reason,
+          reason: optionsLocal.reason,
         });
       }
     };
@@ -739,7 +744,7 @@ export class DiscordVoiceManager {
       playbackQueue: Promise.resolve(),
       processingQueue: Promise.resolve(),
       capture: createVoiceCaptureState(),
-      meetingNotes: options?.meetingNotes,
+      transcripts: options?.transcripts,
       receiveRecovery: createVoiceReceiveRecoveryState(),
       isStopped: () => stopped,
       stop: () => {
@@ -750,7 +755,7 @@ export class DiscordVoiceManager {
       },
     };
 
-    if (!options?.meetingNotes && isDiscordRealtimeVoiceMode(voiceMode)) {
+    if (!options?.transcripts && isDiscordRealtimeVoiceMode(voiceMode)) {
       const realtimeResult = await this.attachRealtimeSession(entry, voiceMode);
       if (!realtimeResult.ok) {
         destroyVoiceConnectionSafely({
@@ -779,52 +784,54 @@ export class DiscordVoiceManager {
       };
     }
 
-    speakingHandler = (userId: string) => {
-      void this.handleSpeakingStart(entry, userId).catch((err) => {
+    const speakingHandler: ((userId: string) => void) | undefined = (userId: string) => {
+      void this.handleSpeakingStart(entry, userId).catch((err: unknown) => {
         logger.warn(`discord voice: capture failed: ${formatErrorMessage(err)}`);
       });
     };
-    speakingEndHandler = (userId: string) => {
+    const speakingEndHandler: ((userId: string) => void) | undefined = (userId: string) => {
       this.scheduleCaptureFinalize(entry, userId, "speaker end");
     };
 
-    disconnectedHandler = async () => {
-      try {
-        logVoiceVerbose(
-          `disconnected: attempting recovery guild ${guildId} channel ${channelId} grace=${reconnectGraceMs}ms`,
-        );
-        await Promise.race([
-          voiceSdk.entersState(
-            connection,
-            voiceSdk.VoiceConnectionStatus.Signalling,
-            reconnectGraceMs,
-          ),
-          voiceSdk.entersState(
-            connection,
-            voiceSdk.VoiceConnectionStatus.Connecting,
-            reconnectGraceMs,
-          ),
-        ]);
-        logVoiceVerbose(`disconnected: recovery started guild ${guildId} channel ${channelId}`);
-      } catch (err) {
-        logger.warn(
-          `discord voice: disconnect recovery failed: guild ${guildId} channel ${channelId} timeout=${reconnectGraceMs}ms error=${formatErrorMessage(err)}; destroying connection`,
-        );
-        clearSessionIfCurrent();
-        stopEntry(entry, {
-          destroyConnection: true,
-          reason: `disconnect recovery failed guild ${guildId} channel ${channelId}`,
-        });
-      }
+    const disconnectedHandler: (() => void) | undefined = () => {
+      void (async () => {
+        try {
+          logVoiceVerbose(
+            `disconnected: attempting recovery guild ${guildId} channel ${channelId} grace=${reconnectGraceMs}ms`,
+          );
+          await Promise.race([
+            voiceSdk.entersState(
+              connection,
+              voiceSdk.VoiceConnectionStatus.Signalling,
+              reconnectGraceMs,
+            ),
+            voiceSdk.entersState(
+              connection,
+              voiceSdk.VoiceConnectionStatus.Connecting,
+              reconnectGraceMs,
+            ),
+          ]);
+          logVoiceVerbose(`disconnected: recovery started guild ${guildId} channel ${channelId}`);
+        } catch (err) {
+          logger.warn(
+            `discord voice: disconnect recovery failed: guild ${guildId} channel ${channelId} timeout=${reconnectGraceMs}ms error=${formatErrorMessage(err)}; destroying connection`,
+          );
+          clearSessionIfCurrent();
+          stopEntry(entry, {
+            destroyConnection: true,
+            reason: `disconnect recovery failed guild ${guildId} channel ${channelId}`,
+          });
+        }
+      })();
     };
-    destroyedHandler = () => {
+    const destroyedHandler: (() => void) | undefined = () => {
       clearSessionIfCurrent();
       stopEntry(entry, {
         destroyConnection: false,
         reason: `destroyed guild ${guildId} channel ${channelId}`,
       });
     };
-    playerErrorHandler = (err: Error) => {
+    const playerErrorHandler: ((err: Error) => void) | undefined = (err: Error) => {
       logger.warn(`discord voice: playback error: ${formatErrorMessage(err)}`);
     };
 
@@ -911,7 +918,7 @@ export class DiscordVoiceManager {
 
   async leave(
     params: { guildId: string; channelId?: string },
-    options?: { preserveFollowState?: boolean; meetingNotesSessionId?: string },
+    options?: { preserveFollowState?: boolean; transcriptsSessionId?: string },
   ): Promise<VoiceOperationResult> {
     const guildId = params.guildId.trim();
     logVoiceVerbose(`leave requested: guild ${guildId} channel ${params.channelId ?? "current"}`);
@@ -922,20 +929,20 @@ export class DiscordVoiceManager {
     if (params.channelId && params.channelId !== entry.channelId) {
       return { ok: false, message: "Not connected to that voice channel." };
     }
-    if (options?.meetingNotesSessionId) {
-      if (!entry.meetingNotes || entry.meetingNotes.sessionId !== options.meetingNotesSessionId) {
+    if (options?.transcriptsSessionId) {
+      if (!entry.transcripts || entry.transcripts.sessionId !== options.transcriptsSessionId) {
         return {
           ok: false,
-          message: "Meeting notes session is not active in this voice channel.",
+          message: "Transcripts session is not active in this voice channel.",
           guildId,
           channelId: entry.channelId,
         };
       }
       if (entry.realtime || entry.pendingRealtime) {
-        entry.meetingNotes = undefined;
+        entry.transcripts = undefined;
         return {
           ok: true,
-          message: `Stopped meeting notes for ${formatMention({ channelId: entry.channelId })}.`,
+          message: `Stopped transcripts for ${formatMention({ channelId: entry.channelId })}.`,
           guildId,
           channelId: entry.channelId,
         };
@@ -1130,7 +1137,7 @@ export class DiscordVoiceManager {
       return;
     }
     this.followUsersReconcileTimer = setInterval(() => {
-      void this.reconcileFollowedUsers("interval").catch((err) => {
+      void this.reconcileFollowedUsers("interval").catch((err: unknown) => {
         logger.warn(`discord voice: follow user reconciliation failed: ${formatErrorMessage(err)}`);
       });
     }, FOLLOW_USERS_RECONCILE_INTERVAL_MS);
@@ -1161,7 +1168,8 @@ export class DiscordVoiceManager {
       );
       return;
     }
-    logVoiceVerbose(
+    logFollowUserReconcileVerbose(
+      reason,
       `follow user reconcile reason=${reason}: ${this.followUserIds.size} users across ${guildIds.length} guilds`,
     );
     const plans = this.selectFollowUserReconcilePlans(guildIds, reason);
@@ -1171,14 +1179,15 @@ export class DiscordVoiceManager {
           this.params.client.rest,
           plan.guildId,
           userId,
-        ).catch((err) => {
+        ).catch((err: unknown) => {
           if (!isUnknownDiscordVoiceStateError(err)) {
             logger.warn(
               `discord voice: follow user reconcile skipped transient voice state error guild=${plan.guildId} user=${userId} reason=${reason}: ${formatErrorMessage(err)}`,
             );
             return "transient-error" as const;
           }
-          logVoiceVerbose(
+          logFollowUserReconcileVerbose(
+            reason,
             `follow user reconcile reason=${reason}: no voice state guild ${plan.guildId} user ${userId}: ${formatErrorMessage(err)}`,
           );
           return undefined;
@@ -1409,14 +1418,15 @@ export class DiscordVoiceManager {
       this.params.client.rest,
       guildId,
       this.botUserId,
-    ).catch((err) => {
+    ).catch((err: unknown) => {
       if (!isUnknownDiscordVoiceStateError(err)) {
         logger.warn(
           `discord voice: follow reconcile skipped transient bot voice state error guild=${guildId} reason=${reason}: ${formatErrorMessage(err)}`,
         );
         return "transient-error" as const;
       }
-      logVoiceVerbose(
+      logFollowUserReconcileVerbose(
+        reason,
         `follow user reconcile reason=${reason}: no bot voice state guild ${guildId}: ${formatErrorMessage(err)}`,
       );
       return undefined;
@@ -1466,13 +1476,17 @@ export class DiscordVoiceManager {
   private enqueueProcessing(entry: VoiceSessionEntry, task: () => Promise<void>) {
     entry.processingQueue = entry.processingQueue
       .then(task)
-      .catch((err) => logger.warn(`discord voice: processing failed: ${formatErrorMessage(err)}`));
+      .catch((err: unknown) =>
+        logger.warn(`discord voice: processing failed: ${formatErrorMessage(err)}`),
+      );
   }
 
   private enqueuePlayback(entry: VoiceSessionEntry, task: () => Promise<void>) {
     entry.playbackQueue = entry.playbackQueue
       .then(task)
-      .catch((err) => logger.warn(`discord voice: playback failed: ${formatErrorMessage(err)}`));
+      .catch((err: unknown) =>
+        logger.warn(`discord voice: playback failed: ${formatErrorMessage(err)}`),
+      );
   }
 
   private clearCaptureFinalizeTimer(entry: VoiceSessionEntry, userId: string, generation?: number) {
@@ -1563,25 +1577,50 @@ export class DiscordVoiceManager {
     });
     const generation = beginVoiceCapture(entry.capture, userId, stream);
     let streamAborted = false;
-    stream.on("error", (err) => {
-      streamAborted = analyzeVoiceReceiveError(err).isAbortLike;
+    let receiveFailureHandled = false;
+    let receiveStreamEndHandled = false;
+    const handleStreamError = (err: unknown) => {
+      const analysis = analyzeVoiceReceiveError(err);
+      if (analysis.isAbortLike && !analysis.countsAsDecryptFailure) {
+        if (receiveStreamEndHandled) {
+          return;
+        }
+        receiveStreamEndHandled = true;
+        streamAborted = true;
+        this.handleReceiveError(entry, err);
+        return;
+      }
+      if (receiveFailureHandled) {
+        return;
+      }
+      receiveFailureHandled = true;
       this.handleReceiveError(entry, err);
-    });
+    };
+    stream.on("error", handleStreamError);
 
     try {
       if (realtime && realtimeIngress) {
         const turn = realtime.beginSpeakerTurn(realtimeIngress, userId);
         try {
-          await this.processRealtimeAudioCapture({ entry, stream, turn });
+          await this.processRealtimeAudioCapture({
+            entry,
+            onReceiveError: handleStreamError,
+            stream,
+            turn,
+          });
         } finally {
           turn.close();
         }
         return;
       }
       const pcm = await decodeOpusStream(stream, {
+        onError: handleStreamError,
         onVerbose: logVoiceVerbose,
         onWarn: (message) => logger.warn(message),
       });
+      if (receiveFailureHandled) {
+        return;
+      }
       if (pcm.length === 0) {
         logVoiceVerbose(
           `capture empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
@@ -1603,17 +1642,27 @@ export class DiscordVoiceManager {
       this.enqueueProcessing(entry, async () => {
         await this.processSegment({ entry, wavPath, userId, durationSeconds });
       });
+    } catch (err) {
+      if (!receiveFailureHandled) {
+        this.handleReceiveError(entry, err);
+      }
+      throw err;
     } finally {
-      finishVoiceCapture(entry.capture, userId, generation);
+      stream.off?.("error", handleStreamError);
+      const finishedActiveCapture = finishVoiceCapture(entry.capture, userId, generation);
+      if (finishedActiveCapture && !stream.destroyed) {
+        stream.destroy();
+      }
     }
   }
 
   private async processRealtimeAudioCapture(params: {
     entry: VoiceSessionEntry;
+    onReceiveError: (err: unknown) => void;
     stream: import("node:stream").Readable;
     turn: import("./session.js").VoiceRealtimeSpeakerTurn;
   }): Promise<void> {
-    const { entry, stream, turn } = params;
+    const { entry, onReceiveError, stream, turn } = params;
     let resetReceiveRecovery = false;
     await decodeOpusStreamChunks(stream, {
       onChunk: (pcm) => {
@@ -1623,6 +1672,7 @@ export class DiscordVoiceManager {
         }
         turn.sendInputAudio(pcm);
       },
+      onError: onReceiveError,
       onVerbose: logVoiceVerbose,
       onWarn: (message) => logger.warn(message),
     });
@@ -1706,7 +1756,7 @@ export class DiscordVoiceManager {
       ownerAllowFrom: this.ownerAllowFrom,
       runtime: this.params.runtime,
       speakerContext: this.speakerContext,
-      meetingNotes: params.entry.meetingNotes,
+      transcripts: params.entry.transcripts,
       fetchGuildName: async (guildId) => {
         const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
         return guild && typeof guild.name === "string" && guild.name.trim()
@@ -1723,6 +1773,10 @@ export class DiscordVoiceManager {
     const analysis = analyzeVoiceReceiveError(err);
     if (analysis.isAbortLike && !analysis.countsAsDecryptFailure) {
       logVoiceVerbose(`receive stream ended: ${analysis.message}`);
+      return;
+    }
+    if (analysis.isDecodeCorruption && !analysis.countsAsDecryptFailure) {
+      logVoiceVerbose(`receive decode skipped: ${analysis.message}`);
       return;
     }
     logger.warn(`discord voice: receive error: ${analysis.message}`);
@@ -1746,7 +1800,7 @@ export class DiscordVoiceManager {
       return;
     }
     void this.recoverFromDecryptFailures(entry)
-      .catch((recoverErr) =>
+      .catch((recoverErr: unknown) =>
         logger.warn(`discord voice: decrypt recovery failed: ${formatErrorMessage(recoverErr)}`),
       )
       .finally(() => {

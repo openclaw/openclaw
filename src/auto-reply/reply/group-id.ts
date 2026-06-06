@@ -1,3 +1,9 @@
+/** Extracts group/channel ids from explicit message targets. */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
@@ -6,10 +12,6 @@ import {
   stripTargetProviderPrefix,
   stripTargetTopicSuffix,
 } from "../../infra/outbound/channel-target-prefix.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { extractSimpleExplicitGroupId } from "./group-id-simple.js";
 
 function extractInferredGroupTargetId(params: {
@@ -18,9 +20,8 @@ function extractInferredGroupTargetId(params: {
   messaging?: ChannelMessagingAdapter;
 }): string | undefined {
   const normalized = params.messaging?.normalizeTarget?.(params.raw);
-  const candidates = [normalized, params.raw].filter(
-    (candidate, index, values): candidate is string =>
-      Boolean(candidate) && values.indexOf(candidate) === index,
+  const candidates = uniqueStrings(
+    [normalized, params.raw].filter((candidate): candidate is string => Boolean(candidate)),
   );
   for (const candidate of candidates) {
     const chatType = params.messaging?.inferTargetChatType?.({ to: candidate });
@@ -66,6 +67,7 @@ function extractLegacyParsedGroupTargetId(params: {
   return target || undefined;
 }
 
+/** Extracts a group/channel target id from explicit channel target syntax. */
 export function extractExplicitGroupId(raw: string | undefined | null): string | undefined {
   const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {

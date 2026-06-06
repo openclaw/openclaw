@@ -1,3 +1,4 @@
+// Agent session helper tests cover explicit session resolution through config and session stores.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionKeyForRequest } from "./session.js";
@@ -147,7 +148,7 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe(SHARED_STORE_PATH);
     expect(result.sessionStore["agent:mybot:main"]?.sessionId).toBe("legacy-session-id");
     expect(mocks.loadSessionStore).toHaveBeenCalledTimes(1);
-    expect(mocks.loadSessionStore).toHaveBeenCalledWith(SHARED_STORE_PATH);
+    expect(mocks.loadSessionStore).toHaveBeenCalledWith(SHARED_STORE_PATH, undefined);
   });
 
   it("prefers the configured default-agent session over legacy main-store rows", () => {
@@ -266,7 +267,7 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionKey).toBe("agent:mybot:explicit:target-session-id");
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
     expect(mocks.loadSessionStore).toHaveBeenCalledTimes(1);
-    expect(mocks.loadSessionStore).toHaveBeenCalledWith(MYBOT_STORE_PATH);
+    expect(mocks.loadSessionStore).toHaveBeenCalledWith(MYBOT_STORE_PATH, undefined);
   });
 
   it("returns correct sessionStore when session found in non-primary agent store", () => {

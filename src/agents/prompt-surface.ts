@@ -1,25 +1,21 @@
+/**
+ * Prompt-surface helpers for OpenClaw tool guidance.
+ *
+ * Maps runtime/session surfaces to the fallback tool text and workflow hints that belong in prompts.
+ */
+import { isOpenClawMainPromptSurface } from "../plugins/agent-prompt-surface-kind.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 
-export type AgentPromptRenderContext = {
-  surface: AgentPromptSurfaceKind;
-  agentRuntimeId?: string;
-  backendKind?: string;
-  availableTools?: ReadonlySet<string>;
-  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-  acpEnabled?: boolean;
-  runtimeChannel?: string;
-  runtimeCapabilities?: readonly string[];
-};
-
+/** Builds fallback tool guidance when a runtime cannot render the structured tool list. */
 export function buildOpenClawToolFallbackText(params: {
   surface: AgentPromptSurfaceKind;
   execToolName: string;
   processToolName: string;
 }): string {
-  if (params.surface === "pi_main") {
+  if (isOpenClawMainPromptSurface(params.surface)) {
     return [
-      "Pi lists the standard tools above. This runtime enables:",
+      "OpenClaw lists the standard tools above. This runtime enables:",
       "- grep: search file contents for patterns",
       "- find: find files by glob pattern",
       "- ls: list directory contents",
@@ -43,18 +39,20 @@ export function buildOpenClawToolFallbackText(params: {
   return "No OpenClaw tool list is injected for this runtime prompt surface. Use only tools exposed directly by the active backend.";
 }
 
+/** Returns whether the main OpenClaw prompt should include workflow hints around the tool list. */
 export function shouldRenderOpenClawToolWorkflowHints(params: {
   surface: AgentPromptSurfaceKind;
   hasToolList: boolean;
 }): boolean {
-  return params.surface === "pi_main";
+  return isOpenClawMainPromptSurface(params.surface);
 }
 
+/** Maps a session key to the prompt surface used for tool guidance and runtime behavior. */
 export function resolveAgentPromptSurfaceForSessionKey(
   sessionKey?: string,
 ): AgentPromptSurfaceKind {
   if (sessionKey && isAcpSessionKey(sessionKey)) {
     return "acp_backend";
   }
-  return sessionKey && isSubagentSessionKey(sessionKey) ? "subagent" : "pi_main";
+  return sessionKey && isSubagentSessionKey(sessionKey) ? "subagent" : "openclaw_main";
 }

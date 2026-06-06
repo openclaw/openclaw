@@ -1,3 +1,5 @@
+// Qa Lab plugin module implements coverage report behavior.
+import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildLiveTransportCoverageLaneSummaries,
   type LiveTransportCoverageLaneSummary,
@@ -85,11 +87,7 @@ function normalizeSearchText(value: string) {
 }
 
 function tokenizeScenarioSearchQuery(query: string) {
-  return query
-    .toLowerCase()
-    .split(/\s+/u)
-    .map((token) => token.trim())
-    .filter(Boolean);
+  return normalizeStringEntriesLower(query.split(/\s+/u));
 }
 
 function scenarioSearchText(scenario: QaSeedScenarioWithSource) {

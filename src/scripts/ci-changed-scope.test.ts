@@ -1,3 +1,4 @@
+// CI changed scope tests cover script detection of changed files and lanes.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -25,7 +26,12 @@ const { detectChangedScope, detectInstallSmokeScope, detectNodeFastScope, listCh
       runPluginContracts: boolean;
       runCiRouting: boolean;
     };
-    listChangedPaths: (base: string, head?: string) => string[];
+    listChangedPaths: (
+      base: string,
+      head?: string,
+      cwd?: string,
+      preferMergeHeadFirstParent?: boolean,
+    ) => string[];
   };
 
 const markerPaths: string[] = [];
@@ -54,6 +60,42 @@ function parseGitHubOutput(output: string): Record<string, string> {
     parsed[line.slice(0, separator)] = line.slice(separator + 1);
   }
   return parsed;
+}
+
+function git(repoDir: string, args: string[]): string {
+  return execFileSync("git", args, { cwd: repoDir, encoding: "utf8" }).trim();
+}
+
+function writeRepoFile(repoDir: string, filePath: string, contents: string): void {
+  const absolutePath = path.join(repoDir, filePath);
+  fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+  fs.writeFileSync(absolutePath, contents, "utf8");
+}
+
+function createSyntheticMergeRepo(prefix: string): { repoDir: string; staleBase: string } {
+  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(repoDir);
+
+  git(repoDir, ["init", "-b", "main"]);
+  git(repoDir, ["config", "user.email", "ci@example.invalid"]);
+  git(repoDir, ["config", "user.name", "CI"]);
+  writeRepoFile(repoDir, "README.md", "base\n");
+  git(repoDir, ["add", "."]);
+  git(repoDir, ["commit", "-m", "base"]);
+  const staleBase = git(repoDir, ["rev-parse", "HEAD"]);
+
+  git(repoDir, ["switch", "-c", "feature"]);
+  writeRepoFile(repoDir, "src/pr.ts", "export const pr = true;\n");
+  git(repoDir, ["add", "."]);
+  git(repoDir, ["commit", "-m", "feature"]);
+
+  git(repoDir, ["switch", "main"]);
+  writeRepoFile(repoDir, "src/main-only.ts", "export const mainOnly = true;\n");
+  git(repoDir, ["add", "."]);
+  git(repoDir, ["commit", "-m", "main only"]);
+  git(repoDir, ["merge", "--no-ff", "feature", "-m", "synthetic merge"]);
+
+  return { repoDir, staleBase };
 }
 
 describe("detectChangedScope", () => {
@@ -318,24 +360,6 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
-    expect(detectChangedScope(["scripts/install-discord-native-opus.mjs"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runAndroid: false,
-      runWindows: true,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-    });
-    expect(detectChangedScope(["test/scripts/install-discord-native-opus.test.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runAndroid: false,
-      runWindows: true,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-    });
     expect(detectChangedScope(["scripts/install.ps1"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -468,7 +492,16 @@ describe("detectChangedScope", () => {
       runChangedSmoke: true,
       runControlUiI18n: false,
     });
-    expect(detectChangedScope(["src/gateway/protocol/messages.ts"])).toEqual({
+    expect(detectChangedScope(["packages/gateway-protocol/src/schema/messages.ts"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+      runControlUiI18n: false,
+    });
+    expect(detectChangedScope(["packages/gateway-client/src/client.ts"])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,
@@ -527,6 +560,10 @@ describe("detectChangedScope", () => {
       runFullInstallSmoke: false,
     });
     expect(detectInstallSmokeScope(["src/plugins/loader.ts"])).toEqual({
+      runFastInstallSmoke: true,
+      runFullInstallSmoke: false,
+    });
+    expect(detectInstallSmokeScope(["packages/gateway-client/src/client.ts"])).toEqual({
       runFastInstallSmoke: true,
       runFullInstallSmoke: false,
     });
@@ -595,7 +632,7 @@ describe("detectChangedScope", () => {
     ).toEqual({
       runFastOnly: true,
       runPluginContracts: true,
-      runCiRouting: false,
+      runCiRouting: true,
     });
   });
 
@@ -603,9 +640,15 @@ describe("detectChangedScope", () => {
     expect(
       detectNodeFastScope([
         ".github/workflows/ci.yml",
+        "scripts/check-changed.mjs",
         "scripts/ci-changed-scope.mjs",
+        "scripts/run-vitest.mjs",
+        "scripts/test-projects.test-support.d.mts",
         "src/commands/status.scan-result.test.ts",
         "src/scripts/ci-changed-scope.test.ts",
+        "test/scripts/changed-lanes.test.ts",
+        "test/scripts/run-vitest.test.ts",
+        "test/scripts/test-projects.test.ts",
         "docs/ci.md",
       ]),
     ).toEqual({
@@ -649,6 +692,22 @@ describe("detectChangedScope", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain(injectedBase);
     expect(fs.existsSync(markerPath)).toBe(false);
+  });
+
+  it("uses the merge commit first parent instead of a stale PR payload base", () => {
+    const { repoDir, staleBase } = createSyntheticMergeRepo("openclaw-ci-scope-merge-");
+
+    expect(
+      execFileSync("git", ["diff", "--name-only", staleBase, "HEAD"], {
+        cwd: repoDir,
+        encoding: "utf8",
+      })
+        .trim()
+        .split("\n")
+        .toSorted(),
+    ).toEqual(["src/main-only.ts", "src/pr.ts"]);
+
+    expect(listChangedPaths(staleBase, "HEAD", repoDir, true)).toEqual(["src/pr.ts"]);
   });
 
   it("keeps direct CLI preflight empty diffs as no-op scope", () => {

@@ -1,3 +1,4 @@
+// Covers plugin marketplace catalog loading and validation.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -318,6 +319,16 @@ describe("marketplace plugins", () => {
         pluginDir,
         marketplaceSource: path.join(rootDir, ".claude-plugin", "marketplace.json"),
       });
+      expect(installPluginInput().installPolicyRequest).toMatchObject({
+        kind: "plugin-dir",
+        requestedSpecifier: `frontend-design@${manifestPath}`,
+        source: {
+          kind: "local-path",
+          authority: "user",
+          mutable: true,
+          network: false,
+        },
+      });
     });
   });
 
@@ -355,6 +366,16 @@ describe("marketplace plugins", () => {
         result,
         pluginDir,
         marketplaceSource: manifestPath,
+      });
+      expect(installPluginInput().installPolicyRequest).toMatchObject({
+        kind: "plugin-dir",
+        requestedSpecifier: `frontend-design@${manifestPath}`,
+        source: {
+          kind: "local-path",
+          authority: "user",
+          mutable: true,
+          network: false,
+        },
       });
       if (canonicalPluginDir !== pluginDir) {
         expect(
@@ -458,6 +479,16 @@ describe("marketplace plugins", () => {
     });
 
     expectRemoteMarketplaceInstallResult(result);
+    expect(installPluginInput().installPolicyRequest).toMatchObject({
+      kind: "plugin-git",
+      requestedSpecifier: "frontend-design@owner/repo",
+      source: {
+        kind: "git",
+        authority: "third-party",
+        mutable: true,
+        network: true,
+      },
+    });
   });
 
   it("preserves remote marketplace file path sources inside the cloned repo", async () => {
@@ -492,6 +523,78 @@ describe("marketplace plugins", () => {
     expectMarketplaceInstallSuccess(result, {
       marketplacePlugin: "frontend-design",
       marketplaceSource: "owner/repo",
+    });
+    expect(installPluginInput().installPolicyRequest).toMatchObject({
+      kind: "plugin-archive",
+      requestedSpecifier: "frontend-design@owner/repo",
+      source: {
+        kind: "archive",
+        authority: "third-party",
+        mutable: true,
+        network: true,
+      },
+    });
+  });
+
+  it("reports full commit remote marketplace archives as immutable to install policy", async () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    mockRemoteMarketplaceClone({
+      pluginFile: path.join("plugins", "frontend-design.tgz"),
+      manifest: {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "./plugins/frontend-design.tgz",
+          },
+        ],
+      },
+    });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      killed: false,
+    });
+    installPluginFromPathMock.mockResolvedValue({
+      ok: true,
+      pluginId: "frontend-design",
+      targetDir: "/tmp/frontend-design",
+      version: "0.1.0",
+      extensions: ["index.ts"],
+    });
+
+    const result = await installPluginFromMarketplace({
+      marketplace: `owner/repo#${commit}`,
+      plugin: "frontend-design",
+    });
+
+    expectMarketplaceInstallSuccess(result, {
+      marketplacePlugin: "frontend-design",
+      marketplaceSource: `owner/repo#${commit}`,
+    });
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
+    expect(runCommandWithTimeoutMock.mock.calls[0]?.[0]).toEqual([
+      "git",
+      "clone",
+      "https://github.com/owner/repo.git",
+      expect.any(String),
+    ]);
+    expect(runCommandWithTimeoutMock.mock.calls[1]?.[0]).toEqual([
+      "git",
+      "switch",
+      "--detach",
+      "--",
+      commit,
+    ]);
+    expect(installPluginInput().installPolicyRequest).toMatchObject({
+      kind: "plugin-archive",
+      requestedSpecifier: `frontend-design@owner/repo#${commit}`,
+      source: {
+        kind: "archive",
+        authority: "third-party",
+        mutable: false,
+        network: true,
+      },
     });
   });
 
@@ -727,6 +830,16 @@ describe("marketplace plugins", () => {
       });
       expectFetchDownloadCall();
       expect(String(installPluginInput().path)).toMatch(/[\\/]frontend-design\.tgz$/);
+      expect(installPluginInput().installPolicyRequest).toMatchObject({
+        kind: "plugin-archive",
+        requestedSpecifier: `frontend-design@${manifestPath}`,
+        source: {
+          kind: "archive",
+          authority: "third-party",
+          mutable: true,
+          network: true,
+        },
+      });
       expect(release).toHaveBeenCalledTimes(1);
     });
   });
@@ -824,16 +937,22 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it("cleans up a partial download temp dir when streaming the archive fails", async () => {
+  it("rejects malformed archive content-length headers before streaming", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
-      const beforeTempDirs = await listMarketplaceDownloadTempDirs();
+      const reader = {
+        read: vi.fn(),
+        cancel: vi.fn(async () => undefined),
+        releaseLock: vi.fn(),
+      };
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response: new Response("x".repeat(1024), {
+        response: {
+          ok: true,
           status: 200,
-          headers: {
-            "content-length": String(300 * 1024 * 1024),
-          },
-        }),
+          body: {
+            getReader: () => reader,
+          } as unknown as Response["body"],
+          headers: new Headers({ "content-length": "1e9" }),
+        } as unknown as Response,
         finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
         release: vi.fn(async () => undefined),
       });
@@ -855,8 +974,57 @@ describe("marketplace plugins", () => {
         ok: false,
         error:
           "failed to download https://example.com/frontend-design.tgz: " +
-          "download too large: 314572800 bytes (limit: 268435456 bytes)",
+          "invalid content-length header: 1e9",
       });
+      expect(reader.read).not.toHaveBeenCalled();
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("cleans up a partial download temp dir when streaming the archive fails", async () => {
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const beforeTempDirs = await listMarketplaceDownloadTempDirs();
+      const reader = {
+        read: vi.fn(async () => ({
+          done: false,
+          value: { length: 268_435_457 },
+        })),
+        releaseLock: vi.fn(),
+      };
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => reader,
+          } as unknown as Response["body"],
+          headers: new Headers(),
+        } as unknown as Response,
+        finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
+        release: vi.fn(async () => undefined),
+      });
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://example.com/frontend-design.tgz",
+          },
+        ],
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error:
+          "failed to download https://example.com/frontend-design.tgz: " +
+          "download too large: 268435457 bytes (limit: 268435456 bytes)",
+      });
+      expect(reader.read).toHaveBeenCalledTimes(1);
+      expect(reader.releaseLock).toHaveBeenCalledTimes(1);
       expect(await listMarketplaceDownloadTempDirs()).toEqual(beforeTempDirs);
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });

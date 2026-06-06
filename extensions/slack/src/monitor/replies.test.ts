@@ -1,3 +1,4 @@
+// Slack tests cover replies plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();
@@ -53,7 +54,7 @@ describe("deliverReplies identity passthrough", () => {
     await deliverReplies(baseParams({ identity }));
 
     expect(sendMock).toHaveBeenCalledOnce();
-    const [, , options] = requireSendCall();
+    const options = requireSendCall()[2];
     expect(options.identity).toBe(identity);
   });
 
@@ -68,7 +69,7 @@ describe("deliverReplies identity passthrough", () => {
     );
 
     expect(sendMock).toHaveBeenCalledOnce();
-    const [, , options] = requireSendCall();
+    const options = requireSendCall()[2];
     expect(options.identity).toBe(identity);
   });
 
@@ -77,7 +78,7 @@ describe("deliverReplies identity passthrough", () => {
     await deliverReplies(baseParams());
 
     expect(sendMock).toHaveBeenCalledOnce();
-    const [, , options] = requireSendCall();
+    const options = requireSendCall()[2];
     expect(options).not.toHaveProperty("identity");
   });
 
@@ -142,7 +143,7 @@ describe("deliverReplies identity passthrough", () => {
     );
 
     expect(sendMock).toHaveBeenCalledOnce();
-    const [, , options] = requireSendCall();
+    const options = requireSendCall()[2];
     const blocks = options.blocks as Array<{
       type?: string;
       elements?: Array<{ action_id?: string; style?: string; value?: string }>;

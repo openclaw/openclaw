@@ -1,21 +1,19 @@
 #!/usr/bin/env node
 
+const { spawnSync } = require("node:child_process");
+
 const minimum = { major: 22, minor: 19, patch: 0 };
 const recommendedMajor = 24;
 
 function commandExists(command) {
-  let result = require("child_process").spawnSync(
-    "sh",
-    ["-c", "command -v " + command + " >/dev/null 2>&1"],
-    {
-      stdio: "ignore",
-    },
-  );
+  const result = spawnSync("sh", ["-c", "command -v " + command + " >/dev/null 2>&1"], {
+    stdio: "ignore",
+  });
   return result.status === 0;
 }
 
 function parseVersion(version) {
-  let match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(version || ""));
+  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(version || ""));
   if (!match) {
     return null;
   }
@@ -40,11 +38,7 @@ function isAtLeast(version, required) {
 }
 
 function run(command, args, options) {
-  return require("child_process").spawnSync(
-    command,
-    args,
-    Object.assign({ stdio: "inherit" }, options || {}),
-  );
+  return spawnSync(command, args, Object.assign({ stdio: "inherit" }, options || {}));
 }
 
 function runShell(script) {
@@ -156,14 +150,14 @@ function installNodeWithSystemPackageManager() {
 }
 
 function currentNodeVersionFromPath() {
-  let result = require("child_process").spawnSync("node", ["--version"], {
+  const result = spawnSync("node", ["--version"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.status !== 0) {
     return null;
   }
-  return parseVersion(String(result.stdout || "").trim());
+  return parseVersion(result.stdout.trim());
 }
 
 function versionToString(version) {
@@ -178,49 +172,45 @@ function shellQuote(value) {
 }
 
 function firstPathCommand(command) {
-  let result = require("child_process").spawnSync("sh", ["-c", "command -v " + command], {
+  const result = spawnSync("sh", ["-c", "command -v " + command], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.status !== 0) {
     return "";
   }
-  return (
-    String(result.stdout || "")
-      .trim()
-      .split("\n")[0] || ""
-  );
+  return result.stdout.trim().split("\n")[0] || "";
 }
 
 function versionOfNodeBinary(path) {
   if (!path) {
     return null;
   }
-  let result = require("child_process").spawnSync(path, ["--version"], {
+  const result = spawnSync(path, ["--version"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.status !== 0) {
     return null;
   }
-  return parseVersion(String(result.stdout || "").trim());
+  return parseVersion(result.stdout.trim());
 }
 
 function repairShadowedNodePath() {
-  let systemNode = "/usr/bin/node";
-  let systemVersion = versionOfNodeBinary(systemNode);
+  const systemNode = "/usr/bin/node";
+  const systemVersion = versionOfNodeBinary(systemNode);
   if (!isAtLeast(systemVersion, minimum)) {
     return false;
   }
 
-  let pathNode = firstPathCommand("node");
+  const pathNode = firstPathCommand("node");
   if (!pathNode || pathNode === systemNode || isAtLeast(versionOfNodeBinary(pathNode), minimum)) {
     return false;
   }
 
-  let stamp = String(Date.now());
-  let nodeBackup = pathNode + ".openclaw-old-node-" + stamp;
-  let commands = [
+  const stamp = String(Date.now());
+  const nodeBackup = pathNode + ".openclaw-old-node-" + stamp;
+  const commands = [
     "set -e",
     "if [ -e " +
       shellQuote(pathNode) +
@@ -233,10 +223,10 @@ function repairShadowedNodePath() {
   ];
 
   ["npm", "npx"].forEach(function (binary) {
-    let pathBinary = firstPathCommand(binary);
-    let systemBinary = "/usr/bin/" + binary;
+    const pathBinary = firstPathCommand(binary);
+    const systemBinary = "/usr/bin/" + binary;
     if (pathBinary && pathBinary !== systemBinary) {
-      let backupBinary = pathBinary + ".openclaw-old-" + binary + "-" + stamp;
+      const backupBinary = pathBinary + ".openclaw-old-" + binary + "-" + stamp;
       commands.push(
         "if [ -e " +
           shellQuote(systemBinary) +
@@ -272,12 +262,12 @@ function shouldAutoInstall() {
   ) {
     return false;
   }
-  let lifecycle = String(process.env.npm_lifecycle_event || "");
+  const lifecycle = process.env.npm_lifecycle_event || "";
   return lifecycle === "preinstall" || process.env.OPENCLAW_AUTO_INSTALL_NODE === "1";
 }
 
 function envTruthy(name) {
-  return /^(1|true|yes|on)$/i.test(String(process.env[name] || ""));
+  return /^(1|true|yes|on)$/i.test(process.env[name] || "");
 }
 
 function isGlobalNpmLifecycle() {
@@ -292,14 +282,14 @@ function existingOpenClawBinary() {
 }
 
 function failClosedOnAccidentalExistingInstallUpgrade() {
-  let lifecycle = String(process.env.npm_lifecycle_event || "");
+  const lifecycle = process.env.npm_lifecycle_event || "";
   if (lifecycle !== "preinstall" || !isGlobalNpmLifecycle()) {
     return;
   }
   if (process.env.ZORG_INSTALL_MODE === "existing" || envTruthy("ZORG_ALLOW_EXISTING_UPGRADE")) {
     return;
   }
-  let existing = existingOpenClawBinary();
+  const existing = existingOpenClawBinary();
   if (!existing) {
     return;
   }
@@ -330,7 +320,7 @@ function printManualInstallHelp() {
 }
 
 function printRepairedRuntimeRetryHelp(repaired) {
-  let npm = firstPathCommand("npm") || "npm";
+  const npm = firstPathCommand("npm") || "npm";
   console.error(
     [
       "[openclaw] Node.js prerequisite repaired; node on PATH is now " +
@@ -347,7 +337,7 @@ function printRepairedRuntimeRetryHelp(repaired) {
   );
 }
 
-let current = parseVersion(process.version);
+const current = parseVersion(process.version);
 failClosedOnAccidentalExistingInstallUpgrade();
 if (!isAtLeast(current, minimum)) {
   if (shouldAutoInstall()) {
@@ -358,7 +348,7 @@ if (!isAtLeast(current, minimum)) {
     );
     if (installNodeWithSystemPackageManager()) {
       repairShadowedNodePath();
-      let repaired = currentNodeVersionFromPath();
+      const repaired = currentNodeVersionFromPath();
       if (isAtLeast(repaired, minimum)) {
         printRepairedRuntimeRetryHelp(repaired);
         process.exit(86);

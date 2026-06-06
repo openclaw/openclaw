@@ -1,5 +1,8 @@
+// Legacy config migration tests cover generic doctor repair of old config layouts.
 import { describe, expect, it } from "vitest";
+import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import { normalizeCompatibilityConfigValues } from "./legacy-config-core-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
 function migrateLegacyConfigForTest(raw: unknown): {
@@ -25,6 +28,173 @@ function expectMigrationChangesToIncludeFragments(changes: string[], fragments: 
   );
   expect(unmatchedFragments).toStrictEqual([]);
 }
+
+describe("compatibility binding repair migrate", () => {
+  it("prunes bindings for missing agents when agents.list is valid", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [{ id: "alpha" }],
+      },
+      bindings: [
+        { agentId: "alpha", match: { channel: "discord" } },
+        { agentId: "ghost", match: { channel: "discord" } },
+      ],
+    } as OpenClawConfig);
+
+    expect(res.config.bindings).toEqual([{ agentId: "alpha", match: { channel: "discord" } }]);
+    expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
+  });
+
+  it("leaves bindings untouched when agents.list has malformed entries", () => {
+    const cfg = {
+      agents: {
+        list: [null, { id: 1 }, { id: "alpha" }],
+      },
+      bindings: [
+        { agentId: "ghost", match: { channel: "discord" } },
+        { agentId: "alpha", match: { channel: "discord" } },
+      ],
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(cfg);
+
+    expect(res.config.bindings).toEqual(cfg.bindings);
+    expect(res.changes).not.toContain("Removed 1 binding that referenced missing agents.list ids.");
+  });
+});
+
+describe("legacy memory search config migrate", () => {
+  it("moves legacy OpenAI Codex provider config to canonical OpenAI provider config", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                api: "openai-codex-responses",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.openai).toEqual({
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      api: "openai-chatgpt-responses",
+      models: [
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-chatgpt-responses",
+        },
+      ],
+    });
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+    expect(res.changes).toEqual([
+      'Moved models.providers.openai-codex.api "openai-codex-responses" → "openai-chatgpt-responses".',
+      'Moved models.providers.openai-codex.models[0].api "openai-codex-responses" → "openai-chatgpt-responses".',
+      "Moved models.providers.openai-codex → models.providers.openai.",
+    ]);
+  });
+
+  it("records removal when canonical OpenAI provider already exists", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+          },
+          "openai-codex": {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.openai).toEqual({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+    expect(res.changes).toEqual([
+      "Removed models.providers.openai-codex because models.providers.openai already exists.",
+    ]);
+  });
+
+  it("rewrites top-level legacy auto provider after moving memorySearch into agent defaults", () => {
+    const raw = {
+      memorySearch: {
+        provider: "auto",
+        model: "text-embedding-3-small",
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
+      "memorySearch",
+      "memorySearch.provider",
+    ]);
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+      provider: "openai",
+      model: "text-embedding-3-small",
+    });
+    expect(res.config).not.toHaveProperty("memorySearch");
+    expect(res.changes).toEqual([
+      "Moved memorySearch → agents.defaults.memorySearch.",
+      'Moved agents.defaults.memorySearch.provider from legacy "auto" to "openai".',
+    ]);
+  });
+
+  it("rewrites default and per-agent legacy auto memory providers", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "auto",
+          },
+        },
+        list: [
+          {
+            id: "local",
+            memorySearch: {
+              provider: " auto ",
+            },
+          },
+          {
+            id: "custom",
+            memorySearch: {
+              provider: "openai-compatible",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
+      "agents.defaults.memorySearch.provider",
+      "agents.list",
+    ]);
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.defaults?.memorySearch?.provider).toBe("openai");
+    expect(res.config?.agents?.list?.[0]?.memorySearch?.provider).toBe("openai");
+    expect(res.config?.agents?.list?.[1]?.memorySearch?.provider).toBe("openai-compatible");
+    expect(res.changes).toEqual([
+      'Moved agents.defaults.memorySearch.provider from legacy "auto" to "openai".',
+      'Moved agents.list.0.memorySearch.provider from legacy "auto" to "openai".',
+    ]);
+  });
+});
 
 describe("legacy silent reply config migrate", () => {
   it("removes silent reply rewrite and direct-chat silent reply config", () => {
@@ -90,6 +260,314 @@ describe("legacy silent reply config migrate", () => {
       "Removed agents.defaults.silentReplyRewrite",
       "Removed surfaces.telegram.silentReplyRewrite",
     ]);
+  });
+});
+
+describe("legacy agent system prompt override config migrate", () => {
+  it("removes default and per-agent system prompt overrides", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          systemPromptOverride: "old default prompt",
+          model: {
+            primary: "openai/gpt-5.5",
+          },
+        },
+        list: [
+          {
+            id: "alpha",
+            systemPromptOverride: "old alpha prompt",
+          },
+          {
+            id: "beta",
+          },
+        ],
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
+      "agents.defaults.systemPromptOverride",
+      "agents.list",
+    ]);
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.defaults).not.toHaveProperty("systemPromptOverride");
+    expect(res.config?.agents?.list?.[0]).not.toHaveProperty("systemPromptOverride");
+    expect(res.config?.agents?.list?.[1]).toEqual({ id: "beta" });
+    expect(res.changes).toEqual([
+      "Removed agents.defaults.systemPromptOverride.",
+      "Removed agents.list.0.systemPromptOverride.",
+    ]);
+  });
+});
+
+describe("profile configured tool section migrate", () => {
+  it("does not add grants when configured sections are the only signal", () => {
+    const raw = {
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["read", "write"],
+        exec: { security: "allowlist" },
+        fs: { workspaceOnly: true },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: { security: "allowlist" },
+            },
+          },
+        ],
+      },
+    };
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("tools");
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("agents.list");
+  });
+
+  it("does not add missing grants to an unrelated allowlist", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["message"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("sets profile full when an allowlist already contains configured-section grants", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["message", "exec", "process"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.allow).toEqual(["message", "exec", "process"]);
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools).not.toHaveProperty("alsoAllow");
+    expect(res.changes).toEqual([
+      'Replaced tools.allow entries with profile "messaging" grants plus explicit configured-section grants.',
+      'Set tools.profile to "full" so tools.allow controls explicit configured-section grants directly.',
+    ]);
+  });
+
+  it("merges same-scope alsoAllow when it contains explicit configured-section grants", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["message"],
+        alsoAllow: ["exec"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.allow).toEqual(["message", "exec"]);
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools).not.toHaveProperty("alsoAllow");
+    expect(res.changes).toContain("Merged tools.alsoAllow into tools.allow.");
+    expect(res.config?.tools?.allow).not.toContain("process");
+  });
+
+  it("repairs configured-section grants held in allow when alsoAllow is also present", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["message", "exec", "process"],
+        alsoAllow: ["browser"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.allow).toEqual(["message", "browser", "exec", "process"]);
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools).not.toHaveProperty("alsoAllow");
+  });
+
+  it("narrows broad allowlists before making them authoritative", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["*"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools?.allow).toContain("message");
+    expect(res.config?.tools?.allow).toContain("exec");
+    expect(res.config?.tools?.allow).toContain("process");
+    expect(res.config?.tools?.allow).not.toContain("*");
+    expect(res.config?.tools?.allow).not.toContain("read");
+    expect(res.changes).toContain(
+      'Replaced tools.allow entries with profile "messaging" grants plus explicit configured-section grants.',
+    );
+  });
+
+  it("does not treat unrelated globs or plugin allow entries as configured-section grants", () => {
+    const glob = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["sessions_*"],
+        exec: { security: "allowlist" },
+      },
+    });
+    const plugin = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["gmail_search"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(glob.config).toBeNull();
+    expect(plugin.config).toBeNull();
+  });
+
+  it("repairs agent allowlists with explicit configured-section grants under an inherited profile", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              allow: ["message", "exec", "process"],
+              exec: { security: "allowlist" },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.profile).toBe("full");
+    expect(res.config?.agents?.list?.[0]?.tools?.allow).toEqual(["message", "exec", "process"]);
+  });
+
+  it("does not materialize provider grants when no provider grant intent is explicit", () => {
+    const raw = {
+      tools: {
+        exec: { security: "allowlist" },
+        byProvider: {
+          openai: {
+            profile: "messaging",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: { security: "allowlist" },
+            },
+          },
+        ],
+      },
+    };
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("agents.list");
+  });
+
+  it("does not report inherited top-level profile provider allowlists as fixable", () => {
+    const raw = {
+      tools: {
+        profile: "messaging",
+        exec: { security: "allowlist" },
+        byProvider: {
+          openai: {
+            allow: ["message", "exec", "process"],
+          },
+        },
+      },
+    };
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("tools");
+  });
+
+  it("sets provider profile full when provider allow already contains configured-section grants", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        exec: { security: "allowlist" },
+        byProvider: {
+          openai: {
+            profile: "messaging",
+            allow: ["message", "exec", "process"],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.tools?.byProvider?.openai?.allow).toEqual(["message", "exec", "process"]);
+    expect(res.config?.tools?.byProvider?.openai?.profile).toBe("full");
+    expect(res.changes).toContain(
+      'Set tools.byProvider.openai.profile to "full" so tools.byProvider.openai.allow controls explicit configured-section grants directly.',
+    );
+  });
+
+  it("repairs model-scoped provider allowlists with inherited provider profiles", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        byProvider: {
+          qwen: {
+            profile: "messaging",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: { security: "allowlist" },
+              byProvider: {
+                "qwen/qwen-plus": {
+                  allow: ["message", "exec", "process"],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["qwen/qwen-plus"]?.allow).toEqual([
+      "message",
+      "exec",
+      "process",
+    ]);
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["qwen/qwen-plus"]?.profile).toBe(
+      "full",
+    );
+  });
+
+  it("ignores blocked inherited provider keys while resolving provider repairs", () => {
+    const raw = JSON.parse(
+      '{"tools":{"byProvider":{"__proto__":{"profile":"messaging"},"qwen":{"profile":"messaging"}}},"agents":{"list":[{"id":"sage","tools":{"exec":{"security":"allowlist"},"byProvider":{"qwen/qwen-plus":{"allow":["message","exec","process"]}}}}]}}',
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(Object.prototype).not.toHaveProperty("profile");
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["qwen/qwen-plus"]?.profile).toBe(
+      "full",
+    );
   });
 });
 
@@ -279,6 +757,70 @@ describe("legacy diagnostics memory pressure snapshot migrate", () => {
     });
     expect(res.changes).toStrictEqual([
       "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
+  });
+});
+
+describe("legacy WebChat channel config migrate", () => {
+  it("removes retired WebChat channel config", () => {
+    const raw = {
+      channels: {
+        webchat: {
+          textChunkLimit: 16000,
+          chunkMode: "newline",
+        },
+        discord: {
+          textChunkLimit: 2000,
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["channels.webchat"]);
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config).not.toHaveProperty("gateway");
+    expect(res.config?.channels).toEqual({
+      discord: {
+        textChunkLimit: 2000,
+      },
+    });
+    expect(res.changes).toStrictEqual(["Removed retired channels.webchat config."]);
+  });
+
+  it("removes retired WebChat gateway config", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        webchat: {
+          chatHistoryMaxChars: 8000,
+        },
+      },
+    });
+
+    expect(res.config).not.toHaveProperty("gateway");
+    expect(res.changes).toStrictEqual(["Removed retired gateway.webchat config."]);
+  });
+
+  it("removes both retired WebChat config sections when present together", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        webchat: {
+          chatHistoryMaxChars: 8000,
+        },
+        bind: "loopback",
+      },
+      channels: {
+        webchat: {
+          textChunkLimit: 16000,
+        },
+      },
+    });
+
+    expect(res.config?.gateway).toEqual({ bind: "loopback" });
+    expect(res.config).not.toHaveProperty("channels");
+    expect(res.changes).toStrictEqual([
+      "Removed retired channels.webchat config.",
+      "Removed retired gateway.webchat config.",
     ]);
   });
 });
@@ -572,33 +1114,6 @@ describe("legacy migrate mention routing", () => {
   });
 });
 
-describe("legacy bundled provider discovery migrate", () => {
-  it("sets compat mode for existing restrictive plugin allowlists", () => {
-    const res = migrateLegacyConfigForTest({
-      plugins: {
-        allow: ["telegram"],
-      },
-    });
-
-    expect(res.config?.plugins?.bundledDiscovery).toBe("compat");
-    expect(res.changes).toStrictEqual([
-      'Set plugins.bundledDiscovery="compat" to preserve legacy bundled provider discovery for this restrictive plugins.allow config.',
-    ]);
-  });
-
-  it("does not override explicit bundled discovery mode", () => {
-    const res = migrateLegacyConfigForTest({
-      plugins: {
-        allow: ["telegram"],
-        bundledDiscovery: "allowlist",
-      },
-    });
-
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
-  });
-});
-
 describe("legacy migrate sandbox scope aliases", () => {
   it("removes legacy agents.defaults.llm timeout config", () => {
     const res = migrateLegacyConfigForTest({
@@ -632,7 +1147,7 @@ describe("legacy migrate sandbox scope aliases", () => {
         list: [
           {
             id: "reviewer",
-            agentRuntime: { fallback: "pi" },
+            agentRuntime: { fallback: "openclaw" },
             embeddedHarness: {
               runtime: "codex",
               fallback: "none",
@@ -715,7 +1230,7 @@ describe("legacy migrate sandbox scope aliases", () => {
           agentRuntime: { id: "claude-cli" },
           model: "anthropic/claude-opus-4-7",
           models: {
-            "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -727,7 +1242,71 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.config?.agents?.defaults).toEqual({
       model: "anthropic/claude-opus-4-7",
       models: {
-        "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+        "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
+      },
+    });
+  });
+
+  it("moves legacy embeddedPi config into embeddedAgent", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          embeddedPi: {
+            projectSettingsPolicy: "sanitize",
+            executionContract: "strict-agentic",
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            embeddedPi: {
+              executionContract: "strict-agentic",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Moved agents.defaults.embeddedPi → agents.defaults.embeddedAgent.",
+      "Moved agents.list.0.embeddedPi → agents.list.0.embeddedAgent.",
+    ]);
+    expect(res.config?.agents?.defaults).toEqual({
+      embeddedAgent: {
+        projectSettingsPolicy: "sanitize",
+        executionContract: "strict-agentic",
+      },
+    });
+    expect(res.config?.agents?.list?.[0]).toEqual({
+      id: "worker",
+      embeddedAgent: {
+        executionContract: "strict-agentic",
+      },
+    });
+  });
+
+  it("merges legacy embeddedPi config without overwriting embeddedAgent", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          embeddedAgent: {
+            executionContract: "default",
+          },
+          embeddedPi: {
+            projectSettingsPolicy: "sanitize",
+            executionContract: "strict-agentic",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Merged agents.defaults.embeddedPi → agents.defaults.embeddedAgent (filled missing fields from legacy; kept explicit embeddedAgent values).",
+    ]);
+    expect(res.config?.agents?.defaults).toEqual({
+      embeddedAgent: {
+        executionContract: "default",
+        projectSettingsPolicy: "sanitize",
       },
     });
   });
@@ -756,7 +1335,7 @@ describe("legacy migrate sandbox scope aliases", () => {
       agents: {
         list: [
           {
-            id: "pi",
+            id: "openclaw",
             sandbox: {
               perSession: false,
             },
@@ -897,6 +1476,62 @@ describe("legacy migrate x_search auth", () => {
   });
 });
 
+describe("legacy bundled provider discovery migrate", () => {
+  it("rewrites legacy OpenAI Codex plugin policy ids", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: ["telegram", "openai-codex", "openai"],
+        deny: ["openai-codex"],
+        entries: {
+          "openai-codex": {
+            enabled: false,
+          },
+        },
+        slots: {
+          memory: "openai-codex",
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.allow).toEqual(["telegram", "openai"]);
+    expect(res.config?.plugins?.deny).toEqual(["openai"]);
+    expect(res.config?.plugins?.entries?.openai).toEqual({ enabled: false });
+    expect(res.config?.plugins?.entries?.["openai-codex"]).toBeUndefined();
+    expect(res.config?.plugins?.slots?.memory).toBe("openai");
+    expect(res.changes).toContain("Rewrote plugins.allow openai-codex references to openai.");
+    expect(res.changes).toContain("Rewrote plugins.deny openai-codex references to openai.");
+    expect(res.changes).toContain(
+      "Rewrote plugins.entries.openai-codex to plugins.entries.openai.",
+    );
+    expect(res.changes).toContain("Rewrote plugins.slots openai-codex references to openai.");
+  });
+
+  it("sets compat mode for existing restrictive plugin allowlists", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: ["telegram"],
+      },
+    });
+
+    expect(res.config?.plugins?.bundledDiscovery).toBe("compat");
+    expect(res.changes).toStrictEqual([
+      'Set plugins.bundledDiscovery="compat" to preserve legacy bundled provider discovery for this restrictive plugins.allow config.',
+    ]);
+  });
+
+  it("does not override explicit bundled discovery mode", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: ["telegram"],
+        bundledDiscovery: "allowlist",
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+});
+
 describe("legacy migrate heartbeat config", () => {
   it("moves top-level heartbeat into agents.defaults.heartbeat", () => {
     const res = migrateLegacyConfigForTest({
@@ -1029,7 +1664,7 @@ describe("legacy migrate heartbeat config", () => {
       | undefined;
     expect(heartbeat?.every).toBe("30m");
     expect((heartbeat as { polluted?: unknown } | undefined)?.polluted).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(heartbeat ?? {}, "__proto__")).toBe(false);
+    expect(Object.hasOwn(heartbeat ?? {}, "__proto__")).toBe(false);
     expect(res.config?.channels?.defaults?.heartbeat).toEqual({ showOk: true });
   });
 
@@ -1269,7 +1904,7 @@ describe("legacy model compat migrate", () => {
       },
     });
 
-    expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-haiku-4-5");
     expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
       primary: "github-copilot/claude-sonnet-4.6",
       fallbacks: ["github-copilot/gpt-5.4-mini"],
@@ -1313,6 +1948,7 @@ describe("legacy model compat migrate", () => {
     });
     expect(res.config?.agents?.defaults?.workspace).toBe("/tmp/claude-3-sonnet");
     expect(res.config?.agents?.defaults?.models).toEqual({
+      "anthropic/claude-haiku-4-5": { alias: "haiku" },
       "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
       "github-copilot/claude-opus-4.7": { alias: "copilot-opus" },
       "openai/gpt-5.5-pro": { alias: "old-pro" },
@@ -1332,10 +1968,9 @@ describe("legacy model compat migrate", () => {
           subagent?: { allowedModels?: string[] };
         }
       )?.subagent?.allowedModels,
-    ).toEqual(["anthropic/claude-sonnet-4-6", "*"]);
+    ).toEqual(["anthropic/claude-haiku-4-5", "*"]);
     expect(res.config?.channels?.modelByChannel?.telegram?.["*"]).toBe("anthropic/claude-opus-4-7");
     expectMigrationChangesToIncludeFragments(res.changes, [
-      'config.agents.defaults.imageModel from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
       'config.agents.defaults.imageGenerationModel.primary from "github-copilot/claude-sonnet-4" to "github-copilot/claude-sonnet-4.6"',
       'config.agents.defaults.imageGenerationModel.fallbacks.0 from "github-copilot/grok-code-fast-1" to "github-copilot/gpt-5.4-mini"',
       'config.agents.defaults.musicGenerationModel from "vercel-ai-gateway/anthropic/claude-opus-4-5" to "vercel-ai-gateway/anthropic/claude-opus-4-6"',
@@ -1362,7 +1997,6 @@ describe("legacy model compat migrate", () => {
       'config.agents.defaults.models key from "openai/gpt-5.2-pro" to "openai/gpt-5.5-pro"',
       'config.agents.defaults.models key from "github-copilot/gpt-5-mini" to "github-copilot/gpt-5.4-mini"',
       'config.plugins.entries.lossless-claw.config.summaryModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
-      'config.plugins.entries.lossless-claw.subagent.allowedModels.0 from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
       'config.channels.modelByChannel.telegram.* from "anthropic/claude-opus-4-5" to "anthropic/claude-opus-4-7"',
     ]);
   });
@@ -1393,6 +2027,647 @@ describe("legacy model compat migrate", () => {
     expect(res.changes).toStrictEqual([
       'Removed models.providers.bailian.models.0.compat.thinkingFormat (unrecognized value "bailian-legacy"; runtime default applies).',
     ]);
+  });
+
+  it("moves legacy vLLM Qwen thinking params to model compat", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: {
+                qwenThinkingFormat: "chat-template",
+                temperature: 0.2,
+              },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            models: [{ id: "Qwen/Qwen3-8B", name: "Qwen3 8B" }],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.models?.["vllm/Qwen/Qwen3-8B"]?.params).toEqual({
+      temperature: 0.2,
+    });
+    expect(res.config?.models?.providers?.vllm?.models?.[0]?.compat).toEqual({
+      thinkingFormat: "qwen-chat-template",
+    });
+    expect(res.config?.models?.providers?.vllm?.models?.[0]?.reasoning).toBe(true);
+    expect(res.changes).toStrictEqual([
+      'Moved agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
+    ]);
+  });
+
+  it("moves legacy vLLM Qwen thinking params from normalized agent model refs", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "VLLM/Qwen/Qwen3-8B": {
+              params: {
+                qwenThinkingFormat: "chat-template",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.models?.["VLLM/Qwen/Qwen3-8B"]).not.toHaveProperty(
+      "params",
+    );
+    expect(res.config?.models?.providers?.vllm?.models).toEqual([
+      {
+        id: "Qwen/Qwen3-8B",
+        name: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      },
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Moved agents.defaults.models."VLLM/Qwen/Qwen3-8B".params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
+    ]);
+  });
+
+  it("creates a vLLM model row for legacy Qwen top-level thinking params", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: {
+                qwen_thinking_format: "enable_thinking",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.models?.["vllm/Qwen/Qwen3-8B"]).not.toHaveProperty(
+      "params",
+    );
+    expect(res.config?.models?.providers?.vllm?.models).toEqual([
+      {
+        id: "Qwen/Qwen3-8B",
+        name: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen" },
+      },
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Moved agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwen_thinking_format to models.providers.vllm.models[0].compat.thinkingFormat ("qwen").',
+    ]);
+  });
+
+  it("preserves existing vLLM model compat when removing legacy Qwen thinking params", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: {
+                qwenThinkingFormat: "top-level",
+              },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            models: [
+              {
+                id: "Qwen/Qwen3-8B",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.models?.["vllm/Qwen/Qwen3-8B"]).not.toHaveProperty(
+      "params",
+    );
+    expect(res.config?.models?.providers?.vllm?.models?.[0]?.compat).toEqual({
+      thinkingFormat: "qwen-chat-template",
+    });
+    expect(res.config?.models?.providers?.vllm?.models?.[0]?.reasoning).toBe(true);
+    expect(res.changes).toStrictEqual([
+      'Removed agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwenThinkingFormat; models.providers.vllm.models[0].compat.thinkingFormat is already "qwen-chat-template".',
+    ]);
+  });
+
+  it("moves legacy vLLM Qwen thinking params onto provider-qualified model rows", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: {
+                qwenThinkingFormat: "chat-template",
+              },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            models: [{ id: "vllm/Qwen/Qwen3-8B", name: "Qwen3 8B" }],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.vllm?.models).toEqual([
+      {
+        id: "vllm/Qwen/Qwen3-8B",
+        name: "Qwen3 8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      },
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Moved agents.defaults.models."vllm/Qwen/Qwen3-8B".params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
+    ]);
+  });
+
+  it("moves legacy vLLM Qwen model-row params to model compat", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          vllm: {
+            models: [
+              {
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen3 8B",
+                params: {
+                  qwenThinkingFormat: "chat-template",
+                  temperature: 0.2,
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.vllm?.models?.[0]).toEqual({
+      id: "Qwen/Qwen3-8B",
+      name: "Qwen3 8B",
+      reasoning: true,
+      params: { temperature: 0.2 },
+      compat: { thinkingFormat: "qwen-chat-template" },
+    });
+    expect(res.changes).toStrictEqual([
+      'Moved models.providers.vllm.models[0].params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
+    ]);
+  });
+
+  it("moves legacy vLLM Qwen provider params to model compat rows", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          vllm: {
+            params: {
+              qwen_thinking_format: "enable_thinking",
+              temperature: 0.2,
+            },
+            models: [
+              { id: "Qwen/Qwen3-8B", name: "Qwen3 8B" },
+              { id: "Qwen/Qwen3-14B", name: "Qwen3 14B" },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.vllm?.params).toEqual({ temperature: 0.2 });
+    expect(res.config?.models?.providers?.vllm?.models).toEqual([
+      {
+        id: "Qwen/Qwen3-8B",
+        name: "Qwen3 8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen" },
+      },
+      {
+        id: "Qwen/Qwen3-14B",
+        name: "Qwen3 14B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen" },
+      },
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Moved models.providers.vllm.params.qwen_thinking_format to models.providers.vllm.models[0].compat.thinkingFormat ("qwen").',
+      'Moved models.providers.vllm.params.qwen_thinking_format to models.providers.vllm.models[1].compat.thinkingFormat ("qwen").',
+    ]);
+  });
+
+  it("moves legacy vLLM Qwen provider params to existing and selected model rows", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "vllm/Qwen/Qwen3-8B" },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            params: {
+              qwenThinkingFormat: "chat-template",
+            },
+            models: [{ id: "Qwen/Qwen3-14B", name: "Qwen3 14B" }],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.vllm?.models).toEqual([
+      {
+        id: "Qwen/Qwen3-14B",
+        name: "Qwen3 14B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      },
+      {
+        id: "Qwen/Qwen3-8B",
+        name: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      },
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Moved models.providers.vllm.params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
+      'Moved models.providers.vllm.params.qwenThinkingFormat to models.providers.vllm.models[1].compat.thinkingFormat ("qwen-chat-template").',
+    ]);
+  });
+
+  it("removes untargeted legacy vLLM Qwen provider params", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://localhost:8000/v1",
+            params: {
+              qwenThinkingFormat: "chat-template",
+              temperature: 0.2,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.vllm).toEqual({
+      baseUrl: "http://localhost:8000/v1",
+      params: { temperature: 0.2 },
+    });
+    expect(res.changes).toStrictEqual([
+      "Removed models.providers.vllm.params.qwenThinkingFormat; no concrete vLLM model row or agent model ref exists, so configure models.providers.vllm.models[].compat.thinkingFormat on each Qwen model that needs it.",
+    ]);
+  });
+
+  it("moves legacy vLLM Qwen provider params using the default selected model", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "vllm/Qwen/Qwen3-8B" },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            params: {
+              qwenThinkingFormat: "chat-template",
+              temperature: 0.2,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.vllm?.params).toEqual({ temperature: 0.2 });
+    expect(res.config?.models?.providers?.vllm?.models).toEqual([
+      {
+        id: "Qwen/Qwen3-8B",
+        name: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      },
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Moved models.providers.vllm.params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
+    ]);
+  });
+
+  it("preserves normalized vLLM provider keys when moving provider params", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "vllm/Qwen/Qwen3-8B" },
+        },
+      },
+      models: {
+        providers: {
+          VLLM: {
+            baseUrl: "http://localhost:8000/v1",
+            params: {
+              qwenThinkingFormat: "chat-template",
+              temperature: 0.2,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.vllm).toBeUndefined();
+    expect(res.config?.models?.providers?.VLLM).toEqual({
+      baseUrl: "http://localhost:8000/v1",
+      params: { temperature: 0.2 },
+      models: [
+        {
+          id: "Qwen/Qwen3-8B",
+          name: "Qwen/Qwen3-8B",
+          reasoning: true,
+          compat: { thinkingFormat: "qwen-chat-template" },
+        },
+      ],
+    });
+    expect(res.changes).toStrictEqual([
+      'Moved models.providers.vllm.params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
+    ]);
+  });
+
+  it("strips auth profile suffixes when moving legacy vLLM Qwen params", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "vllm/Qwen/Qwen3-8B@local" },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            params: {
+              qwenThinkingFormat: "chat-template",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.vllm?.models).toEqual([
+      {
+        id: "Qwen/Qwen3-8B",
+        name: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      },
+    ]);
+  });
+
+  it("moves legacy vLLM Qwen default agent params to the selected model compat row", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "vllm/Qwen/Qwen3-8B" },
+          params: {
+            qwenThinkingFormat: "chat-template",
+            temperature: 0.2,
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.params).toEqual({ temperature: 0.2 });
+    expect(res.config?.models?.providers?.vllm?.models).toEqual([
+      {
+        id: "Qwen/Qwen3-8B",
+        name: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      },
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Moved agents.defaults.params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
+    ]);
+  });
+
+  it("removes untargeted legacy vLLM Qwen default agent params", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          params: {
+            qwenThinkingFormat: "chat-template",
+            temperature: 0.2,
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.params).toEqual({ temperature: 0.2 });
+    expect(res.changes).toStrictEqual([
+      "Removed agents.defaults.params.qwenThinkingFormat; no concrete vLLM model row or agent model ref exists, so configure models.providers.vllm.models[].compat.thinkingFormat on each Qwen model that needs it.",
+    ]);
+  });
+
+  it("moves legacy vLLM Qwen per-agent params to the agent model compat row", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        list: [
+          {
+            id: "local",
+            model: "vllm/Qwen/Qwen3-8B",
+            params: {
+              qwen_thinking_format: "enable_thinking",
+              temperature: 0.2,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.params).toEqual({ temperature: 0.2 });
+    expect(res.config?.models?.providers?.vllm?.models).toEqual([
+      {
+        id: "Qwen/Qwen3-8B",
+        name: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen" },
+      },
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Moved agents.list[0].params.qwen_thinking_format to models.providers.vllm.models[0].compat.thinkingFormat ("qwen").',
+    ]);
+  });
+
+  it("removes untargeted legacy vLLM Qwen per-agent params", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        list: [
+          {
+            id: "local",
+            params: {
+              qwen_thinking_format: "enable_thinking",
+              temperature: 0.2,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.params).toEqual({ temperature: 0.2 });
+    expect(res.changes).toStrictEqual([
+      "Removed agents.list[0].params.qwen_thinking_format; no concrete vLLM model row or agent model ref exists, so configure models.providers.vllm.models[].compat.thinkingFormat on each Qwen model that needs it.",
+    ]);
+  });
+
+  it("moves legacy vLLM Qwen per-agent params using the inherited default model", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: "vllm/Qwen/Qwen3-8B",
+        },
+        list: [
+          {
+            id: "local",
+            params: {
+              qwenThinkingFormat: "chat-template",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]).not.toHaveProperty("params");
+    expect(res.config?.models?.providers?.vllm?.models).toEqual([
+      {
+        id: "Qwen/Qwen3-8B",
+        name: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      },
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Moved agents.list[0].params.qwenThinkingFormat to models.providers.vllm.models[0].compat.thinkingFormat ("qwen-chat-template").',
+    ]);
+  });
+
+  it("leaves legacy vLLM Qwen thinking params when the model compat row cannot be written", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: {
+                qwenThinkingFormat: "chat-template",
+              },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            models: "malformed",
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("leaves malformed vLLM provider ancestors untouched during legacy Qwen migration", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: {
+                qwenThinkingFormat: "chat-template",
+              },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: "malformed",
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("reports legacy vLLM Qwen thinking params before doctor fix", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: {
+                qwenThinkingFormat: "chat-template",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain(
+      "agents.defaults.models",
+    );
+  });
+
+  it("reports legacy vLLM Qwen thinking params from merged extra-param sources", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          params: {
+            qwenThinkingFormat: "chat-template",
+          },
+        },
+        list: [
+          {
+            id: "local",
+            params: {
+              qwen_thinking_format: "enable_thinking",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(
+      expect.arrayContaining(["agents.defaults.params", "agents"]),
+    );
+  });
+
+  it("reports legacy vLLM Qwen params from normalized provider keys", () => {
+    const raw = {
+      models: {
+        providers: {
+          VLLM: {
+            params: {
+              qwenThinkingFormat: "chat-template",
+            },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("models.providers");
   });
 
   it("preserves recognized model compat thinkingFormat values", () => {

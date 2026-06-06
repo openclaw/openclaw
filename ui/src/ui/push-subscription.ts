@@ -1,3 +1,4 @@
+// Control UI module implements push subscription behavior.
 import type { GatewayBrowserClient } from "./gateway.ts";
 
 export type WebPushState = {
@@ -17,9 +18,9 @@ const SW_READY_TIMEOUT = 10_000;
 function swReady(): Promise<ServiceWorkerRegistration> {
   return Promise.race([
     navigator.serviceWorker.ready,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Service worker not ready (timed out)")), SW_READY_TIMEOUT),
-    ),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("Service worker not ready (timed out)")), SW_READY_TIMEOUT);
+    }),
   ]);
 }
 

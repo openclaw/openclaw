@@ -1,3 +1,4 @@
+// Tests model picker item construction and provider endpoint labeling.
 import { describe, expect, it } from "vitest";
 import {
   buildModelPickerItems,
@@ -5,17 +6,20 @@ import {
 } from "./directive-handling.model-picker.js";
 
 describe("directive-handling.model-picker", () => {
-  it("dedupes provider aliases when building picker items", () => {
+  it("preserves distinct provider ids when building picker items", () => {
     expect(
       buildModelPickerItems([
         { provider: "z.ai", id: "glm-5" },
         { provider: "z-ai", id: "glm-5" },
       ]),
-    ).toEqual([{ provider: "zai", model: "glm-5" }]);
+    ).toEqual([
+      { provider: "z-ai", model: "glm-5" },
+      { provider: "z.ai", model: "glm-5" },
+    ]);
   });
 
-  it("matches provider endpoint labels across canonical aliases", () => {
-    const result = resolveProviderEndpointLabel("z-ai", {
+  it("matches provider endpoint labels for exact provider ids", () => {
+    const result = resolveProviderEndpointLabel("z.ai", {
       models: {
         providers: {
           "z.ai": {

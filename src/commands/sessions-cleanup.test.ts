@@ -1,3 +1,4 @@
+// Sessions cleanup tests cover stale session cleanup and runtime output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -469,8 +470,8 @@ describe("sessionsCleanupCommand", () => {
             wouldMutate: true,
           },
           beforeStore: {
-            stale: { sessionId: "stale", updatedAt: 1, model: "pi:opus" },
-            fresh: { sessionId: "fresh", updatedAt: 2, model: "pi:opus" },
+            stale: { sessionId: "stale", updatedAt: 1, model: "test:opus" },
+            fresh: { sessionId: "fresh", updatedAt: 2, model: "test:opus" },
           },
           missingKeys: new Set<string>(),
           staleKeys: new Set(["stale"]),
