@@ -159,7 +159,9 @@ describe("runPreparedCliAgent synthetic-placeholder propagation", () => {
       reason: "format",
       code: "empty_result",
     });
-    expect(classification?.message).toContain("synthetic placeholder");
+    expect(classification && "message" in classification ? classification.message : "").toContain(
+      "synthetic placeholder",
+    );
   });
 
   it("does not mark ordinary CLI runs and leaves the classifier null", async () => {
