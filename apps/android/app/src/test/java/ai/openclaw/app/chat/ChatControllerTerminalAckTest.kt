@@ -43,7 +43,6 @@ class ChatControllerTerminalAckTest {
       assertFalse(controller.messages.value.hasUserText("message that times out before start"))
     }
 
-
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun terminalOkAckClearsOptimisticUserEchoAndRefreshesHistory() =

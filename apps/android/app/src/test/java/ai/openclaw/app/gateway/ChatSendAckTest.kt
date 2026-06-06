@@ -45,7 +45,6 @@ class ChatSendAckTest {
     assertTrue(error.isTerminalFailure)
   }
 
-
   @Test
   fun cachedOkAckUsesUnfilteredHistoryFallback() {
     val startedAt = 123.0
