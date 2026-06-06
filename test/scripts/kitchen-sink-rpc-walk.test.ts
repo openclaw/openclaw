@@ -1188,6 +1188,15 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(() => assertResourceCeiling(null)).toThrow("gateway RSS sample was not captured");
   });
 
+  it("fails zero-valued process RSS samples", () => {
+    expect(() => assertResourceCeiling({ rssMiB: 0 })).toThrow(
+      "gateway RSS sample was invalid: 0 MiB",
+    );
+    expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 0, rssMiB: 128 })).toThrow(
+      "command aggregate RSS sample was invalid: 0 MiB",
+    );
+  });
+
   it("fails missing command samples and command RSS spikes", () => {
     expect(() => assertCommandResourceCeiling(null)).toThrow("command RSS sample was not captured");
     expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 8193, rssMiB: 1024 })).toThrow(

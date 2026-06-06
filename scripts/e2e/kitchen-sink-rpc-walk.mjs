@@ -1599,13 +1599,18 @@ function assertProcessResourceCeiling(sample, { label, maxRssMiB, requireSample 
     }
     return;
   }
+  if (!Number.isFinite(sample.rssMiB) || sample.rssMiB <= 0) {
+    throw new Error(`${label} RSS sample was invalid: ${String(sample.rssMiB)} MiB`);
+  }
+  const aggregateRssMiB = sample.aggregateRssMiB ?? sample.rssMiB;
+  if (!Number.isFinite(aggregateRssMiB) || aggregateRssMiB <= 0) {
+    throw new Error(`${label} aggregate RSS sample was invalid: ${String(aggregateRssMiB)} MiB`);
+  }
   if (sample.rssMiB > maxRssMiB) {
     throw new Error(`${label} RSS exceeded ${maxRssMiB} MiB: ${sample.rssMiB} MiB`);
   }
-  if ((sample.aggregateRssMiB ?? sample.rssMiB) > maxRssMiB) {
-    throw new Error(
-      `${label} aggregate RSS exceeded ${maxRssMiB} MiB: ${sample.aggregateRssMiB} MiB`,
-    );
+  if (aggregateRssMiB > maxRssMiB) {
+    throw new Error(`${label} aggregate RSS exceeded ${maxRssMiB} MiB: ${aggregateRssMiB} MiB`);
   }
 }
 
