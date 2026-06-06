@@ -3,7 +3,64 @@ import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
 } from "@openclaw/llm-core";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
+
+const log = createSubsystemLogger("llm/model-cost");
+const warnedUnknownPricingModels = new Set<string>();
+
+function hasPositiveRate(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
+function hasKnownModelCost(cost: Model<Api>["cost"]): boolean {
+  return (
+    hasPositiveRate(cost.input) ||
+    hasPositiveRate(cost.output) ||
+    hasPositiveRate(cost.cacheRead) ||
+    hasPositiveRate(cost.cacheWrite)
+  );
+}
+
+function hasTokenUsage(usage: Usage): boolean {
+  return (
+    hasPositiveRate(usage.input) ||
+    hasPositiveRate(usage.output) ||
+    hasPositiveRate(usage.cacheRead) ||
+    hasPositiveRate(usage.cacheWrite) ||
+    hasPositiveRate(usage.totalTokens)
+  );
+}
+
+function unknownPricingWarningKey<TApi extends Api>(model: Model<TApi>): string {
+  return `${model.provider}\0${model.id}`;
+}
+
+function warnUnknownPricingOnce<TApi extends Api>(model: Model<TApi>, usage: Usage): void {
+  const key = unknownPricingWarningKey(model);
+
+  if (warnedUnknownPricingModels.has(key)) {
+    return;
+  }
+
+  warnedUnknownPricingModels.add(key);
+  log.warn(
+    `unknown model pricing for ${model.provider}/${model.id}; usage.cost numeric fields will remain zero`,
+    {
+      provider: model.provider,
+      model: model.id,
+      inputTokens: usage.input,
+      outputTokens: usage.output,
+      cacheReadTokens: usage.cacheRead,
+      cacheWriteTokens: usage.cacheWrite,
+      totalTokens: usage.totalTokens,
+    },
+  );
+}
+
+export function resetModelCostWarningStateForTest(): void {
+  warnedUnknownPricingModels.clear();
+}
 
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
@@ -13,6 +70,9 @@ export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage
   usage.cost.cacheWrite = (model.cost.cacheWrite / 1000000) * usage.cacheWrite;
   usage.cost.total =
     usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+  if (!hasKnownModelCost(model.cost) && hasTokenUsage(usage)) {
+    warnUnknownPricingOnce(model, usage);
+  }
   return usage.cost;
 }
 
