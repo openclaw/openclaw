@@ -195,25 +195,33 @@ type ThinkTaggedSplitBlock =
   | { type: "thinking"; thinking: string }
   | { type: "text"; text: string };
 
-const THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)`;
-const THINKING_TAG_OPEN_RE = new RegExp(String.raw`<\s*${THINKING_TAG_NAME_PATTERN}\s*>`, "i");
+const THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:)?(?:think(?:ing)?|thought|reasoning)|antthinking)`;
+const THINKING_TAG_TAIL_PATTERN = String.raw`(?:\s[^<>]*|\/\s*)?>`;
+const THINKING_TAG_OPEN_RE = new RegExp(
+  String.raw`<\s*${THINKING_TAG_NAME_PATTERN}${THINKING_TAG_TAIL_PATTERN}`,
+  "i",
+);
 const THINKING_TAG_CLOSE_RE = new RegExp(
-  String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
+  String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}${THINKING_TAG_TAIL_PATTERN}`,
   "i",
 );
 const THINKING_TAG_OPEN_GLOBAL_RE = new RegExp(
-  String.raw`<\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
+  String.raw`<\s*${THINKING_TAG_NAME_PATTERN}${THINKING_TAG_TAIL_PATTERN}`,
   "gi",
 );
 const THINKING_TAG_CLOSE_GLOBAL_RE = new RegExp(
-  String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
+  String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}${THINKING_TAG_TAIL_PATTERN}`,
   "gi",
 );
 /** Global regex used to scan provider-emitted thinking tags. */
 export const THINKING_TAG_SCAN_RE = new RegExp(
-  String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
+  String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}${THINKING_TAG_TAIL_PATTERN}`,
   "gi",
 );
+
+export function isSelfClosingThinkingTagText(tagText: string): boolean {
+  return /\/\s*>$/.test(tagText);
+}
 
 /** Split text that starts with thinking tags into structured thinking/text blocks. */
 export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
@@ -253,9 +261,14 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
   for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
     const index = match.index ?? 0;
     const isClose = match[1]?.includes("/") ?? false;
+    const isSelfClosing = !isClose && isSelfClosingThinkingTagText(match[0]);
 
     if (!inThinking && !isClose) {
       pushText(text.slice(cursor, index));
+      cursor = index + match[0].length;
+      if (isSelfClosing) {
+        continue;
+      }
       thinkingStart = index + match[0].length;
       inThinking = true;
       continue;
@@ -342,6 +355,11 @@ export function extractThinkingFromTaggedText(text: string): string {
       result += text.slice(lastIndex, idx);
     }
     const isClose = match[1] === "/";
+    const isSelfClosing = !isClose && isSelfClosingThinkingTagText(match[0]);
+    if (isSelfClosing) {
+      lastIndex = idx + match[0].length;
+      continue;
+    }
     inThinking = !isClose;
     lastIndex = idx + match[0].length;
   }
@@ -358,7 +376,9 @@ export function extractThinkingFromTaggedStream(text: string): string {
     return closed;
   }
 
-  const openMatches = [...text.matchAll(THINKING_TAG_OPEN_GLOBAL_RE)];
+  const openMatches = [...text.matchAll(THINKING_TAG_OPEN_GLOBAL_RE)].filter(
+    (match) => !isSelfClosingThinkingTagText(match[0]),
+  );
   if (openMatches.length === 0) {
     return "";
   }

@@ -4,9 +4,11 @@ import { findFinalTagMatches } from "./final-tags.js";
 export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
 
-const QUICK_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking|final)\b/i;
+const QUICK_TAG_RE =
+  /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought|reasoning)|antthinking|final)(?=\s|\/|>)/i;
 const THINKING_TAG_RE =
-  /<\s*(\/?)\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
+  /<\s*(\/?)\s*((?:antml:)?(?:think(?:ing)?|thought|reasoning)|antthinking)(?:\s[^<>]*|\/\s*)?>/gi;
+const UNRECOVERABLE_UNCLOSED_TAG_RE = /^(?:antml:)?reasoning$/i;
 
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {
@@ -16,6 +18,14 @@ function applyTrim(value: string, mode: ReasoningTagTrim): string {
     return value.trimStart();
   }
   return value.trim();
+}
+
+function isSelfClosingThinkingTagText(tagText: string): boolean {
+  return /\/\s*>$/.test(tagText);
+}
+
+function canRecoverLiteralTagMention(prefix: string, textAfterTag: string): boolean {
+  return /^\s*the\s*$/i.test(prefix) && /^\s+tag\b/i.test(textAfterTag);
 }
 
 /** Detects whether a stray reasoning close tag separates two visible text regions. */
@@ -79,10 +89,14 @@ export function stripReasoningTagsFromText(
   let lastIndex = 0;
   let thinkingDepth = 0;
   let firstUnclosedContentIndex: number | undefined;
+  let firstUnclosedTagName: string | undefined;
+  let firstUnclosedTagText: string | undefined;
 
   for (const match of cleaned.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
     const isClose = match[1] === "/";
+    const tagName = match[2];
+    const isSelfClosing = !isClose && isSelfClosingThinkingTagText(match[0]);
 
     if (isInsideCode(idx, codeRegions)) {
       continue;
@@ -104,13 +118,23 @@ export function stripReasoningTagsFromText(
         continue;
       }
       result += cleaned.slice(lastIndex, idx);
+      lastIndex = idx + match[0].length;
+      if (isSelfClosing) {
+        continue;
+      }
       thinkingDepth = 1;
-      firstUnclosedContentIndex = idx + match[0].length;
+      firstUnclosedContentIndex = lastIndex;
+      firstUnclosedTagName = tagName;
+      firstUnclosedTagText = match[0];
     } else if (isClose) {
       thinkingDepth -= 1;
       if (thinkingDepth === 0) {
         firstUnclosedContentIndex = undefined;
+        firstUnclosedTagName = undefined;
+        firstUnclosedTagText = undefined;
       }
+    } else if (isSelfClosing) {
+      // Empty hidden-control tags should not keep later visible text hidden.
     } else {
       thinkingDepth += 1;
     }
@@ -123,14 +147,30 @@ export function stripReasoningTagsFromText(
   }
 
   const trimmedResult = applyTrim(result, trimMode);
+  const unclosedTagIsRecoverable =
+    !firstUnclosedTagName || !UNRECOVERABLE_UNCLOSED_TAG_RE.test(firstUnclosedTagName);
+  const unclosedTagSuffix =
+    firstUnclosedContentIndex === undefined ? "" : cleaned.slice(firstUnclosedContentIndex);
+  if (
+    mode === "strict" &&
+    thinkingDepth > 0 &&
+    trimmedResult &&
+    firstUnclosedTagText !== undefined &&
+    !unclosedTagIsRecoverable &&
+    canRecoverLiteralTagMention(result, unclosedTagSuffix)
+  ) {
+    return applyTrim(result + firstUnclosedTagText + unclosedTagSuffix, trimMode);
+  }
+
   if (
     mode === "strict" &&
     thinkingDepth > 0 &&
     !trimmedResult &&
     firstUnclosedContentIndex !== undefined &&
+    unclosedTagIsRecoverable &&
     cleaned.trim()
   ) {
-    return applyTrim(cleaned.slice(firstUnclosedContentIndex), trimMode);
+    return applyTrim(unclosedTagSuffix, trimMode);
   }
 
   return trimmedResult;

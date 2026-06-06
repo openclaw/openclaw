@@ -99,6 +99,35 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   }
 
+  async function collectTextEndBlockReplyPayloads(deltas: string[]): Promise<string[]> {
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: {
+        minChars: 5,
+        maxChars: 50,
+        breakPreference: "newline",
+      },
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    for (const delta of deltas) {
+      emitAssistantTextDelta(emit, delta);
+    }
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_end" },
+    });
+    await flushBlockReplyCallbacks();
+
+    return onBlockReply.mock.calls
+      .map((call) => call[0]?.text)
+      .filter((value): value is string => typeof value === "string");
+  }
+
   function createWriteFailureHarness(params: {
     runId: string;
     path: string;
@@ -815,6 +844,38 @@ describe("subscribeEmbeddedAgentSession", () => {
       for (const text of payloadTexts) {
         expect(text).not.toContain("Reasoning");
         expect(text).not.toContain(open);
+      }
+    },
+  );
+
+  it.each([
+    {
+      open: '<reasoning hidden="1">',
+      close: "</reasoning>",
+    },
+    {
+      open: '<antml:reasoning hidden="1">',
+      close: "</antml:reasoning>",
+    },
+  ])("suppresses attribute-bearing $open blocks in block replies", async ({ open, close }) => {
+    const payloadTexts = await collectTextEndBlockReplyPayloads([
+      `${open}Reasoning chunk that should not leak`,
+      `${close}Final answer`,
+    ]);
+    expect(payloadTexts).toEqual(["Final answer"]);
+    for (const text of payloadTexts) {
+      expect(text).not.toContain("Reasoning");
+      expect(text).not.toContain(open);
+    }
+  });
+
+  it.each(["<reasoning/>", "<antml:reasoning />"])(
+    "strips self-closing %s tags without hiding following block replies",
+    async (tag) => {
+      const payloadTexts = await collectTextEndBlockReplyPayloads([`${tag}Final answer`]);
+      expect(payloadTexts).toEqual(["Final answer"]);
+      for (const text of payloadTexts) {
+        expect(text).not.toContain(tag);
       }
     },
   );

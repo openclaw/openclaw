@@ -46,6 +46,12 @@ describe("stripReasoningTagsFromText", () => {
         expected: "Before  after",
       },
       { name: "strips thought tags", input: "A <thought>hmm</thought> B", expected: "A  B" },
+      { name: "strips reasoning tags", input: "A <reasoning>hmm</reasoning> B", expected: "A  B" },
+      {
+        name: "strips empty self-closing reasoning tags",
+        input: "<reasoning/>Visible",
+        expected: "Visible",
+      },
       {
         name: "strips antthinking tags",
         input: "X <antthinking>internal</antthinking> Y",
@@ -204,6 +210,10 @@ describe("stripReasoningTagsFromText", () => {
         expected: "A <final-result>visible</final-result> B",
       },
       {
+        input: "A <reasoning-step>visible</reasoning-step> B",
+        expected: "A <reasoning-step>visible</reasoning-step> B",
+      },
+      {
         input: "  <final-result>visible</final-result>  ",
         expected: "  <final-result>visible</final-result>  ",
       },
@@ -244,6 +254,10 @@ describe("stripReasoningTagsFromText", () => {
         input: "A <ANTML:THINKING hidden='1'>secret</ANTML:THINKING> B",
         expected: "A  B",
       },
+      {
+        input: "A <ANTML:REASONING hidden='1'>secret</ANTML:REASONING> B",
+        expected: "A  B",
+      },
     ] as const)("handles unicode/attributes/case-insensitive names: %j", (testCase) => {
       expectStrippedCase(testCase);
     });
@@ -272,6 +286,30 @@ describe("stripReasoningTagsFromText", () => {
         name: "recovers fully wrapped unclosed tags that would otherwise deliver empty text",
         input: "<think>Answer after malformed opening tag",
         expected: "Answer after malformed opening tag",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "does not recover reasoning-only unclosed reasoning tags",
+        input: "<reasoning>hidden reasoning only",
+        expected: "",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "does not recover reasoning-only unclosed reasoning tag prose",
+        input: "<reasoning> tag should be hidden",
+        expected: "",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "preserves visible prose mentions of unclosed reasoning tags",
+        input: "The <reasoning> tag is deprecated in this example.",
+        expected: "The <reasoning> tag is deprecated in this example.",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "keeps visible prefix but hides unclosed reasoning tag prose",
+        input: "Visible prefix <reasoning> tag should be hidden",
+        expected: "Visible prefix",
         opts: { mode: "strict" as const },
       },
       {

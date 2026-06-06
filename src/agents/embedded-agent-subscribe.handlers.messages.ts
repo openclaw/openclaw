@@ -204,7 +204,8 @@ function resolveAssistantTextChunk(params: {
   return "";
 }
 
-const REASONING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b/i;
+const REASONING_TAG_RE =
+  /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought|reasoning)|antthinking)(?=\s|\/|>)/i;
 
 function resolveStreamVisibleText(params: {
   previousRawText: string;

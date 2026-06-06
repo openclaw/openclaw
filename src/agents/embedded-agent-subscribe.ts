@@ -52,7 +52,11 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-subscribe.tools.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
+import {
+  isSelfClosingThinkingTagText,
+  stripDowngradedToolCallText,
+  THINKING_TAG_SCAN_RE,
+} from "./embedded-agent-utils.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -63,10 +67,12 @@ const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
   "think",
   "thinking",
   "thought",
+  "reasoning",
   "antthinking",
   "antml:think",
   "antml:thinking",
   "antml:thought",
+  "antml:reasoning",
 ] as const;
 const embeddedLog = createSubsystemLogger("agent/embedded");
 
@@ -818,6 +824,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     for (const match of scanText.matchAll(THINKING_TAG_SCAN_RE)) {
       const idx = match.index ?? 0;
       const isClose = match[1] === "/";
+      const isSelfClosing = !isClose && isSelfClosingThinkingTagText(match[0]);
       if (inThinking) {
         advanceHiddenCodeState(scanText.slice(lastCodeIndex, idx));
       }
@@ -844,6 +851,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           continue;
         }
         processed += scanText.slice(lastIndex, idx);
+        lastIndex = idx + match[0].length;
+        if (isSelfClosing) {
+          continue;
+        }
         hiddenInlineState = createInlineCodeState();
         hiddenFenceState = undefined;
         hiddenPendingFenceFragment = undefined;
