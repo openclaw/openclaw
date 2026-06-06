@@ -833,6 +833,67 @@
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 12%, transparent);
 }
 
+.sidebar-recent-session__rename {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-recent-session:hover .sidebar-recent-session__rename,
+.sidebar-recent-session__rename:focus-visible {
+  opacity: 1;
+}
+
+.sidebar-recent-session__rename:hover {
+  background: color-mix(in srgb, var(--bg-hover) 80%, transparent);
+  color: var(--text);
+}
+
+.sidebar-recent-session__rename svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-recent-session--editing {
+  cursor: default;
+}
+
+.sidebar-recent-session__rename-input {
+  width: 100%;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 650;
+  font-family: inherit;
+}
+
+.sidebar-recent-session__rename-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .sidebar-nav::-webkit-scrollbar {
   display: none;
 }

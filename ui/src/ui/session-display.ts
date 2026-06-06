@@ -1,4 +1,5 @@
 // Control UI module implements session display behavior.
+import { getSessionRenameLabel } from "./session-rename-store.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { SessionsListResult } from "./types.ts";
 
@@ -94,6 +95,12 @@ export function resolveSessionDisplayName(
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
+  // User-provided client-only rename wins over server label/displayName.
+  // See session-rename-store.ts; persisted in localStorage, display-only.
+  const customLabel = getSessionRenameLabel(key);
+  if (customLabel) {
+    return applyTypedPrefix(customLabel);
+  }
   if (label && label !== key) {
     return applyTypedPrefix(label);
   }

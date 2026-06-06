@@ -1,6 +1,7 @@
 // Control UI module implements app render behavior.
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
+import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { i18n, t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
@@ -168,6 +169,11 @@ import {
 } from "./navigation.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
+import {
+  getSessionRenameLabel,
+  SESSION_RENAME_MAX_LABEL_CHARS,
+  setSessionRenameLabel,
+} from "./session-rename-store.ts";
 import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
@@ -613,11 +619,84 @@ function renderSidebarSessions(state: AppViewState) {
   `;
 }
 
+// Per-view inline rename state for sidebar session rows. Display-only;
+// see session-rename-store.ts for persistence.
+type SessionRenameUiState = { key: string; draft: string } | null;
+const sidebarSessionRenameStates = new WeakMap<AppViewState, SessionRenameUiState>();
+
+function getSidebarRenameState(state: AppViewState): SessionRenameUiState {
+  return sidebarSessionRenameStates.get(state) ?? null;
+}
+
+function setSidebarRenameState(state: AppViewState, value: SessionRenameUiState): void {
+  if (value === null) {
+    sidebarSessionRenameStates.delete(state);
+  } else {
+    sidebarSessionRenameStates.set(state, value);
+  }
+  pendingUpdate?.();
+}
+
 function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow) {
   const active = row.key === state.sessionKey;
   const label = resolveSessionDisplayName(row.key, row);
   const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
   const href = `${pathForTab("chat", state.basePath)}?session=${encodeURIComponent(row.key)}`;
+  const renameState = getSidebarRenameState(state);
+  const isRenaming = renameState?.key === row.key;
+
+  const commitRename = (rawValue: string): void => {
+    const next = rawValue.trim().slice(0, SESSION_RENAME_MAX_LABEL_CHARS);
+    setSessionRenameLabel(row.key, next);
+    setSidebarRenameState(state, null);
+  };
+
+  if (isRenaming) {
+    return html`
+      <div
+        class="sidebar-recent-session sidebar-recent-session--editing ${active
+          ? "sidebar-recent-session--active"
+          : ""}"
+        data-session-key=${row.key}
+      >
+        <span class="sidebar-recent-session__dot" aria-hidden="true"></span>
+        <span class="sidebar-recent-session__body">
+          <input
+            class="sidebar-recent-session__rename-input"
+            type="text"
+            aria-label="Rename session"
+            maxlength=${SESSION_RENAME_MAX_LABEL_CHARS}
+            .value=${renameState?.draft ?? ""}
+            @click=${(event: MouseEvent) => event.stopPropagation()}
+            @input=${(event: Event) => {
+              const value = (event.target as HTMLInputElement).value;
+              sidebarSessionRenameStates.set(state, { key: row.key, draft: value });
+            }}
+            @keydown=${(event: KeyboardEvent) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commitRename((event.target as HTMLInputElement).value);
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setSidebarRenameState(state, null);
+              }
+            }}
+            @blur=${(event: FocusEvent) => {
+              commitRename((event.target as HTMLInputElement).value);
+            }}
+            ${ref((node?: Element) => {
+              if (node instanceof HTMLInputElement && document.activeElement !== node) {
+                node.focus();
+                node.select();
+              }
+            })}
+          />
+          <span class="sidebar-recent-session__meta">${row.key}</span>
+        </span>
+      </div>
+    `;
+  }
+
   return html`
     <a
       href=${href}
@@ -647,6 +726,22 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
         <span class="sidebar-recent-session__name">${label}</span>
         <span class="sidebar-recent-session__meta">${meta}</span>
       </span>
+      <button
+        type="button"
+        class="sidebar-recent-session__rename"
+        aria-label="Rename session"
+        title="Rename session"
+        @click=${(event: MouseEvent) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setSidebarRenameState(state, {
+            key: row.key,
+            draft: getSessionRenameLabel(row.key) ?? label,
+          });
+        }}
+      >
+        ${icons.edit}
+      </button>
       ${row.hasActiveRun
         ? html`<span
             class="sidebar-recent-session__live"
