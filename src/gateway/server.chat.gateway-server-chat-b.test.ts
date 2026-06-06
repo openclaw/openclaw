@@ -824,6 +824,158 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send post-dispatch rejection after abort preserves the terminal abort", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dispatchRelease = createDeferred<void>();
+    const runId = "idem-post-dispatch-abort-throw";
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const abortResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        getRuntimeConfig: () => ({}),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      let capturedAbortSignal: AbortSignal | undefined;
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        capturedAbortSignal = (args as { replyOptions?: GetReplyOptions }).replyOptions
+          ?.abortSignal;
+        await dispatchRelease.promise;
+        throw new Error("dispatch exploded after abort");
+      });
+
+      const params = {
+        sessionKey: "main",
+        message: "abort after dispatch",
+        idempotencyKey: runId,
+      };
+      const client = {
+        connId: "conn-owner",
+        connect: {
+          device: { id: "dev-owner" },
+          scopes: ["operator.write"],
+        },
+      } as never;
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      const send = Promise.resolve(
+        chatHandlers["chat.send"]({
+          req: { type: "req", id: "send", method: "chat.send", params },
+          params,
+          client,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            responses.push({ id: "send", ok, payload, error });
+          }) as RespondFn,
+          context,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(responses).toEqual([
+          {
+            id: "send",
+            ok: true,
+            payload: { runId, status: "started" },
+            error: undefined,
+          },
+        ]);
+        expect(capturedAbortSignal).toBeDefined();
+        expect(context.chatAbortControllers.has(runId)).toBe(true);
+      }, FAST_WAIT_OPTS);
+
+      await chatHandlers["chat.abort"]({
+        req: {
+          type: "req",
+          id: "abort",
+          method: "chat.abort",
+          params: { sessionKey: "main", runId },
+        },
+        params: { sessionKey: "main", runId },
+        client,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          abortResponses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(abortResponses).toEqual([
+        {
+          ok: true,
+          payload: { ok: true, aborted: true, runIds: [runId] },
+          error: undefined,
+        },
+      ]);
+      expect(capturedAbortSignal?.aborted).toBe(true);
+
+      dispatchRelease.resolve();
+      await send;
+      await vi.waitFor(() => {
+        expect(context.dedupe.get(`chat:${runId}`)).toBeDefined();
+      }, FAST_WAIT_OPTS);
+
+      expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+        expect.objectContaining({
+          runId,
+          status: "timeout",
+          summary: "aborted",
+          stopReason: "rpc",
+          endedAt: expect.any(Number),
+        }),
+      );
+      const chatBroadcasts = context.broadcast.mock.calls
+        .filter(([event]) => event === "chat")
+        .map(([, payload]) => payload as { runId?: string; state?: string });
+      expect(chatBroadcasts).toEqual(
+        expect.arrayContaining([expect.objectContaining({ runId, state: "aborted" })]),
+      );
+      expect(chatBroadcasts).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ runId, state: "error" })]),
+      );
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledWith(runId, runId, "main");
+      }, FAST_WAIT_OPTS);
+    } finally {
+      dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
   test.each(configuredImageModelCases)(
     "chat.send preserves text-only image uploads as MediaPaths even with configured imageModel: $id",
     async ({ id, imageModel }) => {
