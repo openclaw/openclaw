@@ -1,9 +1,9 @@
 // Mcp Code Mode Gateway Client tests cover mcp code mode gateway client script behavior.
 import { describe, expect, it } from "vitest";
+import { validateMcpCodeModeResult } from "../../scripts/e2e/lib/mcp-code-mode-validation.ts";
 import {
   fetchJson,
   readMcpCodeModeClientFetchLimits,
-  validateMcpCodeModeResult,
 } from "../../scripts/e2e/mcp-code-mode-gateway-client.ts";
 
 const okResponse = {
@@ -158,5 +158,20 @@ describe("MCP code-mode gateway Docker client result validation", () => {
         toolSearchPollution: 1,
       }),
     ).toThrow("agent should not use tools.search");
+  });
+
+  it("requires planned exec evidence for the source gateway E2E", () => {
+    expect(() =>
+      validateMcpCodeModeResult(okResponse, okMentions, {
+        plannedTools: ["tools.search"],
+        requireExec: true,
+      }),
+    ).toThrow("agent did not call code-mode exec");
+    expect(() =>
+      validateMcpCodeModeResult(okResponse, okMentions, {
+        plannedTools: ["exec"],
+        requireExec: true,
+      }),
+    ).not.toThrow();
   });
 });
