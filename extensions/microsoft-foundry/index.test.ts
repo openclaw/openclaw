@@ -823,6 +823,38 @@ describe("microsoft-foundry plugin", () => {
     expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_completion_tokens");
   });
 
+  it("emits only persisted-schema thinkingLevelMap level keys for Entra ID reasoning onboarding (openclaw#91011)", () => {
+    // The persisted ModelDefinitionSchema only accepts these ModelThinkingLevel keys; if the writer
+    // emits one outside the set, updateConfig rolls the Entra ID onboarding write back.
+    const allowedThinkingLevels = new Set([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:entra",
+      apiKey: "__entra_id_dynamic__",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "gpt-5.1-chat",
+      modelNameHint: "gpt-5.1-chat",
+      api: "openai-responses",
+      authMethod: "entra-id",
+    });
+
+    const thinkingLevelMap =
+      result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0]?.thinkingLevelMap;
+    expect(thinkingLevelMap).toBeDefined();
+    for (const [level, value] of Object.entries(thinkingLevelMap ?? {})) {
+      expect(allowedThinkingLevels.has(level)).toBe(true);
+      expect(value === null || typeof value === "string").toBe(true);
+    }
+  });
+
   it("records model-name reasoning effort limits for Foundry deployment aliases", () => {
     const result = buildFoundryAuthResult({
       profileId: "microsoft-foundry:default",
