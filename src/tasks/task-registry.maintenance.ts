@@ -11,6 +11,11 @@ import {
 import { isAcpTurnActive } from "../acp/control-plane/active-turns.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import {
+  closeHubDelegatedAcpWorker,
+  listHubDelegatedMaintenanceCandidates,
+  resolveExpiredHubDelegatedCandidates,
+} from "../acp/hub-delegated-lifecycle.js";
+import {
   listAcpSessionEntries,
   readAcpSessionEntry,
   type AcpSessionStoreEntry,
@@ -19,6 +24,7 @@ import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
 } from "../agents/subagent-recovery-state.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -736,91 +742,45 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
   }
 }
 
-async function clearHubDelegatedSessionMarker(acpEntry: AcpSessionStoreEntry): Promise<void> {
-  const { updateSessionStore } = await import("../config/sessions/store.js");
-  await updateSessionStore(
-    acpEntry.storePath,
-    (store) => {
-      const storeSessionKey = acpEntry.storeSessionKey;
-      const entry = store[storeSessionKey];
-      if (!entry?.hubDelegated) {
-        return entry ?? null;
-      }
-      const next = { ...entry };
-      delete next.hubDelegated;
-      store[storeSessionKey] = next;
-      return next;
-    },
-    {
-      skipMaintenance: true,
-      activeSessionKey: acpEntry.storeSessionKey,
-    },
-  );
-}
-
 async function cleanupExpiredHubDelegatedAcpSessions(): Promise<void> {
   let acpSessions: AcpSessionStoreEntry[];
   try {
-    acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({ clone: false });
+    acpSessions = await listHubDelegatedMaintenanceCandidates({ cfg: getRuntimeConfig() });
   } catch (error) {
     log.warn("Failed to list ACP sessions during hub-delegate maintenance", { error });
     return;
   }
-  const seenSessionKeys = new Set<string>();
-  for (const acpEntry of acpSessions) {
+  const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;
+  if (!closeAcpSession) {
+    return;
+  }
+  for (const acpEntry of resolveExpiredHubDelegatedCandidates({ entries: acpSessions })) {
     const sessionKey = normalizeOptionalString(acpEntry.sessionKey);
-    if (!sessionKey || seenSessionKeys.has(sessionKey)) {
+    if (!sessionKey || !acpEntry.entry?.hubDelegated) {
       continue;
     }
-    seenSessionKeys.add(sessionKey);
-    if (!isHubDelegatedAcpSessionEntry(acpEntry.entry) || !acpEntry.entry?.hubDelegated) {
-      continue;
-    }
-    const policy = resolveHubDelegatedAcpPolicy(acpEntry.cfg.acp?.delegate);
     const expiry = resolveHubDelegatedExpiry({
       entry: {
         hubDelegated: acpEntry.entry.hubDelegated,
         acp: acpEntry.acp,
       },
-      policy,
+      policy: resolveHubDelegatedAcpPolicy(acpEntry.cfg.acp?.delegate),
     });
     if (!expiry.expired) {
       continue;
     }
-    const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;
-    if (!closeAcpSession) {
-      continue;
-    }
     try {
-      await closeAcpSession({
+      await closeHubDelegatedAcpWorker({
         cfg: acpEntry.cfg,
         sessionKey,
+        storePath: acpEntry.storePath,
+        storeSessionKey: acpEntry.storeSessionKey,
         reason: expiry.reason,
+        closeRuntime: closeAcpSession,
+        unbind: taskRegistryMaintenanceRuntime.unbindSessionBindings,
       });
     } catch (error) {
       log.warn("Failed to close expired hub-delegated ACP session during task maintenance", {
-        sessionKey,
-        reason: expiry.reason,
-        error,
-      });
-      continue;
-    }
-    try {
-      await clearHubDelegatedSessionMarker(acpEntry);
-    } catch (error) {
-      log.warn("Failed to clear hub-delegated marker during task maintenance", {
-        sessionKey,
-        reason: expiry.reason,
-        error,
-      });
-    }
-    try {
-      await taskRegistryMaintenanceRuntime.unbindSessionBindings?.({
-        targetSessionKey: sessionKey,
-        reason: expiry.reason,
-      });
-    } catch (error) {
-      log.warn("Failed to unbind expired hub-delegated ACP session during task maintenance", {
         sessionKey,
         reason: expiry.reason,
         error,

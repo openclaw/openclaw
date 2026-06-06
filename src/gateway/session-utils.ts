@@ -2613,7 +2613,9 @@ function filterSessionEntries(params: {
       }
       return (
         shouldKeepStoreOnlyChildLink(entry, now) &&
-        (entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy)
+        (entry?.spawnedBy === spawnedBy ||
+          entry?.parentSessionKey === spawnedBy ||
+          entry?.hubDelegated?.ownerSessionKey === spawnedBy)
       );
     })
     .filter(([, entry]) => {

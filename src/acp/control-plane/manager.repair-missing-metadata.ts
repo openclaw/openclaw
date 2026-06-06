@@ -2,16 +2,29 @@
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { readAcpSessionEntry } from "../runtime/session-meta.js";
 import { resolveAcpAgentFromSessionKey } from "./manager.utils.js";
 
-function resolveRepairMode(entry: SessionEntry): AcpRuntimeSessionMode {
-  // Only hub-delegated workers carry an explicit persistent lifecycle marker.
+function isPersistentAcpBindingSessionKey(sessionKey: string): boolean {
+  return sessionKey.includes(":acp:binding:");
+}
+
+function resolveRepairMode(entry: SessionEntry, sessionKey: string): AcpRuntimeSessionMode | null {
   if (entry.hubDelegated) {
     return "persistent";
   }
-  return "oneshot";
+  if (isPersistentAcpBindingSessionKey(sessionKey)) {
+    return "persistent";
+  }
+  if (getSessionBindingService().listBySession(sessionKey).length > 0) {
+    return "persistent";
+  }
+  if (entry.spawnedBy || entry.parentSessionKey) {
+    return "oneshot";
+  }
+  return null;
 }
 
 export function shouldRepairMissingAcpSessionMetadata(params: {
@@ -35,10 +48,14 @@ export function shouldRepairMissingAcpSessionMetadata(params: {
   if (!storeEntry?.entry || storeEntry.acp) {
     return null;
   }
+  const mode = resolveRepairMode(storeEntry.entry, sessionKey);
+  if (!mode) {
+    return null;
+  }
   return {
     sessionKey,
     agent: resolveAcpAgentFromSessionKey(sessionKey),
-    mode: resolveRepairMode(storeEntry.entry),
+    mode,
     backendId: params.cfg.acp?.backend,
   };
 }

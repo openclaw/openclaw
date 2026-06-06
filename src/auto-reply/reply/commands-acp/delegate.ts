@@ -7,13 +7,15 @@ import {
 } from "@openclaw/acp-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
+import type { AcpCloseSessionResult } from "../../../acp/control-plane/manager.types.js";
+import { closeHubDelegatedAcpWorker } from "../../../acp/hub-delegated-lifecycle.js";
 import { listAcpSessionEntries } from "../../../acp/runtime/session-meta.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../../agents/tools/sessions-helpers.js";
-import { callGateway } from "../../../gateway/call.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import type { SessionBindingRecord } from "../../../infra/outbound/session-binding.types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { collectAcpErrorText, stopWithText } from "./shared.js";
 
@@ -156,26 +158,31 @@ export async function handleAcpDelegateAction(
 
   const acpManager = getAcpSessionManager();
   try {
-    const closed = await acpManager.closeSession({
+    let closed: AcpCloseSessionResult | undefined;
+    let removedBindings: SessionBindingRecord[] = [];
+    await closeHubDelegatedAcpWorker({
       cfg: params.cfg,
       sessionKey: match.sessionKey,
+      storePath: match.storePath,
+      storeSessionKey: match.storeSessionKey,
       reason: "manual-delegate-close",
-      allowBackendUnavailable: true,
-      clearMeta: true,
-    });
-    await callGateway({
-      method: "sessions.patch",
-      params: {
-        key: match.sessionKey,
-        hubDelegated: null,
+      closeRuntime: async ({ cfg, sessionKey, reason }) => {
+        closed = await acpManager.closeSession({
+          cfg,
+          sessionKey,
+          reason,
+          allowBackendUnavailable: true,
+          clearMeta: true,
+        });
       },
-      timeoutMs: 10_000,
+      unbind: async ({ targetSessionKey }) => {
+        removedBindings = await getSessionBindingService().unbind({
+          targetSessionKey,
+          reason: "manual",
+        });
+      },
     });
-    const removedBindings = await getSessionBindingService().unbind({
-      targetSessionKey: match.sessionKey,
-      reason: "manual",
-    });
-    const runtimeNotice = closed.runtimeNotice ? ` (${closed.runtimeNotice})` : "";
+    const runtimeNotice = closed?.runtimeNotice ? ` (${closed.runtimeNotice})` : "";
     return stopWithText(
       `✅ Closed hub-delegated session "${label}" (${match.sessionKey})${runtimeNotice}. Removed ${removedBindings.length} binding${removedBindings.length === 1 ? "" : "s"}.`,
     );

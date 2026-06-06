@@ -1230,6 +1230,72 @@ describe("sessions tools", () => {
     );
   });
 
+  it("sessions_send scopes label resolve to the requester owner", async () => {
+    const requesterKey = "agent:main:webchat:main";
+    const targetKey = "agent:codex:acp:delegate-child";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        expect(request.params?.spawnedBy).toBe(requesterKey);
+        return { key: targetKey };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-child", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "child reply" }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? {
+            sessionId: "child-session",
+            updatedAt: 1,
+            spawnedBy: requesterKey,
+            parentSessionKey: requesterKey,
+            hubDelegated: {
+              ownerSessionKey: requesterKey,
+              createdAt: 1,
+            },
+            label: "refactor",
+          }
+        : undefined,
+    );
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "webchat",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-label-owner-scope", {
+      label: "refactor",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("ok");
+    expect(
+      callGatewayMock.mock.calls.some(
+        (call) => (call[0] as { method?: string }).method === "sessions.resolve",
+      ),
+    ).toBe(true);
+  });
+
   it("sessions_send resolves sessionId inputs", async () => {
     const sessionId = "sess-send";
     const targetKey = "agent:main:discord:channel:123";

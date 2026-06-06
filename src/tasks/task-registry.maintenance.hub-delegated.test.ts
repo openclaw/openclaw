@@ -2,9 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
@@ -12,56 +9,64 @@ import {
   stopTaskRegistryMaintenanceForTests,
 } from "./task-registry.maintenance.js";
 
+const runtimeConfigState = vi.hoisted(() => ({
+  cfg: {} as {
+    session?: { store?: string };
+    acp?: { allowedAgents?: string[]; delegate?: { idleHours?: number; maxAgeHours?: number } };
+  },
+}));
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => runtimeConfigState.cfg,
+}));
+
 afterEach(() => {
   stopTaskRegistryMaintenanceForTests();
   resetTaskRegistryMaintenanceRuntimeForTests();
+  runtimeConfigState.cfg = {};
 });
 
 describe("task-registry maintenance hub-delegated cleanup", () => {
   it("clears hubDelegated after closing expired delegate sessions", async () => {
-    await withTempDir({ prefix: "openclaw-hub-delegate-maint-" }, async (home) => {
+    const home = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "openclaw-hub-delegate-maint-"));
+    try {
       const storePath = path.join(home, "agents/codex/sessions/sessions.json");
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       const sessionKey = "agent:codex:acp:expired-delegate";
       const createdAt = Date.now() - 8 * 24 * 60 * 60 * 1000;
-      const entry: SessionEntry = {
-        sessionId: "sess-expired",
-        updatedAt: createdAt,
-        label: "refactor",
-        hubDelegated: {
-          ownerSessionKey: "agent:main:main",
-          createdAt,
-        },
-      };
-      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
-
-      const acpEntry: AcpSessionStoreEntry = {
-        cfg: {
-          session: { store: storePath },
-          acp: { delegate: { idleHours: 72, maxAgeHours: 168 } },
-        },
+      fs.writeFileSync(
         storePath,
-        sessionKey,
-        storeSessionKey: sessionKey,
-        entry,
-        acp: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-expired",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: createdAt,
-        },
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sess-expired",
+            updatedAt: createdAt,
+            label: "refactor",
+            hubDelegated: {
+              ownerSessionKey: "agent:main:main",
+              createdAt,
+            },
+          },
+        }),
+      );
+      runtimeConfigState.cfg = {
+        session: { store: storePath },
+        acp: { allowedAgents: ["codex"], delegate: { idleHours: 72, maxAgeHours: 168 } },
       };
 
       const closeAcpSession = vi.fn(async () => {});
-
       setTaskRegistryMaintenanceRuntimeForTests({
-        listAcpSessionEntries: async () => [acpEntry],
-        readAcpSessionEntry: () => acpEntry,
+        listAcpSessionEntries: async () => [],
+        readAcpSessionEntry: () => ({
+          cfg: runtimeConfigState.cfg as never,
+          storePath,
+          sessionKey,
+          storeSessionKey: sessionKey,
+          entry: undefined,
+          storeReadFailed: false,
+        }),
         closeAcpSession,
         loadSessionStore: (targetPath) =>
-          JSON.parse(fs.readFileSync(targetPath, "utf8")) as Record<string, SessionEntry>,
+          JSON.parse(fs.readFileSync(targetPath, "utf8")) as Record<string, unknown>,
         resolveStorePath: () => storePath,
         parseAgentSessionKey: () => ({ agentId: "codex" }) as never,
         isCronJobActive: () => false,
@@ -93,9 +98,11 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
       );
       const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
         string,
-        SessionEntry
+        { hubDelegated?: unknown }
       >;
       expect(persisted[sessionKey]?.hubDelegated).toBeUndefined();
-    });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });

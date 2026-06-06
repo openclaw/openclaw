@@ -82,4 +82,53 @@ describe("shouldRepairMissingAcpSessionMetadata", () => {
       });
     });
   });
+
+  it("returns persistent mode for thread-bound ACP binding keys missing sqlite metadata", async () => {
+    await withTempDir({ prefix: "openclaw-acp-repair-" }, async (home) => {
+      process.env.OPENCLAW_STATE_DIR = path.join(home, "state");
+      const storePath = path.join(home, "agents/codex/sessions/sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
+      const entry: SessionEntry = {
+        sessionId: "child-session-id",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+        parentSessionKey: "agent:main:main",
+      };
+      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+
+      expect(
+        shouldRepairMissingAcpSessionMetadata({
+          cfg: { session: { store: storePath } },
+          sessionKey,
+        }),
+      ).toEqual({
+        sessionKey,
+        agent: "codex",
+        mode: "persistent",
+        backendId: undefined,
+      });
+    });
+  });
+
+  it("does not repair ACP rows without explicit lifecycle evidence", async () => {
+    await withTempDir({ prefix: "openclaw-acp-repair-" }, async (home) => {
+      process.env.OPENCLAW_STATE_DIR = path.join(home, "state");
+      const storePath = path.join(home, "agents/codex/sessions/sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      const sessionKey = "agent:codex:acp:54143f55-ea57-46be-9444-663f086780f1";
+      const entry: SessionEntry = {
+        sessionId: "child-session-id",
+        updatedAt: Date.now(),
+      };
+      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+
+      expect(
+        shouldRepairMissingAcpSessionMetadata({
+          cfg: { session: { store: storePath } },
+          sessionKey,
+        }),
+      ).toBeNull();
+    });
+  });
 });

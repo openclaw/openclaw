@@ -392,7 +392,7 @@ export function createSessionsSendTool(opts?: {
         const resolveParams: Record<string, unknown> = {
           label: labelParam,
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-          ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
+          ...(effectiveRequesterKey ? { spawnedBy: effectiveRequesterKey } : {}),
         };
         let resolvedKey;
         try {
