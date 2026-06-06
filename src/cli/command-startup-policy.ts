@@ -63,6 +63,10 @@ export function shouldEnsureCliPathForCommandPath(commandPath: string[]): boolea
   return commandPath.length === 0 || resolveCliCommandPathPolicy(commandPath).ensureCliPath;
 }
 
+function shouldReserveStdoutForProtocol(commandPath: string[]): boolean {
+  return commandPath[0] === "hooks" && commandPath[1] === "relay";
+}
+
 export function resolveCliStartupPolicy(params: {
   argv?: string[];
   commandPath: string[];
@@ -70,7 +74,8 @@ export function resolveCliStartupPolicy(params: {
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
 }) {
-  const suppressDoctorStdout = params.jsonOutputMode;
+  const suppressDoctorStdout =
+    params.jsonOutputMode || shouldReserveStdoutForProtocol(params.commandPath);
   const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
   const env = params.env ?? process.env;
   return {
