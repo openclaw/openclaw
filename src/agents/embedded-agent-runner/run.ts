@@ -2935,6 +2935,7 @@ export async function runEmbeddedAgent(
             lastAssistant: attempt.lastAssistant,
             currentAssistant: currentAttemptAssistant ?? null,
             lastToolError: attempt.lastToolError,
+            visibleBlockReplyCount: attempt.visibleBlockReplyCount,
             config: params.config,
             isCronTrigger: params.trigger === "cron",
             sessionKey: params.sessionKey ?? params.sessionId,

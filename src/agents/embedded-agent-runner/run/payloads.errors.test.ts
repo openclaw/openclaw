@@ -725,6 +725,38 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadSummary(payloads, { text: "Status loaded." });
   });
 
+  it("suppresses read-only tool warnings after a visible block reply was already delivered", () => {
+    const payloads = buildPayloads({
+      visibleBlockReplyCount: 1,
+      lastToolError: {
+        toolName: "bash",
+        meta: 'search "gpt-5.3-codex-spark" in *.md (in ~/openclaw)',
+        error: "rg: /home/clawuser/codex: No such file or directory (os error 2)",
+        mutatingAction: false,
+      },
+      verboseLevel: "full",
+      toolResultFormat: "markdown",
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
+  it("keeps mutating tool warnings visible after a visible block reply", () => {
+    const payloads = buildPayloads({
+      visibleBlockReplyCount: 1,
+      lastToolError: {
+        toolName: "write",
+        error: "permission denied",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Write");
+    expect(payloads[0]?.text).not.toContain("permission denied");
+  });
+
   it("dedupes identical tool warning text already present in assistant output", () => {
     const seed = buildPayloads({
       lastToolError: {

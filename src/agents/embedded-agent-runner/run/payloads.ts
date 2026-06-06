@@ -219,6 +219,7 @@ export function buildEmbeddedRunPayloads(params: {
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
+  visibleBlockReplyCount?: number;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
   sessionKey: string;
@@ -483,7 +484,8 @@ export function buildEmbeddedRunPayloads(params: {
                 : []
         ).filter((text) => !shouldSuppressRawErrorText(text));
 
-  let hasUserFacingAssistantReply = hasSourceReplyPayload;
+  const hasVisibleBlockReply = (params.visibleBlockReplyCount ?? 0) > 0;
+  let hasUserFacingAssistantReply = hasSourceReplyPayload || hasVisibleBlockReply;
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
   let hasUserFacingFailureAcknowledgement = false;
   for (const text of answerTexts) {

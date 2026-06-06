@@ -5141,6 +5141,7 @@ export async function runEmbeddedAttempt(
         lastAssistant,
         currentAttemptAssistant,
         lastToolError,
+        visibleBlockReplyCount,
         didSendViaMessagingTool: didSendViaMessagingTool(),
         didDeliverSourceReplyViaMessageTool,
         didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
