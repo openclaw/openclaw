@@ -1,3 +1,4 @@
+/** Converts image provider base64/data-url payloads into generated or source image assets. */
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -11,6 +12,7 @@ const DEFAULT_IMAGE_FILE_PREFIX = "image";
 
 // Image asset helpers for provider responses and source uploads. They normalize
 // base64/data-url inputs into in-memory assets with predictable filenames.
+/** Result of conservative image MIME sniffing for provider responses. */
 export type ImageMimeTypeDetection = {
   mimeType: string;
   extension: string;
@@ -33,6 +35,7 @@ function throwMalformedImageResponse(message: string | undefined): never | undef
   return undefined;
 }
 
+/** Maps an image MIME type to a stable filename extension. */
 export function imageFileExtensionForMimeType(
   mimeType: string | undefined,
   fallback = "png",

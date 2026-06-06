@@ -1,3 +1,4 @@
+/** Builds web-tool secret metadata from config, plugins, and provider contracts. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -523,6 +524,7 @@ function inactivePathsForFetchProvider(provider: PluginWebFetchProviderEntry): s
  * Resolves runtime web search/fetch provider metadata and writes selected credentials into a
  * cloned runtime config without mutating the source config.
  */
+/** Resolves web search/fetch secret metadata from config, plugins, and fallback runtime providers. */
 export async function resolveRuntimeWebTools(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;

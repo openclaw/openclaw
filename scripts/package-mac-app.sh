@@ -42,7 +42,7 @@ if [[ "$BUNDLE_ID" == *.debug ]]; then
 fi
 
 sparkle_canonical_build_from_version() {
-  node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
+  (cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")
 }
 
 build_path_for_arch() {
@@ -370,6 +370,18 @@ stop_packaged_app_if_running() {
     sleep 0.25
   done
   kill -KILL "${pids[@]}" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    local alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    [[ "$alive" == "0" ]] && return 0
+    sleep 0.1
+  done
+  echo "ERROR: Packaged OpenClaw bundle did not exit: ${pids[*]}" >&2
+  return 1
 }
 
 stop_packaged_app_if_running

@@ -1,3 +1,4 @@
+/** Clears reset-related queues and system events for session keys. */
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 import { clearSessionQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
 

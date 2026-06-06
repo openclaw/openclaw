@@ -1,3 +1,4 @@
+// Assertions for kitchen-sink plugin E2E scenarios.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -109,7 +110,11 @@ function scanLogs() {
     /\blevel["']?\s*:\s*["']error["']/iu,
     /\[(?:error|ERROR)\]/u,
   ];
-  const allow = [/0 errors?/iu, /expected no diagnostics errors?/iu, /diagnostics errors?:\s*$/iu];
+  const allow = [
+    /^\s*0 errors?\s*$/iu,
+    /^\s*expected no diagnostics errors?\s*$/iu,
+    /^\s*diagnostics errors?:\s*$/iu,
+  ];
   const findings = [];
   let omittedFindings = false;
   for (const file of files) {
@@ -438,7 +443,13 @@ function assertInstalled() {
     expectIncludes(inspect.services, "kitchen-sink-service", "services");
     if (surfaceMode === "full") {
       expectIncludesAny(inspect.commands, ["kitchen", "kitchen-sink-command"], "commands");
-      expectIncludesAny(toolNames, ["kitchen_sink_text", "kitchen-sink-tool"], "tools");
+      for (const toolName of [
+        "kitchen_sink_text",
+        "kitchen_sink_search",
+        "kitchen_sink_image_job",
+      ]) {
+        expectIncludes(toolNames, toolName, "tools");
+      }
     } else {
       expectIncludes(inspect.commands, "kitchen", "commands");
       expectIncludes(toolNames, "kitchen_sink_text", "tools");

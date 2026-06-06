@@ -1,3 +1,5 @@
+// Session history HTTP tests cover transcript-backed history responses,
+// operator read auth, exact assistant messages, and transcript update delivery.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -54,10 +56,10 @@ async function seedSession(params?: { text?: string }) {
     storePath,
   });
   if (params?.text) {
-    const appended = await appendAssistantMessageToSessionTranscript({
+    const appended = await appendExactAssistantMessageToSessionTranscript({
       sessionKey: "agent:main:main",
-      text: params.text,
       storePath,
+      message: makeTranscriptAssistantMessage({ text: params.text }),
     });
     expect(appended.ok).toBe(true);
   }
@@ -67,13 +69,15 @@ async function seedSession(params?: { text?: string }) {
 function makeTranscriptAssistantMessage(params: {
   text: string;
   content?: AssistantMessage["content"];
+  provider?: string;
+  model?: string;
 }): AssistantMessage {
   return {
     role: "assistant" as const,
     content: params.content ?? [{ type: "text", text: params.text }],
     api: "openai-responses",
-    provider: "openclaw",
-    model: "delivery-mirror",
+    provider: params.provider ?? "openai",
+    model: params.model ?? "gpt-5.5",
     usage: {
       input: 0,
       output: 0,
@@ -91,6 +95,16 @@ function makeTranscriptAssistantMessage(params: {
     stopReason: "stop" as const,
     timestamp: Date.now(),
   };
+}
+
+function makeDeliveryMirrorAssistantMessage(
+  params: Parameters<typeof makeTranscriptAssistantMessage>[0],
+): AssistantMessage {
+  return makeTranscriptAssistantMessage({
+    ...params,
+    provider: "openclaw",
+    model: "delivery-mirror",
+  });
 }
 
 async function appendTranscriptMessage(params: {
@@ -117,7 +131,11 @@ async function appendVisibleAssistantMessage(params: {
   text: string;
   storePath: string;
 }) {
-  const appended = await appendAssistantMessageToSessionTranscript(params);
+  const appended = await appendExactAssistantMessageToSessionTranscript({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    message: makeTranscriptAssistantMessage({ text: params.text }),
+  });
   expect(appended.ok).toBe(true);
   if (!appended.ok) {
     throw new Error(`append failed: ${appended.reason}`);
@@ -358,6 +376,24 @@ describe("session history HTTP endpoints", () => {
       });
       expect(body.sessionKey).toBe("agent:main:main");
       expect(body.messages?.[0]?.content?.[0]?.text).toBe("history with bad host");
+    });
+  });
+
+  test("keeps standalone delivery-mirror rows in direct REST history", async () => {
+    const { storePath } = await seedSession({ text: "visible history" });
+    await appendTranscriptMessage({
+      sessionKey: "agent:main:main",
+      storePath,
+      message: makeDeliveryMirrorAssistantMessage({ text: "raw delivery mirror" }),
+      emitInlineMessage: false,
+    });
+
+    await withGatewayHarness(async (harness) => {
+      const body = await readSessionHistoryBody(harness.port, "agent:main:main");
+      expect(body.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+        "visible history",
+        "raw delivery mirror",
+      ]);
     });
   });
 

@@ -1,3 +1,4 @@
+// Applies plugin auto-enable decisions to normalized config objects.
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";

@@ -1,3 +1,4 @@
+// Shares direct-message policy normalization for channel audits.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveGroupAllowFromSources } from "../channels/allow-from.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";

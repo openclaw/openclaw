@@ -1,3 +1,4 @@
+// Defines agent model selection schema fragments.
 import { z } from "zod";
 
 /** Schema for agent model config accepting a string or fallback object. */

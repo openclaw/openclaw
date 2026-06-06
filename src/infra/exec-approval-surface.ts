@@ -1,3 +1,4 @@
+// Resolves native approval support for the initiating channel surface.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   getChannelPlugin,

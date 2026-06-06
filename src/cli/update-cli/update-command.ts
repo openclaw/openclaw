@@ -1,3 +1,4 @@
+// Main update implementation for source checkouts, package installs, finalization, and restart handoff.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -827,12 +828,6 @@ function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
   return isGatewayAncestorPid(pid) ? formatGatewayAncestryBlockMessage(pid) : undefined;
 }
 
-function gatewayRuntimeAncestryBlockMessage(
-  runtime: { pid?: unknown } | null | undefined,
-): string | undefined {
-  return gatewayAncestryBlockMessage(runtime?.pid);
-}
-
 function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
   return jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout;
 }
@@ -899,7 +894,7 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
     };
   }
 
-  const blockMessage = gatewayRuntimeAncestryBlockMessage(serviceState.runtime);
+  const blockMessage = gatewayAncestryBlockMessage(serviceState.runtime?.pid);
   if (blockMessage) {
     return {
       stopped: false,
@@ -1869,6 +1864,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       reason: "source-changed",
       workspaceDir: params.root,
       installRecords: nextInstallRecords,
+      invalidateRuntimeCache: false,
       logger: pluginLogger,
     });
   }

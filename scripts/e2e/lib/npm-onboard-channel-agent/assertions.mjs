@@ -1,3 +1,4 @@
+// Assertions for npm onboard channel-agent E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -29,7 +30,11 @@ const statusSectionTitles = new Set([
 ]);
 
 function normalizedStatusHeading(line) {
-  return stripAnsi(line).trim().replace(/^#+\s*/, "").trim().toLowerCase();
+  return stripAnsi(line)
+    .trim()
+    .replace(/^#+\s*/, "")
+    .trim()
+    .toLowerCase();
 }
 
 function extractStatusSection(text, title) {

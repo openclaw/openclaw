@@ -1,3 +1,5 @@
+// CLI backend live helpers prepare workspace/bootstrap fixtures and gateway
+// clients for live CLI backend model/runtime tests.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -60,6 +62,13 @@ export type CliBackendLiveEnvSnapshot = {
   minimalGateway?: string;
   anthropicApiKey?: string;
   anthropicApiKeyOld?: string;
+};
+
+export const CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV = "OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP";
+
+export type CliBackendLiveProviderSkipDecision = {
+  action: "fail" | "skip";
+  message: string;
 };
 
 function normalizeCliRuntimeModelTarget(raw: string | undefined): string | undefined {
@@ -199,6 +208,28 @@ export function shouldRunCliModelSwitchProbe(providerId: string, modelRef: strin
     return isTruthyEnvValue(raw);
   }
   return typeof resolveCliModelSwitchProbeTarget(providerId, modelRef) === "string";
+}
+
+export function shouldAllowCliBackendLiveProviderSkip(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return isTruthyEnvValue(env[CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV]);
+}
+
+export function resolveCliBackendLiveProviderSkipDecision(params: {
+  allowProviderSkip: boolean;
+  label: string;
+  providerId: string;
+  reasonLabel: string;
+}): CliBackendLiveProviderSkipDecision {
+  const message = `${params.label} for provider "${params.providerId}" was blocked by ${params.reasonLabel}.`;
+  if (params.allowProviderSkip) {
+    return { action: "skip", message };
+  }
+  return {
+    action: "fail",
+    message: `${message} Set ${CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV}=1 only for advisory live probes.`,
+  };
 }
 
 export function matchesCliBackendReply(text: string, expected: string): boolean {

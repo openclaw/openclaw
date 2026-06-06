@@ -1,3 +1,4 @@
+// User turn transcript helpers extract user-turn text from session transcripts.
 import path from "node:path";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../agents/runtime/index.js";
@@ -296,7 +297,14 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
   const hasMedia = Boolean(mediaFields.MediaPath);
   const text = normalizeTranscriptText(params.text);
+  // Storage is BARE (no timestamp prefix). The per-message timestamp is added
+  // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
+  // derived from each message's own `timestamp` field, so the current turn and
+  // every historical turn serialize identically on the wire. Persisting a stamp
+  // here would NOT match the bare-current arrival (the gateway no longer stamps
+  // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
   const content = text || (hasMedia ? (params.mediaOnlyText ?? "") : "");
+
   const message = {
     role: "user",
     content,

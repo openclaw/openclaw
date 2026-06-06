@@ -1,3 +1,4 @@
+// Defines environment-variable config metadata and preservation rules.
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -30,6 +31,9 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
       if (isBlockedConfigEnvVar(key)) {
         continue;
       }
+      if (containsEnvVarReference(value)) {
+        continue;
+      }
       entries[key] = value;
     }
   }
@@ -46,6 +50,9 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
       continue;
     }
     if (isBlockedConfigEnvVar(key)) {
+      continue;
+    }
+    if (containsEnvVarReference(value)) {
       continue;
     }
     entries[key] = value;

@@ -1,3 +1,4 @@
+// Resolves commitment runtime configuration from agent and user settings.
 import { resolveUserTimezone } from "../agents/date-time.js";
 import type { OpenClawConfig } from "../config/config.js";
 

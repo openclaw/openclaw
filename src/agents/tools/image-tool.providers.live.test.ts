@@ -1,3 +1,5 @@
+// Live image provider tests verify real provider calls downscale large local
+// images before sending them to OpenAI or Anthropic.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +19,7 @@ import {
   isServerErrorMessage,
 } from "../../plugin-sdk/test-env.js";
 import { isLiveTestEnabled } from "../live-test-helpers.js";
+import { isLiveAuthDrift } from "../live-test-provider-drift.js";
 import { createImageTool, testing } from "./image-tool.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim() ?? "";
@@ -80,6 +83,8 @@ function createLargeCenterRedPng(size: number): Buffer {
 }
 
 function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
+  // The provider hook receives JPEG bytes after optimization; parsing SOF
+  // markers keeps the downscale proof independent from image libraries.
   let offset = 2;
   while (offset + 9 < buffer.length) {
     if (buffer[offset] !== 0xff) {
@@ -111,6 +116,7 @@ function isSkippableLiveError(error: unknown): boolean {
   const message = formatLiveError(error);
   return (
     isBillingErrorMessage(message) ||
+    isLiveAuthDrift(message) ||
     isOverloadedErrorMessage(message) ||
     isServerErrorMessage(message) ||
     /timed out|operation was aborted/i.test(message)

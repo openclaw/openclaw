@@ -1,3 +1,4 @@
+// Defines and sanitizes runtime diagnostic event payloads.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {

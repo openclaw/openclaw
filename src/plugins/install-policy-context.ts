@@ -1,3 +1,4 @@
+// Builds install policy context for plugin install checks.
 import type {
   PluginHookBeforeInstallBuiltinScan,
   PluginHookBeforeInstallContext,

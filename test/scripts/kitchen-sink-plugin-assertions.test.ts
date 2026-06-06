@@ -1,3 +1,4 @@
+// Kitchen Sink Plugin Assertions tests cover kitchen sink plugin assertions script behavior.
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -52,7 +53,7 @@ function fullSurfaceInspectPayload(pluginId: string) {
       hookCount: 30,
     },
     services: ["kitchen-sink-service"],
-    tools: [{ names: ["kitchen_sink_text"] }],
+    tools: [{ names: ["kitchen_sink_text", "kitchen_sink_search", "kitchen_sink_image_job"] }],
     typedHooks: Array.from({ length: 30 }, (_, index) => `hook-${index}`),
   };
 }
@@ -64,9 +65,11 @@ function diagnosticErrors(messages: string[]) {
 function runAssertInstalled({
   diagnostics = [],
   env = {},
+  inspectPayload,
 }: {
   diagnostics?: Array<{ level: string; message: string }>;
   env?: NodeJS.ProcessEnv;
+  inspectPayload?: ReturnType<typeof fullSurfaceInspectPayload>;
 } = {}) {
   const label = `diagnostics-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const pluginId = "openclaw-kitchen-sink-fixture";
@@ -86,7 +89,7 @@ function runAssertInstalled({
       diagnostics,
       plugins: [{ id: pluginId, status: "loaded" }],
     });
-    writeJson(inspectJsonPath, fullSurfaceInspectPayload(pluginId));
+    writeJson(inspectJsonPath, inspectPayload ?? fullSurfaceInspectPayload(pluginId));
     writeJson(inspectAllJsonPath, { diagnostics: [] });
     writeJson(installsPath, {
       installRecords: {
@@ -227,6 +230,18 @@ describe("kitchen-sink plugin assertions", () => {
     expect(result.status).toBe(0);
   });
 
+  it("requires the full kitchen-sink tool surface in full mode", () => {
+    const inspectPayload = fullSurfaceInspectPayload("openclaw-kitchen-sink-fixture");
+    inspectPayload.tools = [{ names: ["kitchen_sink_text"] }];
+    const result = runAssertInstalled({
+      diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
+      inspectPayload,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("tools missing kitchen_sink_search");
+  });
+
   it("requires ClawHub kitchen-sink fixtures to expose context engines", () => {
     const result = runAssertClawhubInstalled({ contextEngineIds: [] });
 
@@ -271,6 +286,28 @@ describe("kitchen-sink plugin assertions", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("log scan passed");
       expect(`${result.stdout}\n${result.stderr}`).not.toContain("stale sibling failure");
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
+  it("does not allow dirty error lines just because they mention zero errors", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
+    const home = path.join(parent, "home");
+    const scratchRoot = path.join(parent, "scratch");
+    try {
+      mkdirSync(home, { recursive: true });
+      mkdirSync(scratchRoot, { recursive: true });
+      writeFileSync(
+        path.join(scratchRoot, "dirty.log"),
+        "[ERROR] 0 errors reported but fatal state remained\n",
+      );
+
+      const result = runScanLogs({ home, scratchRoot });
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain("unexpected error-like log lines");
+      expect(`${result.stdout}\n${result.stderr}`).toContain("fatal state remained");
     } finally {
       rmSync(parent, { force: true, recursive: true });
     }

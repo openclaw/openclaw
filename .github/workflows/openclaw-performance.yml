@@ -309,24 +309,7 @@ jobs:
           report_md="${report_json%.json}.md"
           effective_status="$status"
           if [[ "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
-            if REPORT_JSON="$report_json" node <<'NODE'
-          const fs = require("node:fs");
-          const report = JSON.parse(fs.readFileSync(process.env.REPORT_JSON, "utf8"));
-          const statuses = report.summary?.statuses ?? {};
-          const nonPassStatuses = Object.entries(statuses)
-            .filter(([status, count]) => status !== "PASS" && Number(count) > 0);
-          const baselineRegressionCount =
-            Number(report.baseline?.comparison?.regressionCount ?? report.gate?.baseline?.regressionCount ?? 0);
-          const gate = report.gate;
-          const toleratedPartial =
-            gate?.verdict === "PARTIAL" &&
-            Number(gate.blockingCount ?? 0) === 0 &&
-            baselineRegressionCount === 0 &&
-            nonPassStatuses.length === 0;
-          if (!toleratedPartial) {
-            process.exit(1);
-          }
-          NODE
+            if node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"
             then
               effective_status=0
               {

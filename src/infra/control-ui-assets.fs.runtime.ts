@@ -1,3 +1,4 @@
+// Provides an fs facade for Control UI asset runtime tests.
 import fs from "node:fs";
 
 // Control UI asset tests/runtime import fs through this facade so the asset

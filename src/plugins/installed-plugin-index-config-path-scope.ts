@@ -1,3 +1,4 @@
+// Resolves config path scope entries for installed plugin index records.
 import type {
   InstalledPluginIndex,
   InstalledPluginIndexRecord,

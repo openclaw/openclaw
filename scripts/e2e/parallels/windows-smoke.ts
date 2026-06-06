@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
+// Windows Smoke script supports OpenClaw repository automation.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { windowsAgentWorkspaceScript } from "./agent-workspace.ts";
@@ -16,6 +17,7 @@ import {
   run,
   say,
   warn,
+  withProgressOnStderr,
   writeSummaryMarkdown,
   writeJson,
   type Mode,
@@ -821,7 +823,10 @@ if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`,
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  await new WindowsSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
+  const options = parseArgs(process.argv.slice(2));
+  const runSmoke = () => new WindowsSmoke(options).run();
+  const runPromise = options.json ? withProgressOnStderr(runSmoke) : runSmoke();
+  await runPromise.catch((error: unknown) => {
     die(error instanceof Error ? error.message : String(error));
   });
 }

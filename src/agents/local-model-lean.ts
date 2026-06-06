@@ -1,3 +1,8 @@
+/**
+ * Local-model lean tool filtering.
+ * Removes high-latency or channel-dependent tools for local models while
+ * preserving explicitly required delivery tools.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
@@ -17,6 +22,7 @@ function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): Set<
   );
 }
 
+/** Resolves tool names that must survive local-model lean filtering. */
 export function resolveLocalModelLeanPreserveToolNames(params?: {
   toolNames?: Iterable<string>;
   forceMessageTool?: boolean;
@@ -29,6 +35,8 @@ export function resolveLocalModelLeanPreserveToolNames(params?: {
   return [...new Set(names)];
 }
 
+// Agent id may arrive explicitly, through the session key, or via config default.
+// Resolve once so default/agent experimental flags use the same scope.
 function resolveLocalModelLeanAgentId(params: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -48,6 +56,7 @@ function resolveLocalModelLeanAgentId(params: {
   return params.config ? resolveDefaultAgentId(params.config) : undefined;
 }
 
+/** Returns true when local-model lean mode is enabled for the selected agent. */
 export function isLocalModelLeanEnabled(params: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -62,6 +71,7 @@ export function isLocalModelLeanEnabled(params: {
   return resolvedExperimental?.localModelLean ?? false;
 }
 
+/** Filters tools for local-model lean mode while preserving required delivery tools. */
 export function filterLocalModelLeanTools(params: {
   tools: AnyAgentTool[];
   config?: OpenClawConfig;

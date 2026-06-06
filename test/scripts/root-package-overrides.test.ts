@@ -1,3 +1,4 @@
+// Root Package Overrides tests cover root package overrides script behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -52,22 +53,21 @@ describe("root package override guardrails", () => {
     expect(pnpmWorkspace.overrides).not.toHaveProperty(packageName);
   });
 
-  it("pins the node-domexception alias exactly in npm and pnpm overrides", () => {
+  it("pins the node-domexception alias exactly in pnpm override metadata", () => {
     const manifest = readRootManifest();
     const pnpmWorkspace = readPnpmWorkspaceConfig();
     const pnpmOverride = pnpmWorkspace.overrides?.["node-domexception"];
-    const npmOverride = manifest.overrides?.["node-domexception"];
 
     expect(pnpmOverride).toBe("npm:@nolyfill/domexception@1.0.28");
-    expect(npmOverride).toBe(pnpmOverride);
+    expect(manifest.overrides).toBeUndefined();
   });
 
-  it("keeps npm, pnpm, and lockfile override metadata aligned", () => {
+  it("keeps pnpm and lockfile override metadata aligned without duplicating root package policy", () => {
     const manifest = readRootManifest();
     const pnpmWorkspace = readPnpmWorkspaceConfig();
     const pnpmLockfile = readPnpmLockfileConfig();
 
-    expect(manifest.overrides).toEqual(pnpmWorkspace.overrides);
+    expect(manifest.overrides).toBeUndefined();
     expect(pnpmLockfile.overrides).toEqual(pnpmWorkspace.overrides);
   });
 });

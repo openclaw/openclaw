@@ -1,3 +1,4 @@
+// Google plugin module implements vertex adc behavior.
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
@@ -92,6 +93,17 @@ export function isGoogleVertexCredentialsMarker(
   return apiKey === undefined || apiKey === GCP_VERTEX_CREDENTIALS_MARKER;
 }
 
+function hasGoogleVertexProjectEnv(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(
+    normalizeOptionalString(env.GOOGLE_CLOUD_PROJECT) ||
+    normalizeOptionalString(env.GCLOUD_PROJECT),
+  );
+}
+
+function hasGoogleVertexLocationEnv(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(normalizeOptionalString(env.GOOGLE_CLOUD_LOCATION));
+}
+
 function resolveGoogleApplicationCredentialsPath(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
@@ -180,6 +192,16 @@ export function hasGoogleVertexAuthorizedUserAdcSync(
     }
   }
   return false;
+}
+
+export function resolveGoogleVertexConfigApiKey(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return hasGoogleVertexProjectEnv(env) &&
+    hasGoogleVertexLocationEnv(env) &&
+    hasGoogleVertexAuthorizedUserAdcSync(env)
+    ? GCP_VERTEX_CREDENTIALS_MARKER
+    : undefined;
 }
 
 async function refreshGoogleVertexAuthorizedUserAccessToken(params: {

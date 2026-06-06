@@ -1,3 +1,4 @@
+// Formats OpenClaw CLI command snippets for chat-facing command responses.
 function quoteShellArg(value: string): string {
   if (process.platform === "win32") {
     return `'${value.replaceAll("'", "''")}'`;

@@ -1,8 +1,10 @@
+// Builds grouped Vitest duration reports or compares two grouped reports.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
@@ -11,7 +13,6 @@ import {
   renderGroupedTestComparison,
   renderGroupedTestReport,
 } from "./lib/test-group-report.mjs";
-import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { formatMs } from "./lib/vitest-report-cli-utils.mjs";
 import { resolveVitestNodeArgs } from "./run-vitest.mjs";
 import {
@@ -56,6 +57,9 @@ function usage() {
   ].join("\n");
 }
 
+/**
+ * Parses report, compare, and Vitest-run options for grouped test reports.
+ */
 export function parseTestGroupReportArgs(argv) {
   const args = {
     allowFailures: false,
@@ -212,6 +216,9 @@ function formatSpawnError(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Runs a command, captures text output, and terminates timed-out process groups.
+ */
 export function spawnText(command, args, options) {
   const maxBuffer = 1024 * 1024 * 64;
   const timeoutMs = options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
@@ -399,18 +406,49 @@ async function runVitestJsonReport(params) {
 }
 
 function readReportInput(entry) {
+  const report = JSON.parse(fs.readFileSync(entry.reportPath, "utf8"));
+  if (!report || typeof report !== "object" || !Array.isArray(report.testResults)) {
+    throw new Error("missing testResults array");
+  }
+  if (report.testResults.length === 0) {
+    throw new Error("empty testResults array");
+  }
   return {
     config: entry.config,
-    report: JSON.parse(fs.readFileSync(entry.reportPath, "utf8")),
+    report,
     reportPath: entry.reportPath,
     run: entry.run ?? null,
   };
+}
+
+export function readReportInputs(entries) {
+  const invalid = [];
+  const missing = [];
+  const reports = [];
+  for (const entry of entries) {
+    if (!fs.existsSync(entry.reportPath)) {
+      missing.push(entry);
+      continue;
+    }
+    try {
+      reports.push(readReportInput(entry));
+    } catch (error) {
+      invalid.push({
+        entry,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { invalid, missing, reports };
 }
 
 function readGroupedReport(reportPath) {
   return JSON.parse(fs.readFileSync(reportPath, "utf8"));
 }
 
+/**
+ * Resolves JSON report and per-run artifact directories from an output path.
+ */
 export function resolveReportArtifactDirs(outputPath) {
   const outputDir = path.dirname(outputPath);
   const outputExt = path.extname(outputPath);
@@ -456,6 +494,9 @@ function buildFullSuiteLeafRunPlans() {
   }
 }
 
+/**
+ * Resolves explicit or full-suite Vitest config plans for report generation.
+ */
 export function resolveRunPlans(args) {
   if (args.reports.length > 0) {
     return [];
@@ -477,6 +518,9 @@ export function resolveRunPlans(args) {
   }));
 }
 
+/**
+ * Builds env for full-suite report runs, including per-config cache paths.
+ */
 export function resolveFullSuiteVitestEnv(args, env = process.env, label = "") {
   if (
     !args.fullSuite ||
@@ -491,6 +535,9 @@ export function resolveFullSuiteVitestEnv(args, env = process.env, label = "") {
   };
 }
 
+/**
+ * Resolves bounded concurrency for grouped report run plans.
+ */
 export function resolveRunPlanConcurrency(args, runPlanCount) {
   if (runPlanCount <= 1) {
     return 1;
@@ -504,6 +551,9 @@ export function resolveRunPlanConcurrency(args, runPlanCount) {
   return Math.min(2, runPlanCount);
 }
 
+/**
+ * Builds concrete report run specs from parsed args and config plans.
+ */
 export function resolveReportRunSpecs(args, runPlans, params = {}) {
   const concurrency = params.concurrency ?? resolveRunPlanConcurrency(args, runPlans.length);
   const env = params.env ?? process.env;
@@ -644,9 +694,24 @@ async function main() {
     process.exit(exitCode);
   }
 
-  const reportInputs = runEntries
-    .filter((entry) => fs.existsSync(entry.reportPath))
-    .map(readReportInput);
+  const reportInputsResult = readReportInputs(runEntries);
+  if (reportInputsResult.missing.length > 0) {
+    for (const entry of reportInputsResult.missing) {
+      console.error(
+        `[test-group-report] missing JSON report for ${entry.config}: ${entry.reportPath}`,
+      );
+    }
+    process.exit(1);
+  }
+  if (reportInputsResult.invalid.length > 0) {
+    for (const { entry, reason } of reportInputsResult.invalid) {
+      console.error(
+        `[test-group-report] invalid JSON report for ${entry.config}: ${entry.reportPath} (${reason})`,
+      );
+    }
+    process.exit(1);
+  }
+  const reportInputs = reportInputsResult.reports;
   const report = buildGroupedTestReport({
     groupBy: args.groupBy,
     maxTestMs: args.maxTestMs,
