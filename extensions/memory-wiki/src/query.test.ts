@@ -209,6 +209,28 @@ describe("searchMemoryWiki", () => {
     expect(getActiveMemorySearchManagerMock).not.toHaveBeenCalled();
   });
 
+  it("finds wiki pages stored in subfolders of query dirs", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.mkdir(path.join(rootDir, "sources", "meetings"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "meetings", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
+        body: "# Alpha Source\n\nalpha body text\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({ config, query: "alpha" });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.corpus).toBe("wiki");
+    expect(results[0]?.path).toBe("sources/meetings/alpha.md");
+    expect(getActiveMemorySearchManagerMock).not.toHaveBeenCalled();
+  });
+
   it("uses the default search limit for non-finite maxResults", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,

@@ -88,25 +88,26 @@ async function collectVaultCounts(vaultPath: string): Promise<{
   const dirs = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
   for (const dir of dirs) {
     const entries = await fs
-      .readdir(path.join(vaultPath, dir), { withFileTypes: true })
+      .readdir(path.join(vaultPath, dir), { withFileTypes: true, recursive: true })
       .catch(() => []);
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".md") || entry.name === "index.md") {
         continue;
       }
-      const kind = inferWikiPageKind(path.join(dir, entry.name));
+      const absolutePath = path.join(entry.parentPath, entry.name);
+      const relativePath = path.relative(vaultPath, absolutePath);
+      const kind = inferWikiPageKind(relativePath);
       if (kind) {
         pageCounts[kind] += 1;
       }
       if (dir === "sources") {
-        const absolutePath = path.join(vaultPath, dir, entry.name);
         const raw = await fs.readFile(absolutePath, "utf8").catch(() => null);
         if (!raw) {
           continue;
         }
         const page = toWikiPageSummary({
           absolutePath,
-          relativePath: path.join(dir, entry.name),
+          relativePath,
           raw,
         });
         if (!page) {
