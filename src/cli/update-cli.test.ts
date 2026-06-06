@@ -5108,6 +5108,80 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("fails package update restart verification when a surviving gateway is healthy but supervisor state is missing", async () => {
+    const updatedRoot = createCaseDir("openclaw-updated-root");
+    const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");
+    setupUpdatedRootRefresh({
+      entrypoints: [updatedEntrypoint],
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: updatedRoot,
+          before: { version: "2026.5.20" },
+          after: { version: "2026.6.1" },
+        }),
+    });
+    let serviceStateRead = 0;
+    serviceReadCommand.mockImplementation(async () => {
+      serviceStateRead += 1;
+      if (serviceStateRead === 1) {
+        return {
+          programArguments: ["openclaw", "gateway", "run"],
+          environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+          sourcePath: "/etc/systemd/system/openclaw-gateway.service",
+        };
+      }
+      return null;
+    });
+    serviceLoaded.mockImplementation(async () => serviceStateRead === 1);
+    serviceReadRuntime.mockImplementation(async () =>
+      serviceStateRead === 1
+        ? { status: "running", pid: 4242, state: "running" }
+        : {
+            status: "running",
+            pid: 4242,
+            state: "running",
+            missingUnit: true,
+            detail: "Unit openclaw-gateway.service could not be found.",
+          },
+    );
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: {
+        version: "2026.6.1",
+        connId: "surviving-updated-gateway",
+      },
+      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+      connectLatencyMs: 1,
+      error: null,
+      url: "ws://127.0.0.1:18789",
+    });
+
+    await updateCommand({ yes: true });
+
+    const installCall = gatewayCommandCall(updatedEntrypoint, "install");
+    expect(installCall?.[0][0]).toContain("node");
+    expect(installCall?.[0].slice(1)).toEqual([updatedEntrypoint, "gateway", "install", "--force"]);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    const logs = vi
+      .mocked(defaultRuntime.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(logs).not.toContain(
+      "Gateway already reports the updated version after service refresh; skipped redundant restart.",
+    );
+    expect(logs).toContain("Gateway service supervision was not verified after restart.");
+    expect(logs).toContain("installed=false");
+    expect(logs).toContain("loaded=false");
+    expect(logs).toContain("Unit openclaw-gateway.service could not be found.");
+  });
+
   it("writes the control-plane update sentinel after managed package restart health passes", async () => {
     const stateDir = await createTrackedTempDir("openclaw-update-sentinel-state-");
     const metaDir = await createTrackedTempDir("openclaw-update-sentinel-meta-");
