@@ -300,7 +300,7 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
   });
 
-  it("prints macOS launchd stdout and suppressed stderr when gateway is not listening", () => {
+  it("prints macOS launchd stdout and stderr log paths when gateway is not listening", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
@@ -345,7 +345,10 @@ describe("printDaemonStatus", () => {
 
     expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
     expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
-    expectMockLineContains(runtime.error, "Errors: suppressed");
+    expectMockLineContains(
+      runtime.error,
+      "Errors: /Users/test/Library/Logs/openclaw/gateway.err.log",
+    );
     const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
     expect(errors.match(/Last gateway error:/g)).toHaveLength(1);
   });
