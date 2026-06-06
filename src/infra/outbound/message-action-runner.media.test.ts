@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -309,6 +310,34 @@ describe("runMessageAction media behavior", () => {
     const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
     expect(sendArgs.mediaUrl).toBe(result.sendResult?.mediaUrl);
     expect(sendArgs.mediaUrls).toEqual([result.sendResult?.mediaUrl]);
+  });
+
+  it("rejects oversized buffer-only send attachments before channel dispatch", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "send",
+        params: {
+          channel: "workspace",
+          target: "12345678",
+          message: "too large",
+          buffer: Buffer.alloc(MEDIA_MAX_BYTES + 1, 1).toString("base64"),
+          contentType: "application/octet-stream",
+        },
+      }),
+    ).rejects.toThrow(/exceeds|limit/i);
+
+    expect(channelResolutionMocks.executeSendAction).not.toHaveBeenCalled();
   });
 
   it("forwards asVoice from send actions into core delivery", async () => {

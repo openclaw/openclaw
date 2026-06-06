@@ -19,6 +19,7 @@ import {
   type OutboundMediaReadFile,
 } from "../../media/load-options.js";
 import { resolveOutboundAttachmentFromBuffer } from "../../media/outbound-attachment.js";
+import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
@@ -124,6 +125,20 @@ function decodeAttachmentBuffer(base64: string): Buffer {
   return Buffer.from(base64, "base64");
 }
 
+function resolveSendBufferMaxBytes(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+}): number {
+  return (
+    resolveAttachmentMaxBytes({
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+    }) ?? MEDIA_MAX_BYTES
+  );
+}
+
 /** Materializes buffer-only `send` params into outbound media paths before channel delivery. */
 export async function materializeSendBufferMediaParams(params: {
   cfg: OpenClawConfig;
@@ -155,14 +170,9 @@ export async function materializeSendBufferMediaParams(params: {
     inferAttachmentFilename({
       contentType: contentType ?? undefined,
     });
-  const maxBytes = resolveAttachmentMaxBytes({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-  });
   const staged = await resolveOutboundAttachmentFromBuffer(
     decodeAttachmentBuffer(normalized.base64),
-    maxBytes ?? Number.MAX_SAFE_INTEGER,
+    resolveSendBufferMaxBytes(params),
     {
       contentType: contentType ?? undefined,
       filename,

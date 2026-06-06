@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { MEDIA_MAX_BYTES } from "../../media/store.js";
 
 const { resolveChannelMessageToolMediaSourceParamKeysMock } = vi.hoisted(() => ({
   resolveChannelMessageToolMediaSourceParamKeysMock: vi.fn(() => ["avatarPath", "avatarUrl"]),
@@ -663,6 +664,24 @@ describe("message action sandbox media hydration", () => {
     expect(args.media).toBe(args.mediaUrl);
     expect(args.mediaUrls).toEqual([args.media]);
     await expect(fs.readFile(String(args.media), "utf8")).resolves.toBe("artifact bytes");
+  });
+
+  it("rejects oversized buffer-only send params against the default media byte cap", async () => {
+    const args: Record<string, unknown> = {
+      buffer: Buffer.alloc(MEDIA_MAX_BYTES + 1, 1).toString("base64"),
+      contentType: "application/octet-stream",
+    };
+
+    await expect(
+      materializeSendBufferMediaParams({
+        cfg,
+        channel: "workspace",
+        args,
+      }),
+    ).rejects.toThrow(/exceeds|limit/i);
+
+    expect(args.media).toBeUndefined();
+    expect(args.mediaUrl).toBeUndefined();
   });
 
   it("skips send buffer materialization when an explicit media source is present", async () => {
