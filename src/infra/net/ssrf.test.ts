@@ -103,6 +103,7 @@ const idnaMappedReservedHostnameCases = [
   ["svc.ｌｏｃａｌ", "svc.local"],
   ["svc.ｉｎｔｅｒｎａｌ", "svc.internal"],
   ["metadata.google.ｉｎｔｅｒｎａｌ", "metadata.google.internal"],
+  ["ｌｏｃａｌｈｏｓｔ.", "localhost"],
 ] as const;
 
 function createPublicLookup(): LookupFn {
@@ -329,6 +330,15 @@ describe("isBlockedHostnameOrIp", () => {
   it.each(["xn--loclhost-36g", "metadata.google.xn--internl-7fg"])(
     "does not treat IDN homograph hostname %s as a reserved ASCII hostname",
     (hostname) => {
+      expect(isBlockedHostnameOrIp(hostname)).toBe(false);
+    },
+  );
+
+  it.each(["xn--localhost-", "metadata.google.xn--internal-"])(
+    "does not over-block genuine xn-- A-labels that only decode to a reserved display form %s",
+    (hostname) => {
+      // new URL()/DNS keep these as the literal A-label, not localhost/internal,
+      // so ToASCII-based rechecking must leave them allowed.
       expect(isBlockedHostnameOrIp(hostname)).toBe(false);
     },
   );
