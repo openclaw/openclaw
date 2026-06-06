@@ -239,7 +239,6 @@ function formatPressureNextStep(
     ? "nextStep=inspect latest stability bundle or run openclaw gateway diagnostics export; restart gateway if process is unstable"
     : "nextStep=run openclaw gateway status --deep and openclaw gateway diagnostics export; restart gateway if pressure persists";
 }
-
 function logMemoryPressure(params: {
   pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">;
   writeCriticalBundle: boolean;
