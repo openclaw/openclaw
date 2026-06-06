@@ -24,10 +24,9 @@ import {
   stripParallelGeneratedSessionId,
 } from "./parallel-search-normalize.js";
 
-// Stable marker the UI keys off to brand the tool-call label "Parallel Web
-// Search" — this is the user-visible free-tier credit. (No separate attribution
-// string in the payload: nothing consumes it and the model ignores result
-// metadata, so it would be dead weight.)
+// Marks results served by the free Search MCP. The Control UI keys off this to
+// label the tool-call chip "Parallel Web Search". (No attribution string is
+// added to the payload because nothing consumes one.)
 const PARALLEL_FREE_MCP_TRANSPORT = "parallel-free-mcp";
 
 export async function executeParallelFreeWebSearchProviderTool(
