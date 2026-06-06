@@ -52,16 +52,37 @@ const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
 } as const;
 const RESERVED_PLUGIN_APPROVAL_ID_PREFIX = "plugin:";
 
+type ApprovalDeliveryTaskResult = {
+  delivered: boolean;
+  attempted: boolean;
+};
+
+type ApprovalDeliveryHandlerResult =
+  | boolean
+  | {
+      delivered: boolean;
+      attempted?: boolean;
+    };
+
 type ExecApprovalIosPushDelivery = {
   handleRequested?: (
     request: ExecApprovalRequest,
     opts?: {
       isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
     },
-  ) => Promise<boolean>;
+  ) => Promise<ApprovalDeliveryHandlerResult>;
   handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
   handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
 };
+
+function normalizeDeliveryTaskResult(
+  result: ApprovalDeliveryHandlerResult,
+): ApprovalDeliveryTaskResult {
+  if (typeof result === "boolean") {
+    return { delivered: result, attempted: result };
+  }
+  return { delivered: result.delivered, attempted: result.attempted === true };
+}
 
 function normalizeCommandSpans(
   spans: { startIndex: number; endIndex: number }[] | undefined,
@@ -354,15 +375,18 @@ export function createExecApprovalHandlers(
         requireDeliveryRoute: p.requireDeliveryRoute,
         suppressDelivery: p.suppressDelivery,
         deliverRequest: () => {
-          const deliveryTasks: Array<Promise<boolean>> = [];
+          const deliveryTasks: Array<Promise<ApprovalDeliveryTaskResult>> = [];
           if (opts?.forwarder) {
             deliveryTasks.push(
-              opts.forwarder.handleRequested(requestEvent).catch((err: unknown) => {
-                context.logGateway?.error?.(
-                  `exec approvals: forward request failed: ${String(err)}`,
-                );
-                return false;
-              }),
+              opts.forwarder
+                .handleRequested(requestEvent)
+                .then(normalizeDeliveryTaskResult)
+                .catch((err: unknown) => {
+                  context.logGateway?.error?.(
+                    `exec approvals: forward request failed: ${String(err)}`,
+                  );
+                  return { delivered: false, attempted: true };
+                }),
             );
           }
           if (opts?.iosPushDelivery?.handleRequested) {
@@ -381,23 +405,27 @@ export function createExecApprovalHandlers(
                       } as GatewayClient,
                     }),
                 })
+                .then(normalizeDeliveryTaskResult)
                 .catch((err: unknown) => {
                   context.logGateway?.error?.(
                     `exec approvals: iOS push request failed: ${String(err)}`,
                   );
-                  return false;
+                  return { delivered: false, attempted: true };
                 }),
             );
           }
           if (deliveryTasks.length === 0) {
-            return false;
+            return { delivered: false, attempted: false };
           }
           return (async () => {
             let delivered = false;
+            let attempted = false;
             for (const task of deliveryTasks) {
-              delivered = (await task) || delivered;
+              const result = await task;
+              delivered = result.delivered || delivered;
+              attempted = result.attempted || attempted;
             }
-            return delivered;
+            return { delivered, attempted };
           })();
         },
         afterDecision: async (decision) => {

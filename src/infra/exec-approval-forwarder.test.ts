@@ -423,6 +423,61 @@ describe("exec approval forwarder", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
+  it("reports request delivery failure when all approval targets fail", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue({
+      status: "failed",
+      error: new Error("Outbound not configured for channel: discord"),
+    });
+    const { forwarder } = createForwarder({
+      cfg: makeTargetsCfg([{ channel: "discord", to: "channel:123" }]),
+      deliver,
+    });
+
+    await expect(forwarder.handleRequested(baseRequest)).rejects.toThrow(
+      "exec approvals: failed to deliver request req-1",
+    );
+    expect(deliver).toHaveBeenCalledTimes(1);
+
+    await forwarder.handleResolved({
+      id: baseRequest.id,
+      decision: "allow-once",
+      resolvedBy: "discord:channel:123",
+      ts: 2000,
+    });
+    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps approval pending when at least one request target delivers", async () => {
+    vi.useFakeTimers();
+    const deliver = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: "failed",
+        error: new Error("first target failed"),
+      })
+      .mockResolvedValue([]);
+    const { forwarder } = createForwarder({
+      cfg: makeTargetsCfg([
+        { channel: "discord", to: "channel:123" },
+        { channel: "slack", to: "U123" },
+      ]),
+      deliver,
+    });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    expect(deliver).toHaveBeenCalledTimes(2);
+
+    await forwarder.handleResolved({
+      id: baseRequest.id,
+      decision: "allow-once",
+      resolvedBy: "slack:U123",
+      ts: 2000,
+    });
+    expect(deliver).toHaveBeenCalledTimes(4);
+  });
+
   it("deduplicates session and explicit approval targets through normalized route identity", async () => {
     vi.useFakeTimers();
     const cfg = {

@@ -382,6 +382,38 @@ describe("createPluginApprovalHandlers", () => {
       }
     });
 
+    it("expires plugin approvals when explicit forwarding fails despite originating chat routing", async () => {
+      const forwarder = {
+        handleRequested: vi.fn(async () => false),
+        handleResolved: vi.fn(async () => {}),
+        handlePluginApprovalRequested: vi.fn(async () => {
+          throw new Error("plugin delivery failed");
+        }),
+        handlePluginApprovalResolved: vi.fn(async () => {}),
+        stop: vi.fn(),
+      };
+      const handlers = createPluginApprovalHandlers(manager, { forwarder });
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Sensitive action",
+          description: "Desc",
+          turnSourceChannel: "slack",
+          turnSourceTo: "C123",
+        },
+        {
+          respond,
+          context: createApprovalContext({ hasExecApprovalClients: () => false }),
+        },
+      );
+
+      await handlers["plugin.approval.request"](opts);
+
+      expect(forwarder.handlePluginApprovalRequested).toHaveBeenCalledTimes(1);
+      expect(expectResponseOk(respond).decision).toBeNull();
+    });
+
     it.each(invalidRequestCases)("rejects $name", async ({ params }) => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.request", params);

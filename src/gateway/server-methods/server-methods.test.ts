@@ -3438,6 +3438,36 @@ describe("exec approval handlers", () => {
     }
   });
 
+  it("expires when explicit exec forwarding fails instead of falling back to originating chat", async () => {
+    const { manager, handlers, forwarder, respond, context } =
+      createForwardingExecApprovalFixture();
+    const expireSpy = vi.spyOn(manager, "expire");
+    forwarder.handleRequested.mockRejectedValueOnce(new Error("approval delivery failed"));
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        timeoutMs: 60_000,
+        id: "approval-forwarding-failed",
+        host: "gateway",
+        turnSourceChannel: "slack",
+        turnSourceTo: "D123",
+      },
+    });
+
+    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    expect(expireSpy).toHaveBeenCalledWith("approval-forwarding-failed", "no-approval-route");
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), {
+      id: "approval-forwarding-failed",
+      decision: null,
+    });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
+  });
+
   it("keeps approvals pending when the originating chat can handle /approve directly", async () => {
     vi.useFakeTimers();
     try {

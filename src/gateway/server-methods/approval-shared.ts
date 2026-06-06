@@ -51,6 +51,13 @@ type RequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields> = {
   expiresAtMs: number;
 };
 
+type ApprovalDeliveryResult =
+  | boolean
+  | {
+      delivered: boolean;
+      attempted?: boolean;
+    };
+
 type PendingApprovalListEntry<TPayload> = {
   id: string;
   request: TPayload;
@@ -82,6 +89,16 @@ type ApprovalRecordLookupResult<TPayload> =
 
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
   return typeof value === "object" && value !== null && "then" in value;
+}
+
+function normalizeApprovalDeliveryResult(result: ApprovalDeliveryResult): {
+  delivered: boolean;
+  attempted: boolean;
+} {
+  if (typeof result === "boolean") {
+    return { delivered: result, attempted: result };
+  }
+  return { delivered: result.delivered, attempted: result.attempted === true };
 }
 
 export function isApprovalDecision(value: string): value is ExecApprovalDecision {
@@ -394,7 +411,7 @@ export async function handlePendingApprovalRequest<
   requestEvent: RequestedApprovalEvent<TPayload>;
   twoPhase: boolean;
   approvalKind?: "exec" | "plugin";
-  deliverRequest: () => boolean | Promise<boolean>;
+  deliverRequest: () => ApprovalDeliveryResult | Promise<ApprovalDeliveryResult>;
   afterDecision?: (
     decision: ExecApprovalDecision | null,
     requestEvent: RequestedApprovalEvent<TPayload>,
@@ -433,12 +450,15 @@ export async function handlePendingApprovalRequest<
       ? approvalClientConnIds.size > 0
       : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false);
   const deliveredResult = suppressDelivery ? false : params.deliverRequest();
-  const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
+  const delivery = normalizeApprovalDeliveryResult(
+    isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult,
+  );
   // A turn-source route can approve without an active approval client, so keep
   // the record alive when the originating channel/account can still receive it.
   const hasTurnSourceRoute =
     !hasApprovalClients &&
-    !delivered &&
+    !delivery.delivered &&
+    !delivery.attempted &&
     hasApprovalTurnSourceRoute({
       turnSourceChannel: params.record.request.turnSourceChannel,
       turnSourceAccountId: params.record.request.turnSourceAccountId,
@@ -450,7 +470,7 @@ export async function handlePendingApprovalRequest<
     !params.keepPendingWithoutRoute &&
     !hasApprovalClients &&
     !hasTurnSourceRoute &&
-    !delivered
+    !delivery.delivered
   ) {
     params.manager.expire(params.record.id, "no-approval-route");
     params.respond(
