@@ -897,6 +897,22 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.input } == "second")
     }
 
+    @Test func terminalOkSendAckClearsPendingRunWithoutWaitingForCompletion() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId, messages: [])
+        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "cached")
+        try await waitUntil("terminal ok ack clears pending run") {
+            await MainActor.run { vm.pendingRunCount == 0 && !vm.isSending }
+        }
+
+        #expect(await MainActor.run { vm.errorText } == nil)
+        #expect(await transport.waitCompletionRunIds().isEmpty)
+        #expect(await MainActor.run { vm.messages.containsUserText("cached") })
+    }
+
     @Test func terminalTimeoutSendAckClearsPendingRunAndAllowsNextSend() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId, messages: [])
