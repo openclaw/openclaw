@@ -19,8 +19,6 @@ const exportHtmlSrcDir = path.join(
 const exportHtmlDistDir = path.join(
   context.projectRoot,
   "dist",
-  "auto-reply",
-  "reply",
   "export-html",
 );
 
