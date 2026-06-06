@@ -350,28 +350,76 @@ export function saveLocalUserIdentity(next: LocalUserIdentity) {
 
 export type LocalAssistantIdentity = { avatar: string | null };
 
-export function loadLocalAssistantIdentity(): LocalAssistantIdentity {
+type PersistedLocalAssistantIdentity = {
+  // Legacy flat avatar stored before per-agent isolation.
+  avatar?: string | null;
+  // Per-agent avatar overrides. Key is the normalized agent id.
+  agents?: Record<string, LocalAssistantIdentity>;
+};
+
+export function loadLocalAssistantIdentity(agentId?: string | null): LocalAssistantIdentity {
   const storage = getSafeLocalStorage();
+  const normalizedAgentId = normalizeOptionalString(agentId) ?? "main";
   try {
     const raw = storage?.getItem(LOCAL_ASSISTANT_IDENTITY_KEY);
     if (!raw) {
       return { avatar: null };
     }
-    const parsed = JSON.parse(raw) as Partial<LocalAssistantIdentity>;
-    return { avatar: typeof parsed.avatar === "string" ? parsed.avatar : null };
+    const parsed = JSON.parse(raw) as Partial<PersistedLocalAssistantIdentity>;
+    // Per-agent storage takes precedence.
+    if (parsed.agents && typeof parsed.agents === "object") {
+      const agentEntry = parsed.agents[normalizedAgentId];
+      if (agentEntry && typeof agentEntry.avatar === "string") {
+        return { avatar: agentEntry.avatar };
+      }
+    }
+    // Legacy flat fallback: migrate on save, but for now treat the legacy
+    // avatar as belonging to the requested agent so existing users do not
+    // suddenly lose their override.
+    if (typeof parsed.avatar === "string") {
+      return { avatar: parsed.avatar };
+    }
+    return { avatar: null };
   } catch {
     return { avatar: null };
   }
 }
 
-export function saveLocalAssistantIdentity(next: LocalAssistantIdentity) {
+export function saveLocalAssistantIdentity(next: LocalAssistantIdentity, agentId?: string | null) {
   const storage = getSafeLocalStorage();
+  const normalizedAgentId = normalizeOptionalString(agentId) ?? "main";
   try {
+    let parsed: PersistedLocalAssistantIdentity = {};
+    try {
+      const raw = storage?.getItem(LOCAL_ASSISTANT_IDENTITY_KEY);
+      if (raw) {
+        parsed = JSON.parse(raw) as PersistedLocalAssistantIdentity;
+      }
+    } catch {
+      // ignore parse errors; start fresh
+    }
+
+    const nextAgents: Record<string, LocalAssistantIdentity> =
+      parsed.agents && typeof parsed.agents === "object" ? { ...parsed.agents } : {};
+
     if (!next.avatar) {
+      delete nextAgents[normalizedAgentId];
+    } else {
+      nextAgents[normalizedAgentId] = { avatar: next.avatar };
+    }
+
+    const persisted: PersistedLocalAssistantIdentity = {
+      ...parsed,
+      agents: nextAgents,
+    };
+    // Once migrated to per-agent storage, drop the legacy flat key.
+    delete persisted.avatar;
+
+    if (Object.keys(persisted.agents ?? {}).length === 0) {
       storage?.removeItem(LOCAL_ASSISTANT_IDENTITY_KEY);
       return;
     }
-    storage?.setItem(LOCAL_ASSISTANT_IDENTITY_KEY, JSON.stringify({ avatar: next.avatar }));
+    storage?.setItem(LOCAL_ASSISTANT_IDENTITY_KEY, JSON.stringify(persisted));
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory identity updates from being applied
