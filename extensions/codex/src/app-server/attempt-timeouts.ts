@@ -116,8 +116,15 @@ export function resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(
 }
 
 /** Resolves the long terminal turn idle timeout. */
-export function resolveCodexTurnTerminalIdleTimeoutMs(value: number | undefined): number {
-  return resolvePositiveIntegerTimeoutMs(value, CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS);
+export function resolveCodexTurnTerminalIdleTimeoutMs(
+  value: number | undefined,
+  runTimeoutMs?: number,
+): number {
+  const defaultMs = Math.max(
+    CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
+    resolvePositiveIntegerTimeoutMs(runTimeoutMs, CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS),
+  );
+  return resolvePositiveIntegerTimeoutMs(value, defaultMs);
 }
 
 /** Adds gateway grace time to a caller timeout without overflowing invalid values. */

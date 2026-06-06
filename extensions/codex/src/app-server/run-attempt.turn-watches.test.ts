@@ -360,7 +360,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.codexAppServerFailure?.replaySafe).toBe(false);
     expect(result.codexAppServerFailure?.replayBlockedReason).toBe("potential_side_effect");
     expect(result.codexAppServerFailure?.diagnostics).toBeUndefined();
-    expect(result.promptTimeoutOutcome).toBeUndefined();
+    expect(result.promptTimeoutOutcome).toEqual({
+      message:
+        "Codex app-server waited 1 second for a terminal turn event before stopping. " +
+        "The response may be incomplete; increase the run timeout if this turn is expected to take longer.",
+    });
   });
 
   it("does not use completion timeout outcome for non-completion timeout with assistant output", async () => {
@@ -2453,6 +2457,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.promptError).toBe(
       "codex app-server turn idle timed out waiting for turn/completed",
     );
+    expect(result.promptTimeoutOutcome).toEqual({
+      message:
+        "Codex app-server waited 1 second for a terminal turn event before stopping. " +
+        "The response may be incomplete; increase the run timeout if this turn is expected to take longer.",
+    });
     const terminalWarnCall = warn.mock.calls.find(
       ([message]) => message === "codex app-server turn idle timed out waiting for terminal event",
     );

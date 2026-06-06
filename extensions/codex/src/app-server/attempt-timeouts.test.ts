@@ -105,6 +105,11 @@ describe("Codex app-server attempt timeouts", () => {
     expect(resolveCodexTurnTerminalIdleTimeoutMs(Number.NEGATIVE_INFINITY)).toBe(
       CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
     );
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, 45 * 60_000)).toBe(45 * 60_000);
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, 10_000)).toBe(
+      CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(Number.NaN, 45 * 60_000)).toBe(45 * 60_000);
     expect(resolveCodexTurnTerminalIdleTimeoutMs(3.7)).toBe(3);
     expect(resolveCodexTurnTerminalIdleTimeoutMs(-1)).toBe(1);
     expect(resolveCodexTurnTerminalIdleTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(

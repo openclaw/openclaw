@@ -1158,10 +1158,11 @@ export async function runCodexAppServerAttempt(
         appServer.postToolRawAssistantCompletionIdleTimeoutMs,
       turnAssistantCompletionIdleTimeoutMs,
     );
+  const turnAttemptIdleTimeoutMs = Math.max(100, Math.floor(params.timeoutMs));
   const turnTerminalIdleTimeoutMs = resolveCodexTurnTerminalIdleTimeoutMs(
     options.turnTerminalIdleTimeoutMs,
+    turnAttemptIdleTimeoutMs,
   );
-  const turnAttemptIdleTimeoutMs = Math.max(100, Math.floor(params.timeoutMs));
   let nativeHookRelayLastRenewedAt = 0;
   let activeAppServerTurnRequests = 0;
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
@@ -2311,6 +2312,7 @@ export async function runCodexAppServerAttempt(
       result,
       turnCompletionIdleTimedOut,
       turnWatchTimeoutKind,
+      turnWatchTimeoutMs,
     });
     const codexAppServerFailureDiagnostics =
       codexAppServerFailureKind === "turn_completion_idle_timeout" &&

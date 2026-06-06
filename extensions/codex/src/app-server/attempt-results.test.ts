@@ -71,8 +71,13 @@ describe("Codex app-server attempt results", () => {
         }),
         turnCompletionIdleTimedOut: true,
         turnWatchTimeoutKind: "terminal",
+        turnWatchTimeoutMs: 45 * 60_000,
       }),
-    ).toBeUndefined();
+    ).toEqual({
+      message:
+        "Codex app-server waited 45 minutes for a terminal turn event before stopping. " +
+        "The response may be incomplete; increase the run timeout if this turn is expected to take longer.",
+    });
     expect(
       buildCodexAppServerPromptTimeoutOutcome({
         result: createResult({

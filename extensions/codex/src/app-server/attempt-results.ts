@@ -15,6 +15,18 @@ const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE =
 const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE =
   "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.";
 
+function formatTimeoutDuration(timeoutMs: number | undefined): string {
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return "the terminal idle timeout";
+  }
+  const seconds = Math.max(1, Math.round(timeoutMs / 1_000));
+  if (seconds % 60 === 0) {
+    const minutes = seconds / 60;
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
+}
+
 /** Joins terminal assistant text blocks into the final attempt answer. */
 export function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
   return result.assistantTexts.join("\n\n").trim();
@@ -28,9 +40,19 @@ export function buildCodexAppServerPromptTimeoutOutcome(params: {
   result: EmbeddedRunAttemptResult;
   turnCompletionIdleTimedOut: boolean;
   turnWatchTimeoutKind?: CodexAttemptTurnWatchTimeoutKind;
+  turnWatchTimeoutMs?: number;
 }): EmbeddedRunAttemptResult["promptTimeoutOutcome"] {
   if (!params.turnCompletionIdleTimedOut) {
     return undefined;
+  }
+  if (params.turnWatchTimeoutKind === "terminal") {
+    return {
+      message:
+        `Codex app-server waited ${formatTimeoutDuration(
+          params.turnWatchTimeoutMs,
+        )} for a terminal turn event before stopping. ` +
+        "The response may be incomplete; increase the run timeout if this turn is expected to take longer.",
+    };
   }
   if (params.turnWatchTimeoutKind !== undefined && params.turnWatchTimeoutKind !== "completion") {
     return undefined;
