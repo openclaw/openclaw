@@ -60,6 +60,23 @@ const workedExampleNeedsChangesExpected: CronJobTaskRecordValidationResult = {
   ],
 };
 
+const workedExampleNeedsChangesWrongTypeInput = {
+  ...workedExamplePassInput,
+  // Completeness failure: next_action has the wrong runtime type
+  next_action: 123,
+} as const;
+
+const workedExampleNeedsChangesWrongTypeExpected: CronJobTaskRecordValidationResult = {
+  verdict: "NEEDS_CHANGES",
+  summary: "missing fields: next_action",
+  missingFields: ["next_action"],
+  drift: [],
+  notes: [
+    "Missing required fields: next_action",
+    "Result: NEEDS_CHANGES (1 missing, 0 drift mismatches).",
+  ],
+};
+
 describe("cron job task record preflight validator", () => {
   it("worked example: PASS", () => {
     expect(validateCronJobTaskRecordPreflight(workedExamplePassInput)).toEqual(
@@ -70,6 +87,12 @@ describe("cron job task record preflight validator", () => {
   it("worked example: NEEDS_CHANGES", () => {
     expect(validateCronJobTaskRecordPreflight(workedExampleNeedsChangesInput)).toEqual(
       workedExampleNeedsChangesExpected,
+    );
+  });
+
+  it("worked example: NEEDS_CHANGES (wrong type required field)", () => {
+    expect(validateCronJobTaskRecordPreflight(workedExampleNeedsChangesWrongTypeInput)).toEqual(
+      workedExampleNeedsChangesWrongTypeExpected,
     );
   });
 });
