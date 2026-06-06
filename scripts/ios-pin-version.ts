@@ -1,3 +1,4 @@
+// Ios Pin Version script supports OpenClaw repository automation.
 import path from "node:path";
 import {
   normalizePinnedIosVersion,
@@ -87,7 +88,7 @@ export function parseArgs(argv: string[]): CliOptions {
 
 export function pinIosVersion(params: CliOptions): PinIosVersionResult {
   const rootDir = path.resolve(params.rootDir);
-  let previousVersion: string | null = null;
+  let previousVersion: string | null;
   try {
     previousVersion = resolveIosVersion(rootDir).canonicalVersion;
   } catch {

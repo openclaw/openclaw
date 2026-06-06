@@ -1,3 +1,4 @@
+// Resolves extension Vitest configs, costs, and batch shards for plugin test runs.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -26,8 +27,10 @@ import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-what
 import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mjs";
+import { parsePositiveInt } from "./numeric-options.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
+/** Default number of shards for broad bundled extension test batches. */
 export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 8;
 const EXTENSION_TEST_COST_MULTIPLIERS = {
   // CI shard planning uses measured wall time rather than raw file count.
@@ -39,7 +42,7 @@ const EXTENSION_TEST_COST_MULTIPLIERS = {
   "test/vitest/vitest.extension-discord.config.ts": 0.62,
   "test/vitest/vitest.extension-feishu.config.ts": 0.18,
   "test/vitest/vitest.extension-imessage.config.ts": 1.7,
-  "test/vitest/vitest.extension-irc.config.ts": 1.0,
+  "test/vitest/vitest.extension-irc.config.ts": 1,
   "test/vitest/vitest.extension-line.config.ts": 1.1,
   "test/vitest/vitest.extension-matrix.config.ts": 0.28,
   "test/vitest/vitest.extension-mattermost.config.ts": 0.75,
@@ -70,7 +73,9 @@ function isPathInsideRepo(relativePath) {
 }
 
 function isSkippedTrackedTestFile(relativePath) {
-  return relativePath.split("/").some((segment) => segment === "dist" || segment === "node_modules");
+  return relativePath
+    .split("/")
+    .some((segment) => segment === "dist" || segment === "node_modules");
 }
 
 function listTrackedTestFiles(rootPath) {
@@ -99,13 +104,8 @@ function listTrackedTestFiles(rootPath) {
     );
 }
 
-function countTestFiles(rootPath) {
-  const trackedFiles = listTrackedTestFiles(rootPath);
-  if (trackedFiles) {
-    return trackedFiles.length;
-  }
-
-  let total = 0;
+function listFilesystemTestFiles(rootPath) {
+  const files = [];
   const stack = [rootPath];
 
   while (stack.length > 0) {
@@ -123,12 +123,32 @@ function countTestFiles(rootPath) {
         continue;
       }
       if (entry.isFile() && (fullPath.endsWith(".test.ts") || fullPath.endsWith(".test.tsx"))) {
-        total += 1;
+        files.push(normalizeRelative(path.relative(repoRoot, fullPath)));
       }
     }
   }
 
-  return total;
+  return files.toSorted((left, right) => left.localeCompare(right));
+}
+
+/** List tracked or filesystem-discovered test files for extension roots. */
+export function listTrackedTestFilesForRoots(roots) {
+  const files = [];
+  for (const root of roots) {
+    const rootPath = path.join(repoRoot, root);
+    const trackedFiles = listTrackedTestFiles(rootPath) ?? listFilesystemTestFiles(rootPath);
+    files.push(...trackedFiles);
+  }
+  return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function countTestFiles(rootPath) {
+  const trackedFiles = listTrackedTestFiles(rootPath);
+  if (trackedFiles) {
+    return trackedFiles.length;
+  }
+
+  return listFilesystemTestFiles(rootPath).length;
 }
 
 function estimatePlanCost(config, testFileCount) {
@@ -173,6 +193,7 @@ function resolveExtensionDirectory(targetArg, cwd = process.cwd()) {
   );
 }
 
+/** Resolve the Vitest configs, files, and estimated cost for one extension target. */
 export function resolveExtensionTestPlan(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const targetArg = params.targetArg;
@@ -266,7 +287,13 @@ export function resolveExtensionTestPlan(params = {}) {
 function mergeTestPlans(plans) {
   const groupsByConfig = new Map();
 
-  for (const plan of plans) {
+  const testPlans = plans.filter((plan) => plan.hasTests);
+  const noTestExtensionIds = plans
+    .filter((plan) => !plan.hasTests)
+    .map((plan) => plan.extensionId)
+    .toSorted((left, right) => left.localeCompare(right));
+
+  for (const plan of testPlans) {
     const current = groupsByConfig.get(plan.config) ?? {
       config: plan.config,
       extensionIds: [],
@@ -296,21 +323,24 @@ function mergeTestPlans(plans) {
     extensionIds: plans
       .map((plan) => plan.extensionId)
       .toSorted((left, right) => left.localeCompare(right)),
-    estimatedCost: plans.reduce((sum, plan) => sum + plan.estimatedCost, 0),
-    hasTests: plans.length > 0,
+    estimatedCost: testPlans.reduce((sum, plan) => sum + plan.estimatedCost, 0),
+    hasTests: testPlans.length > 0,
+    noTestExtensionIds,
     planGroups,
-    testFileCount: plans.reduce((sum, plan) => sum + plan.testFileCount, 0),
+    testFileCount: testPlans.reduce((sum, plan) => sum + plan.testFileCount, 0),
   };
 }
 
+/** Resolve a combined extension test plan for explicit or all available extension ids. */
 export function resolveExtensionBatchPlan(params = {}) {
   const cwd = params.cwd ?? process.cwd();
+  const hasExplicitExtensionIds = params.extensionIds !== undefined;
   const extensionIds = params.extensionIds ?? listAvailableExtensionIds();
-  const plans = extensionIds
-    .map((extensionId) => resolveExtensionTestPlan({ cwd, targetArg: extensionId }))
-    .filter((plan) => plan.hasTests);
+  const plans = extensionIds.map((extensionId) =>
+    resolveExtensionTestPlan({ cwd, targetArg: extensionId }),
+  );
 
-  return mergeTestPlans(plans);
+  return mergeTestPlans(hasExplicitExtensionIds ? plans : plans.filter((plan) => plan.hasTests));
 }
 
 function pickLeastLoadedShard(shards) {
@@ -332,10 +362,12 @@ function pickLeastLoadedShard(shards) {
   }, -1);
 }
 
+/** Create balanced extension test shards from per-extension plans. */
 export function createExtensionTestShards(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const extensionIds = params.extensionIds ?? listAvailableExtensionIds();
-  const shardCount = Math.max(1, Number.parseInt(String(params.shardCount ?? ""), 10) || 1);
+  const shardCount =
+    params.shardCount === undefined ? 1 : parsePositiveInt(params.shardCount, "shardCount");
   const plans = extensionIds
     .map((extensionId) => resolveExtensionTestPlan({ cwd, targetArg: extensionId }))
     .filter((plan) => plan.hasTests)

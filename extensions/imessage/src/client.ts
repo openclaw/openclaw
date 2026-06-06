@@ -1,3 +1,4 @@
+// Imessage plugin module implements client behavior.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -88,7 +89,7 @@ export class IMessageRpcClient {
     if (isTestEnv()) {
       throw new Error("Refusing to start imsg rpc in test environment; mock iMessage RPC client");
     }
-    const args = ["rpc"];
+    const args = ["rpc", "--json"];
     if (this.dbPath) {
       args.push("--db", this.dbPath);
     }

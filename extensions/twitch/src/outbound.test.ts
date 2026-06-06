@@ -12,7 +12,7 @@
 import {
   createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it, vi } from "vitest";
 import { resolveTwitchAccountContext } from "./config.js";
 import { twitchMessageAdapter, twitchOutbound } from "./outbound.js";
@@ -215,6 +215,7 @@ describe("outbound", () => {
       expect(proofResults).toEqual([
         { capability: "text", status: "verified" },
         { capability: "media", status: "verified" },
+        { capability: "poll", status: "not_declared" },
         { capability: "payload", status: "not_declared" },
         { capability: "silent", status: "not_declared" },
         { capability: "replyTo", status: "not_declared" },

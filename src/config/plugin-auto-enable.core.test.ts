@@ -1,3 +1,4 @@
+// Covers core plugin auto-enable behavior and bundled plugin defaults.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -289,6 +290,23 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.config.plugins?.allow).toBeUndefined();
   });
 
+  it("preserves an empty plugins.allow as nonrestrictive during auto-enable", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { slack: { botToken: "x" } },
+        plugins: {
+          allow: [],
+          bundledDiscovery: "compat",
+        },
+      },
+      env,
+    });
+
+    expect(result.config.channels?.slack?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual([]);
+    expect(result.changes.join("\n")).toContain("Slack configured, enabled automatically.");
+  });
+
   it("does not auto-enable Slack from unrelated Slack-prefixed env vars", () => {
     const result = applyPluginAutoEnable({
       config: {},
@@ -570,7 +588,7 @@ describe("applyPluginAutoEnable core", () => {
       },
       env,
       manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        { id: "openai", channels: [], providers: ["openai", "openai"] },
         {
           id: "codex",
           channels: [],
@@ -590,13 +608,13 @@ describe("applyPluginAutoEnable core", () => {
       config: {
         agents: {
           defaults: {
-            model: "openai-codex/gpt-5.5",
+            model: "openai/gpt-5.5",
           },
         },
       },
       env,
       manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        { id: "openai", channels: [], providers: ["openai", "openai"] },
         {
           id: "codex",
           channels: [],
@@ -609,7 +627,7 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.config.plugins?.entries?.openai?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
     expect(result.changes).toEqual([
-      "openai-codex/gpt-5.5 model configured, enabled automatically.",
+      "openai/gpt-5.5 model configured, enabled automatically.",
       "codex agent runtime configured, enabled automatically.",
     ]);
   });
@@ -620,15 +638,19 @@ describe("applyPluginAutoEnable core", () => {
         agents: {
           defaults: {
             model: "openai/gpt-5.5",
-            agentRuntime: {
-              id: "codex",
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: {
+                  id: "codex",
+                },
+              },
             },
           },
         },
       },
       env,
       manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        { id: "openai", channels: [], providers: ["openai", "openai"] },
         {
           id: "codex",
           channels: [],
@@ -657,7 +679,7 @@ describe("applyPluginAutoEnable core", () => {
       },
       env,
       manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        { id: "openai", channels: [], providers: ["openai", "openai"] },
         {
           id: "codex",
           channels: [],
@@ -695,7 +717,7 @@ describe("applyPluginAutoEnable core", () => {
       },
       env,
       manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        { id: "openai", channels: [], providers: ["openai", "openai"] },
         {
           id: "codex",
           channels: [],
@@ -835,7 +857,7 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
         agents: {
-          list: [{ id: "pi" }],
+          list: [{ id: "openclaw" }],
         },
       },
       env,
@@ -849,7 +871,7 @@ describe("applyPluginAutoEnable core", () => {
         },
       },
       agents: {
-        list: [{ id: "pi" }],
+        list: [{ id: "openclaw" }],
       },
     });
     expect(result.changes).toStrictEqual([]);

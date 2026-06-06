@@ -1,3 +1,4 @@
+// Top-level migrate command tests cover provider planning, interactive selection, apply flow, and JSON output.
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
@@ -7,7 +8,9 @@ const mocks = vi.hoisted(() => ({
   backupCreateCommand: vi.fn(),
   cancelSymbol: Symbol("cancel"),
   clackCancel: vi.fn(),
+  clackConfirm: vi.fn(),
   clackIsCancel: vi.fn(),
+  clackLogMessage: vi.fn(),
   multiselect: vi.fn(),
   progress: {
     setLabel: vi.fn(),
@@ -47,8 +50,9 @@ vi.mock("../cli/progress.js", () => ({
 
 vi.mock("@clack/prompts", () => ({
   cancel: mocks.clackCancel,
+  confirm: mocks.clackConfirm,
   isCancel: mocks.clackIsCancel,
-  log: { message: vi.fn() },
+  log: { message: mocks.clackLogMessage },
 }));
 
 vi.mock("./migrate/skill-selection-prompt.js", () => ({
@@ -90,6 +94,30 @@ function plan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
     items: [{ id: "workspace:AGENTS.md", kind: "workspace", action: "copy", status: "planned" }],
     ...overrides,
   };
+}
+
+function authPlan(status: MigrationPlan["items"][number]["status"] = "skipped"): MigrationPlan {
+  return plan({
+    summary: {
+      total: 1,
+      planned: status === "planned" ? 1 : 0,
+      migrated: 0,
+      skipped: status === "skipped" ? 1 : 0,
+      conflicts: 0,
+      errors: 0,
+      sensitive: 1,
+    },
+    items: [
+      {
+        id: "auth:openai",
+        kind: "auth",
+        action: status === "planned" ? "create" : "skip",
+        status,
+        sensitive: true,
+        reason: status === "skipped" ? "auth credential migration not selected" : undefined,
+      },
+    ],
+  });
 }
 
 function codexSkillPlan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
@@ -275,8 +303,10 @@ describe("migrateApplyCommand", () => {
     mocks.progress.tick.mockClear();
     mocks.multiselect.mockReset();
     mocks.clackCancel.mockReset();
+    mocks.clackConfirm.mockReset();
     mocks.clackIsCancel.mockReset();
     mocks.clackIsCancel.mockImplementation((value) => value === mocks.cancelSymbol);
+    mocks.clackLogMessage.mockReset();
     mocks.promptYesNo.mockReset();
     mocks.backupCreateCommand.mockReset();
     mocks.backupCreateCommand.mockResolvedValue({ archivePath: "/tmp/openclaw-backup.tgz" });
@@ -360,6 +390,23 @@ describe("migrateApplyCommand", () => {
       expect.objectContaining({ indeterminate: true, label: "Scanning codex migration…" }),
       expect.any(Function),
     );
+  });
+
+  it("lets --no-auth-credentials override explicit secret import in plan", async () => {
+    const planned = authPlan("skipped");
+    mocks.provider.plan.mockImplementation(async (ctx) => {
+      expect(ctx.includeSecrets).toBe(false);
+      return planned;
+    });
+
+    const result = await migratePlanCommand(runtime, {
+      provider: "hermes",
+      includeSecrets: true,
+      authCredentials: false,
+    });
+
+    expect(result).toBe(planned);
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
   });
 
   it("does not wrap JSON planning in progress output", async () => {
@@ -455,6 +502,163 @@ describe("migrateApplyCommand", () => {
     expect(mocks.backupCreateCommand).toHaveBeenCalled();
     expect(typeof firstApplyContext()).toBe("object");
     expect(firstAppliedPlan()).toBe(planned);
+  });
+
+  it("asks before including auth credentials in interactive root migrations", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const skippedAuthPlan = authPlan("skipped");
+    const plannedAuthPlan = authPlan("planned");
+    mocks.provider.plan
+      .mockImplementationOnce(async (ctx) => {
+        expect(ctx.includeSecrets).toBe(false);
+        return skippedAuthPlan;
+      })
+      .mockImplementationOnce(async (ctx) => {
+        expect(ctx.includeSecrets).toBe(true);
+        return plannedAuthPlan;
+      });
+    mocks.clackConfirm.mockResolvedValue(true);
+
+    const result = await migrateDefaultCommand(runtime, { provider: "hermes", dryRun: true });
+
+    expect(result).toBe(plannedAuthPlan);
+    expect(mocks.clackConfirm).toHaveBeenCalledWith({
+      message: "Do you want to migrate your auth credentials as well?",
+      initialValue: true,
+    });
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not replan auth credentials when the interactive auth prompt is declined", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const skippedAuthPlan = authPlan("skipped");
+    mocks.provider.plan.mockResolvedValue(skippedAuthPlan);
+    mocks.clackConfirm.mockResolvedValue(false);
+
+    const result = await migrateDefaultCommand(runtime, { provider: "hermes", dryRun: true });
+
+    expect(result).toBe(skippedAuthPlan);
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
+    expect(mocks.clackConfirm).toHaveBeenCalledWith({
+      message: "Do you want to migrate your auth credentials as well?",
+      initialValue: true,
+    });
+  });
+
+  it("cancels the migration when the interactive auth prompt is canceled", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const skippedAuthPlan = authPlan("skipped");
+    mocks.provider.plan.mockResolvedValue(skippedAuthPlan);
+    mocks.clackConfirm.mockResolvedValue(mocks.cancelSymbol);
+
+    await expect(
+      migrateDefaultCommand(runtime, { provider: "hermes", dryRun: true }),
+    ).rejects.toThrow("exit 0");
+
+    expect(mocks.clackCancel).toHaveBeenCalledWith("Migration cancelled.");
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+    expect(mocks.promptYesNo).not.toHaveBeenCalled();
+  });
+
+  it("honors suppressPlanLog while using the interactive auth prompt path", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const skippedAuthPlan = authPlan("skipped");
+    const plannedAuthPlan = authPlan("planned");
+    mocks.provider.plan
+      .mockResolvedValueOnce(skippedAuthPlan)
+      .mockResolvedValueOnce(plannedAuthPlan);
+    mocks.clackConfirm.mockResolvedValue(true);
+
+    const result = await migrateDefaultCommand(runtime, {
+      provider: "hermes",
+      dryRun: true,
+      suppressPlanLog: true,
+    });
+
+    expect(result).toBe(plannedAuthPlan);
+    expect(mocks.clackLogMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps auth credentials skipped by default for non-interactive --yes apply", async () => {
+    const planned = authPlan("skipped");
+    const applied: MigrationApplyResult = {
+      ...planned,
+      items: planned.items,
+    };
+    mocks.provider.plan.mockImplementation(async (ctx) => {
+      expect(ctx.includeSecrets).toBe(false);
+      return planned;
+    });
+    mocks.provider.apply.mockImplementation(async (ctx) => {
+      expect(ctx.includeSecrets).toBe(false);
+      return applied;
+    });
+
+    await migrateApplyCommand(runtime, { provider: "hermes", yes: true });
+
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
+    expect(mocks.provider.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes auth credentials when --yes is paired with explicit secret import", async () => {
+    const planned = authPlan("planned");
+    const applied: MigrationApplyResult = {
+      ...planned,
+      summary: { ...planned.summary, planned: 0, migrated: 1 },
+      items: planned.items.map((item) => ({ ...item, status: "migrated" })),
+    };
+    mocks.provider.plan.mockImplementation(async (ctx) => {
+      expect(ctx.includeSecrets).toBe(true);
+      return planned;
+    });
+    mocks.provider.apply.mockImplementation(async (ctx) => {
+      expect(ctx.includeSecrets).toBe(true);
+      return applied;
+    });
+
+    await migrateApplyCommand(runtime, { provider: "hermes", yes: true, includeSecrets: true });
+
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
+    expect(mocks.provider.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets --no-auth-credentials override explicit secret import", async () => {
+    const planned = authPlan("skipped");
+    const applied: MigrationApplyResult = {
+      ...planned,
+      items: planned.items,
+    };
+    mocks.provider.plan.mockImplementation(async (ctx) => {
+      expect(ctx.includeSecrets).toBe(false);
+      return planned;
+    });
+    mocks.provider.apply.mockImplementation(async (ctx) => {
+      expect(ctx.includeSecrets).toBe(false);
+      return applied;
+    });
+
+    await migrateApplyCommand(runtime, {
+      provider: "hermes",
+      yes: true,
+      includeSecrets: true,
+      authCredentials: false,
+    });
+
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
+    expect(mocks.provider.apply).toHaveBeenCalledTimes(1);
   });
 
   it("prompts for Codex skills before interactive default apply", async () => {
@@ -565,8 +769,8 @@ describe("migrateApplyCommand", () => {
         (
           (
             (
-              appliedPlan.items.find((item) => item.id === "config:codex-plugins")?.details
-                ?.value as Record<string, unknown>
+              appliedPlan.items.find((item) => item.id === "config:codex-plugins")!.details!
+                .value as Record<string, unknown>
             ).config as Record<string, unknown>
           ).codexPlugins as Record<string, unknown>
         ).plugins as Record<string, unknown>,
@@ -852,7 +1056,7 @@ describe("migrateApplyCommand", () => {
 
     await migrateDefaultCommand(runtime, { provider: "codex" });
 
-    let appliedPlan = firstAppliedPlan();
+    const appliedPlan = firstAppliedPlan();
     expect(appliedPlan.summary.planned).toBe(3);
     expect(appliedPlan.summary.skipped).toBe(0);
     expect(appliedPlan.summary.conflicts).toBe(0);

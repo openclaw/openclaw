@@ -1,3 +1,4 @@
+// Memory Core tests cover manager search plugin behavior.
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
@@ -573,7 +574,11 @@ describe("searchVector sqlite-vec KNN", () => {
 
   function insertFallbackChunk(
     db: InstanceType<typeof DatabaseSync>,
-    params: { id: string; model: string; vector: number[] },
+    params: {
+      id: string;
+      model: string;
+      vector: number[];
+    },
   ): void {
     db.prepare(
       "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

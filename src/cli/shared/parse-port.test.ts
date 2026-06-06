@@ -1,3 +1,4 @@
+// Parse port tests cover shared CLI port parsing and validation.
 import { describe, expect, it } from "vitest";
 import { parsePort } from "./parse-port.js";
 
@@ -37,5 +38,7 @@ describe("parsePort (#83899, #83900)", () => {
     expect(parsePort(Number.POSITIVE_INFINITY)).toBeNull();
     expect(parsePort("abc")).toBeNull();
     expect(parsePort("8080ms")).toBeNull();
+    expect(parsePort("0x10")).toBeNull();
+    expect(parsePort("1e3")).toBeNull();
   });
 });

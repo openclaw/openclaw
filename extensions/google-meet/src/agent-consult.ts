@@ -1,3 +1,4 @@
+// Google Meet plugin module implements agent consult behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
@@ -144,7 +145,7 @@ export function handleGoogleMeetRealtimeConsultToolCall(params: {
       });
       params.session.submitToolResult(callId, result);
     })
-    .catch((error: Error) => {
+    .catch((error: unknown) => {
       params.onTalkEvent?.({
         type: "tool.error",
         callId,

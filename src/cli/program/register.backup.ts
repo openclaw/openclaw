@@ -1,12 +1,14 @@
+// Backup command registration for local state archive creation and verification.
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { backupVerifyCommand } from "../../commands/backup-verify.js";
 import { backupCreateCommand } from "../../commands/backup.js";
 import { defaultRuntime } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
 
+/** Register backup create/verify subcommands. */
 export function registerBackupCommand(program: Command) {
   const backup = program
     .command("backup")
@@ -72,7 +74,7 @@ export function registerBackupCommand(program: Command) {
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           [
-            "openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz",
+            "openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz",
             "Check that the archive structure and manifest are intact.",
           ],
           [

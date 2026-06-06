@@ -1,3 +1,4 @@
+// Manifest model-catalog planner tests cover plugin-owned row planning, filters, conflicts, and suppressions.
 import { describe, expect, it } from "vitest";
 import { planManifestModelCatalogRows, planManifestModelCatalogSuppressions } from "./index.js";
 
@@ -350,7 +351,7 @@ describe("manifest model catalog suppression planner", () => {
         plugins: [
           {
             id: "openai",
-            providers: ["openai", "openai-codex"],
+            providers: ["openai", "openai"],
             modelCatalog: {
               aliases: {
                 "azure-openai-responses": {

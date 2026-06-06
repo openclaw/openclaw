@@ -1,3 +1,5 @@
+// Verifies outbound channel resolution fast paths, active-registry reads,
+// bootstrap fallback, and runtime facade projection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
@@ -116,6 +118,22 @@ describe("outbound channel resolution", () => {
       channelResolution.resolveOutboundChannelPlugin({
         channel: "alpha",
         cfg: {} as never,
+      }),
+    ).toBe(plugin);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a bundled plugin without bootstrapping", async () => {
+    const plugin = { id: "alpha" };
+    getLoadedChannelPluginMock.mockReturnValue(undefined);
+    getChannelPluginMock.mockReturnValue(plugin);
+    const channelResolution = await importChannelResolution("bundled-plugin");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: {} as never,
+        allowBootstrap: true,
       }),
     ).toBe(plugin);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();

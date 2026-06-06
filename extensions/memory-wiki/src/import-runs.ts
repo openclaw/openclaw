@@ -1,5 +1,7 @@
+// Memory Wiki plugin module implements import runs behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 
 type MemoryWikiImportRunSummary = {
@@ -62,7 +64,7 @@ function normalizeImportRunSummary(raw: unknown): MemoryWikiImportRunSummary | n
         .map((entry) => (typeof entry?.path === "string" ? entry.path.trim() : ""))
         .filter((entry): entry is string => entry.length > 0)
     : [];
-  const pagePaths = [...new Set([...createdPaths, ...updatedPaths])];
+  const pagePaths = uniqueStrings([...createdPaths, ...updatedPaths]);
   const conversationCount =
     typeof record.conversationCount === "number" && Number.isFinite(record.conversationCount)
       ? Math.max(0, Math.floor(record.conversationCount))
@@ -113,8 +115,9 @@ export async function listMemoryWikiImportRuns(
   const importRunsDir = resolveImportRunsDir(config.vault.path);
   const entries = await fs
     .readdir(importRunsDir, { withFileTypes: true })
-    .catch((error: NodeJS.ErrnoException) => {
-      if (error?.code === "ENOENT") {
+    .catch((error: unknown) => {
+      const code = asRecord(error)?.code;
+      if (code === "ENOENT") {
         return [];
       }
       throw error;

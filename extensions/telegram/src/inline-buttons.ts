@@ -1,10 +1,12 @@
+// Telegram plugin module implements inline buttons behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramInlineButtonsScope } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+import { inspectTelegramAccount } from "./account-inspect.js";
+import { listTelegramAccountIds } from "./accounts.js";
 
 const DEFAULT_INLINE_BUTTONS_SCOPE: TelegramInlineButtonsScope = "allowlist";
 
@@ -60,7 +62,7 @@ export function resolveTelegramInlineButtonsScope(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): TelegramInlineButtonsScope {
-  const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = inspectTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
   return resolveTelegramInlineButtonsScopeFromCapabilities(account.config.capabilities);
 }
 

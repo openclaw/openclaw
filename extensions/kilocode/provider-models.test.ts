@@ -1,3 +1,4 @@
+// Kilocode tests cover provider models plugin behavior.
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -196,8 +197,8 @@ describe("discoverKilocodeModels (fetch path)", () => {
       expect(models.length).toBe(2);
 
       const sonnet = requireModelById(models, "anthropic/claude-sonnet-4");
-      expect(sonnet.cost.input).toBeCloseTo(3.0);
-      expect(sonnet.cost.output).toBeCloseTo(15.0);
+      expect(sonnet.cost.input).toBeCloseTo(3);
+      expect(sonnet.cost.output).toBeCloseTo(15);
       expect(sonnet.cost.cacheRead).toBeCloseTo(0.3);
       expect(sonnet.cost.cacheWrite).toBeCloseTo(3.75);
       expect(sonnet.input).toEqual(["text", "image"]);
@@ -237,6 +238,40 @@ describe("discoverKilocodeModels (fetch path)", () => {
         expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
       });
     }
+  });
+
+  it("falls back from malformed live token metadata", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: [
+            makeGatewayModel({
+              id: "some/bad-window",
+              context_length: -1,
+              top_provider: { max_completion_tokens: 8192.5 },
+            }),
+            makeGatewayModel({
+              id: "some/bad-output",
+              context_length: Number.POSITIVE_INFINITY,
+              top_provider: { max_completion_tokens: 0 },
+            }),
+          ],
+        }),
+    });
+
+    await withFetchPathTest(mockFetch, async () => {
+      const models = await discoverKilocodeModels();
+
+      expect(requireModelById(models, "some/bad-window")).toMatchObject({
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      });
+      expect(requireModelById(models, "some/bad-output")).toMatchObject({
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      });
+    });
   });
 
   it("ensures kilo/auto is present even when API doesn't return it", async () => {
@@ -295,7 +330,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const models = await discoverKilocodeModels();
       const auto = requireModelById(models, "kilo/auto");
       expect(auto.name).toBe("Kilo: Auto");
-      expect(auto.cost.input).toBeCloseTo(5.0);
+      expect(auto.cost.input).toBeCloseTo(5);
       expect(requireModelById(models, "anthropic/claude-sonnet-4").id).toBe(
         "anthropic/claude-sonnet-4",
       );

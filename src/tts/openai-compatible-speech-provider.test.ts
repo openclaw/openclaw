@@ -1,3 +1,4 @@
+// OpenAI-compatible speech provider tests cover speech request and file output.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAiCompatibleSpeechProvider } from "./openai-compatible-speech-provider.js";
 
@@ -76,6 +77,7 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       },
     });
 
+    expect(provider.defaultModel).toBe("demo-tts");
     expect(
       provider.resolveConfig?.({
         cfg: {} as never,

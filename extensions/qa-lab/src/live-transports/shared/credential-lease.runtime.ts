@@ -1,5 +1,7 @@
+// Qa Lab plugin module implements credential lease behavior.
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { z } from "zod";
 import {
   isQaCredentialTruthyOptIn,
@@ -258,6 +260,7 @@ async function postConvexBroker(params: {
   timeoutMs: number;
   url: string;
 }): Promise<unknown> {
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
   const response = await params.fetchImpl(params.url, {
     method: "POST",
     headers: {
@@ -265,7 +268,7 @@ async function postConvexBroker(params: {
       "content-type": "application/json",
     },
     body: JSON.stringify(params.body),
-    signal: AbortSignal.timeout(params.timeoutMs),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   const text = await response.text();
@@ -386,7 +389,11 @@ export async function acquireQaCredentialLease<TPayload>(
   });
   const fetchImpl = opts.fetchImpl ?? fetch;
   const sleepImpl =
-    opts.sleepImpl ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    opts.sleepImpl ??
+    ((ms: number) =>
+      new Promise((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const timeImpl = opts.timeImpl ?? (() => Date.now());
   const randomImpl = opts.randomImpl ?? (() => Math.random());
   const startedAt = timeImpl();

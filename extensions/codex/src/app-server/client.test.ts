@@ -1,3 +1,4 @@
+// Codex tests cover client plugin behavior.
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -29,8 +30,8 @@ describe("CodexAppServerClient", () => {
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     for (const client of clients) {
       client.close();
     }
@@ -408,9 +409,10 @@ describe("CodexAppServerClient", () => {
     // Start a pending request so we can verify it gets properly rejected.
     const pending = harness.client.request("test/method");
 
-    // Simulate the child process closing its pipe — a write to the now-dead
-    // stdin emits an asynchronous EPIPE error on the stream.
-    harness.process.stdin.destroy(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+    // Simulate the child process closing its pipe: stdin emits an asynchronous
+    // EPIPE error before the transport observes a process exit.
+    const pipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    harness.process.stdin.emit("error", pipeError);
 
     // The pending request must be rejected with the pipe error rather than
     // an unhandled exception tearing down the gateway.
@@ -486,7 +488,7 @@ describe("CodexAppServerClient", () => {
     clients.push(harness.client);
     harness.client.addRequestHandler((request) => {
       if (request.method === "item/tool/call") {
-        return new Promise<never>(() => undefined);
+        return new Promise<never>(() => {});
       }
       return undefined;
     });

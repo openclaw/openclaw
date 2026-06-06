@@ -1,4 +1,6 @@
-import { completeSimple, getModel } from "@earendil-works/pi-ai";
+// Z.ai live tests verify GLM completions against the real provider when live
+// credentials and live-test flags are enabled.
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   createSingleUserPromptMessage,
@@ -13,7 +15,18 @@ const ZAI_LIVE_TIMEOUT_MS = 45_000;
 const describeLive = LIVE && ZAI_KEY ? describe : describe.skip;
 
 async function expectModelReturnsAssistantText(modelId: "glm-5-turbo" | "glm-5.1") {
-  const model = getModel("zai", modelId);
+  const model: Model<"openai-completions"> = {
+    id: modelId,
+    name: modelId,
+    api: "openai-completions",
+    provider: "zai",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 202_800,
+    maxTokens: 131_100,
+  };
   const res = await completeSimple(
     model,
     {

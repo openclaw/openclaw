@@ -1,7 +1,8 @@
+// Memory Wiki tests cover compile plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -14,6 +15,16 @@ describe("compileMemoryWikiVault", () => {
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-suite-"));
+  });
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   afterAll(async () => {
@@ -108,6 +119,61 @@ describe("compileMemoryWikiVault", () => {
     await expect(
       fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
+  });
+
+  it("bounds concurrent page reads while compiling", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    for (let index = 0; index < 24; index += 1) {
+      await fs.writeFile(
+        path.join(rootDir, "sources", `page-${index}.md`),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "source",
+            id: `source.page-${index}`,
+            title: `Page ${index}`,
+          },
+          body: `# Page ${index}\n`,
+        }),
+        "utf8",
+      );
+    }
+
+    const originalReadFile = fs.readFile.bind(fs);
+    let activePageReads = 0;
+    let maxActivePageReads = 0;
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+        const targetPath = args[0];
+        const isTestPageRead =
+          typeof targetPath === "string" &&
+          targetPath.startsWith(path.join(rootDir, "sources", "page-"));
+        if (!isTestPageRead) {
+          return await originalReadFile(...args);
+        }
+
+        activePageReads += 1;
+        maxActivePageReads = Math.max(maxActivePageReads, activePageReads);
+        try {
+          await Promise.resolve();
+          return await originalReadFile(...args);
+        } finally {
+          activePageReads -= 1;
+        }
+      });
+
+    try {
+      await compileMemoryWikiVault(config);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+
+    expect(maxActivePageReads).toBeGreaterThan(0);
+    expect(maxActivePageReads).toBeLessThanOrEqual(16);
   });
 
   it("renders obsidian-friendly links when configured", async () => {
@@ -520,5 +586,52 @@ describe("compileMemoryWikiVault", () => {
     await expect(
       fs.readFile(path.join(rootDir, "concepts", "gamma.md"), "utf8"),
     ).resolves.not.toContain("### Referenced By");
+  });
+
+  it("retries transient page reads during compile", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    const sourcePath = path.join(rootDir, "sources", "alpha.md");
+
+    await fs.writeFile(
+      sourcePath,
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+
+    const realReadFile = fs.readFile;
+    let attempts = 0;
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof realReadFile>) => {
+        const [target, options] = args;
+        if (
+          typeof target === "string" &&
+          path.resolve(target) === sourcePath &&
+          options === "utf8" &&
+          attempts++ === 0
+        ) {
+          const err = new Error(
+            "Unknown system error -11: Unknown system error -11, read",
+          ) as NodeJS.ErrnoException;
+          err.code = "EDEADLK";
+          err.errno = -11;
+          throw err;
+        }
+        return await realReadFile(target, options as never);
+      });
+
+    try {
+      const result = await compileMemoryWikiVault(config);
+      expect(result.pageCounts.source).toBe(1);
+      expect(attempts).toBeGreaterThanOrEqual(2);
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 });

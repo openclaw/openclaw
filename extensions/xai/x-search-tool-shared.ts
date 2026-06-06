@@ -1,4 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// Xai plugin module implements x search tool shared behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 
 export function buildMissingXSearchApiKeyPayload() {

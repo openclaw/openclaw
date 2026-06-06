@@ -1,3 +1,4 @@
+// Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
   jsonResult,
   resolveMemorySearchConfig,
@@ -62,7 +63,7 @@ const MemorySearchSchema = {
   type: "object",
   properties: {
     query: { type: "string" },
-    maxResults: { type: "number" },
+    maxResults: { type: "integer", minimum: 1 },
     minScore: { type: "number" },
     corpus: { type: "string", enum: ["memory", "wiki", "all", "sessions"] },
   },
@@ -74,8 +75,8 @@ const MemoryGetSchema = {
   type: "object",
   properties: {
     path: { type: "string" },
-    from: { type: "number" },
-    lines: { type: "number" },
+    from: { type: "integer", minimum: 1 },
+    lines: { type: "integer", minimum: 1 },
     corpus: { type: "string", enum: ["memory", "wiki", "all"] },
   },
   required: ["path"],

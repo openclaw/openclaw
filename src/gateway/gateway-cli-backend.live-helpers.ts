@@ -1,8 +1,14 @@
+// CLI backend live helpers prepare workspace/bootstrap fixtures and gateway
+// clients for live CLI backend model/runtime tests.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveCliBackendLiveTest } from "../agents/cli-backends.js";
-import { migrateLegacyRuntimeModelRef } from "../agents/model-runtime-aliases.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import {
+  listCliRuntimeModelBackendBindings,
+  resolveCliBackendLiveTest,
+} from "../agents/cli-backends.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -15,12 +21,10 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
-import type { EventFrame } from "./protocol/index.js";
 
 // Aggregate docker live runs can contend on startup enough that the gateway
 // websocket handshake needs a wider budget than the single-provider reruns.
@@ -60,6 +64,20 @@ export type CliBackendLiveEnvSnapshot = {
   anthropicApiKeyOld?: string;
 };
 
+function normalizeCliRuntimeModelTarget(raw: string | undefined): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = parseModelRef(raw, "");
+  if (!parsed) {
+    return raw;
+  }
+  const binding = listCliRuntimeModelBackendBindings({ includeSetupRegistry: true }).find(
+    (entry) => entry.runtime === parsed.provider,
+  );
+  return binding ? `${binding.provider}/${parsed.model}` : raw;
+}
+
 export function resolveCliBackendLiveModelSelection(params: {
   rawModel: string;
   defaultProvider: string;
@@ -72,21 +90,21 @@ export function resolveCliBackendLiveModelSelection(params: {
     );
   }
 
-  const migrated = migrateLegacyRuntimeModelRef(params.rawModel);
-  if (migrated?.legacyProvider === "codex-cli") {
+  if (parsed.provider === "codex-cli") {
     throw new Error(
       "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/... is no longer supported. Use a supported CLI backend such as claude-cli or google-gemini-cli.",
     );
   }
-  if (migrated?.cli) {
+  const cliBinding = listCliRuntimeModelBackendBindings({ includeSetupRegistry: true }).find(
+    (binding) => binding.runtime === parsed.provider,
+  );
+  if (cliBinding) {
     return {
-      providerId: migrated.runtime,
-      cliModelKey: `${migrated.runtime}/${migrated.model}`,
-      configModelKey: migrated.ref,
-      configModelSwitchTarget: params.modelSwitchTarget
-        ? (migrateLegacyRuntimeModelRef(params.modelSwitchTarget)?.ref ?? params.modelSwitchTarget)
-        : undefined,
-      agentRuntime: { id: migrated.runtime },
+      providerId: cliBinding.runtime,
+      cliModelKey: `${cliBinding.runtime}/${parsed.model}`,
+      configModelKey: `${cliBinding.provider}/${parsed.model}`,
+      configModelSwitchTarget: normalizeCliRuntimeModelTarget(params.modelSwitchTarget),
+      agentRuntime: { id: cliBinding.runtime },
     };
   }
 
@@ -96,7 +114,7 @@ export function resolveCliBackendLiveModelSelection(params: {
     cliModelKey: modelKey,
     configModelKey: modelKey,
     configModelSwitchTarget: params.modelSwitchTarget,
-    agentRuntime: { id: "pi" },
+    agentRuntime: { id: "openclaw" },
   };
 }
 
@@ -238,7 +256,9 @@ export async function createBootstrapWorkspace(
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
@@ -298,6 +318,8 @@ export async function connectTestGatewayClient(params: {
   maxAttemptTimeoutMs?: number;
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
+  tickWatchTimeoutMs?: number;
+  waitForEventLoopReady?: boolean;
   onEvent?: (evt: EventFrame) => void;
   onRetry?: (attempt: number, error: Error) => void;
 }): Promise<GatewayClient> {
@@ -338,11 +360,12 @@ async function connectClientOnce(params: {
   deviceIdentity?: DeviceIdentity;
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
+  tickWatchTimeoutMs?: number;
+  waitForEventLoopReady?: boolean;
   onEvent?: (evt: EventFrame) => void;
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let done = false;
-    let client: GatewayClient | undefined;
     const abortStart = new AbortController();
     const finish = (result: { client?: GatewayClient; error?: Error }) => {
       if (done) {
@@ -383,24 +406,34 @@ async function connectClientOnce(params: {
     if (params.requestTimeoutMs !== undefined) {
       clientOptions.requestTimeoutMs = params.requestTimeoutMs;
     }
+    if (params.tickWatchTimeoutMs !== undefined) {
+      clientOptions.tickWatchTimeoutMs = params.tickWatchTimeoutMs;
+    }
 
-    client = new GatewayClient(clientOptions);
+    const client: GatewayClient | undefined = new GatewayClient(clientOptions);
 
     const connectTimeout = setTimeout(
       () => finish({ error: new Error("gateway connect timeout") }),
       params.timeoutMs,
     );
     connectTimeout.unref();
-    void startGatewayClientWhenEventLoopReady(client, {
-      timeoutMs: params.timeoutMs,
-      signal: abortStart.signal,
-    }).then(
+    const startPromise =
+      params.waitForEventLoopReady === false
+        ? Promise.resolve().then(() => {
+            client.start();
+            return { ready: true, aborted: false };
+          })
+        : startGatewayClientWhenEventLoopReady(client, {
+            timeoutMs: params.timeoutMs,
+            signal: abortStart.signal,
+          });
+    void startPromise.then(
       (readiness) => {
         if (!readiness.ready && !readiness.aborted) {
           finish({ error: new Error("gateway event loop readiness timeout") });
         }
       },
-      (error) => {
+      (error: unknown) => {
         finish({ error: error instanceof Error ? error : new Error(String(error)) });
       },
     );

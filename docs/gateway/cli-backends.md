@@ -161,22 +161,25 @@ told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats
 a new policy.
 </Note>
 
-The bundled Anthropic `claude-cli` backend receives the OpenClaw skills snapshot
-two ways: the compact OpenClaw skills catalog in the appended system prompt, and
-a temporary Claude Code plugin passed with `--plugin-dir`. The plugin contains
-only the eligible skills for that agent/session, so Claude Code's native skill
-resolver sees the same filtered set that OpenClaw would otherwise advertise in
-the prompt. Skill env/API key overrides are still applied by OpenClaw to the
-child process environment for the run.
+The bundled Anthropic `claude-cli` backend prefers Claude Code's native skill
+resolver for OpenClaw skills. When the current skills snapshot includes at least
+one selected skill with a materialized path, OpenClaw passes a temporary Claude
+Code plugin with `--plugin-dir` and omits the duplicate OpenClaw skills catalog
+from the appended system prompt. If the snapshot has no materialized plugin
+skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key
+overrides are still applied by OpenClaw to the child process environment for the
+run.
 
 Claude CLI also has its own noninteractive permission mode. OpenClaw maps that
-to the existing exec policy instead of adding Claude-specific config: when the
-effective requested exec policy is YOLO (`tools.exec.security: "full"` and
-`tools.exec.ask: "off"`), OpenClaw adds `--permission-mode bypassPermissions`.
-Per-agent `agents.list[].tools.exec` settings override global `tools.exec` for
-that agent. To force a different Claude mode, set explicit raw backend args
-such as `--permission-mode default` or `--permission-mode acceptEdits` under
-`agents.defaults.cliBackends.claude-cli.args` and matching `resumeArgs`.
+to the existing exec policy instead of adding Claude-specific policy config.
+For OpenClaw-managed Claude live sessions, the effective OpenClaw exec policy is
+authoritative: YOLO (`tools.exec.security: "full"` and
+`tools.exec.ask: "off"`) launches Claude with
+`--permission-mode bypassPermissions`, while restrictive effective exec policy
+launches Claude with `--permission-mode default`. Per-agent
+`agents.list[].tools.exec` settings override global `tools.exec` for that
+agent. Raw Claude backend args may still include `--permission-mode`, but live
+Claude launches normalize that flag to match the effective OpenClaw exec policy.
 
 The bundled Anthropic `claude-cli` backend also maps OpenClaw `/think` levels
 to Claude Code's native `--effort` flag for non-off levels. `minimal` and
@@ -369,6 +372,30 @@ its own control markers and channel delivery.
 For CLIs that emit Claude Code stream-json compatible JSONL, set
 `jsonlDialect: "claude-stream-json"` on that backend's config.
 
+## Native compaction ownership
+
+Some CLI backends run an agent that compacts its **own** transcript, so OpenClaw must
+not run its safeguard summarizer against them - doing so fights the backend's own
+compaction and can hard-fail the turn.
+
+`claude-cli` has no harness endpoint - Claude Code compacts internally - so it declares
+`ownsNativeCompaction: true`, and OpenClaw returns a no-op from the compaction path.
+Native-harness sessions such as Codex keep routing to their harness compaction endpoint
+instead.
+
+Because the backend owns compaction, the old stopgap of setting
+`contextTokens: 1_000_000` purely to keep OpenClaw's safeguard from firing on a
+claude-cli session is **no longer needed** - the opt-out replaces it.
+
+```typescript
+api.registerCliBackend({ id: "my-cli", ownsNativeCompaction: true /* ... */ });
+```
+
+Only declare `ownsNativeCompaction` for a backend that genuinely owns its compaction: it
+must reliably bound its own transcript as it nears its context window and persist a
+resumable session (e.g. `--resume` / `--session-id`); otherwise a deferred session can
+stay over budget. Matching `agentHarnessId` sessions still route to the harness endpoint.
+
 ## Bundle MCP overlays
 
 CLI backends do **not** receive OpenClaw tool calls directly, but a backend can
@@ -396,6 +423,22 @@ reaped after `mcp.sessionIdleTtlMs` milliseconds of idle time (default 10
 minutes; set `0` to disable). One-shot embedded runs such as auth probes,
 slug generation, and active-memory recall request cleanup at run end so stdio
 children and Streamable HTTP/SSE streams do not outlive the run.
+
+## Reseed history cap
+
+When a fresh CLI session is seeded from a prior OpenClaw transcript (for
+example after a `session_expired` retry), the rendered
+`<conversation_history>` block is capped to keep reseed prompts from
+exploding. The default is `12288` characters (about 3000 tokens).
+
+Claude CLI backends automatically use a larger cap derived from the resolved
+Claude context tier. Standard 200K-token Claude runs keep a larger transcript
+slice, and 1M-token Claude runs keep a larger slice again, while other CLI
+backends keep the conservative default.
+
+- The cap only governs the reseed prompt's prior-history block. Live-session
+  output limits are tuned separately under `reliability.outputLimits`
+  (see [Sessions](#sessions)).
 
 ## Limitations
 

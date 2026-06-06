@@ -1,3 +1,4 @@
+// Status runtime shared tests cover gateway health, runtime details, and safe status probe fallbacks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveStatusGatewayHealth,
@@ -326,6 +327,7 @@ describe("status-runtime-shared", () => {
       config: { gateway: {} },
       sourceConfig: { gateway: { mode: "local" } },
       deep: false,
+      deepTimeoutMs: 1234,
       includeFilesystem: true,
       includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,

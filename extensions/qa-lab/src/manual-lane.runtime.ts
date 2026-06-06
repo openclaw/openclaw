@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements manual lane behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -8,6 +9,7 @@ import type { QaProviderMode } from "./model-selection.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
+import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 
 type QaManualLaneParams = {
   repoRoot: string;
@@ -106,7 +108,7 @@ export async function runQaManualLane(params: QaManualLaneParams) {
         runId: started.runId,
         timeoutMs,
       },
-      { timeoutMs: timeoutMs + 5_000 },
+      { timeoutMs: resolveQaGatewayTimeoutWithGraceMs(timeoutMs) },
     )) as { status?: string; error?: string };
 
     const replySettleMs = params.replySettleMs ?? 500;

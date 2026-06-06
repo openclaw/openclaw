@@ -1,3 +1,4 @@
+// Live media script tests cover live media test command construction.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const loadShellEnvFallbackMock = vi.fn();
@@ -49,7 +50,7 @@ describe("test-live-media", () => {
       "openai",
       "vydra",
     ]);
-    expect(requirePlanEntry(plan, "music").providers).toEqual(["google", "minimax"]);
+    expect(requirePlanEntry(plan, "music").providers).toEqual(["fal", "google", "minimax"]);
     expect(requirePlanEntry(plan, "video").providers).toEqual([
       "google",
       "minimax",

@@ -1,4 +1,14 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+/**
+ * Browser agent tool action executors.
+ *
+ * Converts model-facing parameters into browser control client calls and wraps
+ * browser-originated text as untrusted content before returning it to agents.
+ */
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+} from "openclaw/plugin-sdk/param-readers";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   browserAct,
@@ -16,7 +26,10 @@ import {
   resolveRuntimeImageSanitization,
   wrapExternalContent,
 } from "./browser-tool.runtime.js";
-import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./browser/constants.js";
+import {
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
+} from "./browser/constants.js";
 
 const browserToolActionDeps = {
   browserAct,
@@ -33,9 +46,15 @@ type BrowserActRequest = Parameters<typeof browserAct>[1];
 type BrowserActRequestWithTimeout = BrowserActRequest & { timeoutMs?: number };
 
 function normalizePositiveTimeoutMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  return readPositiveIntegerParam({ value }, "value", {
+    message: "timeoutMs must be a positive integer.",
+  });
+}
+
+function normalizeNonNegativeDurationMs(value: unknown): number | undefined {
+  return readNonNegativeIntegerParam({ value }, "value", {
+    message: "timeMs must be a non-negative integer.",
+  });
 }
 
 function supportsBrowserActTimeout(request: BrowserActRequest): boolean {
@@ -89,6 +108,8 @@ function withConfiguredActTimeout(
     return request;
   }
   if (existingSessionRejectsActTimeout(request) && usesExistingSessionProfile(profileName)) {
+    // Chrome MCP existing-session actions reject per-call timeouts for these
+    // operations, so default timeout injection must stay disabled there.
     return request;
   }
 
@@ -107,7 +128,7 @@ function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefine
     candidateTimeouts.push(explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
   }
   if (request.kind === "wait") {
-    const waitDuration = normalizePositiveTimeoutMs(request.timeMs);
+    const waitDuration = normalizeNonNegativeDurationMs(request.timeMs);
     if (waitDuration !== undefined) {
       candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
     }
@@ -184,6 +205,8 @@ function wrapBrowserExternalJson(params: {
   includeWarning?: boolean;
 }): { wrappedText: string; safeDetails: Record<string, unknown> } {
   const extractedText = JSON.stringify(params.payload, null, 2);
+  // Browser tabs, snapshots, and console output are page-controlled data. Keep
+  // text wrapped even when details carry the structured fields for callers.
   const wrappedText = wrapExternalContent(extractedText, {
     source: "browser",
     includeWarning: params.includeWarning ?? true,
@@ -319,6 +342,7 @@ export async function executeTabsAction(params: {
   return formatTabsToolResult(tabs);
 }
 
+/** Execute and format browser snapshots for agent consumption. */
 export async function executeSnapshotAction(params: {
   input: Record<string, unknown>;
   baseUrl?: string;
@@ -343,16 +367,18 @@ export async function executeSnapshotAction(params: {
     input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
   const hasMaxChars = Object.hasOwn(input, "maxChars");
   const targetId = normalizeOptionalString(input.targetId);
-  const limit =
-    typeof input.limit === "number" && Number.isFinite(input.limit) ? input.limit : undefined;
-  const maxChars =
-    typeof input.maxChars === "number" && Number.isFinite(input.maxChars) && input.maxChars > 0
-      ? Math.floor(input.maxChars)
-      : undefined;
+  const limit = readPositiveIntegerParam(input, "limit", {
+    message: "limit must be a positive integer.",
+  });
+  const maxCharsRaw = readNonNegativeIntegerParam(input, "maxChars", {
+    message: "maxChars must be a non-negative integer.",
+  });
+  const maxChars = maxCharsRaw !== undefined && maxCharsRaw > 0 ? maxCharsRaw : undefined;
   const interactive = typeof input.interactive === "boolean" ? input.interactive : undefined;
   const compact = typeof input.compact === "boolean" ? input.compact : undefined;
-  const depth =
-    typeof input.depth === "number" && Number.isFinite(input.depth) ? input.depth : undefined;
+  const depth = readNonNegativeIntegerParam(input, "depth", {
+    message: "depth must be a non-negative integer.",
+  });
   const selector = normalizeOptionalString(input.selector);
   const frame = normalizeOptionalString(input.frame);
   const resolvedMaxChars =
@@ -365,6 +391,12 @@ export async function executeSnapshotAction(params: {
       : hasMaxChars
         ? maxChars
         : undefined;
+  // AI snapshots have a compact default cap; ARIA snapshots keep full structure
+  // unless maxChars is explicit, because agents often need complete node refs.
+  const snapshotTimeoutMs =
+    readPositiveIntegerParam(input, "timeoutMs", {
+      message: "timeoutMs must be a positive integer.",
+    }) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
   const snapshotQuery = {
     ...(format ? { format } : {}),
     targetId,
@@ -379,6 +411,7 @@ export async function executeSnapshotAction(params: {
     labels,
     urls,
     mode,
+    timeoutMs: snapshotTimeoutMs,
   };
   let refsFallback: "role" | undefined;
   const readSnapshot = async (query: typeof snapshotQuery) =>
@@ -388,6 +421,7 @@ export async function executeSnapshotAction(params: {
           path: "/snapshot",
           profile,
           query,
+          timeoutMs: snapshotTimeoutMs,
         })) as Awaited<ReturnType<typeof browserSnapshot>>)
       : await browserToolActionDeps.browserSnapshot(baseUrl, {
           ...query,
@@ -499,6 +533,7 @@ export async function executeSnapshotAction(params: {
   }
 }
 
+/** Execute browser console retrieval and wrap page-controlled messages. */
 export async function executeConsoleAction(params: {
   input: Record<string, unknown>;
   baseUrl?: string;
@@ -528,6 +563,7 @@ export async function executeConsoleAction(params: {
   return formatConsoleToolResult(result);
 }
 
+/** Execute browser actions with profile-aware timeout defaults and stale-tab recovery. */
 export async function executeActAction(params: {
   request: BrowserActRequest;
   baseUrl?: string;

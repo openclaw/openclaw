@@ -1,7 +1,9 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Slack tests cover auth plugin behavior.
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "./context.js";
 
 const readChannelIngressStoreAllowFromForDmPolicyMock = vi.hoisted(() => vi.fn());
+let authorizeSlackBotRoomMessage: typeof import("./auth.js").authorizeSlackBotRoomMessage;
 let authorizeSlackSystemEventSender: typeof import("./auth.js").authorizeSlackSystemEventSender;
 let clearSlackAllowFromCacheForTest: typeof import("./auth.js").clearSlackAllowFromCacheForTest;
 let resolveSlackEffectiveAllowFrom: typeof import("./auth.js").resolveSlackEffectiveAllowFrom;
@@ -109,12 +111,165 @@ describe("resolveSlackEffectiveAllowFrom", () => {
 
 describe("authorizeSlackSystemEventSender", () => {
   beforeAll(async () => {
-    ({ authorizeSlackSystemEventSender, clearSlackAllowFromCacheForTest } =
-      await import("./auth.js"));
+    ({
+      authorizeSlackBotRoomMessage,
+      authorizeSlackSystemEventSender,
+      clearSlackAllowFromCacheForTest,
+    } = await import("./auth.js"));
   });
 
   beforeEach(() => {
     clearSlackAllowFromCacheForTest();
+    delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
+  });
+
+  afterEach(() => {
+    delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
+  });
+
+  it("ignores non-decimal channel member cache ttl env values", async () => {
+    process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS = "0x0";
+    const conversationsMembers = vi.fn(async () => ({
+      members: ["UOWNER"],
+      response_metadata: {},
+    }));
+    const ctx = {
+      allowFrom: [],
+      accountId: "main",
+      allowNameMatching: false,
+      app: { client: { conversations: { members: conversationsMembers } } },
+      botToken: "xoxb-test",
+    } as unknown as SlackMonitorContext;
+
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+
+    expect(conversationsMembers).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops cached channel members when the current clock is not a valid date timestamp", async () => {
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(1_700_000_000_000)
+      .mockReturnValueOnce(1_700_000_000_000)
+      .mockReturnValueOnce(Number.NaN)
+      .mockReturnValue(1_700_000_000_000);
+    const conversationsMembers = vi.fn(async () => ({
+      members: ["UOWNER"],
+      response_metadata: {},
+    }));
+    const ctx = {
+      allowFrom: [],
+      accountId: "main",
+      allowNameMatching: false,
+      app: { client: { conversations: { members: conversationsMembers } } },
+      botToken: "xoxb-test",
+    } as unknown as SlackMonitorContext;
+
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+
+    expect(conversationsMembers).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache channel members when the expiry timestamp would exceed the valid date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const conversationsMembers = vi.fn(async () => ({
+      members: ["UOWNER"],
+      response_metadata: {},
+    }));
+    const ctx = {
+      allowFrom: [],
+      accountId: "main",
+      allowNameMatching: false,
+      app: { client: { conversations: { members: conversationsMembers } } },
+      botToken: "xoxb-test",
+    } as unknown as SlackMonitorContext;
+
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+
+    expect(conversationsMembers).toHaveBeenCalledTimes(2);
+  });
+
+  it("still coalesces in-flight channel member lookups when durable cache expiry is invalid", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    let resolveMembers: (value: {
+      members: string[];
+      response_metadata: Record<string, never>;
+    }) => void;
+    const membersPromise = new Promise<{
+      members: string[];
+      response_metadata: Record<string, never>;
+    }>((resolve) => {
+      resolveMembers = resolve;
+    });
+    const conversationsMembers = vi.fn(() => membersPromise);
+    const ctx = {
+      allowFrom: [],
+      accountId: "main",
+      allowNameMatching: false,
+      app: { client: { conversations: { members: conversationsMembers } } },
+      botToken: "xoxb-test",
+    } as unknown as SlackMonitorContext;
+
+    const first = authorizeSlackBotRoomMessage({
+      ctx,
+      channelId: "C1",
+      senderId: "U_BOT",
+      allowFromLower: ["uowner"],
+    });
+    const second = authorizeSlackBotRoomMessage({
+      ctx,
+      channelId: "C1",
+      senderId: "U_BOT",
+      allowFromLower: ["uowner"],
+    });
+    resolveMembers!({ members: ["UOWNER"], response_metadata: {} });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    expect(conversationsMembers).toHaveBeenCalledTimes(1);
   });
 
   it("keeps non-interactive channel senders open when only global allowFrom is configured", async () => {

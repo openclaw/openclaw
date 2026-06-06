@@ -1,7 +1,10 @@
+// Runtime-state test helpers hold hoisted mutable mocks shared by gateway
+// Vitest suites and module mocks.
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { Mock, vi } from "vitest";
+import { vi } from "vitest";
+import type { Mock } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { MsgContext } from "../auto-reply/templating.js";
@@ -12,6 +15,9 @@ import type { RunCronAgentTurnResult } from "../cron/isolated-agent/run.types.js
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
+/**
+ * Hoisted mutable state shared by gateway Vitest module mocks.
+ */
 export type GetReplyFromConfigFn = (
   ctx: MsgContext,
   opts?: GetReplyOptions,
@@ -22,13 +28,13 @@ type AgentCommandFn = (...args: unknown[]) => Promise<void>;
 type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 export type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
 type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
-type CompactEmbeddedPiSessionFn = (...args: unknown[]) => Promise<unknown>;
+type CompactEmbeddedAgentSessionFn = (...args: unknown[]) => Promise<unknown>;
 
 const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.configRoot");
 
 type GatewayTestHoistedState = {
   testTailnetIPv4: { value: string | undefined };
-  piSdkMock: {
+  agentDiscoveryMock: {
     enabled: boolean;
     discoverCalls: number;
     models: Array<{
@@ -51,7 +57,7 @@ type GatewayTestHoistedState = {
     abortCalls: string[];
     waitCalls: string[];
     waitResults: Map<string, boolean>;
-    compactEmbeddedPiSession: Mock<CompactEmbeddedPiSessionFn>;
+    compactEmbeddedAgentSession: Mock<CompactEmbeddedAgentSessionFn>;
   };
   testTailscaleWhois: { value: TailscaleWhoisIdentity | null };
   getReplyFromConfig: Mock<GetReplyFromConfigFn>;
@@ -80,12 +86,12 @@ type GatewayTestHoistedState = {
 const gatewayTestHoisted = vi.hoisted(() => {
   const key = Symbol.for("openclaw.gatewayTestHelpers.hoisted");
   const store = globalThis as Record<PropertyKey, unknown>;
-  if (Object.prototype.hasOwnProperty.call(store, key)) {
+  if (Object.hasOwn(store, key)) {
     return store[key] as GatewayTestHoistedState;
   }
   const created: GatewayTestHoistedState = {
     testTailnetIPv4: { value: undefined },
-    piSdkMock: {
+    agentDiscoveryMock: {
       enabled: false,
       discoverCalls: 0,
       models: [],
@@ -101,7 +107,7 @@ const gatewayTestHoisted = vi.hoisted(() => {
       abortCalls: [],
       waitCalls: [],
       waitResults: new Map<string, boolean>(),
-      compactEmbeddedPiSession: vi.fn().mockResolvedValue({
+      compactEmbeddedAgentSession: vi.fn().mockResolvedValue({
         ok: true,
         compacted: true,
         result: {
@@ -139,13 +145,14 @@ const gatewayTestHoisted = vi.hoisted(() => {
   return created;
 });
 
+/** Returns the singleton state object used by gateway test module mocks. */
 export function getGatewayTestHoistedState(): GatewayTestHoistedState {
   return gatewayTestHoisted;
 }
 
 export const testTailnetIPv4 = gatewayTestHoisted.testTailnetIPv4;
 export const testTailscaleWhois = gatewayTestHoisted.testTailscaleWhois;
-export const piSdkMock = gatewayTestHoisted.piSdkMock;
+export const agentDiscoveryMock = gatewayTestHoisted.agentDiscoveryMock;
 export const cronIsolatedRun = gatewayTestHoisted.cronIsolatedRun;
 export const agentCommand = gatewayTestHoisted.agentCommand;
 export const runBtwSideQuestion = gatewayTestHoisted.runBtwSideQuestion;
@@ -164,6 +171,7 @@ export const testConfigRoot = resolveGlobalSingleton(GATEWAY_TEST_CONFIG_ROOT_KE
   value: path.join(os.tmpdir(), `openclaw-gateway-test-${process.pid}-${crypto.randomUUID()}`),
 }));
 
+/** Updates the config root used by gateway config-module mocks. */
 export function setTestConfigRoot(root: string): void {
   testConfigRoot.value = root;
   process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");

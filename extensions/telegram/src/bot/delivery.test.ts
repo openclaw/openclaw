@@ -1,3 +1,4 @@
+// Telegram tests cover delivery plugin behavior.
 import type { Bot } from "grammy";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -748,6 +749,33 @@ describe("deliverReplies", () => {
 
     expect(loadWebMedia).toHaveBeenCalledWith("/tmp/workspace-work/photo.jpg", {
       localRoots: mediaLocalRoots,
+    });
+  });
+
+  it("passes the configured media byte cap to media loading", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 13,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendPhoto });
+    const mediaMaxBytes = 50 * 1024 * 1024;
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverReplies({
+      replies: [{ mediaUrl: "https://example.com/photo.jpg" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+      mediaMaxBytes,
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith("https://example.com/photo.jpg", {
+      maxBytes: mediaMaxBytes,
     });
   });
 

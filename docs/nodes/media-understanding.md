@@ -137,6 +137,32 @@ Each `models[]` entry can be **provider** or **CLI**:
   </Tab>
 </Tabs>
 
+### Provider credentials (`apiKey`)
+
+Provider media understanding uses the same provider auth resolution as normal
+model calls: auth profiles, environment variables, then
+`models.providers.<providerId>.apiKey`.
+
+`tools.media.*.models[]` entries do not accept an inline `apiKey` field. The
+`provider` value in a media model entry, such as `openai` or `moonshot`, must
+have credentials available through one of the standard provider auth sources.
+
+Minimal example:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: { apiKey: "<OPENAI_API_KEY>" },
+      moonshot: { apiKey: "<MOONSHOT_API_KEY>" },
+    },
+  },
+}
+```
+
+For the full provider auth reference, including profiles, environment
+variables, and custom base URLs, see [Tools and custom providers](/gateway/config-tools).
+
 ## Defaults and limits
 
 Recommended defaults:
@@ -251,11 +277,11 @@ For CLI entries, **set `capabilities` explicitly** to avoid surprising matches. 
 
 ## Provider support matrix (OpenClaw integrations)
 
-| Capability | Provider integration                                                                                                         | Notes                                                                                                                                                                                                                                   |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Image      | OpenAI, OpenAI Codex OAuth, Codex app-server, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Qwen, Z.AI, config providers | Vendor plugins register image support; `openai-codex/*` uses OAuth provider plumbing; `codex/*` uses a bounded Codex app-server turn; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
-| Audio      | OpenAI, Groq, xAI, Deepgram, OpenRouter, Google, SenseAudio, ElevenLabs, Mistral                                             | Provider transcription (Whisper/Groq/xAI/Deepgram/OpenRouter STT/Gemini/SenseAudio/Scribe/Voxtral).                                                                                                                                     |
-| Video      | Google, Qwen, Moonshot                                                                                                       | Provider video understanding via vendor plugins; Qwen video understanding uses the Standard DashScope endpoints.                                                                                                                        |
+| Capability | Provider integration                                                                                                         | Notes                                                                                                                                                                                                                                       |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Image      | OpenAI, OpenAI Codex OAuth, Codex app-server, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Qwen, Z.AI, config providers | Vendor plugins register image support; `openai/*` can use API-key or Codex OAuth routing; `codex/*` uses a bounded Codex app-server turn; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
+| Audio      | OpenAI, Groq, xAI, Deepgram, OpenRouter, Google, SenseAudio, ElevenLabs, Mistral                                             | Provider transcription (Whisper/Groq/xAI/Deepgram/OpenRouter STT/Gemini/SenseAudio/Scribe/Voxtral).                                                                                                                                         |
+| Video      | Google, Qwen, Moonshot                                                                                                       | Provider video understanding via vendor plugins; Qwen video understanding uses the Standard DashScope endpoints.                                                                                                                            |
 
 <Note>
 **MiniMax note**

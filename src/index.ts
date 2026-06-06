@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Re-exports the OpenClaw CLI entry point for package execution.
+// Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatCliFailureLines } from "./cli/failure-output.js";
@@ -84,7 +86,7 @@ if (!isMain) {
 }
 
 if (isMain) {
-  const { restoreTerminalState } = await import("./terminal/restore.js");
+  const { restoreTerminalState } = await import("../packages/terminal-core/src/restore.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
@@ -115,7 +117,7 @@ if (isMain) {
     process.exit(1);
   });
 
-  void runLegacyCliEntry(process.argv).catch((err) => {
+  void runLegacyCliEntry(process.argv).catch((err: unknown) => {
     for (const line of formatCliFailureLines({
       title: "The CLI command failed.",
       error: err,

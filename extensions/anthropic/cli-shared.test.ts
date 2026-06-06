@@ -1,3 +1,4 @@
+// Anthropic tests cover cli shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
@@ -73,6 +74,20 @@ describe("normalizeClaudeSettingSourcesArgs", () => {
         "stream-json",
       ]),
     ).toEqual(["-p", "--output-format", "stream-json", "--setting-sources", "user"]);
+  });
+});
+
+describe("Claude CLI model aliases", () => {
+  it("keeps pinned Claude CLI model refs on exact selectors", () => {
+    const aliases = buildAnthropicCliBackend().config.modelAliases;
+
+    expect(aliases?.["opus"]).toBe("opus");
+    expect(aliases?.["opus-4.8"]).toBe("claude-opus-4-8");
+    expect(aliases?.["opus-4.7"]).toBe("claude-opus-4-7");
+    expect(aliases?.["opus-4.6"]).toBe("claude-opus-4-6");
+    expect(aliases?.["claude-opus-4-8"]).toBe("claude-opus-4-8");
+    expect(aliases?.["claude-opus-4-7"]).toBe("claude-opus-4-7");
+    expect(aliases?.["claude-opus-4-6"]).toBe("claude-opus-4-6");
   });
 });
 
@@ -268,6 +283,13 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.sessionMode).toBe("always");
     expect(backend.config.resumeArgs).toContain("--resume");
     expect(backend.config.resumeArgs).toContain("{sessionId}");
+  });
+
+  it("passes system prompt on every turn (issue #80374 — systemPromptWhen must be 'always')", () => {
+    // Before fix this was hardcoded to "first", which silently dropped updated
+    // OpenClaw system prompt context on resumed / compacted claude-cli sessions.
+    const backend = buildAnthropicCliBackend();
+    expect(backend.config.systemPromptWhen).toBe("always");
   });
 
   it("leaves claude cli subscription-managed, restricts setting sources, and clears inherited env overrides", () => {

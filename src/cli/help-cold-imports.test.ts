@@ -1,3 +1,4 @@
+// Help cold import tests cover root help output without loading heavy command modules.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -184,6 +185,42 @@ vi.mock("../commands/agents.commands.list.js", () => {
   return { agentsListCommand: vi.fn(async () => {}) };
 });
 
+vi.mock("@clack/prompts", () => {
+  loaded.mark("clack-prompts");
+  return {
+    confirm: vi.fn(async () => true),
+  };
+});
+
+vi.mock("../secrets/apply.js", () => {
+  loaded.mark("secrets-apply-runtime");
+  return {
+    runSecretsApply: vi.fn(async () => ({})),
+  };
+});
+
+vi.mock("../secrets/audit.js", () => {
+  loaded.mark("secrets-audit-runtime");
+  return {
+    resolveSecretsAuditExitCode: vi.fn(() => 0),
+    runSecretsAudit: vi.fn(async () => ({})),
+  };
+});
+
+vi.mock("../secrets/configure.js", () => {
+  loaded.mark("secrets-configure-runtime");
+  return {
+    runSecretsConfigureInteractive: vi.fn(async () => ({})),
+  };
+});
+
+vi.mock("../secrets/plan.js", () => {
+  loaded.mark("secrets-plan-runtime");
+  return {
+    isSecretsApplyPlan: vi.fn(() => true),
+  };
+});
+
 function makeProgram(): Command {
   const program = new Command();
   program.name("openclaw");
@@ -296,5 +333,20 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("agents-delete-command");
     expect(loaded.modules).not.toContain("agents-identity-command");
     expect(loaded.modules).not.toContain("agents-list-command");
+    expect(loaded.modules).not.toContain("default-runtime");
+  });
+
+  it("keeps secrets help out of secrets action modules", async () => {
+    const { registerSecretsCli } = await import("./secrets-cli.js");
+    const program = makeProgram();
+
+    registerSecretsCli(program);
+    await expectHelpExit(program, ["secrets", "--help"]);
+
+    expect(loaded.modules).not.toContain("clack-prompts");
+    expect(loaded.modules).not.toContain("secrets-apply-runtime");
+    expect(loaded.modules).not.toContain("secrets-audit-runtime");
+    expect(loaded.modules).not.toContain("secrets-configure-runtime");
+    expect(loaded.modules).not.toContain("secrets-plan-runtime");
   });
 });

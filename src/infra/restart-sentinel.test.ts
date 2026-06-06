@@ -1,10 +1,10 @@
+// Covers restart sentinel persistence, summaries, and messages.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
-  DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
   buildRestartSuccessContinuation,
   consumeRestartSentinel,
   finalizeUpdateRestartSentinelRunningVersion,
@@ -25,15 +25,9 @@ import {
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  try {
-    await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
-      process.env.OPENCLAW_STATE_DIR = tempDir;
-      await run();
-    });
-  } finally {
-    envSnapshot.restore();
-  }
+  await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, run);
+  });
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -271,11 +265,8 @@ describe("restart sentinel", () => {
 });
 
 describe("restart success continuation", () => {
-  it("builds the default agent turn for session-scoped restarts", () => {
-    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toEqual({
-      kind: "agentTurn",
-      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
-    });
+  it("does not infer an agent turn from session context alone", () => {
+    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toBeNull();
   });
 
   it("keeps explicit continuation messages", () => {
@@ -367,9 +358,20 @@ describe("restart sentinel message dedup", () => {
     expect(result).toContain("Reason: /restart");
   });
 
-  it("formats the non-interactive doctor command", () => {
-    expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toContain(
-      "openclaw doctor --non-interactive",
+  it("formats the non-interactive doctor command as actionability guidance", () => {
+    expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toBe(
+      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+    );
+  });
+
+  it("keeps profile-aware doctor guidance actionable outside constrained delivery surfaces", () => {
+    expect(
+      formatDoctorNonInteractiveHint({
+        OPENCLAW_PROFILE: "isolated",
+        PATH: "/usr/bin:/bin",
+      }),
+    ).toBe(
+      "Recommended follow-up: run openclaw --profile isolated doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
     );
   });
 });

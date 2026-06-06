@@ -1,3 +1,5 @@
+// Device method tests cover pairing approval/rejection, paired-device lookup,
+// token rotation/revocation, and operator scope enforcement.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deviceHandlers } from "./devices.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -69,6 +71,7 @@ function createOptions(
     context: {
       broadcast: vi.fn(),
       disconnectClientsForDevice: vi.fn(),
+      invalidateClientsForDevice: vi.fn(),
       logGateway: {
         debug: vi.fn(),
         error: vi.fn(),
@@ -138,6 +141,28 @@ describe("deviceHandlers", () => {
       { deviceId: "device-1", removedAtMs: 123 },
       undefined,
     );
+  });
+
+  it("invalidates affected clients synchronously before responding to device.pair.remove", async () => {
+    removePairedDeviceMock.mockResolvedValue({ deviceId: "device-1", removedAtMs: 123 });
+    const opts = createOptions("device.pair.remove", { deviceId: "device-1" });
+    const respond = vi.mocked(opts.respond);
+    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
+    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
+
+    respond.mockImplementation(() => {
+      // At the moment the response is emitted, the client flag must already
+      // be set so any RPCs pipelined in the WS buffer are rejected.
+      expect(invalidate).toHaveBeenCalledWith("device-1", { reason: "device-pair-removed" });
+      // The hard close is deferred to the microtask to let the response flush.
+      expect(disconnect).not.toHaveBeenCalled();
+    });
+
+    await deviceHandlers["device.pair.remove"](opts);
+    await Promise.resolve();
+
+    expect(respond).toHaveBeenCalled();
+    expect(disconnect).toHaveBeenCalledWith("device-1");
   });
 
   it("does not disconnect clients when device removal fails", async () => {
@@ -348,6 +373,62 @@ describe("deviceHandlers", () => {
       },
       undefined,
     );
+  });
+
+  it("invalidates affected clients synchronously before responding to device.token.rotate", async () => {
+    mockPairedOperatorDevice();
+    mockRotateOperatorTokenSuccess();
+    const opts = createOptions(
+      "device.token.rotate",
+      { deviceId: "device-1", role: "operator", scopes: ["operator.pairing"] },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+    const respond = vi.mocked(opts.respond);
+    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
+    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
+
+    respond.mockImplementation(() => {
+      expect(invalidate).toHaveBeenCalledWith("device-1", {
+        role: "operator",
+        reason: "device-token-rotated",
+      });
+      expect(disconnect).not.toHaveBeenCalled();
+    });
+
+    await deviceHandlers["device.token.rotate"](opts);
+    await Promise.resolve();
+
+    expect(respond).toHaveBeenCalled();
+    expect(disconnect).toHaveBeenCalledWith("device-1", { role: "operator" });
+  });
+
+  it("invalidates affected clients synchronously before responding to device.token.revoke", async () => {
+    revokeDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: { role: "operator", revokedAtMs: 456 },
+    });
+    const opts = createOptions(
+      "device.token.revoke",
+      { deviceId: "device-1", role: "operator" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+    const respond = vi.mocked(opts.respond);
+    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
+    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
+
+    respond.mockImplementation(() => {
+      expect(invalidate).toHaveBeenCalledWith("device-1", {
+        role: "operator",
+        reason: "device-token-revoked",
+      });
+      expect(disconnect).not.toHaveBeenCalled();
+    });
+
+    await deviceHandlers["device.token.revoke"](opts);
+    await Promise.resolve();
+
+    expect(respond).toHaveBeenCalled();
+    expect(disconnect).toHaveBeenCalledWith("device-1", { role: "operator" });
   });
 
   it("treats normalized device ids as self-owned for token rotation", async () => {
@@ -809,6 +890,59 @@ describe("deviceHandlers", () => {
     );
   });
 
+  it("allows shared-auth operator sessions to approve operator roles within caller scopes", async () => {
+    getPendingDevicePairingMock.mockResolvedValue({
+      requestId: "req-1",
+      deviceId: "device-2",
+      publicKey: "pk-2",
+      role: "operator",
+      roles: ["operator"],
+      scopes: ["operator.pairing"],
+      ts: 100,
+    });
+    approveDevicePairingMock.mockResolvedValue({
+      status: "approved",
+      requestId: "req-1",
+      device: {
+        deviceId: "device-2",
+        publicKey: "pk-2",
+        role: "operator",
+        roles: ["operator"],
+        approvedScopes: ["operator.pairing"],
+        approvedAtMs: 100,
+        createdAtMs: 50,
+      },
+    });
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: "req-1" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }) },
+    );
+
+    await deviceHandlers["device.pair.approve"](opts);
+
+    expect(getPendingDevicePairingMock).toHaveBeenCalledWith("req-1");
+    expect(approveDevicePairingMock).toHaveBeenCalledWith("req-1", {
+      callerScopes: ["operator.pairing"],
+    });
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        requestId: "req-1",
+        device: {
+          deviceId: "device-2",
+          publicKey: "pk-2",
+          role: "operator",
+          roles: ["operator"],
+          approvedAtMs: 100,
+          createdAtMs: 50,
+          tokens: undefined,
+        },
+      },
+      undefined,
+    );
+  });
+
   it("rejects approving node roles for the caller device without admin scope", async () => {
     getPendingDevicePairingMock.mockResolvedValue({
       requestId: "req-1",
@@ -822,6 +956,63 @@ describe("deviceHandlers", () => {
       "device.pair.approve",
       { requestId: "req-1" },
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.pair.approve"](opts);
+
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device pairing approval denied");
+  });
+
+  it("rejects approving node roles from non-admin shared-auth sessions", async () => {
+    getPendingDevicePairingMock.mockResolvedValue({
+      requestId: "req-1",
+      deviceId: "device-1",
+      publicKey: "pk-1",
+      role: "node",
+      roles: ["node"],
+      ts: 100,
+    });
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: "req-1" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }) },
+    );
+
+    await deviceHandlers["device.pair.approve"](opts);
+
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device pairing approval denied");
+  });
+
+  it("rejects approving mixed operator and node roles from non-admin sessions", async () => {
+    getPendingDevicePairingMock.mockResolvedValue({
+      requestId: "req-1",
+      deviceId: "device-2",
+      publicKey: "pk-2",
+      role: "operator",
+      roles: [" operator ", " node "],
+      scopes: ["operator.pairing"],
+      ts: 100,
+    });
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: "req-1" },
+      { client: createClient(["operator.pairing"]) },
+    );
+
+    await deviceHandlers["device.pair.approve"](opts);
+
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device pairing approval denied");
+  });
+
+  it("denies unknown approvals from non-admin non-device sessions", async () => {
+    getPendingDevicePairingMock.mockResolvedValue(null);
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: "missing" },
+      { client: createClient(["operator.pairing"]) },
     );
 
     await deviceHandlers["device.pair.approve"](opts);

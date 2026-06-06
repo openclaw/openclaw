@@ -1,3 +1,4 @@
+/** CLI entrypoint for non-mutating doctor lint health checks. */
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
@@ -23,6 +24,7 @@ export interface DoctorLintCliOptions {
   readonly severityMin?: string;
   readonly skipIds?: readonly string[];
   readonly onlyIds?: readonly string[];
+  readonly allowExec?: boolean;
 }
 
 function detectMode(opts: DoctorLintCliOptions): "human" | "json" {
@@ -32,6 +34,12 @@ function detectMode(opts: DoctorLintCliOptions): "human" | "json" {
   return process.stdout.isTTY ? "human" : "json";
 }
 
+/**
+ * Runs registered doctor health checks in human or JSON mode and returns the lint exit code.
+ *
+ * Invalid config is reported before regular health checks because most checks need a parsed config
+ * and workspace root.
+ */
 export async function runDoctorLintCli(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
@@ -69,6 +77,7 @@ export async function runDoctorLintCli(
     runtime,
     cfg: snapshot.config,
     cwd: resolveAgentWorkspaceDir(snapshot.config, resolveDefaultAgentId(snapshot.config)),
+    allowExecSecretRefs: opts.allowExec === true,
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
   registerBundledHealthChecks({ cfg: snapshot.config, cwd: ctx.cwd });

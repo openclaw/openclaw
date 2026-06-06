@@ -1,5 +1,9 @@
+// Configures SQLite WAL and related pragmas for local stores.
 import type { DatabaseSync } from "node:sqlite";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
+// WAL maintenance configures SQLite write-ahead logging and schedules bounded
+// checkpoints so state databases do not accumulate unbounded WAL files.
 export const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS = 30 * 60 * 1000;
 
@@ -14,10 +18,13 @@ export type SqliteWalMaintenance = {
   close: () => boolean;
 };
 
+/** Options controlling WAL autocheckpoint and periodic checkpoint behavior. */
 export type SqliteWalMaintenanceOptions = {
   autoCheckpointPages?: number;
   checkpointIntervalMs?: number;
   checkpointMode?: SqliteWalCheckpointMode;
+  databaseLabel?: string;
+  databasePath?: string;
   onCheckpointError?: (error: unknown) => void;
 };
 
@@ -28,6 +35,7 @@ function normalizeNonNegativeInteger(value: number, label: string): number {
   return value;
 }
 
+/** Configure WAL pragmas and return a handle for checkpoint/close maintenance. */
 export function configureSqliteWalMaintenance(
   db: DatabaseSync,
   options: SqliteWalMaintenanceOptions = {},
@@ -40,8 +48,8 @@ export function configureSqliteWalMaintenance(
     options.checkpointIntervalMs ?? DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
     "checkpointIntervalMs",
   );
+  const timerIntervalMs = Math.min(checkpointIntervalMs, MAX_TIMER_TIMEOUT_MS);
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
-
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
 
@@ -56,8 +64,8 @@ export function configureSqliteWalMaintenance(
   };
 
   let timer: IntervalHandle | null = null;
-  if (checkpointIntervalMs > 0) {
-    timer = setInterval(checkpoint, checkpointIntervalMs) as IntervalHandle;
+  if (timerIntervalMs > 0) {
+    timer = setInterval(checkpoint, timerIntervalMs) as IntervalHandle;
     timer.unref?.();
   }
 

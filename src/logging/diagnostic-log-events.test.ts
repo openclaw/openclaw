@@ -1,3 +1,4 @@
+// Diagnostic log event tests cover structured events written to diagnostic logs.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -16,7 +17,9 @@ const SPAN_ID = "00f067aa0ba902b7";
 const PROTO_KEY = "__proto__";
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 beforeEach(() => {

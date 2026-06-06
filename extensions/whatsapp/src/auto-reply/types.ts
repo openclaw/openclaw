@@ -1,3 +1,5 @@
+// Whatsapp type declarations define plugin contracts.
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { WebInboundMessage } from "../inbound/types.js";
 import type { ReconnectPolicy } from "../reconnect.js";
 import type { WhatsAppSocketTimingOptions } from "../socket-timing.js";
@@ -41,6 +43,7 @@ export type WebMonitorTuning = {
   watchdogCheckMs?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   statusSink?: (status: WebChannelStatus) => void;
+  channelRuntime?: ChannelRuntimeSurface;
   /** WhatsApp account id. Default: "default". */
   accountId?: string;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender. */

@@ -1,3 +1,4 @@
+// Vitest boundary config tests validate boundary test configuration.
 import { describe, expect, it } from "vitest";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import {
@@ -40,6 +41,19 @@ describe("boundary vitest config", () => {
     const testConfig = requireTestConfig(config);
 
     expect(testConfig.include).toEqual(["src/infra/openclaw-root.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("lets unrelated root Vitest projects skip when CLI filters match no boundary files", () => {
+    const config = createBoundaryVitestConfig({}, [
+      "node",
+      "vitest",
+      "run",
+      "src/config/channel-configured.test.ts",
+    ]);
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual([]);
     expect(testConfig.passWithNoTests).toBe(true);
   });
 });

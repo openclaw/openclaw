@@ -1,3 +1,4 @@
+// Dispatches final reply payloads through visible senders and message tools.
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -9,13 +10,20 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
-import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import type {
+  ReplyDispatchBeforeDeliver,
+  ReplyDispatchKind,
+  ReplyDispatcher,
+} from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
 export type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
-type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
+type ReplyDispatchErrorHandler = (
+  err: unknown,
+  info: { kind: ReplyDispatchKind },
+) => Promise<void> | void;
 
 type ReplyDispatchSkipHandler = (
   payload: ReplyPayload,
@@ -27,10 +35,7 @@ type ReplyDispatchDeliverer = (
   info: { kind: ReplyDispatchKind },
 ) => Promise<unknown>;
 
-export type ReplyDispatchBeforeDeliver = (
-  payload: ReplyPayload,
-  info: { kind: ReplyDispatchKind },
-) => Promise<ReplyPayload | null> | ReplyPayload | null;
+export type { ReplyDispatchBeforeDeliver };
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
@@ -68,7 +73,7 @@ export type ReplyDispatcherOptions = {
    * Called at normalization time, after model selection is complete. */
   responsePrefixContextProvider?: () => ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
-  onIdle?: () => void;
+  onIdle?: () => Promise<void> | void;
   onError?: ReplyDispatchErrorHandler;
   // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
   onSkip?: ReplyDispatchSkipHandler;
@@ -80,7 +85,9 @@ export type ReplyDispatcherOptions = {
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
   typingCallbacks?: TypingCallbacks;
   onReplyStart?: () => Promise<void> | void;
-  onIdle?: () => void;
+  onIdle?: () => Promise<void> | void;
+  onSettled?: () => unknown;
+  onFreshSettledDelivery?: () => unknown;
   /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
   onCleanup?: () => void;
 };
@@ -121,6 +128,7 @@ function normalizeReplyPayloadInternal(
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
+  let beforeDeliver = options.beforeDeliver;
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   // Start with pending=1 as a "reservation" to prevent premature gateway restart.
@@ -191,8 +199,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           }
         }
         let deliverPayload: ReplyPayload | null = normalized;
-        if (options.beforeDeliver) {
-          deliverPayload = await options.beforeDeliver(normalized, { kind });
+        if (beforeDeliver) {
+          deliverPayload = await beforeDeliver(normalized, { kind });
           if (!deliverPayload) {
             cancelledCounts[kind] += 1;
             return;
@@ -200,9 +208,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
         await options.deliver(deliverPayload, { kind });
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         failedCounts[kind] += 1;
-        options.onError?.(err, { kind });
+        void options.onError?.(err, { kind });
       })
       .finally(() => {
         pending -= 1;
@@ -216,7 +224,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         if (pending === 0) {
           // Unregister from global tracking when idle.
           unregister();
-          options.onIdle?.();
+          void options.onIdle?.();
         }
       });
     return true;
@@ -236,7 +244,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         pending -= 1;
         if (pending === 0) {
           unregister();
-          options.onIdle?.();
+          void options.onIdle?.();
         }
       }
     });
@@ -246,6 +254,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
+    appendBeforeDeliver: (hook) => {
+      const previousBeforeDeliver = beforeDeliver;
+      beforeDeliver = previousBeforeDeliver
+        ? async (payload, info) => {
+            const previousPayload = await previousBeforeDeliver(payload, info);
+            return previousPayload ? hook(previousPayload, info) : null;
+          }
+        : hook;
+    },
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
     getCancelledCounts: () => ({ ...cancelledCounts }),
@@ -254,10 +271,42 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   };
 }
 
+export async function waitForReplyDispatcherIdle(
+  dispatcher: Pick<ReplyDispatcher, "waitForIdle">,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  if (!abortSignal) {
+    await dispatcher.waitForIdle();
+    return;
+  }
+  if (abortSignal.aborted) {
+    return;
+  }
+  let removeAbortListener: (() => void) | undefined;
+  const aborted = new Promise<void>((resolve) => {
+    const onAbort = () => resolve();
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+    removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+  });
+  try {
+    await Promise.race([dispatcher.waitForIdle(), aborted]);
+  } finally {
+    removeAbortListener?.();
+  }
+}
+
 export function createReplyDispatcherWithTyping(
   options: ReplyDispatcherWithTypingOptions,
 ): ReplyDispatcherWithTypingResult {
-  const { typingCallbacks, onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
+  const {
+    typingCallbacks,
+    onReplyStart,
+    onIdle,
+    onSettled: _onSettled,
+    onFreshSettledDelivery: _onFreshSettledDelivery,
+    onCleanup,
+    ...dispatcherOptions
+  } = options;
   const resolvedOnReplyStart = onReplyStart ?? typingCallbacks?.onReplyStart;
   const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
   const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
@@ -266,7 +315,7 @@ export function createReplyDispatcherWithTyping(
     ...dispatcherOptions,
     onIdle: () => {
       typingController?.markDispatchIdle();
-      resolvedOnIdle?.();
+      return resolvedOnIdle?.();
     },
   });
 

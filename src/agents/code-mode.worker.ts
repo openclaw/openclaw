@@ -1,8 +1,17 @@
+/**
+ * QuickJS worker for Code Mode guest execution and suspended VM snapshots.
+ */
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 import { EvalFlags, Intrinsics, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
 
-type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield";
+const require = createRequire(import.meta.url);
+const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
+let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
+
+type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield" | "namespace";
 
 type CodeModeConfig = {
   timeoutMs: number;
@@ -24,12 +33,33 @@ type SettledBridgeRequest = {
   error?: string;
 };
 
+type SerializedCodeModeNamespaceValue =
+  | { kind: "array"; items: SerializedCodeModeNamespaceValue[] }
+  | { kind: "function"; path: string[] }
+  | { kind: "object"; entries: Array<[string, SerializedCodeModeNamespaceValue]> }
+  | { kind: "value"; value: unknown };
+
+type CodeModeNamespaceDescriptor = {
+  id: string;
+  globalName: string;
+  description?: string;
+  scope: SerializedCodeModeNamespaceValue;
+};
+
+type CodeModeApiVirtualFile = {
+  path: string;
+  description?: string;
+  content: string;
+};
+
 type CodeModeWorkerInput =
   | {
       kind: "exec";
       source: string;
       config: CodeModeConfig;
       catalog: unknown[];
+      apiFiles?: CodeModeApiVirtualFile[];
+      namespaces: CodeModeNamespaceDescriptor[];
     }
   | {
       kind: "resume";
@@ -53,14 +83,69 @@ type CodeModeWorkerResult =
   | {
       status: "failed";
       error: string;
-      code: "invalid_input" | "internal_error";
+      code:
+        | "invalid_input"
+        | "runtime_unavailable"
+        | "timeout"
+        | "snapshot_limit_exceeded"
+        | "internal_error";
       output: unknown[];
     };
+
+class CodeModeWorkerFailure extends Error {
+  readonly code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"];
+
+  constructor(
+    code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"],
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "CodeModeWorkerFailure";
+    this.code = code;
+  }
+}
+
+class CodeModeWorkerFailureWithOutput extends CodeModeWorkerFailure {
+  readonly output: unknown[];
+
+  constructor(
+    code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"],
+    message: string,
+    output: unknown[],
+    options?: ErrorOptions,
+  ) {
+    super(code, message, options);
+    this.name = "CodeModeWorkerFailureWithOutput";
+    this.output = output;
+  }
+}
+
+class CodeModeGuestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CodeModeGuestError";
+  }
+}
+
+function isQuickJsInterruptedError(error: unknown): boolean {
+  if (error instanceof CodeModeGuestError) {
+    return false;
+  }
+  return errorMessage(error) === "interrupted";
+}
 
 type VmRun = {
   vm: QuickJS;
   didTimeout: () => boolean;
 };
+
+function getQuickJsWasmModule(): Promise<WebAssembly.Module> {
+  quickJsWasmModulePromise ??= readFile(QUICKJS_WASM_PATH).then((bytes) =>
+    WebAssembly.compile(bytes),
+  );
+  return quickJsWasmModulePromise;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -71,7 +156,8 @@ function toJsonSafe(value: unknown): unknown {
     return null;
   }
   try {
-    return JSON.parse(JSON.stringify(value)) as unknown;
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
   } catch {
     if (value instanceof Error) {
       return { name: value.name, message: value.message };
@@ -109,6 +195,8 @@ const CONTROLLER_SOURCE = String.raw`
   const output = [];
   const pending = new Map();
   const catalog = Array.isArray(globalThis.__openclawCatalog) ? globalThis.__openclawCatalog : [];
+  const apiFiles = Array.isArray(globalThis.__openclawApiFiles) ? globalThis.__openclawApiFiles : [];
+  const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
 
   function safe(value) {
     if (value === undefined) return null;
@@ -138,6 +226,34 @@ const CONTROLLER_SOURCE = String.raw`
     });
   }
 
+  function namespaceFunction(namespaceId, path) {
+    const callablePath = Object.freeze((Array.isArray(path) ? path : []).map((entry) => String(entry)));
+    return (...args) => request("namespace", [namespaceId, callablePath, args]);
+  }
+
+  function deserializeNamespaceValue(namespaceId, value) {
+    if (!value || typeof value !== "object") return null;
+    if (value.kind === "function") {
+      return namespaceFunction(namespaceId, Array.isArray(value.path) ? value.path.slice() : []);
+    }
+    if (value.kind === "array") {
+      return Object.freeze((Array.isArray(value.items) ? value.items : []).map((item) => deserializeNamespaceValue(namespaceId, item)));
+    }
+    if (value.kind === "object") {
+      const object = Object.create(null);
+      for (const entry of Array.isArray(value.entries) ? value.entries : []) {
+        const key = Array.isArray(entry) && typeof entry[0] === "string" ? entry[0] : "";
+        if (!key) continue;
+        Object.defineProperty(object, key, {
+          value: deserializeNamespaceValue(namespaceId, entry[1]),
+          enumerable: true,
+        });
+      }
+      return Object.freeze(object);
+    }
+    return safe(value.value);
+  }
+
   function settle(id, ok, payload) {
     const entry = pending.get(String(id));
     if (!entry) return false;
@@ -164,6 +280,47 @@ const CONTROLLER_SOURCE = String.raw`
     call: { value: (id, input) => request("call", [id, input]), enumerable: true },
   });
 
+  function normalizeApiPath(value) {
+    const text = String(value ?? "").trim().replace(/^\/+/, "");
+    if (!text || text.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
+      throw new Error("invalid API file path");
+    }
+    return text;
+  }
+
+  const apiFileMap = new Map();
+  for (const file of apiFiles) {
+    if (!file || typeof file !== "object") continue;
+    const path = typeof file.path === "string" ? file.path : "";
+    const content = typeof file.content === "string" ? file.content : "";
+    if (!path || !content) continue;
+    apiFileMap.set(path, Object.freeze({
+      path,
+      content,
+      description: typeof file.description === "string" ? file.description : undefined,
+      bytes: content.length,
+    }));
+  }
+  const api = Object.freeze({
+    list: async (prefix = "") => {
+      const normalizedPrefix = prefix == null || String(prefix).trim() === "" ? "" : normalizeApiPath(prefix);
+      const files = [...apiFileMap.values()]
+        .filter((file) => !normalizedPrefix || file.path === normalizedPrefix || file.path.startsWith(normalizedPrefix.replace(/\/?$/, "/")))
+        .map((file) => Object.freeze({
+          path: file.path,
+          description: file.description,
+          bytes: file.bytes,
+        }));
+      return { files };
+    },
+    read: async (path) => {
+      const normalizedPath = normalizeApiPath(path);
+      const file = apiFileMap.get(normalizedPath);
+      if (!file) throw new Error("Unknown API file: " + normalizedPath);
+      return file;
+    },
+  });
+
   const safeNameCounts = new Map();
   for (const tool of catalog) {
     const name = typeof tool?.name === "string" ? tool.name : "";
@@ -182,8 +339,29 @@ const CONTROLLER_SOURCE = String.raw`
     });
   }
 
+  const namespaceGlobals = Object.create(null);
+  for (const descriptor of namespaceDescriptors) {
+    const id = typeof descriptor?.id === "string" ? descriptor.id : "";
+    const globalName = typeof descriptor?.globalName === "string" ? descriptor.globalName : "";
+    if (!id || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(globalName)) continue;
+    const scope = deserializeNamespaceValue(id, descriptor.scope);
+    Object.defineProperty(namespaceGlobals, globalName, {
+      value: scope,
+      enumerable: true,
+    });
+    const existingGlobal = Object.getOwnPropertyDescriptor(globalThis, globalName);
+    if (existingGlobal && existingGlobal.configurable === false) continue;
+    Object.defineProperty(globalThis, globalName, {
+      value: scope,
+      enumerable: true,
+      configurable: true,
+    });
+  }
+
   Object.defineProperties(globalThis, {
     ALL_TOOLS: { value: Object.freeze(catalog.slice()), enumerable: true },
+    API: { value: api, enumerable: true },
+    namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
     tools: { value: Object.freeze(baseTools), enumerable: true },
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
     json: { value: (value) => output.push({ type: "json", value: safe(value) }), enumerable: true },
@@ -208,16 +386,24 @@ function createHostRequestHandler(params: {
       throw new Error("too many pending code mode tool calls");
     }
     const method = methodHandle.toString();
-    if (method !== "search" && method !== "describe" && method !== "call" && method !== "yield") {
+    if (
+      method !== "search" &&
+      method !== "describe" &&
+      method !== "call" &&
+      method !== "yield" &&
+      method !== "namespace"
+    ) {
       throw new Error("unsupported code mode bridge method");
     }
-    let args: unknown = [];
+    let args: unknown;
     try {
       args = JSON.parse(argsHandle.toString()) as unknown;
     } catch {
       args = [];
     }
     const id = `bridge:${params.pendingRequests.length + 1}:${randomUUID()}`;
+    // The guest receives only an opaque id. Host-side tool execution and policy
+    // happen after the worker returns a waiting snapshot.
     params.pendingRequests.push({
       id,
       method,
@@ -229,17 +415,21 @@ function createHostRequestHandler(params: {
 
 async function createVm(params: {
   catalog: unknown[];
+  apiFiles: CodeModeApiVirtualFile[];
+  namespaces: CodeModeNamespaceDescriptor[];
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
 }): Promise<VmRun> {
   const startedAt = Date.now();
   let timedOut = false;
+  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
   const vm = await QuickJS.create({
+    wasm: await getQuickJsWasmModule(),
     memoryLimit: params.config.memoryLimitBytes,
     intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
     interruptHandler: () => {
-      timedOut = Date.now() - startedAt > params.config.timeoutMs;
+      timedOut = deadlineReached();
       return timedOut;
     },
   });
@@ -248,6 +438,18 @@ async function createVm(params: {
     vm.setProp(vm.global, "__openclawCatalog", catalogHandle);
   } finally {
     catalogHandle.dispose();
+  }
+  const namespacesHandle = vm.hostToHandle(params.namespaces);
+  try {
+    vm.setProp(vm.global, "__openclawNamespaces", namespacesHandle);
+  } finally {
+    namespacesHandle.dispose();
+  }
+  const apiFilesHandle = vm.hostToHandle(params.apiFiles);
+  try {
+    vm.setProp(vm.global, "__openclawApiFiles", apiFilesHandle);
+  } finally {
+    apiFilesHandle.dispose();
   }
   const hostRequest = vm.newFunction(
     "__openclawHostRequest",
@@ -263,7 +465,7 @@ async function createVm(params: {
     hostRequest.dispose();
   }
   vm.evalCode(CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
-  return { vm, didTimeout: () => timedOut };
+  return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
 
 async function restoreVm(params: {
@@ -273,13 +475,15 @@ async function restoreVm(params: {
 }): Promise<VmRun> {
   const startedAt = Date.now();
   let timedOut = false;
+  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
   const snapshot = QuickJS.deserializeSnapshot(params.snapshotBytes);
   const vm = await QuickJS.restore(snapshot, {
+    wasm: await getQuickJsWasmModule(),
     memoryLimit: params.config.memoryLimitBytes,
     intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
     interruptHandler: () => {
-      timedOut = Date.now() - startedAt > params.config.timeoutMs;
+      timedOut = deadlineReached();
       return timedOut;
     },
   });
@@ -291,7 +495,7 @@ async function restoreVm(params: {
       config: params.config,
     }),
   );
-  return { vm, didTimeout: () => timedOut };
+  return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
 
 function takeOutput(vm: QuickJS): unknown[] {
@@ -307,6 +511,49 @@ function takeOutput(vm: QuickJS): unknown[] {
   } finally {
     take.dispose();
   }
+}
+
+function takeOutputSafely(vm: QuickJS): unknown[] {
+  try {
+    return takeOutput(vm);
+  } catch {
+    return [];
+  }
+}
+
+function throwWorkerFailureWithOutput(params: {
+  error: unknown;
+  didTimeout: () => boolean;
+  output: unknown[];
+  vm: QuickJS;
+}): never {
+  const timedOut = params.didTimeout() || isQuickJsInterruptedError(params.error);
+  const failureOutput = params.output.length > 0 ? params.output : takeOutputSafely(params.vm);
+  if (timedOut) {
+    throw new CodeModeWorkerFailureWithOutput(
+      "timeout",
+      "code mode timeout exceeded",
+      failureOutput,
+      { cause: params.error },
+    );
+  }
+  if (params.error instanceof CodeModeWorkerFailure) {
+    throw new CodeModeWorkerFailureWithOutput(
+      params.error.code,
+      params.error.message,
+      failureOutput,
+      { cause: params.error },
+    );
+  }
+  if (failureOutput.length > 0) {
+    throw new CodeModeWorkerFailureWithOutput(
+      "internal_error",
+      errorMessage(params.error),
+      failureOutput,
+      { cause: params.error },
+    );
+  }
+  throw params.error;
 }
 
 function drainPendingJobs(vm: QuickJS): void {
@@ -329,7 +576,7 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
     try {
-      throw new Error(errorMessage(vm.dump(settled.error)));
+      throw new CodeModeGuestError(errorMessage(vm.dump(settled.error)));
     } finally {
       settled.error.dispose();
     }
@@ -349,7 +596,7 @@ function waitingResult(params: {
 }): CodeModeWorkerResult {
   const snapshotBytes = QuickJS.serializeSnapshot(params.vm.snapshot());
   if (snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
-    throw new Error("code mode snapshot limit exceeded");
+    throw new CodeModeWorkerFailure("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
   }
   return {
     status: "waiting",
@@ -363,9 +610,12 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
   const pendingRequests: PendingBridgeRequest[] = [];
   const { vm, didTimeout } = await createVm({
     catalog: input.catalog,
+    apiFiles: input.apiFiles ?? [],
+    namespaces: input.namespaces,
     config: input.config,
     pendingRequests,
   });
+  let output: unknown[] = [];
   try {
     vm.evalCode(
       buildUserSource(input.source),
@@ -373,10 +623,12 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
       EvalFlags.ASYNC,
     ).dispose();
     drainPendingJobs(vm);
-    const output = takeOutput(vm);
+    output = takeOutput(vm);
     const resultHandle = getResultHandle(vm);
     try {
       if (pendingRequests.length > 0) {
+        // Pending host work suspends the VM instead of blocking in-worker; the
+        // host resumes with settled bridge results via runResume.
         return waitingResult({ vm, pendingRequests, output, config: input.config });
       }
       if (resultHandle.isPromise && resultHandle.promiseState === 0) {
@@ -391,10 +643,7 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
       resultHandle.dispose();
     }
   } catch (error) {
-    if (didTimeout()) {
-      throw new Error("code mode timeout exceeded", { cause: error });
-    }
-    throw error;
+    return throwWorkerFailureWithOutput({ error, didTimeout, output, vm });
   } finally {
     vm.dispose();
   }
@@ -407,6 +656,7 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
     config: input.config,
     pendingRequests,
   });
+  let output: unknown[] = [];
   try {
     const settle = vm.global.getProp("__openclawSettleBridge");
     try {
@@ -430,7 +680,7 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
       settle.dispose();
     }
     drainPendingJobs(vm);
-    const output = takeOutput(vm);
+    output = takeOutput(vm);
     const resultHandle = getResultHandle(vm);
     try {
       if (pendingRequests.length > 0) {
@@ -448,10 +698,7 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
       resultHandle.dispose();
     }
   } catch (error) {
-    if (didTimeout()) {
-      throw new Error("code mode timeout exceeded", { cause: error });
-    }
-    throw error;
+    return throwWorkerFailureWithOutput({ error, didTimeout, output, vm });
   } finally {
     vm.dispose();
   }
@@ -474,6 +721,10 @@ async function main(): Promise<CodeModeWorkerResult> {
         source: input.source,
         config: input.config as CodeModeConfig,
         catalog: Array.isArray(input.catalog) ? input.catalog : [],
+        apiFiles: Array.isArray(input.apiFiles) ? (input.apiFiles as CodeModeApiVirtualFile[]) : [],
+        namespaces: Array.isArray(input.namespaces)
+          ? (input.namespaces as CodeModeNamespaceDescriptor[])
+          : [],
       });
     }
     if (input.kind === "resume" && input.snapshotBytes instanceof Uint8Array) {
@@ -496,11 +747,14 @@ async function main(): Promise<CodeModeWorkerResult> {
     return {
       status: "failed",
       error: errorMessage(error),
-      code: "internal_error",
-      output: [],
+      code: error instanceof CodeModeWorkerFailure ? error.code : "internal_error",
+      output: error instanceof CodeModeWorkerFailureWithOutput ? error.output : [],
     };
   }
 }
 
-// oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node worker_threads MessagePort, not window.postMessage.
-parentPort?.postMessage(await main());
+if (parentPort) {
+  Reflect.apply(Reflect.get(parentPort, "postMessage") as (message: unknown) => void, parentPort, [
+    await main(),
+  ]);
+}

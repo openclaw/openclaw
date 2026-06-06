@@ -1,3 +1,4 @@
+// Covers plugin conversation binding persistence and lookup behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -307,7 +308,9 @@ async function requestResolvedBinding(input: PluginBindingRequestInput) {
 }
 
 async function flushMicrotasks(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {

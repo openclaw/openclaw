@@ -1,12 +1,13 @@
-import {
-  type APIChannel,
-  type APIEmbed,
-  type APIGuild,
-  type APIGuildMember,
-  type APIMessage,
-  type APIRole,
-  type APIUser,
-  type MessageType,
+// Discord plugin module implements structures behavior.
+import type {
+  APIChannel,
+  APIEmbed,
+  APIGuild,
+  APIGuildMember,
+  APIMessage,
+  APIRole,
+  APIUser,
+  MessageType,
 } from "discord-api-types/v10";
 import {
   createChannelMessage,

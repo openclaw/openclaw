@@ -1,3 +1,4 @@
+// Telegram tests cover group policy plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
@@ -18,6 +19,36 @@ describe("resolveTelegramGroupRequireMention", () => {
               topics: {
                 "77": {
                   requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveTelegramGroupRequireMention({
+        cfg,
+        groupId: "-1001:topic:77",
+      }),
+    ).toBe(false);
+  });
+
+  it("lets exact topic configs inherit wildcard topic requireMention", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "telegram-test",
+          groups: {
+            "-1001": {
+              requireMention: true,
+              topics: {
+                "*": {
+                  requireMention: false,
+                },
+                "77": {
+                  agentId: "main",
                 },
               },
             },

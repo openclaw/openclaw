@@ -1,3 +1,4 @@
+// Traditional Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
 export const zh_TW = {
@@ -29,14 +30,18 @@ export const zh_TW = {
       compatibilityAnthropicHint: "使用 /messages",
       compatibilityOpenAi: "相容 OpenAI",
       compatibilityOpenAiHint: "使用 /chat/completions",
+      compatibilityOpenAiResponses: "相容 OpenAI Responses",
+      compatibilityOpenAiResponsesHint: "使用 /responses",
       compatibilityUnknown: "未知（自動偵測）",
-      compatibilityUnknownHint: "先探測 OpenAI，再探測 Anthropic 端點",
+      compatibilityUnknownHint: "先探測 OpenAI Chat、OpenAI Responses，再探測 Anthropic 端點",
       detectionFailed: "無法偵測端點類型。",
-      detectionFailedNote: "這個端點沒有回應 OpenAI 或 Anthropic 風格的請求。",
+      detectionFailedNote:
+        "這個端點沒有回應 OpenAI Chat、OpenAI Responses 或 Anthropic 風格的請求。",
       detectionNoteTitle: "端點偵測",
       detectionProgress: "正在偵測端點類型...",
       detectedAnthropic: "偵測到相容 Anthropic 的端點。",
       detectedOpenAi: "偵測到相容 OpenAI 的端點。",
+      detectedOpenAiResponses: "偵測到相容 OpenAI Responses 的端點。",
       endpointId: "端點 ID",
       endpointIdRequired: "端點 ID 必填。",
       endpointIdRenamed: '端點 ID "{from}" 已用於不同的基礎 URL。將使用 "{to}"。',
@@ -318,6 +323,7 @@ export const zh_TW = {
       setEnv: "為 {name} 設定 {env}？",
       skipDepsHint: "繼續，不安裝依賴",
       statusTitle: "技能狀態",
+      allReadyTitle: "所有技能已就緒",
     },
     channels: {
       account: "{label} 帳號",
@@ -955,11 +961,13 @@ export const zh_TW = {
       webSearchDisabled: "Web search（{provider}）已設定但被停用。",
       webSearchEnabled: "Web search 已啟用，agent 可在需要時線上查詢。",
       webSearchGetKey: "取得 key：{url}",
+      webSearchAuthProfile: "憑證：使用已有 {provider} auth profile。",
       webSearchKeyEnv: "API key：透過 {env} 環境變數提供。",
       webSearchKeyRef: "API key：透過 secret reference 設定。",
       webSearchKeyStored: "API key：已存入設定。",
       webSearchNeedsKey: "新增 key 前 web_search 無法運作。",
       webSearchNoKey: "已選擇 provider {provider}，但沒有找到 API key。",
+      webSearchOAuthProfile: "憑證：使用已有 {provider} OAuth 登入。",
       webSearchProvider: "Provider：{provider}",
       webSearchProviderUnavailable:
         "已選擇 Web search provider {provider}，但目前插件策略下不可用。",

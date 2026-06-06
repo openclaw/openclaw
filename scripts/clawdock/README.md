@@ -141,13 +141,14 @@ The Docker setup uses three config files on the host. The container never stores
 
 ### Docker Files
 
-| File                       | Purpose                                                                    |
-| -------------------------- | -------------------------------------------------------------------------- |
-| `Dockerfile`               | Builds the `openclaw:local` image (Node 22, pnpm, non-root `node` user)    |
-| `docker-compose.yml`       | Defines `openclaw-gateway` and `openclaw-cli` services, bind-mounts, ports |
-| `scripts/docker/setup.sh`  | First-time setup — builds image, creates `.env` from `.env.example`        |
-| `.env.example`             | Template for `<project>/.env` with all supported vars and docs             |
-| `docker-compose.extra.yml` | Optional overrides — auto-loaded by ClawDock helpers if present            |
+| File                          | Purpose                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------ |
+| `Dockerfile`                  | Builds the `openclaw:local` image (Node 22, pnpm, non-root `node` user)        |
+| `docker-compose.yml`          | Defines `openclaw-gateway` and `openclaw-cli` services, bind-mounts, ports     |
+| `docker-compose.override.yml` | Standard Docker Compose overrides — auto-loaded by ClawDock helpers if present |
+| `docker-compose.extra.yml`    | Additional overrides — loaded after the standard override if present           |
+| `scripts/docker/setup.sh`     | First-time setup — builds image, creates `.env` from `.env.example`            |
+| `.env.example`                | Template for `<project>/.env` with all supported vars and docs                 |
 
 ### Config Files
 
@@ -202,7 +203,11 @@ This means:
 - `~/.openclaw/.env` is available inside the container at `/home/node/.openclaw/.env` — OpenClaw loads it automatically as the global env fallback
 - `~/.openclaw/openclaw.json` is available at `/home/node/.openclaw/openclaw.json` — the gateway watches it and hot-reloads most changes
 - `~/.openclaw-auth-profile-secrets` is available at `/home/node/.config/openclaw` — OpenClaw stores the auth-profile encryption key there
-- Downloadable plugin packages and install records live under the mounted OpenClaw home
+- Downloadable external plugin packages and install records live under the mounted OpenClaw home
+- Bundled OpenClaw channel plugins, such as Discord when present in the image,
+  should normally load from the image-matched bundled copy. Avoid installing
+  pinned `@openclaw/*` channel packages into the mounted home unless you
+  deliberately want an external npm override.
 - No need to add API keys to `docker-compose.yml` or configure anything inside the container
 - Keys survive `clawdock-update`, `clawdock-rebuild`, and `clawdock-clean` because they live on the host
 

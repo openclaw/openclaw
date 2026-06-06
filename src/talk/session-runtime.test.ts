@@ -1,3 +1,4 @@
+// Talk session runtime tests cover provider lifecycle and session events.
 import { describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
@@ -160,7 +161,7 @@ describe("realtime voice bridge session runtime", () => {
     callbacks?.onMark?.("mark-1");
 
     expect(sendMark).not.toHaveBeenCalled();
-    expect(bridge.acknowledgeMark).toHaveBeenCalledTimes(1);
+    expect(bridge["acknowledgeMark"]).toHaveBeenCalledTimes(1);
   });
 
   it("can ignore provider marks", () => {
@@ -187,7 +188,7 @@ describe("realtime voice bridge session runtime", () => {
     callbacks?.onMark?.("mark-1");
 
     expect(sendMark).not.toHaveBeenCalled();
-    expect(bridge.acknowledgeMark).not.toHaveBeenCalled();
+    expect(bridge["acknowledgeMark"]).not.toHaveBeenCalled();
   });
 
   it("passes tool calls the active session and triggers initial greeting on ready", () => {
@@ -222,7 +223,7 @@ describe("realtime voice bridge session runtime", () => {
     callbacks?.onReady?.();
     callbacks?.onToolCall?.(event);
 
-    expect(bridge.triggerGreeting).toHaveBeenCalledWith("Say hello");
+    expect(bridge["triggerGreeting"]).toHaveBeenCalledWith("Say hello");
     expect(onToolCall).toHaveBeenCalledWith(event, session);
   });
 
@@ -242,7 +243,7 @@ describe("realtime voice bridge session runtime", () => {
 
     session.submitToolResult("call-1", { status: "working" }, { willContinue: true });
 
-    expect(bridge.submitToolResult).toHaveBeenCalledWith(
+    expect(bridge["submitToolResult"]).toHaveBeenCalledWith(
       "call-1",
       { status: "working" },
       { willContinue: true },

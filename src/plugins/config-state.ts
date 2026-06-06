@@ -1,8 +1,9 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+/** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createEffectiveEnableStateResolver,
   createPluginEnableStateResolver,
@@ -34,7 +35,6 @@ export type PluginActivationConfigSource = {
 export type NormalizedPluginsConfig = SharedNormalizedPluginsConfig;
 
 const BUILT_IN_PLUGIN_ALIAS_FALLBACKS: ReadonlyArray<readonly [alias: string, pluginId: string]> = [
-  ["openai-codex", "openai"],
   ["google-gemini-cli", "google"],
   ["minimax-portal", "minimax"],
   ["minimax-portal-auth", "minimax"],
@@ -74,6 +74,7 @@ function createScopedPluginIdNormalizer(): NormalizePluginId {
     });
 }
 
+/** Normalizes user/config plugin ids into the canonical lowercase key form. */
 export function normalizePluginId(id: string): string {
   return normalizePluginIdWithLookup(id, getBundledPluginAliasLookup);
 }
@@ -95,13 +96,10 @@ export function createPluginActivationSource(params: {
 }
 
 const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
-  Boolean(plugins?.slots && Object.prototype.hasOwnProperty.call(plugins.slots, "memory"));
+  Boolean(plugins?.slots && Object.hasOwn(plugins.slots, "memory"));
 
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
-  Boolean(
-    plugins?.entries &&
-    Object.prototype.hasOwnProperty.call(plugins.entries, defaultSlotIdForKey("memory")),
-  );
+  Boolean(plugins?.entries && Object.hasOwn(plugins.entries, defaultSlotIdForKey("memory")));
 
 export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) =>
   hasExplicitPluginConfigShared(plugins);

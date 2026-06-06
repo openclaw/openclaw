@@ -1,3 +1,4 @@
+// Slack tests cover accounts plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
@@ -192,6 +193,65 @@ describe("resolveSlackAccount allowFrom precedence", () => {
       windowSeconds: 120,
       cooldownSeconds: 240,
     });
+  });
+
+  it("merges canonical account streaming over top-level defaults field-by-field", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            streaming: {
+              mode: "progress",
+              nativeTransport: true,
+              preview: { toolProgress: true, commandText: "raw" },
+              progress: { label: "Shelling", commandText: "status" },
+              block: { enabled: true, coalesce: { minChars: 40, maxChars: 80, idleMs: 250 } },
+            },
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                streaming: {
+                  progress: { nativeTaskCards: true },
+                  block: { coalesce: { idleMs: 500 } },
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.streaming).toEqual({
+      mode: "progress",
+      nativeTransport: true,
+      preview: { toolProgress: true, commandText: "raw" },
+      progress: { label: "Shelling", commandText: "status", nativeTaskCards: true },
+      block: { enabled: true, coalesce: { minChars: 40, maxChars: 80, idleMs: 500 } },
+    });
+  });
+
+  it("preserves account legacy scalar streaming overrides", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            streaming: { mode: "progress", progress: { label: "Shelling" } },
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                streaming: "off",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      accountId: "work",
+    });
+
+    expect(resolved.config.streaming).toBe("off");
   });
 
   it("does not inherit default account allowFrom for named account when top-level is absent", () => {

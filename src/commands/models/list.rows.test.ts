@@ -1,3 +1,4 @@
+// Model list row tests cover rendered row construction for model listing output.
 import { describe, expect, it, vi } from "vitest";
 import type { ModelRow } from "./list.types.js";
 
@@ -46,7 +47,7 @@ describe("appendProviderCatalogRows", () => {
           id: "gpt-5.5",
           name: "gpt-5.5",
           provider: "codex",
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api",
           input: ["text"],
           reasoning: false,

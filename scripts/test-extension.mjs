@@ -1,16 +1,23 @@
 #!/usr/bin/env node
 
+// Runs the Vitest plan for one bundled plugin by id or path.
 import { formatErrorMessage } from "./lib/error-format.mjs";
 import { resolveExtensionTestPlan } from "./lib/extension-test-plan.mjs";
 import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mjs";
 
+const ALLOW_NO_TESTS_FLAG = "--allow-no-tests";
+
 function printUsage() {
-  console.error("Usage: pnpm test:extension <extension-name|path> [vitest args...]");
-  console.error("       node scripts/test-extension.mjs [extension-name|path] [vitest args...]");
+  console.error(
+    `Usage: pnpm test:extension <extension-name|path> [${ALLOW_NO_TESTS_FLAG}] [vitest args...]`,
+  );
+  console.error(
+    `       node scripts/test-extension.mjs [extension-name|path] [${ALLOW_NO_TESTS_FLAG}] [vitest args...]`,
+  );
 }
 
 function printNoTestsMessage(plan) {
-  console.log(`[test-extension] No tests found for ${plan.extensionDir}. Skipping.`);
+  console.error(`[test-extension] No tests found for ${plan.extensionDir}.`);
 }
 
 async function run() {
@@ -20,7 +27,8 @@ async function run() {
     return;
   }
 
-  const passthroughArgs = rawArgs.filter((arg) => arg !== "--");
+  const allowNoTests = rawArgs.includes(ALLOW_NO_TESTS_FLAG);
+  const passthroughArgs = rawArgs.filter((arg) => arg !== "--" && arg !== ALLOW_NO_TESTS_FLAG);
 
   let targetArg;
   if (passthroughArgs[0] && !passthroughArgs[0].startsWith("-")) {
@@ -38,6 +46,9 @@ async function run() {
 
   if (!plan.hasTests) {
     printNoTestsMessage(plan);
+    if (!allowNoTests) {
+      process.exit(1);
+    }
     return;
   }
 

@@ -1,3 +1,4 @@
+// Profile CLI tests cover profile selection, persistence, and command wiring.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatCliCommand } from "./command-format.js";
@@ -168,6 +169,7 @@ describe("applyCliProfileEnv", () => {
 
   it("does not override explicit env values", () => {
     const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "prod",
       OPENCLAW_STATE_DIR: "/custom",
       OPENCLAW_GATEWAY_PORT: "19099",
     };
@@ -176,6 +178,7 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
+    expect(env.OPENCLAW_PROFILE).toBe("dev");
     expect(env.OPENCLAW_STATE_DIR).toBe("/custom");
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19099");
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));

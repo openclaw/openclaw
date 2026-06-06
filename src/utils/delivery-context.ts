@@ -1,5 +1,6 @@
+// Delivery context helpers normalize target and route metadata for delivery.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "./message-channel.js";
 export {
   channelRouteFromDeliveryContext,
@@ -40,6 +41,7 @@ function normalizeConversationTargetParams(params: ConversationTargetParams): {
   return { channel, conversationId, parentConversationId };
 }
 
+/** Formats a conversation id into a deliverable target, using plugin hooks before generic fallback. */
 export function formatConversationTarget(params: ConversationTargetParams): string | undefined {
   const { channel, conversationId, parentConversationId } =
     normalizeConversationTargetParams(params);
@@ -58,6 +60,7 @@ export function formatConversationTarget(params: ConversationTargetParams): stri
   return `channel:${conversationId}`;
 }
 
+/** Resolves a channel conversation into target/thread fields for delivery routing. */
 export function resolveConversationDeliveryTarget(params: {
   channel?: string;
   conversationId?: string | number;

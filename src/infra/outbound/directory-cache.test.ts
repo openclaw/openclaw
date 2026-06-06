@@ -1,3 +1,5 @@
+// Covers directory cache key dimensions, TTL expiration, config invalidation,
+// recency refresh, bounded eviction, and matching clears.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DirectoryCache, buildDirectoryCacheKey } from "./directory-cache.js";
@@ -68,5 +70,17 @@ describe("DirectoryCache", () => {
 
     cache.clear(cfg);
     expect(cache.get("a", cfg)).toBeUndefined();
+  });
+
+  it("uses the default max size when maxSize is non-finite", () => {
+    const cache = new DirectoryCache<number>(60_000, Number.NaN);
+    const cfg = {} as OpenClawConfig;
+
+    for (let i = 0; i <= 2000; i++) {
+      cache.set(`key-${i}`, i, cfg);
+    }
+
+    expect(cache.get("key-0", cfg)).toBeUndefined();
+    expect(cache.get("key-2000", cfg)).toBe(2000);
   });
 });
