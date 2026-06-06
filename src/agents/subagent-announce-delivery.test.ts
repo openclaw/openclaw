@@ -4886,48 +4886,50 @@ describe("deliverSubagentAnnouncement requester session backfill (issue #86034)"
       "utf-8",
     );
 
-    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
-      result: { payloads: [{ text: "requester voice completion" }] },
-    });
-    testing.setDepsForTest({
-      dispatchGatewayMethodInProcess,
-      getRequesterSessionActivity: () => ({
-        sessionId: "telegram-session-1",
-        isActive: false,
-      }),
-      getRuntimeConfig: () => ({ session: { store: storeTemplate } }) as never,
-    });
+    try {
+      const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+        result: { payloads: [{ text: "requester voice completion" }] },
+      });
+      testing.setDepsForTest({
+        dispatchGatewayMethodInProcess,
+        getRequesterSessionActivity: () => ({
+          sessionId: "telegram-session-1",
+          isActive: false,
+        }),
+        getRuntimeConfig: () => ({ session: { store: storeTemplate } }) as never,
+      });
 
-    const result = await deliverSubagentAnnouncement({
-      requesterSessionKey: sessionKey,
-      targetRequesterSessionKey: sessionKey,
-      triggerMessage: "image done",
-      steerMessage: "image done",
-      // Origin carries channel/accountId but NOT `to` — simulates an
-      // image_generate task created off the direct-reply path.
-      requesterOrigin: { channel: "telegram", accountId: "bot-1" },
-      requesterSessionOrigin: { channel: "telegram", accountId: "bot-1" },
-      completionDirectOrigin: { channel: "telegram", accountId: "bot-1" },
-      directOrigin: { channel: "telegram", accountId: "bot-1" },
-      requesterIsSubagent: false,
-      expectsCompletionMessage: true,
-      bestEffortDeliver: true,
-      directIdempotencyKey: "announce-86034-backfill",
-      sourceTool: "image_generate",
-    });
+      const result = await deliverSubagentAnnouncement({
+        requesterSessionKey: sessionKey,
+        targetRequesterSessionKey: sessionKey,
+        triggerMessage: "image done",
+        steerMessage: "image done",
+        // Origin carries channel/accountId but NOT `to` — simulates an
+        // image_generate task created off the direct-reply path.
+        requesterOrigin: { channel: "telegram", accountId: "bot-1" },
+        requesterSessionOrigin: { channel: "telegram", accountId: "bot-1" },
+        completionDirectOrigin: { channel: "telegram", accountId: "bot-1" },
+        directOrigin: { channel: "telegram", accountId: "bot-1" },
+        requesterIsSubagent: false,
+        expectsCompletionMessage: true,
+        bestEffortDeliver: true,
+        directIdempotencyKey: "announce-86034-backfill",
+        sourceTool: "image_generate",
+      });
 
-    expectRecordFields(result, {
-      delivered: true,
-      path: "direct",
-    });
-    // The deliverability decision must see the backfilled `to`.
-    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
-      deliver: true,
-      channel: "telegram",
-      accountId: "bot-1",
-      to: "5866004662",
-    });
-
-    await fs.rm(storePath, { force: true });
+      expectRecordFields(result, {
+        delivered: true,
+        path: "direct",
+      });
+      // The deliverability decision must see the backfilled `to`.
+      expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+        deliver: true,
+        channel: "telegram",
+        accountId: "bot-1",
+        to: "5866004662",
+      });
+    } finally {
+      await fs.rm(storePath, { force: true });
+    }
   });
 });
