@@ -25,6 +25,11 @@ const GMAIL_WATCH_SENSITIVE_FLAGS = new Set(["--token", "--hook-url", "--hook-to
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
 let gogBin: string | undefined;
 
+export type GogWatchServeSecretFiles = {
+  pushTokenFile?: string;
+  hookTokenFile?: string;
+};
+
 export type GmailHookOverrides = {
   account?: string;
   label?: string;
@@ -230,7 +235,10 @@ export function buildGogWatchStartArgs(
   ];
 }
 
-export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
+export function buildGogWatchServeArgs(
+  cfg: GmailHookRuntimeConfig,
+  secretFiles: GogWatchServeSecretFiles = {},
+): string[] {
   const args = [
     "gmail",
     "watch",
@@ -243,13 +251,18 @@ export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
     String(cfg.serve.port),
     "--path",
     cfg.serve.path,
-    "--token",
-    cfg.pushToken,
-    "--hook-url",
-    cfg.hookUrl,
-    "--hook-token",
-    cfg.hookToken,
   ];
+  if (secretFiles.pushTokenFile) {
+    args.push("--token-file", secretFiles.pushTokenFile);
+  } else {
+    args.push("--token", cfg.pushToken);
+  }
+  args.push("--hook-url", cfg.hookUrl);
+  if (secretFiles.hookTokenFile) {
+    args.push("--hook-token-file", secretFiles.hookTokenFile);
+  } else {
+    args.push("--hook-token", cfg.hookToken);
+  }
   if (cfg.includeBody) {
     args.push("--include-body");
   }

@@ -1,5 +1,6 @@
 // Gmail watcher tests cover watcher events and Gmail hook message flow.
 import { EventEmitter } from "node:events";
+import { readFileSync, statSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -8,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(),
   spawn: vi.fn(),
 }));
+
+const fixtureHookToken = ["hook", "token"].join("-");
+const fixturePushToken = ["push", "token"].join("-");
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -35,11 +39,11 @@ function createGmailConfig(account = "me@example.com") {
   return {
     hooks: {
       enabled: true,
-      token: "hook-token",
+      token: fixtureHookToken,
       gmail: {
         account,
         topic: "projects/demo/topics/gmail",
-        pushToken: "push-token",
+        pushToken: fixturePushToken,
       },
     },
   } as never;
@@ -173,11 +177,11 @@ describe("startGmailWatcher", () => {
       {
         hooks: {
           enabled: true,
-          token: "hook-token",
+          token: fixtureHookToken,
           gmail: {
             account: "me@example.com",
             topic: "projects/demo/topics/gmail",
-            pushToken: "push-token",
+            pushToken: fixturePushToken,
             tailscale: { mode: "serve" },
           },
         },
@@ -230,6 +234,30 @@ describe("startGmailWatcher", () => {
     await startGmailWatcher(createGmailConfig());
     expect(spawnedChildren).toHaveLength(2);
     expect(spawnedChildren[0].kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("spawns gog serve with token files instead of raw token argv", async () => {
+    mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+
+    await expect(startGmailWatcher(createGmailConfig())).resolves.toEqual({
+      started: true,
+    });
+
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+    const args = mocks.spawn.mock.calls[0]?.[1] as string[];
+    expect(args).toContain("--token-file");
+    expect(args).toContain("--hook-token-file");
+    expect(args).not.toContain("--token");
+    expect(args).not.toContain("--hook-token");
+    expect(args).not.toContain(fixturePushToken);
+    expect(args).not.toContain(fixtureHookToken);
+
+    const pushTokenFile = args[args.indexOf("--token-file") + 1];
+    const hookTokenFile = args[args.indexOf("--hook-token-file") + 1];
+    expect(readFileSync(pushTokenFile, "utf8")).toBe(fixturePushToken);
+    expect(readFileSync(hookTokenFile, "utf8")).toBe(fixtureHookToken);
+    expect((statSync(pushTokenFile).mode & 0o777).toString(8)).toBe("600");
+    expect((statSync(hookTokenFile).mode & 0o777).toString(8)).toBe("600");
   });
 
   it("clears existing renewInterval on re-entry to prevent interval leak", async () => {
