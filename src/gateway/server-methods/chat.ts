@@ -4332,6 +4332,30 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
+          if (activeRunAbort.controller.signal.aborted) {
+            // Dispatch can reject after chat.abort already broadcast the terminal
+            // abort. Preserve that outcome instead of resurrecting the run as an error.
+            const stopReason = activeRunAbort.entry?.abortStopReason ?? "rpc";
+            const endedAt = Date.now();
+            const payload = buildAbortedChatSendPayload({
+              runId: clientRunId,
+              stopReason,
+              endedAt,
+            });
+            context.logGateway.warn(
+              `chat.send post-dispatch threw after abort for runId=${clientRunId}: ${formatForLog(err)}`,
+            );
+            setGatewayDedupeEntry({
+              dedupe: context.dedupe,
+              key: `chat:${clientRunId}`,
+              entry: {
+                ts: endedAt,
+                ok: true,
+                payload,
+              },
+            });
+            return;
+          }
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
