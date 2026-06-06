@@ -967,6 +967,9 @@ export const dispatchTelegramMessage = async ({
       : undefined;
   let lastAnswerPartialText = "";
   let activeAnswerDraftIsToolProgressOnly = false;
+  // Per-assistant-message id for progress-mode inter-tool commentary lines so they
+  // accumulate one-per-block in the shared draft (see ingestDraftLaneSegments).
+  let progressCommentaryItemSeq = 0;
   function resetAnswerToolProgressDraft() {
     activeAnswerDraftIsToolProgressOnly = false;
   }
@@ -1165,6 +1168,16 @@ export const dispatchTelegramMessage = async ({
     const split = splitTextIntoLaneSegments(update, isReasoning);
     for (const segment of split.segments) {
       if (segment.lane === "answer") {
+        if (streamMode === "progress" && progressDraft.commentaryProgressEnabled) {
+          // Progress mode delivers the answer separately, so inter-tool partial answer text is
+          // commentary. With commentary enabled, route it into the shared progress draft's
+          // commentary lane (keyed per assistant message) so it coexists with tool progress
+          // instead of suppressing the answer lane and dropping the tool lines after it. #90962.
+          await progressDraft.pushCommentaryProgress(segment.update.text, {
+            itemId: `partial-commentary:${progressCommentaryItemSeq}`,
+          });
+          continue;
+        }
         await prepareAnswerLaneForText();
       }
       if (segment.lane === "reasoning") {
@@ -2021,6 +2034,10 @@ export const dispatchTelegramMessage = async ({
                           finalAnswerDelivered = false;
                           if (streamMode !== "progress") {
                             resetProgressDraftState();
+                          } else {
+                            // New assistant message => new progress-mode commentary block,
+                            // so its inter-tool commentary lands on a fresh draft line.
+                            progressCommentaryItemSeq += 1;
                           }
                           if (answerLane.finalized) {
                             await rotateLaneForNewMessage(answerLane);
