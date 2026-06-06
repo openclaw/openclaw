@@ -2000,6 +2000,58 @@ describe("subagent registry seam flow", () => {
     expect(replacement?.endedAt).toBeUndefined();
   });
 
+  it("keeps CLI lifecycle-yielded subagent runs paused instead of completing cleanup", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-cli-lifecycle-yield-paused",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "pause after CLI lifecycle yield",
+      cleanup: "delete",
+      expectsCompletionMessage: true,
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-cli-lifecycle-yield-paused",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 333,
+        endedAt: 444,
+        yielded: true,
+        livenessState: "paused",
+        stopReason: "end_turn",
+      },
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-cli-lifecycle-yield-paused");
+      expect(run?.endedAt).toBe(444);
+      expect(run?.pauseReason).toBe("sessions_yield");
+      expect(run?.outcome).toBeUndefined();
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(mocks.cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
+    expect(mod.countPendingDescendantRuns("agent:main:main")).toBe(1);
+  });
+
   it("announces blocked agent.wait snapshots as errors instead of success", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
