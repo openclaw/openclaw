@@ -1,3 +1,4 @@
+// Memory Core tests cover index plugin behavior.
 import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -482,6 +483,39 @@ describe("memory index", () => {
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const statusManager = await getFreshManager(aliasCfg, "status");
+    try {
+      const status = statusManager.status();
+
+      expect(status.dirty).toBe(false);
+      expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await statusManager.close?.();
+    }
+  });
+
+  it("keeps status clean when configured model defaults to the adapter model (#90413)", async () => {
+    const dbPath = path.join(workspaceDir, "index-default-model-status.sqlite");
+    // Index under the provider's resolved default model, as provider init does.
+    const indexCfg = createCfg({
+      storePath: dbPath,
+      provider: "gemini",
+      model: "gemini-embed",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const indexManager = await getFreshManager(indexCfg);
+    await indexManager.sync({ reason: "test", force: true });
+    await indexManager.close?.();
+
+    // Plain status path before provider init: settings.model is the empty
+    // default, so identity must resolve the adapter model instead of comparing
+    // meta against a blank "expected" model.
+    const statusCfg = createCfg({
+      storePath: dbPath,
+      provider: "gemini",
+      model: "",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const statusManager = await getFreshManager(statusCfg, "status");
     try {
       const status = statusManager.status();
 

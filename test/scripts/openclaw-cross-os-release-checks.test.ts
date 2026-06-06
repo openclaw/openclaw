@@ -1,3 +1,4 @@
+// Openclaw Cross Os Release Checks tests cover openclaw cross os release checks script behavior.
 import { spawn } from "node:child_process";
 import {
   existsSync,
@@ -304,6 +305,20 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(
       shouldRetryCrossOsAgentTurnError(
         new Error("Agent turn used embedded fallback instead of gateway."),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error(
+          "GatewayClientRequestError: FailoverError: Rate limit reached for gpt-5.5: code=rate_limit_exceeded",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error(
+          "OpenAI image generation failed (HTTP 503): upstream connect error or disconnect/reset before headers. reset reason: connection timeout",
+        ),
       ),
     ).toBe(true);
   });

@@ -1,3 +1,4 @@
+// Msteams plugin module implements conversation store state behavior.
 import crypto from "node:crypto";
 import {
   findPreferredDmConversationByUserId,
