@@ -23,6 +23,7 @@ type HubDelegatedSessionEntry = {
   hubDelegated?: HubDelegatedSessionMeta | null;
   spawnedBy?: string;
   parentSessionKey?: string;
+  label?: string;
   acp?: {
     lastActivityAt?: number;
     mode?: "persistent" | "oneshot";

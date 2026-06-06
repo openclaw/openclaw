@@ -110,7 +110,8 @@ export async function handleAcpDelegateAction(
     }
     const rows = entries
       .toSorted((a, b) => (b.entry?.updatedAt ?? 0) - (a.entry?.updatedAt ?? 0))
-      .map(({ sessionKey, entry, acp }) => {
+      .map((storeEntry) => {
+        const { sessionKey, entry, acp } = storeEntry;
         if (!entry?.hubDelegated || !isHubDelegatedAcpSessionEntry(entry)) {
           return "";
         }
@@ -121,10 +122,9 @@ export async function handleAcpDelegateAction(
         return formatDelegateLine({
           sessionKey,
           label:
-            normalizeOptionalString(entry.label) ??
-            resolveHubDelegatedDisplayAgent({ sessionKey, entry, acp }),
-          agent: resolveHubDelegatedDisplayAgent({ sessionKey, entry, acp }),
-          state: resolveHubDelegatedDisplayState({ sessionKey, entry, acp }),
+            normalizeOptionalString(entry.label) ?? resolveHubDelegatedDisplayAgent(storeEntry),
+          agent: resolveHubDelegatedDisplayAgent(storeEntry),
+          state: resolveHubDelegatedDisplayState(storeEntry),
           ...expiry,
         });
       })
