@@ -1,0 +1,39 @@
+{
+  "name": "cron/job task records (wrench build-queue sweep)",
+  "version": 1,
+  "literals": {
+    "assigned_to": "wrench",
+    "status": "assigned"
+  },
+  "requiredFields": [
+    "id",
+    "title",
+    "status",
+    "assigned_to",
+    "priority",
+    "domain",
+    "project",
+    "source",
+    "context",
+    "next_action",
+    "created_at",
+    "updated_at"
+  ],
+  "fieldTypes": {
+    "id": "string",
+    "title": "string",
+    "status": "string",
+    "assigned_to": "string",
+    "priority": "number",
+    "domain": "string",
+    "project": "string",
+    "source": "string",
+    "context": "string",
+    "next_action": "string",
+    "created_at": "string",
+    "updated_at": "string",
+    "due_at": "string|null",
+    "deliverable": "string|null",
+    "blocker": "string|null"
+  }
+}
