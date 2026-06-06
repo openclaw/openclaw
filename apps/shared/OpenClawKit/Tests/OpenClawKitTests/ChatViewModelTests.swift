@@ -21,6 +21,15 @@ private func chatErrorMessage(role: String, errorMessage: String, timestamp: Dou
     ])
 }
 
+fileprivate extension Array where Element == OpenClawChatMessage {
+    func containsUserText(_ text: String) -> Bool {
+        self.contains { message in
+            message.role == "user" &&
+                message.content.contains { $0.text == text }
+        }
+    }
+}
+
 private func historyPayload(
     sessionKey: String = "main",
     sessionId: String? = "sess-main",
