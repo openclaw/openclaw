@@ -9,7 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { createChannelIngressQueue } from "./ingress-queue.js";
+import { createChannelIngressQueue, recoverAllStaleChannelIngressClaims } from "./ingress-queue.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
@@ -322,6 +322,237 @@ describe("channel ingress queue", () => {
       expect(await queue.prune({ completedTtlMs: 10, failedTtlMs: 10, now: 40 })).toBe(3);
       expect(await queue.listPending()).toEqual([]);
       expect(await queue.listClaims()).toEqual([]);
+    });
+  });
+});
+
+describe("recoverAllStaleChannelIngressClaims", () => {
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+  });
+
+  it("recovers claims with dead owner PIDs across multiple queues", async () => {
+    await withTempState(async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+      // Create two separate queues (different channel/account pairs).
+      const queueA = createChannelIngressQueue<{ text: string }>({
+        channelId: "telegram",
+        accountId: "dm-1",
+        stateDir,
+        now: () => 100,
+      });
+      const queueB = createChannelIngressQueue<{ text: string }>({
+        channelId: "whatsapp",
+        accountId: "dm-2",
+        stateDir,
+        now: () => 100,
+      });
+
+      // Enqueue and claim with a dead (non-existent) PID.
+      await queueA.enqueue("tg-1", { text: "hello" });
+      await queueA.enqueue("tg-2", { text: "world" });
+      await queueB.enqueue("wa-1", { text: "hi" });
+
+      // Use ownerId that maps to a non-existent PID.
+      const deadPid = "999999999";
+      await queueA.claim("tg-1", { ownerId: deadPid });
+      await queueA.claim("tg-2", { ownerId: deadPid });
+      await queueB.claim("wa-1", { ownerId: deadPid });
+
+      // Sweep should recover all three claims (staleMs: 0 to bypass age check in test).
+      const recovered = await recoverAllStaleChannelIngressClaims({
+        env,
+        now: () => 200,
+        staleMs: 0,
+      });
+      expect(recovered).toBe(3);
+
+      // All events should be back in pending state.
+      expect((await queueA.listPending()).map((r) => r.id).toSorted()).toEqual(["tg-1", "tg-2"]);
+      expect((await queueB.listPending()).map((r) => r.id)).toEqual(["wa-1"]);
+      expect(await queueA.listClaims()).toEqual([]);
+      expect(await queueB.listClaims()).toEqual([]);
+    });
+  });
+
+  it("preserves claims owned by the current process", async () => {
+    await withTempState(async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "live",
+        stateDir,
+        now: () => 100,
+      });
+
+      await queue.enqueue("live-event", { text: "active" });
+      // claim() defaults ownerId to process.pid, which is alive.
+      const claimed = await queue.claim("live-event");
+      expect(claimed).toBeTruthy();
+
+      const recovered = await recoverAllStaleChannelIngressClaims({ env, now: () => 200 });
+      expect(recovered).toBe(0);
+
+      // Claim should still be held.
+      expect((await queue.listClaims()).map((r) => r.id)).toEqual(["live-event"]);
+    });
+  });
+
+  it("preserves live compound claim owners (Telegram spool `pid:uuid`)", async () => {
+    await withTempState(async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "spool",
+        stateDir,
+        now: () => 100,
+      });
+
+      await queue.enqueue("spooled", { text: "active" });
+      // Telegram spool owners are `${process.pid}:${uuid}`; the live PID prefix
+      // must be parsed so the sweep does not release this active claim.
+      const claimed = await queue.claim("spooled", { ownerId: `${process.pid}:abc-123` });
+      expect(claimed).toBeTruthy();
+
+      const recovered = await recoverAllStaleChannelIngressClaims({ env, now: () => 200 });
+      expect(recovered).toBe(0);
+      expect((await queue.listClaims()).map((r) => r.id)).toEqual(["spooled"]);
+    });
+  });
+
+  it("does not release a stale event that was re-claimed by a live worker", async () => {
+    await withTempState(async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      let clock = 100;
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "race",
+        stateDir,
+        now: () => clock,
+      });
+
+      await queue.enqueue("evt", { text: "x" });
+      // Original claim by a dead PID — a stale-recovery candidate.
+      const stale = await queue.claim("evt", { ownerId: "999999999" });
+      if (!stale) {
+        throw new Error("Expected the initial stale claim");
+      }
+      // A live worker re-claims the same event (new claim_token + live owner)
+      // before the sweep writes. Even though the re-claim is old enough to pass
+      // the staleMs age window, the live owner and the claim_token guard keep
+      // the sweep from releasing this fresh claim into duplicate processing.
+      await queue.release(stale);
+      clock = 9999;
+      expect(await queue.claim("evt", { ownerId: `${process.pid}` })).toBeTruthy();
+
+      const recovered = await recoverAllStaleChannelIngressClaims({
+        env,
+        now: () => 100_000,
+        staleMs: 60_000,
+      });
+      expect(recovered).toBe(0);
+      expect((await queue.listClaims()).map((r) => r.id)).toEqual(["evt"]);
+    });
+  });
+
+  it("returns zero when there are no claimed rows", async () => {
+    await withTempState(async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        stateDir,
+      });
+      await queue.enqueue("only-pending", { text: "waiting" });
+
+      const recovered = await recoverAllStaleChannelIngressClaims({ env });
+      expect(recovered).toBe(0);
+    });
+  });
+
+  it("recovers claims with null or empty claim_owner", async () => {
+    await withTempState(async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        stateDir,
+        now: () => 100,
+      });
+
+      await queue.enqueue("orphan", { text: "no-owner" });
+      // Claim normally, then manually set claim_owner to null to simulate
+      // a row that was only partially updated before crash.
+      await queue.claim("orphan", { ownerId: "12345" });
+
+      const database = openOpenClawStateDatabase({ env });
+      const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        kysely
+          .updateTable("channel_ingress_events")
+          .set({ claim_owner: null })
+          .where("event_id", "=", "orphan"),
+      );
+
+      const recovered = await recoverAllStaleChannelIngressClaims({
+        env,
+        now: () => 200,
+        staleMs: 0,
+      });
+      expect(recovered).toBe(1);
+      expect((await queue.listPending()).map((r) => r.id)).toEqual(["orphan"]);
+    });
+  });
+
+  it("skips claims newer than staleMs even with dead PIDs", async () => {
+    await withTempState(async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        stateDir,
+        now: () => 1000,
+      });
+
+      await queue.enqueue("old-event", { text: "old" });
+      await queue.enqueue("new-event", { text: "new" });
+      // Claim both with dead PID.
+      await queue.claim("old-event", { ownerId: "999999999" });
+      await queue.claim("new-event", { ownerId: "999999999" });
+
+      // With staleMs=500 and now=2000, cutoff=1500.
+      // Both claims have claimed_at=1000 (below cutoff), so both are stale.
+      expect(
+        await recoverAllStaleChannelIngressClaims({ env, now: () => 2000, staleMs: 500 }),
+      ).toBe(2);
+    });
+  });
+
+  it("preserves recent claims within staleMs window", async () => {
+    await withTempState(async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+      let clock = 1000;
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        stateDir,
+        now: () => clock,
+      });
+
+      await queue.enqueue("recent", { text: "recent" });
+      await queue.claim("recent", { ownerId: "999999999" });
+
+      // Advance clock by only 10ms — claim is 10ms old, below the 60s default.
+      clock = 1010;
+      const recovered = await recoverAllStaleChannelIngressClaims({ env, now: () => clock });
+      expect(recovered).toBe(0);
+
+      // Claim should still be held (age-protected even though PID is dead).
+      expect((await queue.listClaims()).map((r) => r.id)).toEqual(["recent"]);
     });
   });
 });

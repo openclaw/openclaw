@@ -73,9 +73,14 @@ export async function prepareGatewayPluginBootstrap(params: {
     ];
     if (!params.minimalTestGateway) {
       const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
+      const { runStartupIngressClaimSweep } = await import("./server-startup-ingress-sweep.js");
       startupTasks.push(
         runStartupSessionMigration({
           cfg: params.cfgAtStart,
+          env: process.env,
+          log: params.log,
+        }),
+        runStartupIngressClaimSweep({
           env: process.env,
           log: params.log,
         }),
