@@ -44,7 +44,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // blocks preserved for the LLM.
     const currentContent = output[2]?.content;
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain("Reply target of current user message (untrusted, for context):");
+    expect(currentContent).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
     expect(JSON.stringify(input)).toContain("Conversation info");
   });
 
@@ -126,6 +128,24 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(output[0]?.content).toBe("bare ask");
   });
 
+  it("keeps inter-session provenance headers before timestamp context", () => {
+    const input = [
+      {
+        role: "user",
+        content: "[Inter-session message] sourceTool=sessions_send isUser=false\nforwarded ask",
+        timestamp: 1717570800000,
+      },
+    ];
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: string }>;
+
+    expect(output[0]?.content).toBe(
+      "[Inter-session message] sourceTool=sessions_send isUser=false\nforwarded ask",
+    );
+  });
+
   it("preserves inbound metadata on the current user turn", () => {
     const historicalEnvelope =
       'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\nOld ask';
@@ -158,7 +178,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // Current: form-canonicalized to plain string; metadata blocks preserved.
     const currentContent = output[2]?.content;
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain("Reply target of current user message (untrusted, for context):");
+    expect(currentContent).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
     expect(currentContent).toContain("quoted status body");
   });
 
@@ -193,7 +215,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // metadata blocks preserved for the LLM.
     const currentContent = output[0]?.content;
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain("Reply target of current user message (untrusted, for context):");
+    expect(currentContent).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
     expect(currentContent).toContain("quoted status body");
   });
 
@@ -334,7 +358,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(output.some((item) => item.customType === "other-extension-context")).toBe(true);
     // User messages (both historical and current) are form-canonicalized.
     expect(output.some((item) => item.role === "user" && item.content === "old ask")).toBe(true);
-    expect(output.some((item) => item.role === "user" && item.content === "visible ask")).toBe(true);
+    expect(output.some((item) => item.role === "user" && item.content === "visible ask")).toBe(
+      true,
+    );
   });
 
   it("keeps overflow retry runtime context immediately before the active user", () => {

@@ -3,6 +3,7 @@
  */
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
@@ -299,9 +300,7 @@ export function installModelPromptTransform(params: {
  *
  * @see https://github.com/openclaw/openclaw/issues/3658
  */
-function canonicalizeTextOnlyUserContent(
-  content: unknown,
-): string | unknown {
+function canonicalizeTextOnlyUserContent(content: unknown): string | unknown {
   if (!Array.isArray(content)) {
     return content;
   }
@@ -356,6 +355,9 @@ function stampUserTextWithMessageTimestamp(
     return text;
   }
   if (BOUNDARY_TIMESTAMP_ENVELOPE_RE.test(text) || text.includes(BOUNDARY_CRON_TIME_MARKER)) {
+    return text;
+  }
+  if (text.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE)) {
     return text;
   }
   if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
