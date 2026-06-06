@@ -64,11 +64,27 @@ const PingSchema = z.object({
   ts: z.number().int().nonnegative(),
 });
 
+/**
+ * A sampled inbound video frame (caller camera or screen-share) the worker forwards so the agent
+ * can "see" what the caller shows it. Sparse (a frame every few seconds), JPEG, already downscaled
+ * worker-side. Much larger than audio — see the inbound payload cap.
+ */
+const VideoFrameSchema = z.object({
+  type: z.literal("video.frame"),
+  source: z.enum(["camera", "screenshare"]),
+  ts: z.number().int().nonnegative(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  mime: z.string().min(1),
+  dataBase64: z.string().min(1),
+});
+
 const InboundMessageSchema = z.discriminatedUnion("type", [
   SessionStartSchema,
   SessionEndSchema,
   RecordingStatusMessageSchema,
   AudioFrameSchema,
+  VideoFrameSchema,
   PingSchema,
 ]);
 
@@ -130,6 +146,16 @@ export interface MsteamsMediaStreamConfig {
     timestampMs: number;
     payload: Buffer;
   }) => void;
+  /** A sampled inbound video frame (caller camera or screen-share) for the agent to "see". */
+  onVideoFrame?: (info: {
+    callId: string;
+    source: "camera" | "screenshare";
+    ts: number;
+    width: number;
+    height: number;
+    mime: string;
+    dataBase64: string;
+  }) => void;
 }
 
 const DEFAULT_HMAC_WINDOW_MS = 60_000;
@@ -143,12 +169,13 @@ const DEFAULT_HMAC_WINDOW_MS = 60_000;
 const DEFAULT_BIND_ADDRESS = "127.0.0.1";
 
 /**
- * Hard cap on a single inbound WebSocket frame. Legitimate messages are small
- * JSON envelopes — control messages plus one base64-encoded PCM audio frame,
- * well under 1 KB. Bounding the payload rejects oversized frames before they
- * reach JSON parsing, mitigating memory-exhaustion from unauthenticated peers.
+ * Hard cap on a single inbound WebSocket frame. Control + audio messages are tiny
+ * (<1 KB), but a `video.frame` carries a base64 JPEG (the worker downscales and caps
+ * the JPEG at ~1 MB, so base64 ≈ 1.4 MB). The cap is sized to admit one such frame
+ * and still bound memory: the sender is the HMAC-authenticated worker, not an
+ * arbitrary peer, so the looser bound only loosens the trusted path.
  */
-const MAX_INBOUND_PAYLOAD_BYTES = 64 * 1024;
+const MAX_INBOUND_PAYLOAD_BYTES = 2 * 1024 * 1024;
 
 /**
  * Connection guardrails, mirroring the Twilio media-stream path so a valid
@@ -455,6 +482,18 @@ export class MsteamsMediaStream {
           seq: parsed.seq,
           timestampMs: parsed.timestampMs,
           payload: Buffer.from(parsed.payloadBase64, "base64"),
+        });
+        break;
+      }
+      case "video.frame": {
+        this.config.onVideoFrame?.({
+          callId,
+          source: parsed.source,
+          ts: parsed.ts,
+          width: parsed.width,
+          height: parsed.height,
+          mime: parsed.mime,
+          dataBase64: parsed.dataBase64,
         });
         break;
       }
