@@ -428,6 +428,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "github-copilot",
   "google",
   "google-antigravity",
+  "google-antigravity-cli",
   "google-gemini-cli",
   "google-vertex",
   "groq",
