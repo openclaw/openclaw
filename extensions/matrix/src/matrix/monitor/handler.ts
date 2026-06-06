@@ -467,6 +467,21 @@ function formatMatrixToolProgressMarkdownCode(text: string): string {
 }
 
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
+  // Fail fast at construction when the injected channel runtime is missing the
+  // inbound dispatch surface. The matrix monitor relies on
+  // `core.channel.inbound.run` per inbound event; without this guard a stale or
+  // incompatible plugin install (issue #90325, previously closed by d05e4a4bc6
+  // for feishu) only surfaces as a generic per-message
+  // `TypeError: Cannot read properties of undefined (reading 'run')` and silently
+  // drops every Matrix message. Surface an actionable error instead.
+  if (typeof params.core?.channel?.inbound?.run !== "function") {
+    throw new Error(
+      "matrix: channel runtime is missing inbound.run; this usually means a stale " +
+        "@openclaw/matrix install is shadowing the current OpenClaw runtime. " +
+        "Run `openclaw doctor --fix` and reinstall the plugin with " +
+        "`openclaw plugins install --force clawhub:@openclaw/matrix`.",
+    );
+  }
   const {
     client,
     core,
