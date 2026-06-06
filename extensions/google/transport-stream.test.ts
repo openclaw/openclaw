@@ -979,7 +979,7 @@ describe("google transport stream", () => {
         headers: { "content-type": "application/json" },
       }),
     );
-    const guardedFetchMock = vi.fn().mockResolvedValue(
+    guardedFetchMock.mockResolvedValue(
       buildSseResponse([{ candidates: [{ content: { parts: [{ text: "ok" }] } }] }]),
     );
 
@@ -1030,7 +1030,7 @@ describe("google transport stream", () => {
         headers: { "content-type": "application/json" },
       }),
     );
-    const guardedFetchMock = vi.fn().mockResolvedValue(
+    guardedFetchMock.mockResolvedValue(
       buildSseResponse([{ candidates: [{ content: { parts: [{ text: "ok" }] } }] }]),
     );
 
