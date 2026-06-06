@@ -919,11 +919,21 @@ function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
   return withoutSuffix.split("/").pop();
 }
 
+function isMicrosoftFoundryProvider(provider: unknown): boolean {
+  // Foundry alias/instance providers reuse `microsoft-foundry-<suffix>` ids
+  // (for example `microsoft-foundry-9433`) and share the same OpenAI-compatible
+  // gateway that rejects the non-standard top-level `thinking` argument.
+  if (typeof provider !== "string") {
+    return false;
+  }
+  return provider === "microsoft-foundry" || provider.startsWith("microsoft-foundry-");
+}
+
 function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
     model.api === "openai-completions" &&
-    model.provider !== "microsoft-foundry" &&
+    !isMicrosoftFoundryProvider(model.provider) &&
     (normalizedModelId === "deepseek-v4-flash" || normalizedModelId === "deepseek-v4-pro")
   );
 }
