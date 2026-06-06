@@ -13,7 +13,11 @@ import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 type LlmBoundaryOptions = {
   timezone?: string;
-  currentUserTimestamp?: number;
+  currentUserTimestampOverride?: {
+    timestamp: number;
+    text: string;
+    alternateText?: string;
+  };
 };
 
 /**
@@ -378,6 +382,28 @@ function stampUserTextWithMessageTimestamp(
   return `${prefix}${text}`;
 }
 
+function messageContentMatchesCurrentUserText(
+  content: unknown,
+  override: NonNullable<LlmBoundaryOptions["currentUserTimestampOverride"]>,
+): boolean {
+  const matchesText = (text: string): boolean =>
+    text === override.text || text === override.alternateText;
+  if (typeof content === "string") {
+    return matchesText(content);
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  const firstTextBlock = content.find((block): block is { text: string; type?: unknown } => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const typedBlock = block as { type?: unknown; text?: unknown };
+    return typedBlock.type === "text" && typeof typedBlock.text === "string";
+  });
+  return firstTextBlock ? matchesText(firstTextBlock.text) : false;
+}
+
 function stripHistoricalInboundMetadataFromUserMessages(
   messages: AgentMessage[],
   options: LlmBoundaryOptions | undefined,
@@ -390,10 +416,12 @@ function stripHistoricalInboundMetadataFromUserMessages(
     }
     const content = (message as { content?: unknown }).content;
     const isActive = index === activeUserMessageIndex;
-    const messageTimestamp =
-      isActive && typeof options?.currentUserTimestamp === "number"
-        ? options.currentUserTimestamp
-        : (message as { timestamp?: unknown }).timestamp;
+    const override = options?.currentUserTimestampOverride;
+    const useCurrentUserTimestampOverride =
+      isActive && override !== undefined && messageContentMatchesCurrentUserText(content, override);
+    const messageTimestamp = useCurrentUserTimestampOverride
+      ? override.timestamp
+      : (message as { timestamp?: unknown }).timestamp;
 
     // Historical turns strip inbound metadata blocks (Conversation info, Sender
     // info, etc.); the active turn keeps its metadata for the current request.

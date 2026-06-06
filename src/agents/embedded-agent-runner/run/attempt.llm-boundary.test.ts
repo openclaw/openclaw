@@ -127,13 +127,47 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
     const output = normalizeMessagesForLlmBoundary(
       input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-      { timezone: "UTC", currentUserTimestamp: preparedTimestamp },
+      {
+        timezone: "UTC",
+        currentUserTimestampOverride: {
+          timestamp: preparedTimestamp,
+          text: "Current ask",
+        },
+      },
     ) as unknown as Array<{ content?: string }>;
 
     const expectedPrefix = buildTimestampPrefix(new Date(preparedTimestamp), {
       timezone: "UTC",
     });
     expect(output[0]?.content).toBe(`${expectedPrefix}Current ask`);
+  });
+
+  it("does not apply the prepared timestamp override to later queued turns", () => {
+    const preparedTimestamp = 1717570800000;
+    const queuedTimestamp = 1717574460000;
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "queued ask" }],
+        timestamp: queuedTimestamp,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      {
+        timezone: "UTC",
+        currentUserTimestampOverride: {
+          timestamp: preparedTimestamp,
+          text: "initial ask",
+        },
+      },
+    ) as unknown as Array<{ content?: string }>;
+
+    const expectedPrefix = buildTimestampPrefix(new Date(queuedTimestamp), {
+      timezone: "UTC",
+    });
+    expect(output[0]?.content).toBe(`${expectedPrefix}queued ask`);
   });
 
   it("does not stamp when no timezone is supplied (form/metadata normalization only)", () => {

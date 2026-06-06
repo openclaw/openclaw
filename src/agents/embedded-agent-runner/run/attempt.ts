@@ -2294,18 +2294,25 @@ export async function runEmbeddedAttempt(
       // Single source for the per-message timestamp prefix (issue #3658):
       // normal embedded runs stamp every user message from its own timestamp.
       // Raw model probes must keep the requested prompt text exact.
-      const boundaryOptions = isRawModelRun
+      const boundaryTimezone = isRawModelRun
         ? undefined
-        : {
-            timezone: resolveUserTimezone(params.config?.agents?.defaults?.userTimezone),
-            ...(typeof preparedUserTurnMessage?.timestamp === "number"
-              ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
-              : {}),
-          };
+        : resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
+      let currentUserTimestampOverride:
+        | { timestamp: number; text: string; alternateText?: string }
+        | undefined;
+      const buildBoundaryOptions = () => {
+        if (isRawModelRun) {
+          return undefined;
+        }
+        return {
+          ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+          ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),
+        };
+      };
       if (typeof activeSession.agent.convertToLlm === "function") {
         const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
         activeSession.agent.convertToLlm = async (messages) =>
-          await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages, boundaryOptions));
+          await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions()));
       }
       let prePromptMessageCount = activeSession.messages.length;
       let contextEngineAfterTurnCheckpoint: number | null = null;
@@ -3843,6 +3850,14 @@ export async function runEmbeddedAttempt(
             context: params.currentInboundContext,
             prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
           });
+          currentUserTimestampOverride =
+            !isRawModelRun && typeof preparedUserTurnMessage?.timestamp === "number"
+              ? {
+                  timestamp: preparedUserTurnMessage.timestamp,
+                  text: promptForSession,
+                  ...(promptForModel !== promptForSession ? { alternateText: promptForModel } : {}),
+                }
+              : undefined;
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
           if (promptSubmission.runtimeOnly && runtimeSystemContext) {
             const runtimeSystemPrompt = composeSystemPromptWithHookContext({
@@ -3864,7 +3879,10 @@ export async function runEmbeddedAttempt(
           const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
             messages: messagesForCurrentPrompt,
             prompt: promptForModel,
-            ...(boundaryOptions ? { timezone: boundaryOptions.timezone } : {}),
+            ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+            ...(typeof preparedUserTurnMessage?.timestamp === "number"
+              ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
+              : {}),
           });
           if (systemPromptReport) {
             systemPromptReport.currentTurn = {
