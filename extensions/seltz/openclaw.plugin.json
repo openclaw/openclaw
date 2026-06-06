@@ -1,0 +1,50 @@
+{
+  "id": "seltz",
+  "activation": {
+    "onStartup": false
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "seltz",
+        "envVars": ["SELTZ_API_KEY"]
+      }
+    ]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Seltz API Key",
+      "help": "Seltz Search API key (fallback: SELTZ_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "your-api-key"
+    },
+    "webSearch.baseUrl": {
+      "label": "Seltz Search Base URL",
+      "help": "Optional Seltz API base URL override. OpenClaw appends /v1/search when the URL does not already end there."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["seltz"]
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

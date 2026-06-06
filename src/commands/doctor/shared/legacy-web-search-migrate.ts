@@ -23,12 +23,13 @@ const BUNDLED_LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
   ["parallel", "parallel"],
   ["perplexity", "perplexity"],
   ["searxng", "searxng"],
+  ["seltz", "seltz"],
   ["tavily", "tavily"],
 ]);
 
-// Tavily and Parallel only ever used the plugin-owned config path, so there is
-// no legacy `tools.web.search.<id>.*` shape to migrate for them.
-const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set(["parallel", "tavily"]);
+// Tavily, Parallel, and Seltz only ever used the plugin-owned config path, so
+// there is no legacy `tools.web.search.<id>.*` shape to migrate for them.
+const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set(["parallel", "seltz", "tavily"]);
 const LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID = "brave";
 
 function getBundledLegacyWebSearchOwners(): ReadonlyMap<string, string> {

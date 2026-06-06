@@ -223,6 +223,10 @@ export const pluginRegistrationContractCases = {
     pluginId: "senseaudio",
     mediaUnderstandingProviderIds: ["senseaudio"],
   },
+  seltz: {
+    pluginId: "seltz",
+    webSearchProviderIds: ["seltz"],
+  },
   tavily: {
     pluginId: "tavily",
     webSearchProviderIds: ["tavily"],

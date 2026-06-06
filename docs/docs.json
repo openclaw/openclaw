@@ -1334,6 +1334,7 @@
                       "tools/parallel-search",
                       "tools/perplexity-search",
                       "tools/searxng-search",
+                      "tools/seltz-search",
                       "tools/tavily"
                     ]
                   }

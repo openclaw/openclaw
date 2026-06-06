@@ -25,6 +25,7 @@ for (const providerId of [
   "moonshot",
   "parallel",
   "perplexity",
+  "seltz",
   "tavily",
   "xai",
 ] as const) {

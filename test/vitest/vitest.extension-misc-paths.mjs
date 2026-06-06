@@ -19,6 +19,7 @@ export const miscExtensionTestRoots = [
   "extensions/perplexity",
   "extensions/phone-control",
   "extensions/searxng",
+  "extensions/seltz",
   "extensions/synthetic",
   "extensions/tavily",
   "extensions/thread-ownership",
