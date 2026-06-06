@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import OSLog
@@ -254,7 +255,7 @@ final class TalkRealtimeRelaySession {
                 sessionId: sessionId,
                 callId: callId,
                 name: name,
-                args: payload["args"]?.foundationValue ?? [:])
+                args: payload["args"] ?? AnyCodable([:]))
             guard let runId = started.runId ?? started.idempotencyKey else {
                 throw NSError(domain: "TalkRealtimeRelay", code: 2, userInfo: [
                     NSLocalizedDescriptionKey: "Realtime tool call did not return a run id",
@@ -264,16 +265,16 @@ final class TalkRealtimeRelaySession {
                 runId: runId,
                 stream: completionStream,
                 timeoutSeconds: 120)
-            let result: [String: Any] = completion.failed
-                ? ["error": "OpenClaw tool call failed"]
-                : ["text": completion.text ?? "OpenClaw finished with no text."]
+            let result = completion.failed
+                ? AnyCodable(["error": "OpenClaw tool call failed"])
+                : AnyCodable(["text": completion.text ?? "OpenClaw finished with no text."])
             try await self.client.submitToolResult(sessionId: sessionId, callId: callId, result: result)
             self.onPhaseChanged(.listening)
         } catch {
             try? await self.client.submitToolResult(
                 sessionId: sessionId,
                 callId: callId,
-                result: ["error": error.localizedDescription])
+                result: AnyCodable(["error": error.localizedDescription]))
             self.onPhaseChanged(.listening)
         }
     }
@@ -291,7 +292,7 @@ final class TalkRealtimeRelaySession {
             sessionKey: self.options.sessionKey,
             text: text?.isEmpty == false ? text! : "status",
             mode: mode?.isEmpty == false ? mode : nil)
-        let result = response.dictionaryValue?.mapValues(\.foundationValue) ?? ["result": response.foundationValue]
+        let result = response.dictionaryValue.map(AnyCodable.init) ?? AnyCodable(["result": response])
         try await self.client.submitToolResult(sessionId: sessionId, callId: callId, result: result)
         self.onPhaseChanged(.listening)
     }

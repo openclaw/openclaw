@@ -57,13 +57,13 @@ struct TalkRealtimeRelayGatewayClient: Sendable {
             timeoutMs: 8_000)
     }
 
-    func submitToolResult(sessionId: String, callId: String, result: [String: Any]) async throws {
+    func submitToolResult(sessionId: String, callId: String, result: AnyCodable) async throws {
         let _: TalkSessionOkResult = try await self.requestDecoded(
             method: "talk.session.submitToolResult",
             params: [
                 "sessionId": AnyCodable(sessionId),
                 "callId": AnyCodable(callId),
-                "result": AnyCodable(result),
+                "result": result,
             ],
             timeoutMs: 30_000)
     }
@@ -86,7 +86,7 @@ struct TalkRealtimeRelayGatewayClient: Sendable {
         sessionId: String,
         callId: String,
         name: String,
-        args: Any) async throws -> TalkRealtimeRelayToolStartResult
+        args: AnyCodable) async throws -> TalkRealtimeRelayToolStartResult
     {
         try await self.requestDecoded(
             method: "talk.client.toolCall",
@@ -95,7 +95,7 @@ struct TalkRealtimeRelayGatewayClient: Sendable {
                 "relaySessionId": AnyCodable(sessionId),
                 "callId": AnyCodable(callId),
                 "name": AnyCodable(name),
-                "args": AnyCodable(args),
+                "args": args,
             ],
             timeoutMs: 30_000)
     }
