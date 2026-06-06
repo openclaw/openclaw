@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
 import {
   getRuntimeEmbeddingProviderAdapter,
   listRuntimeEmbeddingProviderAdapters,
-  readConfiguredProviderApiId,
   resolveRuntimeEmbeddingProviderLookupIds,
 } from "./embedding-provider-runtime-shared.js";
 import {
@@ -10,9 +10,6 @@ import {
   listRegisteredEmbeddingProviders,
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
-
-const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
-const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 
 export { listRegisteredEmbeddingProviders };
 
@@ -34,16 +31,7 @@ export function resolveConfiguredEmbeddingProviderId(
   providerId: string,
   cfg?: OpenClawConfig,
 ): string | undefined {
-  return readConfiguredProviderApiId({
-    providerId,
-    cfg,
-    resolveApiProviderId: (normalizedApiId) =>
-      OPENAI_COMPATIBLE_MODEL_APIS.has(normalizedApiId)
-        ? OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID
-        : normalizedApiId,
-    resolveMissingApiProviderId: (providerConfig) =>
-      providerConfig.baseUrl?.trim() ? OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID : undefined,
-  });
+  return resolveConfiguredGenericEmbeddingProviderId(providerId, cfg);
 }
 
 function resolveEmbeddingProviderLookupIds(id: string, cfg?: OpenClawConfig): string[] {

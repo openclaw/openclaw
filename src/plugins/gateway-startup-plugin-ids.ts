@@ -25,7 +25,7 @@ import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import { resolveConfiguredEmbeddingProviderId } from "./embedding-provider-runtime.js";
+import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
 import {
   collectConfiguredSpeechProviderIds,
   normalizeConfiguredSpeechProviderIdForStartup,
@@ -542,7 +542,7 @@ function resolveMemoryEmbeddingProviderOwnerIds(
 ): string[] {
   const ownerIds = [providerId];
   const genericOwnerId = normalizeOptionalLowercaseString(
-    resolveConfiguredEmbeddingProviderId(providerId, config),
+    resolveConfiguredGenericEmbeddingProviderId(providerId, config),
   );
   if (genericOwnerId && genericOwnerId !== providerId) {
     ownerIds.push(genericOwnerId);
