@@ -830,9 +830,9 @@ Override the spawned Chrome DevTools MCP server per profile when the default
 `npx chrome-devtools-mcp@latest` flow is not what you want (offline hosts,
 pinned versions, vendored binaries):
 
-| Field        | What it does                                                                                                                                                                                   |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mcpCommand` | Executable to spawn instead of `npx`. Resolved as-is; absolute paths are honored.                                                                                                              |
+| Field        | What it does                                                                                                                                                                                                                                                                            |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mcpCommand` | Executable to spawn instead of `npx`. Resolved as-is; absolute paths are honored.                                                                                                                                                                                                       |
 | `mcpArgs`    | Extra argument array for `mcpCommand`. Endpoint arguments can override auto-connect. Use `browser.chromeMcp.capabilities` for Chrome MCP feature policy; legacy diagnostic/category flags here are accepted as compatibility defaults unless explicit capability policy overrides them. |
 
 For upgrades from older configs, legacy `mcpArgs` diagnostic/category flags keep

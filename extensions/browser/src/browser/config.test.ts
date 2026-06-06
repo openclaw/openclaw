@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../../test-support.js";
 import type { BrowserConfig } from "../config/config.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
@@ -14,32 +15,6 @@ import {
   shouldStartLocalBrowserServer,
 } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
-
-function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
-  const snapshot = new Map<string, string | undefined>();
-  for (const [key] of Object.entries(env)) {
-    snapshot.set(key, process.env[key]);
-  }
-
-  try {
-    for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-    return fn();
-  } finally {
-    for (const [key, value] of snapshot) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
 
 describe("browser config", () => {
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {
