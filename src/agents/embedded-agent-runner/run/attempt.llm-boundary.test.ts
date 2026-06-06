@@ -114,6 +114,28 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(output[2]?.content).toBe(`${expectedCurrentPrefix}Current ask`);
   });
 
+  it("stamps the current turn from the prepared persisted timestamp when supplied", () => {
+    const preparedTimestamp = 1717570800000;
+    const runtimeTimestamp = 1717574460000;
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Current ask" }],
+        timestamp: runtimeTimestamp,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC", currentUserTimestamp: preparedTimestamp },
+    ) as unknown as Array<{ content?: string }>;
+
+    const expectedPrefix = buildTimestampPrefix(new Date(preparedTimestamp), {
+      timezone: "UTC",
+    });
+    expect(output[0]?.content).toBe(`${expectedPrefix}Current ask`);
+  });
+
   it("does not stamp when no timezone is supplied (form/metadata normalization only)", () => {
     const input = [
       {

@@ -2296,7 +2296,12 @@ export async function runEmbeddedAttempt(
       // Raw model probes must keep the requested prompt text exact.
       const boundaryOptions = isRawModelRun
         ? undefined
-        : { timezone: resolveUserTimezone(params.config?.agents?.defaults?.userTimezone) };
+        : {
+            timezone: resolveUserTimezone(params.config?.agents?.defaults?.userTimezone),
+            ...(typeof preparedUserTurnMessage?.timestamp === "number"
+              ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
+              : {}),
+          };
       if (typeof activeSession.agent.convertToLlm === "function") {
         const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
         activeSession.agent.convertToLlm = async (messages) =>

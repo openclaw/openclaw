@@ -11,6 +11,11 @@ import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
+type LlmBoundaryOptions = {
+  timezone?: string;
+  currentUserTimestamp?: number;
+};
+
 /**
  * Matches a leading `[... YYYY-MM-DD HH:MM ...]` timestamp envelope — either
  * from a channel plugin envelope or from a previous boundary stamp. Mirrors
@@ -29,14 +34,14 @@ const BOUNDARY_LEADING_ENVELOPE_CAPTURE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2
 
 export function normalizeMessagesForLlmBoundary(
   messages: AgentMessage[],
-  options?: { timezone?: string },
+  options?: LlmBoundaryOptions,
 ): AgentMessage[] {
   const normalized = stripUnsafeBlockedRunMetadata(
     stripToolResultDetails(normalizeAssistantReplayContent(messages)),
   );
   const withoutHistoricalInboundMetadata = stripHistoricalInboundMetadataFromUserMessages(
     normalized,
-    options?.timezone,
+    options,
   );
   return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
 }
@@ -46,11 +51,12 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
   messages: AgentMessage[];
   prompt: string;
   timezone?: string;
+  currentUserTimestamp?: number;
 }): AgentMessage[] {
   const promptMessage = {
     role: "user" as const,
     content: [{ type: "text" as const, text: params.prompt }],
-    timestamp: Date.now(),
+    timestamp: params.currentUserTimestamp ?? Date.now(),
   };
   return normalizeMessagesForLlmBoundary([...params.messages, promptMessage], {
     ...(params.timezone ? { timezone: params.timezone } : {}),
@@ -372,7 +378,7 @@ function stampUserTextWithMessageTimestamp(
 
 function stripHistoricalInboundMetadataFromUserMessages(
   messages: AgentMessage[],
-  timezone: string | undefined,
+  options: LlmBoundaryOptions | undefined,
 ): AgentMessage[] {
   const activeUserMessageIndex = findActiveUserMessageIndex(messages);
   let changed = false;
@@ -382,7 +388,10 @@ function stripHistoricalInboundMetadataFromUserMessages(
     }
     const content = (message as { content?: unknown }).content;
     const isActive = index === activeUserMessageIndex;
-    const messageTimestamp = (message as { timestamp?: unknown }).timestamp;
+    const messageTimestamp =
+      isActive && typeof options?.currentUserTimestamp === "number"
+        ? options.currentUserTimestamp
+        : (message as { timestamp?: unknown }).timestamp;
 
     // Historical turns strip inbound metadata blocks (Conversation info, Sender
     // info, etc.); the active turn keeps its metadata for the current request.
@@ -407,7 +416,7 @@ function stripHistoricalInboundMetadataFromUserMessages(
         return `${envelope}${stripInboundMetadata(body)}`;
       }
       const stripped = isActive ? raw : stripInboundMetadata(raw);
-      return stampUserTextWithMessageTimestamp(stripped, messageTimestamp, timezone);
+      return stampUserTextWithMessageTimestamp(stripped, messageTimestamp, options?.timezone);
     };
 
     if (typeof content === "string") {
