@@ -353,7 +353,9 @@ text: replay-safe cases say the response may be incomplete, while unsafe cases
 tell the user to verify current state before retrying. Public timeout diagnostics
 include structural fields such as the last app-server notification method,
 raw assistant response item id/type/role, active request/item counts, and armed
-watch state; they do not include raw prompt, assistant, or tool content.
+watch state. When the last notification is a raw assistant response item, they
+also include a bounded assistant text preview. They do not include raw prompt or
+tool content.
 
 ## Model discovery
 

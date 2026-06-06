@@ -2701,6 +2701,9 @@ function buildCodexAppServerTimeoutDiagnostics(params: {
     ...(readString("lastNotificationItemRole")
       ? { lastNotificationItemRole: readString("lastNotificationItemRole") }
       : {}),
+    ...(readString("lastAssistantTextPreview")
+      ? { lastAssistantTextPreview: readString("lastAssistantTextPreview") }
+      : {}),
     ...(readNumber("activeAppServerTurnRequests") !== undefined
       ? { activeAppServerTurnRequests: readNumber("activeAppServerTurnRequests") }
       : {}),

@@ -148,6 +148,7 @@ export type EmbeddedRunAttemptResult = {
       lastNotificationItemId?: string;
       lastNotificationItemType?: string;
       lastNotificationItemRole?: string;
+      lastAssistantTextPreview?: string;
       activeAppServerTurnRequests?: number;
       activeTurnItemCount?: number;
       terminalTurnNotificationQueued?: boolean;

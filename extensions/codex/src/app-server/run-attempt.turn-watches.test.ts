@@ -1743,11 +1743,16 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const completionWarnData = completionWarnCall?.[1] as
       | {
           lastActivityReason?: string;
+          lastAssistantTextPreview?: string;
           timeoutMs?: number;
         }
       | undefined;
     expect(completionWarnData?.timeoutMs).toBe(100);
     expect(completionWarnData?.lastActivityReason).toBe("notification:rawResponseItem/completed");
+    expect(completionWarnData?.lastAssistantTextPreview).toBe("I'm writing the report now.");
+    expect(result.codexAppServerFailure?.diagnostics?.lastAssistantTextPreview).toBe(
+      "I'm writing the report now.",
+    );
   });
 
   it("uses the post-tool timeout for commentary raw assistant progress", async () => {
@@ -2449,6 +2454,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const terminalWarnData = terminalWarnCall?.[1] as
       | {
           lastActivityReason?: string;
+          lastAssistantTextPreview?: string;
           lastNotificationItemId?: string;
           lastNotificationItemRole?: string;
           lastNotificationItemType?: string;
@@ -2466,6 +2472,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(terminalWarnData?.lastNotificationItemId).toBe("raw-status-1");
     expect(terminalWarnData?.lastNotificationItemType).toBe("message");
     expect(terminalWarnData?.lastNotificationItemRole).toBe("assistant");
+    expect(terminalWarnData?.lastAssistantTextPreview).toBe("I'm writing the report now.");
     expect(
       warn.mock.calls.some(
         ([message]) => message === "codex app-server turn idle timed out waiting for completion",
