@@ -29,6 +29,15 @@ async function startServer(opts: {
     payload: Buffer;
   }) => void;
   onRecordingStatus?: (info: { callId: string; status: string }) => void;
+  onVideoFrame?: (info: {
+    callId: string;
+    source: "camera" | "screenshare";
+    ts: number;
+    width: number;
+    height: number;
+    mime: string;
+    dataBase64: string;
+  }) => void;
 }): Promise<MsteamsMediaStream> {
   const server = new MsteamsMediaStream({
     port: opts.port,
@@ -41,6 +50,7 @@ async function startServer(opts: {
     onSessionEnd: opts.onSessionEnd,
     onAudioFrame: opts.onAudioFrame,
     onRecordingStatus: opts.onRecordingStatus,
+    onVideoFrame: opts.onVideoFrame,
   });
   await server.start();
   return server;
@@ -364,8 +374,8 @@ describe("MsteamsMediaStream", () => {
       ws.once("error", reject);
     });
 
-    // ~70 KB base64 payload — over the 64 KB inbound cap. ws closes oversized
-    // frames with code 1009 (message too big) before they reach JSON parsing.
+    // ~3 MB base64 payload — over the 2 MB inbound cap (sized for video.frame). ws closes
+    // oversized frames with code 1009 (message too big) before they reach JSON parsing.
     const closeCode = await new Promise<number>((resolve) => {
       ws.once("close", (code) => resolve(code));
       ws.send(
@@ -373,13 +383,46 @@ describe("MsteamsMediaStream", () => {
           type: "audio.frame",
           seq: 0,
           timestampMs: Date.now(),
-          payloadBase64: "A".repeat(70 * 1024),
+          payloadBase64: "A".repeat(3 * 1024 * 1024),
         }),
       );
     });
 
     expect(closeCode).toBe(1009);
     expect(frames).toBe(0);
+  });
+
+  it("parses video.frame and emits via onVideoFrame", async () => {
+    const port = randomPort();
+    const received: Array<{ source: string; width: number; height: number; dataBase64: string }> =
+      [];
+    server = await startServer({ port, onVideoFrame: (info) => received.push(info) });
+
+    const callId = "call-video";
+    const ws = openAuthed(port, callId);
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    ws.send(
+      JSON.stringify({
+        type: "video.frame",
+        source: "screenshare",
+        ts: 1719,
+        width: 1280,
+        height: 720,
+        mime: "image/jpeg",
+        dataBase64: "AQID",
+      }),
+    );
+
+    await waitFor(() => received.length > 0);
+    expect(received[0]).toMatchObject({
+      source: "screenshare",
+      width: 1280,
+      height: 720,
+      dataBase64: "AQID",
+    });
   });
 
   it("rejects connections beyond maxConnections", async () => {
