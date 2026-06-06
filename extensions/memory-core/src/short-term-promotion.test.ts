@@ -155,6 +155,8 @@ describe("short-term promotion", () => {
     expect(isShortTermMemoryPath("memory/日记/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("memory/notes/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("memory/nested/deep/2026-04-03.md")).toBe(true);
+    expect(isShortTermMemoryPath("memory/2026-04-03-1200.md")).toBe(true);
+    expect(isShortTermMemoryPath("2026-04-03-2359.md")).toBe(true);
     expect(isShortTermMemoryPath("memory/dreaming/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("memory/dreaming/deep/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("../../vault/memory/dreaming/deep/2026-04-03.md")).toBe(false);
