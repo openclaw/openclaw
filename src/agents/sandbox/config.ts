@@ -18,6 +18,7 @@ import {
   DEFAULT_SANDBOX_BROWSER_PREFIX,
   DEFAULT_SANDBOX_BROWSER_VNC_PORT,
   DEFAULT_SANDBOX_CONTAINER_PREFIX,
+  DEFAULT_SANDBOX_DOCKER_INIT_TIMEOUT_MS,
   DEFAULT_SANDBOX_IDLE_HOURS,
   DEFAULT_SANDBOX_IMAGE,
   DEFAULT_SANDBOX_MAX_AGE_DAYS,
@@ -122,6 +123,10 @@ export function resolveSandboxDockerConfig(params: {
     capDrop: agentDocker?.capDrop ?? globalDocker?.capDrop ?? ["ALL"],
     env,
     setupCommand: agentDocker?.setupCommand ?? globalDocker?.setupCommand,
+    initTimeoutMs: resolveTimerTimeoutMs(
+      agentDocker?.initTimeoutMs ?? globalDocker?.initTimeoutMs,
+      DEFAULT_SANDBOX_DOCKER_INIT_TIMEOUT_MS,
+    ),
     pidsLimit: agentDocker?.pidsLimit ?? globalDocker?.pidsLimit,
     memory: agentDocker?.memory ?? globalDocker?.memory,
     memorySwap: agentDocker?.memorySwap ?? globalDocker?.memorySwap,

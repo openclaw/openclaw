@@ -134,6 +134,28 @@ describe("computeSandboxConfigHash", () => {
 
     expect(withoutSkills).not.toBe(withSkills);
   });
+
+  it("ignores initTimeoutMs (operational timeout, not container identity)", () => {
+    // The init deadline is a client-side timeout; it must never change the reuse
+    // hash, or upgrades would needlessly recreate existing containers.
+    const shared = {
+      workspaceAccess: "rw" as const,
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    };
+    const without = computeSandboxConfigHash({ ...shared, docker: createDockerConfig() });
+    const with60s = computeSandboxConfigHash({
+      ...shared,
+      docker: createDockerConfig({ initTimeoutMs: 60_000 }),
+    });
+    const with5s = computeSandboxConfigHash({
+      ...shared,
+      docker: createDockerConfig({ initTimeoutMs: 5_000 }),
+    });
+    expect(with60s).toBe(without);
+    expect(with5s).toBe(without);
+  });
 });
 
 describe("computeSandboxBrowserConfigHash", () => {

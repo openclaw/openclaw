@@ -22,6 +22,12 @@ export type SandboxDockerSettings = {
   env?: Record<string, string>;
   /** Optional setup command run once after container creation (array entries are joined by newline). */
   setupCommand?: string;
+  /**
+   * Deadline (ms) for Docker control-plane calls during sandbox init
+   * (inspect/create/start/rm) so a wedged engine fails fast instead of hanging.
+   * Default 60000. Does not bound setupCommand or the command exec path.
+   */
+  initTimeoutMs?: number;
   /** Limit container PIDs (0 = Docker default). */
   pidsLimit?: number;
   /** Limit container memory (e.g. 512m, 2g, or bytes as number). */

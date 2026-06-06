@@ -19,6 +19,12 @@ type ExecDockerRawOptions = {
   allowFailure?: boolean;
   input?: Buffer | string;
   signal?: AbortSignal;
+  /**
+   * Deadline (ms). When set, a wedged engine (no output, never closes) is killed
+   * and rejected with a typed timeout instead of pending forever. Composes with
+   * `signal` (first to fire wins). Unset on the exec path so long commands live.
+   */
+  timeoutMs?: number;
 };
 
 export type ExecDockerRawResult = {
@@ -36,6 +42,29 @@ type ExecDockerRawError = Error & {
 function createAbortError(): Error {
   const err = new Error("Aborted");
   err.name = "AbortError";
+  return err;
+}
+
+/** Typed error thrown when a Docker invocation exceeds its deadline. */
+export type DockerExecTimeoutError = Error & {
+  code: "SANDBOX_DOCKER_TIMEOUT";
+  timeoutMs: number;
+};
+
+/** True for a Docker exec deadline timeout (not abort/ENOENT/exit failure). */
+export function isDockerExecTimeoutError(error: unknown): error is DockerExecTimeoutError {
+  return error instanceof Error && (error as { code?: unknown }).code === "SANDBOX_DOCKER_TIMEOUT";
+}
+
+function createDockerTimeoutError(args: string[], timeoutMs: number): DockerExecTimeoutError {
+  const err = new Error(
+    `Docker did not respond within ${timeoutMs}ms while running \`docker ${args.join(" ")}\`. ` +
+      "The Docker engine may be present but unresponsive. Start or restart Docker, or set " +
+      "`agents.defaults.sandbox.mode=off` to disable sandboxing.",
+  ) as DockerExecTimeoutError;
+  err.name = "DockerExecTimeoutError";
+  err.code = "SANDBOX_DOCKER_TIMEOUT";
+  err.timeoutMs = timeoutMs;
   return err;
 }
 
@@ -86,8 +115,16 @@ export function execDockerRaw(
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let aborted = false;
+    // Guards against double-settle (deadline vs abort/close); cleanup() frees timer + listener.
+    let settled = false;
 
     const signal = opts?.signal;
+    const timeoutMs =
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+        ? opts.timeoutMs
+        : undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+
     const handleAbort = () => {
       if (aborted) {
         return;
@@ -95,12 +132,34 @@ export function execDockerRaw(
       aborted = true;
       child.kill("SIGTERM");
     };
+    const cleanup = () => {
+      if (deadline !== undefined) {
+        clearTimeout(deadline);
+        deadline = undefined;
+      }
+      if (signal) {
+        signal.removeEventListener("abort", handleAbort);
+      }
+    };
+
     if (signal) {
       if (signal.aborted) {
         handleAbort();
       } else {
         signal.addEventListener("abort", handleAbort, { once: true });
       }
+    }
+    if (timeoutMs !== undefined) {
+      deadline = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        // Kill the wedged child (don't leak it), then reject.
+        child.kill("SIGTERM");
+        reject(createDockerTimeoutError(args, timeoutMs));
+      }, timeoutMs);
     }
 
     child.stdout?.on("data", (chunk) => {
@@ -111,9 +170,11 @@ export function execDockerRaw(
     });
 
     child.on("error", (error) => {
-      if (signal) {
-        signal.removeEventListener("abort", handleAbort);
+      if (settled) {
+        return;
       }
+      settled = true;
+      cleanup();
       if (
         error &&
         typeof error === "object" &&
@@ -133,9 +194,11 @@ export function execDockerRaw(
     });
 
     child.on("close", (code) => {
-      if (signal) {
-        signal.removeEventListener("abort", handleAbort);
+      if (settled) {
+        return;
       }
+      settled = true;
+      cleanup();
       const stdout = Buffer.concat(stdoutChunks);
       const stderr = Buffer.concat(stderrChunks);
       if (aborted || signal?.aborted) {
@@ -177,7 +240,7 @@ import {
   computeSandboxConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
 } from "./config-hash.js";
-import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
+import { DEFAULT_SANDBOX_DOCKER_INIT_TIMEOUT_MS, DEFAULT_SANDBOX_IMAGE } from "./constants.js";
 import { readRegistryEntry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
@@ -337,9 +400,13 @@ export function formatDockerDaemonUnavailableError(stderr: string): string {
     .join(" ");
 }
 
-async function inspectDockerImage(image: string): Promise<"exists" | "missing"> {
+async function inspectDockerImage(
+  image: string,
+  opts?: { timeoutMs?: number },
+): Promise<"exists" | "missing"> {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
+    timeoutMs: opts?.timeoutMs,
   });
   if (result.code === 0) {
     return "exists";
@@ -354,8 +421,8 @@ async function inspectDockerImage(image: string): Promise<"exists" | "missing"> 
   throw new Error(`Failed to inspect sandbox image: ${stderr}`);
 }
 
-export async function ensureDockerImage(image: string) {
-  const imageState = await inspectDockerImage(image);
+export async function ensureDockerImage(image: string, opts?: { timeoutMs?: number }) {
+  const imageState = await inspectDockerImage(image, opts);
   if (imageState === "exists") {
     return;
   }
@@ -367,9 +434,10 @@ export async function ensureDockerImage(image: string) {
   throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
 }
 
-export async function dockerContainerState(name: string) {
+export async function dockerContainerState(name: string, opts?: { timeoutMs?: number }) {
   const result = await execDocker(["inspect", "-f", "{{.State.Running}}", name], {
     allowFailure: true,
+    timeoutMs: opts?.timeoutMs,
   });
   if (result.code !== 0) {
     return { exists: false, running: false };
@@ -567,9 +635,11 @@ async function createSandboxContainer(params: {
   scopeKey: string;
   configHash?: string;
   readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[];
+  initTimeoutMs?: number;
 }) {
   const { name, cfg, workspaceDir, scopeKey } = params;
-  await ensureDockerImage(cfg.image);
+  const timeoutMs = params.initTimeoutMs;
+  await ensureDockerImage(cfg.image, { timeoutMs });
 
   const args = buildSandboxCreateArgs({
     name,
@@ -596,10 +666,11 @@ async function createSandboxContainer(params: {
   });
   args.push(cfg.image, "sleep", "infinity");
 
-  await execDocker(args);
-  await execDocker(["start", name]);
+  await execDocker(args, { timeoutMs });
+  await execDocker(["start", name], { timeoutMs });
 
   if (cfg.setupCommand?.trim()) {
+    // Unbounded: setupCommand is user-defined and may run long; init deadline must not kill it.
     await execDocker(["exec", "-i", name, "/bin/sh", "-lc", cfg.setupCommand]);
   }
 }
@@ -629,6 +700,8 @@ export async function ensureSandboxContainer(params: {
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
   const name = `${params.cfg.docker.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
+  // Bound the control-plane calls below so a wedged engine fails fast, not hangs.
+  const initTimeoutMs = params.cfg.docker.initTimeoutMs ?? DEFAULT_SANDBOX_DOCKER_INIT_TIMEOUT_MS;
   const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
@@ -647,7 +720,7 @@ export async function ensureSandboxContainer(params: {
     ),
   });
   const now = Date.now();
-  const state = await dockerContainerState(containerName);
+  const state = await dockerContainerState(containerName, { timeoutMs: initTimeoutMs });
   let hasContainer = state.exists;
   let running = state.running;
   let currentHash: string | null = null;
@@ -676,7 +749,10 @@ export async function ensureSandboxContainer(params: {
           `Sandbox config changed for ${containerName} (recently used). Recreate to apply: ${hint}`,
         );
       } else {
-        await execDocker(["rm", "-f", containerName], { allowFailure: true });
+        await execDocker(["rm", "-f", containerName], {
+          allowFailure: true,
+          timeoutMs: initTimeoutMs,
+        });
         hasContainer = false;
         running = false;
       }
@@ -692,9 +768,10 @@ export async function ensureSandboxContainer(params: {
       scopeKey,
       configHash: expectedHash,
       readOnlyWorkspaceSkillMounts,
+      initTimeoutMs,
     });
   } else if (!running) {
-    await execDocker(["start", containerName]);
+    await execDocker(["start", containerName], { timeoutMs: initTimeoutMs });
   }
   await updateRegistry({
     containerName,
