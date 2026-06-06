@@ -168,6 +168,38 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it("sends audioAsVoice media through send-attachment audio transport", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/voice-guid" });
+
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/voice.caf",
+      audioAsVoice: true,
+      resolveAttachmentImpl: async () => ({ path: "/tmp/voice.caf", contentType: "audio/x-caf" }),
+      runCliJson,
+    });
+
+    expect(result.messageId).toBe("p:0/voice-guid");
+    expect(runCliJson.mock.calls).toEqual([
+      [
+        [
+          "send-attachment",
+          "--chat",
+          "chat-1",
+          "--file",
+          "/tmp/voice.caf",
+          "--audio",
+          "--transport",
+          "auto",
+        ],
+      ],
+    ]);
+    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
+    expect(client["request"]).not.toHaveBeenCalled();
+  });
+
   it("resolves chat_id media-only payloads before using send-attachment", async () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi

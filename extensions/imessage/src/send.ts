@@ -48,6 +48,7 @@ type IMessageSendOpts = {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  audioAsVoice?: boolean;
   maxBytes?: number;
   timeoutMs?: number;
   chatId?: number;
@@ -729,6 +730,7 @@ async function trySendAttachmentForTarget(params: {
   target: ReturnType<typeof parseIMessageTarget>;
   service?: IMessageService;
   filePath: string;
+  audioAsVoice?: boolean;
   echoText?: string;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
@@ -758,6 +760,7 @@ async function trySendAttachmentForTarget(params: {
       attachmentChatTarget,
       "--file",
       params.filePath,
+      ...(params.audioAsVoice ? ["--audio"] : []),
       "--transport",
       "auto",
     ]);
@@ -822,7 +825,7 @@ async function trySendAttachmentForTarget(params: {
     receipt: createIMessageSendReceipt({
       messageId,
       target: params.target,
-      kind: "media",
+      kind: params.audioAsVoice ? "voice" : "media",
     }),
   };
 }
@@ -915,6 +918,7 @@ export async function sendMessageIMessage(
       target,
       service,
       filePath,
+      audioAsVoice: opts.audioAsVoice,
       echoText: attachmentEchoText,
       runCliJson,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
