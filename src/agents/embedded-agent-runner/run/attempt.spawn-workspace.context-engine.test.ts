@@ -2406,6 +2406,43 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     expect(loopHookParams.midTurnPrecheck).toBeUndefined();
   });
 
+  it("populates currentTokenCount in the loop-hook getRuntimeContext callback", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        ...createContextEngineBootstrapAndAssemble(),
+        info: { ownsCompaction: true },
+      },
+      sessionKey,
+      tempPaths,
+    });
+
+    const loopHookParams = mockParams(
+      hoisted.installContextEngineLoopHookMock,
+      0,
+      "context engine loop hook params",
+    );
+    const getRuntimeContext = loopHookParams.getRuntimeContext as
+      | ((p: {
+          messages: AgentMessage[];
+          prePromptMessageCount: number;
+        }) => Record<string, unknown> | undefined)
+      | undefined;
+    expect(typeof getRuntimeContext).toBe("function");
+
+    const runtimeContext = getRuntimeContext?.({
+      messages: [
+        {
+          role: "user",
+          content: "loop iteration probe with non-trivial content",
+          timestamp: 1,
+        } as AgentMessage,
+      ],
+      prePromptMessageCount: 0,
+    });
+    expect(typeof runtimeContext?.currentTokenCount).toBe("number");
+    expect(runtimeContext?.currentTokenCount as number).toBeGreaterThan(0);
+  });
+
   it("recovers when the runtime persists the mid-turn precheck as an assistant error", async () => {
     hoisted.installToolResultContextGuardMock.mockImplementation((...args: unknown[]) => {
       const params = args[0] as ToolResultGuardInstallParams;

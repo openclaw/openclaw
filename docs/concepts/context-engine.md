@@ -74,7 +74,7 @@ Every time OpenClaw runs a model prompt, the context engine participates at four
     Called when a new message is added to the session. The engine can store or index the message in its own data store.
   </Accordion>
   <Accordion title="2. Assemble">
-    Called before each model run. The engine returns an ordered set of messages (and an optional `systemPromptAddition`) that fit within the token budget.
+    Called before each model run. The engine returns an ordered set of messages (and an optional `systemPromptAddition`) that fit within the token budget. OpenClaw also passes an optional `currentTokenCount` — a best-effort estimate of tokens already consumed by `messages + system prompt + incoming prompt` — so engines can bound any `systemPromptAddition` against the remaining headroom.
   </Accordion>
   <Accordion title="3. Compact">
     Called when the context window is full, or when the user runs `/compact`. The engine summarizes older history to free space.
@@ -100,6 +100,35 @@ OpenClaw calls two optional subagent lifecycle hooks:
 ### System prompt addition
 
 The `assemble` method can return a `systemPromptAddition` string. OpenClaw prepends this to the system prompt for the run. This lets engines inject dynamic recall guidance, retrieval instructions, or context-aware hints without requiring static workspace files.
+
+### Sizing `systemPromptAddition`
+
+`assemble` receives two values that together let engines bound their injection:
+
+<ParamField path="tokenBudget" type="number">
+  The model's full input context window for this run (e.g. `200_000`, `1_048_576`). Not the headroom remaining — engines must subtract what is already consumed.
+</ParamField>
+<ParamField path="currentTokenCount" type="number">
+  Best-effort pre-assembly estimate of tokens already consumed by `messages + system prompt + incoming prompt`. Computed by the runtime via the same estimator the preemptive overflow precheck uses, so engines see the same number the runtime would. Optional — may be `undefined` on older OpenClaw runtimes; treat absence as "no headroom info, inject conservatively or skip the guard."
+</ParamField>
+
+A typical guard looks like:
+
+```ts
+const responseReserve = 8_192; // assistant response budget; not in currentTokenCount
+const remaining =
+  tokenBudget !== undefined && currentTokenCount !== undefined
+    ? Math.max(0, tokenBudget - currentTokenCount - responseReserve)
+    : undefined;
+
+if (remaining !== undefined && estimateTokens(additionContent) > remaining) {
+  // skip injection so the turn proceeds without an oversized prompt
+} else {
+  return { messages, estimatedTokens, systemPromptAddition: format(additionContent) };
+}
+```
+
+OpenClaw's own preemptive-compaction runs _before_ assemble, so it does not catch overflow caused by the engine's injection. Sizing the addition against `remaining` is the engine's responsibility.
 
 ## The legacy engine
 
@@ -134,8 +163,17 @@ export default function register(api) {
       return { ingested: true };
     },
 
-    async assemble({ sessionId, messages, tokenBudget, availableTools, citationsMode }) {
-      // Return messages that fit the budget
+    async assemble({
+      sessionId,
+      messages,
+      tokenBudget,
+      currentTokenCount,
+      availableTools,
+      citationsMode,
+    }) {
+      // Return messages that fit the budget. When both tokenBudget and
+      // currentTokenCount are present, you can size any systemPromptAddition
+      // against the remaining headroom (see "Sizing systemPromptAddition").
       return {
         messages: buildContext(messages, tokenBudget),
         estimatedTokens: countTokens(messages),

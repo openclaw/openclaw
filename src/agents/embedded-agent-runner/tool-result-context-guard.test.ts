@@ -674,6 +674,44 @@ describe("installContextEngineLoopHook", () => {
     });
   });
 
+  it("passes currentTokenCount from runtimeContext through to loop-hook assemble", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine, 1, () => ({ currentTokenCount: 17_500 }));
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
+    const assembleParams = engine.assemble.mock.calls.at(0)?.[0];
+    expect(assembleParams?.currentTokenCount).toBe(17_500);
+    expect(assembleParams?.tokenBudget).toBe(tokenBudget);
+  });
+
+  it("omits currentTokenCount when runtimeContext does not include it", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine, 1, () => ({ provider: "anthropic" }));
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    const assembleParams = engine.assemble.mock.calls.at(0)?.[0];
+    expect(assembleParams).not.toHaveProperty("currentTokenCount");
+  });
+
+  it("omits currentTokenCount when no runtimeContext callback is wired up", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine, 1);
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    const assembleParams = engine.assemble.mock.calls.at(0)?.[0];
+    expect(assembleParams).not.toHaveProperty("currentTokenCount");
+  });
+
   it("passes loop messages and the prompt fence into the runtimeContext callback", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();

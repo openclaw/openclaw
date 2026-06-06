@@ -314,6 +314,8 @@ export interface ContextEngine {
     sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    /** Best-effort pre-assembly prompt token estimate so engines can bound any `systemPromptAddition` against `tokenBudget`. */
+    currentTokenCount?: number;
     /** Tool names available for this run so engines can align prompt guidance with runtime tool access. */
     availableTools?: Set<string>;
     /** Active memory citation mode when engines want to mirror memory prompt guidance. */

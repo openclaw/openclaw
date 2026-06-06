@@ -244,4 +244,32 @@ describe("embedded attempt context injection", () => {
       { role: "assistant", content: "real answer" },
     ]);
   });
+
+  it("threads currentTokenCount through assembleAttemptContextEngine to the engine", async () => {
+    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
+      messages,
+      estimatedTokens: 0,
+    }));
+
+    await assembleAttemptContextEngine({
+      contextEngine: {
+        info: { id: "test", name: "Test", version: "0.0.1" },
+        ingest: async () => ({ ingested: true }),
+        compact: async () => ({ ok: false, compacted: false, reason: "unused" }),
+        assemble,
+      } satisfies AttemptContextEngine,
+      sessionId: "session",
+      sessionKey: "agent:main",
+      messages: [{ role: "user", content: "ask", timestamp: 1 } as AgentMessage],
+      tokenBudget: 200_000,
+      currentTokenCount: 42_000,
+      modelId: "gpt-test",
+    });
+
+    const assembleInput = assemble.mock.calls.at(0)?.[0] as
+      | { currentTokenCount?: number; tokenBudget?: number }
+      | undefined;
+    expect(assembleInput?.currentTokenCount).toBe(42_000);
+    expect(assembleInput?.tokenBudget).toBe(200_000);
+  });
 });

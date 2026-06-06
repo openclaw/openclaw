@@ -356,6 +356,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(assembleParams.prompt).toBe("hello");
     expect(assembleParams.messages.map((message) => message.role)).toEqual(["assistant"]);
     expect(assembleParams.availableTools).toEqual(new Set());
+    // Codex harness must thread a pre-assembly token estimate so engines can
+    // bound systemPromptAddition against tokenBudget on this path too.
+    expect(typeof assembleParams.currentTokenCount).toBe("number");
+    expect(assembleParams.currentTokenCount).toBeGreaterThan(0);
 
     const threadStartParams = requireRequestParams(harness, "thread/start");
     expect(optionalString(threadStartParams.developerInstructions)).toContain(

@@ -450,6 +450,7 @@ import {
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
+  estimatePrePromptTokens,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -2396,6 +2397,14 @@ export async function runEmbeddedAttempt(
               cwd: effectiveCwd,
               agentDir,
               tokenBudget: params.contextTokenBudget,
+              // Mid-tool-loop the next model call has no new user prompt — the
+              // continuation is driven by tool results that are already in
+              // `messages`. Estimate against messages + system prompt only.
+              currentTokenCount: estimatePrePromptTokens({
+                messages,
+                systemPrompt: systemPromptText,
+                prompt: "",
+              }),
               promptCache:
                 promptCache ??
                 buildLoopPromptCacheInfo({
@@ -2960,12 +2969,19 @@ export async function runEmbeddedAttempt(
             // history in place would otherwise leave the precheck reading
             // already-windowed messages instead of the true pre-assembly state.
             const preassemblyContextEngineMessagesForPrecheck = activeSession.messages.slice();
+            // Pre-assembly token estimate so engines can bound any systemPromptAddition against tokenBudget.
+            const preassemblyCurrentTokenCount = estimatePrePromptTokens({
+              messages: activeSession.messages,
+              systemPrompt: systemPromptText,
+              prompt: params.prompt ?? "",
+            });
             const assembled = await assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
+              currentTokenCount: preassemblyCurrentTokenCount,
               availableTools: new Set(effectiveTools.map((tool) => tool.name)),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
