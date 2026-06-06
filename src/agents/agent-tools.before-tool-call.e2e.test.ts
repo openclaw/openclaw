@@ -1762,6 +1762,65 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(onResolution).toHaveBeenCalledWith("cancelled");
   });
+
+  it("forwards turn source routing fields from ctx to plugin.approval.request", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Channel-routed approval",
+        description: "Must route to telegram",
+        pluginId: "my-plugin",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "route-id-1", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "route-id-1", decision: "allow-once" });
+
+    await runBeforeToolCallHook({
+      toolName: "fetch",
+      params: { url: "https://example.com" },
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "-100123456789",
+        turnSourceAccountId: "acct-42",
+        turnSourceThreadId: 9001,
+      },
+    });
+
+    const requestCall = requireGatewayCall(0);
+    expect(requestCall[0]).toBe("plugin.approval.request");
+    const requestParams = requireRecord(requestCall[2], "approval request params");
+    expect(requestParams.turnSourceChannel).toBe("telegram");
+    expect(requestParams.turnSourceTo).toBe("-100123456789");
+    expect(requestParams.turnSourceAccountId).toBe("acct-42");
+    expect(requestParams.turnSourceThreadId).toBe(9001);
+  });
+
+  it("omits turn source routing fields when ctx does not carry them", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "No route ctx",
+        description: "Local-only approval",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "no-route-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "no-route-id", decision: "allow-once" });
+
+    await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    const requestCall = requireGatewayCall(0);
+    const requestParams = requireRecord(requestCall[2], "approval request params");
+    expect(requestParams.turnSourceChannel).toBeUndefined();
+    expect(requestParams.turnSourceTo).toBeUndefined();
+    expect(requestParams.turnSourceAccountId).toBeUndefined();
+    expect(requestParams.turnSourceThreadId).toBeUndefined();
+  });
 });
 
 describe("before_tool_call tool content private-data capture", () => {
