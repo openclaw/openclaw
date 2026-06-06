@@ -209,4 +209,29 @@ describe("chat-model-select-state", () => {
       label: "anthropic/claude-3-7-sonnet-thinking",
     });
   });
+
+  describe("normalization", () => {
+    it("normalizes cached bare overrides to the matching catalog option", () => {
+      const state = createChatModelState({
+        chatModelOverrides: { main: { kind: "raw", value: "gpt-5-mini" } },
+        chatModelCatalog: createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG),
+      });
+
+      const resolved = resolveChatModelSelectState(state);
+      expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
+      expectOptionValues(resolved, { include: ["openai/gpt-5-mini"], exclude: ["gpt-5-mini"] });
+    });
+
+    it("prefers catalog provider matches over stale session providers", () => {
+      const state = createChatModelState({
+        chatModelCatalog: createModelCatalog(DEEPSEEK_CHAT_MODEL),
+        sessionsResult: createSessionsListResult({
+          model: "deepseek-chat",
+          modelProvider: "zai",
+        }),
+      });
+
+      expect(resolveChatModelSelectState(state).currentOverride).toBe("deepseek/deepseek-chat");
+    });
+  });
 });

@@ -68,7 +68,7 @@ function buildChatModelOptions(
   };
 
   for (const entry of catalog) {
-    const option = buildChatModelOptionFromLookup(entry, displayLookup);
+    const option = buildChatModelOptionFromLookup(entry);
     addOption(option.value, option.label);
   }
 
