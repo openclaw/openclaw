@@ -47,27 +47,30 @@ function buildLegacyRealtimeTalkCompat(
 }
 
 /**
- * Produce a stable JSON representation with sorted keys.
- * Used as secondary comparison to prevent spurious normalization
- * when isDeepStrictEqual detects a difference that disappears after
- * JSON round-trip (e.g. derived field defaults like speakerVoice).
+ * Check whether normalized and raw talk configs differ only in speakerVoice
+ * derived from voice. normalizeTalkRealtimeConfig intentionally derives
+ * speakerVoice from voice (gateway talk.config response compatibility),
+ * but the doctor should not report this as a config change (#90446).
  */
-function stableJson(value: unknown): string {
-  const seen = new WeakSet<object>();
-  return JSON.stringify(value, function replacer(_key, val) {
-    if (val !== null && typeof val === "object" && !Array.isArray(val)) {
-      if (seen.has(val as object)) {
-        return val;
+function equivalentTalkConfig(
+  normalized: Record<string, unknown>,
+  raw: Record<string, unknown>,
+): boolean {
+  // Fast path: deep equal already failed. Check if the only difference is
+  // a derived speakerVoice field.
+  const stripped = JSON.parse(JSON.stringify(normalized)) as Record<string, unknown>;
+  const nRt = stripped.realtime as Record<string, unknown> | undefined;
+  const rRt = (raw as Record<string, unknown>).realtime as Record<string, unknown> | undefined;
+  if (nRt && rRt && typeof nRt.speakerVoice === "string" && nRt.speakerVoice === nRt.voice) {
+    // speakerVoice was derived from voice — only strip when raw doesn't have it
+    if (!("speakerVoice" in rRt)) {
+      delete nRt.speakerVoice;
+      if (isDeepStrictEqual(stripped, raw)) {
+        return true;
       }
-      seen.add(val as object);
-      const sorted: Record<string, unknown> = {};
-      for (const k of Object.keys(val).toSorted()) {
-        sorted[k] = (val as Record<string, unknown>)[k];
-      }
-      return sorted;
     }
-    return val;
-  });
+  }
+  return false;
 }
 
 /** Normalize legacy Talk provider/realtime fields into current talk.providers and talk.realtime. */
@@ -98,14 +101,19 @@ export function normalizeLegacyTalkConfig(cfg: OpenClawConfig, changes: string[]
   if (Object.keys(normalizedTalk).length === 0) {
     return cfg;
   }
-  // Skip normalization when objects are identical (covers key-order differences).
-  // But also guard against derived fields that differ in JS memory yet serialize
-  // to the same on-disk bytes — a deep-equal difference that JSON round-trips away
-  // would still cause repeat doctor suggestions (#90446).
+  // Skip normalization when objects are identical.
+  // Also skip when the only difference is speakerVoice derived from voice
+  // by normalizeTalkRealtimeConfig (gateway response compatibility requires
+  // the derivation, but doctor should not treat it as a config change — #90446).
   if (isDeepStrictEqual(normalizedTalk, rawTalk)) {
     return cfg;
   }
-  if (stableJson(normalizedTalk) === stableJson(rawTalk)) {
+  if (
+    equivalentTalkConfig(
+      normalizedTalk as Record<string, unknown>,
+      rawTalk as Record<string, unknown>,
+    )
+  ) {
     return cfg;
   }
 

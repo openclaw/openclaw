@@ -156,18 +156,15 @@ describe("talk normalization", () => {
     expect(payload?.realtime?.instructions).toBe("Speak with crisp diction.");
   });
 
-  it("normalizes realtime voice field without deriving speakerVoice (derivation moved to legacy compat layer)", () => {
+  it("maps legacy realtime voice to speakerVoice while preserving legacy output", () => {
     const normalized = normalizeTalkSection({
       realtime: {
         voice: " alloy ",
       },
     });
 
-    // normalizeTalkRealtimeConfig no longer seeds speakerVoice from voice;
-    // the speakerVoice ?? voice fallback happens at consumption time in talk-shared.
-    // Legacy flat-field voice→speakerVoice seeding is handled by
-    // buildLegacyRealtimeTalkCompat in legacy-talk-config-normalizer.
     expect(normalized?.realtime).toEqual({
+      speakerVoice: "alloy",
       voice: "alloy",
     });
   });
