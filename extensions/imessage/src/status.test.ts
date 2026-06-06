@@ -67,6 +67,77 @@ describe("createIMessageRpcClient", () => {
 
     expect(internals.buildCloseError(1, null).message).toBe(PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR);
   });
+
+  it.each([
+    ["U+2028", "\u2028"],
+    ["U+2029", "\u2029"],
+  ])(
+    "frames stdout on LF only so raw %s inside JSON strings stays intact",
+    async (_, separator) => {
+      const { IMessageRpcClient } = await import("./client.js");
+      const client = new IMessageRpcClient();
+      const internals = client as unknown as {
+        handleStdoutChunk: (chunk: Buffer | string) => void;
+        pending: Map<
+          string,
+          {
+            resolve: (value: unknown) => void;
+            reject: (error: Error) => void;
+          }
+        >;
+      };
+      const result = new Promise((resolve, reject) => {
+        internals.pending.set("1", { resolve, reject });
+      });
+      const text = `line one${separator}line two`;
+      const payload = `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { messages: [{ text }] },
+      })}\n`;
+      const bytes = Buffer.from(payload, "utf8");
+      const separatorIndex = bytes.indexOf(Buffer.from(separator, "utf8"));
+
+      internals.handleStdoutChunk(bytes.subarray(0, separatorIndex + 1));
+      internals.handleStdoutChunk(bytes.subarray(separatorIndex + 1));
+
+      await expect(result).resolves.toEqual({
+        messages: [{ text }],
+      });
+    },
+  );
+
+  it("handles multiple LF-delimited stdout responses in one chunk", async () => {
+    const { IMessageRpcClient } = await import("./client.js");
+    const client = new IMessageRpcClient();
+    const internals = client as unknown as {
+      handleStdoutChunk: (chunk: Buffer | string) => void;
+      pending: Map<
+        string,
+        {
+          resolve: (value: unknown) => void;
+          reject: (error: Error) => void;
+        }
+      >;
+    };
+    const first = new Promise((resolve, reject) => {
+      internals.pending.set("1", { resolve, reject });
+    });
+    const second = new Promise((resolve, reject) => {
+      internals.pending.set("2", { resolve, reject });
+    });
+
+    internals.handleStdoutChunk(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: "first" } })}\n${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        result: { ok: "second" },
+      })}\n`,
+    );
+
+    await expect(first).resolves.toEqual({ ok: "first" });
+    await expect(second).resolves.toEqual({ ok: "second" });
+  });
 });
 
 describe("imessage setup status", () => {
