@@ -1,11 +1,13 @@
+/** macOS LaunchAgent installer, runtime inspection, and lifecycle controls. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SERVICE_KIND,
@@ -15,14 +17,12 @@ import {
   resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
+import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import {
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
-import {
-  isCurrentProcessLaunchdServiceLabel,
-  scheduleDetachedLaunchdRestartHandoff,
-} from "./launchd-restart-handoff.js";
+import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
@@ -46,6 +46,7 @@ const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
 const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
+const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
 
 export type StaleOpenClawUpdateLaunchdJob = {
   label: string;
@@ -58,7 +59,12 @@ function normalizeOpenClawUpdateLaunchdLabel(label: unknown): string | null {
     return null;
   }
   const trimmed = label.trim();
-  return trimmed.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX) ? trimmed : null;
+  if (trimmed.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX)) {
+    return trimmed;
+  }
+  // Manual update jobs include a timestamp-like suffix and should be cleaned up
+  // without matching arbitrary ai.openclaw labels.
+  return OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed) ? trimmed : null;
 }
 
 function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): boolean {
@@ -197,6 +203,8 @@ async function prepareLaunchAgentProgramArguments(params: {
     return { programArguments: params.programArguments };
   }
 
+  // Environment values with secrets live in an owner-only env file instead of
+  // inline plist XML, which can be harder to rotate and audit.
   const envDir = resolveLaunchAgentEnvDir(params.env);
   const envFilePath = resolveLaunchAgentEnvFilePath(params.env, params.label);
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
@@ -232,11 +240,23 @@ export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
   return resolveLaunchAgentPlistPathForLabel(env, label);
 }
 
+function resolveLaunchAgentEnvironmentReadOptions(env: GatewayServiceEnv, label: string) {
+  return {
+    expectedEnvironmentWrapperPath: resolveLaunchAgentEnvWrapperPath(env, label),
+    expectedEnvironmentFilePath: resolveLaunchAgentEnvFilePath(env, label),
+    generatedEnvironmentLabel: label,
+  };
+}
+
 export async function readLaunchAgentProgramArguments(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
+  const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
-  return readLaunchAgentProgramArgumentsFromFile(plistPath);
+  return readLaunchAgentProgramArgumentsFromFile(
+    plistPath,
+    resolveLaunchAgentEnvironmentReadOptions(env, label),
+  );
 }
 
 function buildLaunchAgentPlist({
@@ -287,8 +307,8 @@ export function parseLaunchctlListOpenClawUpdateJobs(
     }
     const parts = line.split(/\s+/);
     const [pidRaw, statusRaw, ...labelParts] = parts;
-    const label = labelParts.join(" ");
-    if (!label.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX)) {
+    const label = normalizeOpenClawUpdateLaunchdLabel(labelParts.join(" "));
+    if (!label) {
       continue;
     }
     const pid = pidRaw === "-" ? undefined : parseStrictPositiveInteger(pidRaw ?? "");
@@ -302,9 +322,9 @@ export function parseLaunchctlListOpenClawUpdateJobs(
   return jobs.toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
-export async function findStaleOpenClawUpdateLaunchdJobs(): Promise<
-  StaleOpenClawUpdateLaunchdJob[]
-> {
+export async function findStaleOpenClawUpdateLaunchdJobs(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<StaleOpenClawUpdateLaunchdJob[]> {
   if (process.platform !== "darwin") {
     return [];
   }
@@ -312,7 +332,11 @@ export async function findStaleOpenClawUpdateLaunchdJobs(): Promise<
   if (result.code !== 0) {
     return [];
   }
-  return parseLaunchctlListOpenClawUpdateJobs(result.stdout);
+  // Never report the active gateway label as stale even when a wrapper exposes
+  // update-like launchd metadata through the current environment.
+  return parseLaunchctlListOpenClawUpdateJobs(result.stdout).filter(
+    (job) => !isCurrentGatewayLaunchdLabel(job.label, env),
+  );
 }
 
 export async function removeOpenClawUpdateLaunchdJob(label: string): Promise<boolean> {
@@ -356,15 +380,15 @@ function parseGatewayPortFromProgramArguments(
       continue;
     }
     if (current === "--port") {
-      const next = parseStrictPositiveInteger(programArguments[index + 1] ?? "");
-      if (next !== undefined) {
+      const next = parseTcpPort(programArguments[index + 1] ?? "");
+      if (next !== null) {
         return next;
       }
       continue;
     }
     if (current.startsWith("--port=")) {
-      const value = parseStrictPositiveInteger(current.slice("--port=".length));
-      if (value !== undefined) {
+      const value = parseTcpPort(current.slice("--port=".length));
+      if (value !== null) {
         return value;
       }
     }
@@ -378,14 +402,11 @@ async function resolveLaunchAgentGatewayPort(env: GatewayServiceEnv): Promise<nu
   if (fromArgs !== null) {
     return fromArgs;
   }
-  const fromServiceEnv = parseStrictPositiveInteger(
-    command?.environment?.OPENCLAW_GATEWAY_PORT ?? "",
-  );
-  if (fromServiceEnv !== undefined) {
+  const fromServiceEnv = parseTcpPort(command?.environment?.OPENCLAW_GATEWAY_PORT ?? "");
+  if (fromServiceEnv !== null) {
     return fromServiceEnv;
   }
-  const fromEnv = parseStrictPositiveInteger(env.OPENCLAW_GATEWAY_PORT ?? "");
-  return fromEnv ?? null;
+  return parseTcpPort(env.OPENCLAW_GATEWAY_PORT ?? "");
 }
 
 function resolveGuiDomain(): string {
@@ -406,6 +427,7 @@ function throwBootstrapGuiSessionError(params: {
       `LaunchAgent ${params.actionHint} requires a logged-in macOS GUI session for this user (${params.domain}).`,
       "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
       `Fix: sign in to the macOS desktop as the target user and rerun \`${params.actionHint}\`.`,
+      "For headless VM setups, enable auto-login for the target user so macOS creates the GUI session after boot.",
       "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
     ].join("\n"),
   );
@@ -445,6 +467,12 @@ async function bootstrapLaunchAgentOrThrow(params: {
       domain: params.domain,
       actionHint: params.actionHint,
     });
+  }
+  if (isLaunchctlOperationAlreadyInProgress(detail)) {
+    const state = await probeLaunchAgentState(params.serviceTarget);
+    if (state.state === "running" || state.state === "stopped") {
+      return;
+    }
   }
   throw new Error(`launchctl bootstrap failed: ${detail}`);
 }
@@ -660,6 +688,14 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   );
 }
 
+function isLaunchctlOperationAlreadyInProgress(detail: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
+  return (
+    normalized.includes("operation already in progress") ||
+    normalized.includes("bootstrap failed: 37")
+  );
+}
+
 function formatLaunchctlResultDetail(res: {
   stdout: string;
   stderr: string;
@@ -758,6 +794,14 @@ export async function stopLaunchAgent({
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const serviceTarget = `${domain}/${label}`;
+
+  if (
+    isCurrentProcessLaunchdServiceLabel(label, process.env, { allowConfiguredLabelFallback: false })
+  ) {
+    throw new Error(
+      `Refusing to stop LaunchAgent ${label} from inside the same launchd service; run this command from an external shell.`,
+    );
+  }
 
   if (!persistDisable) {
     // Default: bootout only. Removes the job from the current launchd domain without
@@ -926,7 +970,10 @@ async function rewriteLaunchAgentPlistForRestart({
   label: string;
   plistPath: string;
 }): Promise<boolean> {
-  const existing = await readLaunchAgentProgramArgumentsFromFile(plistPath);
+  const existing = await readLaunchAgentProgramArgumentsFromFile(
+    plistPath,
+    resolveLaunchAgentEnvironmentReadOptions(env, label),
+  );
   if (!existing?.programArguments.length) {
     return false;
   }

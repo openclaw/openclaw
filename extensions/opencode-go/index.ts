@@ -1,13 +1,14 @@
+// Opencode Go plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyOpencodeGoConfig, OPENCODE_GO_DEFAULT_MODEL_REF } from "./api.js";
 import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
-  listOpencodeGoSupplementalModelCatalogEntries,
+  listOpencodeGoModelCatalogEntries,
   normalizeOpencodeGoBaseUrl,
   normalizeOpencodeGoResolvedModel,
-  resolveOpencodeGoSupplementalModel,
+  resolveOpencodeGoModel,
 } from "./provider-catalog.js";
 import { createOpencodeGoWrapper } from "./stream.js";
 
@@ -81,17 +82,17 @@ export default definePluginEntry({
         }
         return baseUrlNormalized !== model ? baseUrlNormalized : undefined;
       },
-      normalizeTransport: ({ api, baseUrl }) => {
-        const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({ api, baseUrl });
+      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
+        const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({ api: apiLocal, baseUrl });
         return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
           ? {
-              api,
+              api: apiLocal,
               baseUrl: normalizedBaseUrl,
             }
           : undefined;
       },
-      resolveDynamicModel: ({ modelId }) => resolveOpencodeGoSupplementalModel(modelId),
-      augmentModelCatalog: () => listOpencodeGoSupplementalModelCatalogEntries(),
+      resolveDynamicModel: ({ modelId }) => resolveOpencodeGoModel(modelId),
+      augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
       isModernModelRef: () => true,

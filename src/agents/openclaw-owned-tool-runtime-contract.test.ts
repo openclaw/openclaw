@@ -1,23 +1,24 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+// Verifies OpenClaw-owned tool hooks preserve adjusted params and telemetry.
+import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   installOpenClawOwnedToolHooks,
   resetOpenClawOwnedToolHooks,
   textToolResult,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
+import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
+import { createBaseToolHandlerState } from "./agent-tool-handler-state.test-helpers.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
-} from "./pi-embedded-subscribe.handlers.tools.js";
+} from "./embedded-agent-subscribe.handlers.tools.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
-} from "./pi-embedded-subscribe.handlers.types.js";
-import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
-import { createBaseToolHandlerState } from "./pi-tool-handler-state.test-helpers.js";
-import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+} from "./embedded-agent-subscribe.handlers.types.js";
 
 function createContractTool(name: string, execute: AgentTool["execute"]): AgentTool {
   return {
@@ -33,6 +34,7 @@ type ToolExecutionStartEvent = Parameters<typeof handleToolExecutionStart>[1];
 type ToolExecutionEndEvent = Parameters<typeof handleToolExecutionEnd>[1];
 
 function createToolHandlerCtx(): ToolHandlerContext {
+  // Minimal embedded-agent tool handler context used to drive start/end events.
   return {
     params: {
       runId: "run-contract",
@@ -92,6 +94,7 @@ function createToolExtensionContext(): ExtensionContext {
 async function waitForAfterToolCall(hooks: {
   afterToolCall: { mock: { calls: unknown[][] } };
 }): Promise<[Record<string, unknown>, Record<string, unknown>]> {
+  // after_tool_call fires asynchronously after the execution-end event is processed.
   await vi.waitFor(() => {
     expect(hooks.afterToolCall).toHaveBeenCalledTimes(1);
   });
@@ -102,7 +105,7 @@ async function waitForAfterToolCall(hooks: {
   return call as [Record<string, unknown>, Record<string, unknown>];
 }
 
-describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
+describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => {
   afterEach(() => {
     resetOpenClawOwnedToolHooks();
   });
@@ -120,7 +123,7 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     });
     const definition = toToolDefinitions([tool])[0];
     if (!definition) {
-      throw new Error("missing Pi tool definition");
+      throw new Error("missing embedded agent tool definition");
     }
     const ctx = createToolHandlerCtx();
     const toolCallId = "call-contract";
@@ -168,7 +171,7 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     expect(afterContext.toolCallId).toBe(toolCallId);
   });
 
-  it("reports Pi dynamic tool execution errors through after_tool_call", async () => {
+  it("reports embedded agent dynamic tool execution errors through after_tool_call", async () => {
     const adjustedParams = { timeoutSec: 1 };
     const mergedParams = { command: "false", timeoutSec: 1 };
     const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
@@ -183,7 +186,7 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     });
     const definition = toToolDefinitions([tool])[0];
     if (!definition) {
-      throw new Error("missing Pi tool definition");
+      throw new Error("missing embedded agent tool definition");
     }
     const ctx = createToolHandlerCtx();
     ctx.params.runId = "run-error";
@@ -229,7 +232,7 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     expect(afterContext.toolCallId).toBe(toolCallId);
   });
 
-  it("commits successful Pi messaging text, media, and target telemetry", async () => {
+  it("commits successful embedded agent messaging text, media, and target telemetry", async () => {
     const hooks = installOpenClawOwnedToolHooks();
     const execute = vi.fn(async () => textToolResult("sent"));
     const tool = wrapToolWithBeforeToolCallHook(createContractTool("message", execute), {
@@ -240,15 +243,15 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     });
     const definition = toToolDefinitions([tool])[0];
     if (!definition) {
-      throw new Error("missing Pi tool definition");
+      throw new Error("missing embedded agent tool definition");
     }
     const ctx = createToolHandlerCtx();
     ctx.params.runId = "run-message";
     const toolCallId = "call-message";
     const originalParams = {
       action: "send",
-      content: "hello from Pi",
-      mediaUrl: "/tmp/pi-reply.png",
+      content: "hello from embedded agent",
+      mediaUrl: "/tmp/openclaw-reply.png",
       provider: "telegram",
       to: "chat-1",
     };
@@ -278,8 +281,8 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
       }),
     );
 
-    expect(ctx.state.messagingToolSentTexts).toEqual(["hello from Pi"]);
-    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/pi-reply.png"]);
+    expect(ctx.state.messagingToolSentTexts).toEqual(["hello from embedded agent"]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/openclaw-reply.png"]);
     expect(
       ctx.state.messagingToolSentTargets.map((target) => ({
         tool: "message",
@@ -293,8 +296,8 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
         tool: "message",
         provider: "telegram",
         to: "chat-1",
-        text: "hello from Pi",
-        mediaUrls: ["/tmp/pi-reply.png"],
+        text: "hello from embedded agent",
+        mediaUrls: ["/tmp/openclaw-reply.png"],
       },
     ]);
     const [afterPayload, afterContext] = await waitForAfterToolCall(hooks);
@@ -308,7 +311,7 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     expect(afterContext.toolCallId).toBe(toolCallId);
   });
 
-  it("fails closed when before_tool_call blocks a Pi dynamic tool", async () => {
+  it("fails closed when before_tool_call blocks an embedded agent dynamic tool", async () => {
     const hooks = installOpenClawOwnedToolHooks({ blockReason: "blocked by policy" });
     const execute = vi.fn(async () => textToolResult("should not run"));
     const tool = wrapToolWithBeforeToolCallHook(createContractTool("message", execute), {
@@ -319,7 +322,7 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     });
     const definition = toToolDefinitions([tool])[0];
     if (!definition) {
-      throw new Error("missing Pi tool definition");
+      throw new Error("missing embedded agent tool definition");
     }
     const ctx = createToolHandlerCtx();
     ctx.params.runId = "run-blocked";

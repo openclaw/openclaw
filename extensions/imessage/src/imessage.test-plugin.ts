@@ -1,10 +1,11 @@
+// Imessage plugin module implements imessage plugin behavior.
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-contract";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import { collectStatusIssuesFromLastError } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 

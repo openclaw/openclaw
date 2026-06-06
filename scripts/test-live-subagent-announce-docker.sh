@@ -39,19 +39,24 @@ elif openclaw_live_is_ci; then
 else
   CACHE_HOME_DIR="$HOME/.cache/openclaw/docker-cache"
 fi
-mkdir -p "$CACHE_HOME_DIR"
+openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"
 
-if openclaw_live_is_ci; then
+if openclaw_live_uses_managed_bind_dirs; then
   DOCKER_USER="$(id -u):$(id -g)"
   DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
   TEMP_DIRS+=("$DOCKER_HOME_DIR")
+  openclaw_live_prepare_bind_dir_for_container_user "$DOCKER_HOME_DIR"
   DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
 fi
 
 PROFILE_MOUNT=()
 PROFILE_STATUS="none"
 if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
-  PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
+  if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
+    openclaw_live_stage_profile_into_home "$DOCKER_HOME_DIR" "$PROFILE_FILE"
+  else
+    PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
+  fi
   PROFILE_STATUS="$PROFILE_FILE"
 fi
 
@@ -76,11 +81,7 @@ if [[ -n "${OPENAI_API_KEY:-}" || -n "${OPENAI_BASE_URL:-}" || -n "${GEMINI_API_
   DOCKER_EXTRA_ENV_FILES+=(--env-file "$docker_env_file")
 fi
 
-CONTAINER_NODE_OPTIONS="${OPENCLAW_DOCKER_NODE_OPTIONS:-${NODE_OPTIONS:-}}"
-if [[ -z "$(openclaw_live_trim "$CONTAINER_NODE_OPTIONS")" ]]; then
-  CONTAINER_NODE_OPTIONS="--max-old-space-size=4096"
-fi
-CONTAINER_NODE_OPTIONS="$CONTAINER_NODE_OPTIONS --disable-warning=ExperimentalWarning"
+CONTAINER_NODE_OPTIONS="$(openclaw_live_container_node_options)"
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
@@ -123,12 +124,21 @@ node scripts/test-live.mjs -- src/agents/subagent-announce.live.test.ts -- --rep
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"
+if openclaw_live_uses_managed_bind_dirs; then
+  openclaw_live_chown_bind_dirs_for_container_user \
+    "$LIVE_IMAGE_NAME" \
+    "$DOCKER_USER" \
+    "$CACHE_HOME_DIR" \
+    "${DOCKER_HOME_DIR:-}"
+fi
 
 echo "==> Run subagent announce live test in Docker"
 echo "==> Target: src/agents/subagent-announce.live.test.ts"
 echo "==> Model: ${OPENCLAW_LIVE_SUBAGENT_E2E_MODEL:-openai/gpt-5.5}"
 echo "==> Profile file: $PROFILE_STATUS"
-DOCKER_RUN_ARGS=(docker run --rm -t \
+DOCKER_RUN_ARGS=()
+openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_SUBAGENT_DOCKER_RUN_TIMEOUT:-1200s}"
+DOCKER_RUN_ARGS+=(--rm -t \
   -u "$DOCKER_USER" \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \

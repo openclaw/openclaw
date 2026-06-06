@@ -28,7 +28,7 @@ export const DEFAULT_RESOURCE_LIMITS = {
   "live:gemini": 4,
   "live:opencode": 4,
   "live:openai": 1,
-  npm: 10,
+  npm: 5,
   service: 7,
 };
 export const DEFAULT_TAIL_PARALLELISM = 10;
@@ -290,7 +290,7 @@ export function laneWeight(poolLane) {
 }
 
 export function laneResources(poolLane) {
-  return ["docker", ...(poolLane.resources ?? [])];
+  return [...new Set(["docker", ...(poolLane.resources ?? [])])];
 }
 
 export function laneSummary(poolLane) {
@@ -325,6 +325,7 @@ export function findLaneByName(name) {
 }
 
 function laneCredentialRequirements(poolLane) {
+  const resources = laneResources(poolLane);
   const credentials = [];
   if (poolLane.name === "install-e2e-openai") {
     credentials.push("openai");
@@ -332,14 +333,23 @@ function laneCredentialRequirements(poolLane) {
   if (poolLane.name === "install-e2e-anthropic") {
     credentials.push("anthropic");
   }
-  if (
-    poolLane.name === "openwebui" ||
-    poolLane.name === "openai-chat-tools" ||
-    poolLane.name === "openai-web-search-minimal" ||
-    poolLane.name === "live-codex-npm-plugin" ||
-    poolLane.name === "live-plugin-tool"
-  ) {
+  if (resources.includes("live:openai")) {
     credentials.push("openai");
+  }
+  if (resources.includes("live:codex")) {
+    credentials.push("codex");
+  }
+  if (resources.includes("live:claude")) {
+    credentials.push("anthropic");
+  }
+  if (resources.includes("live:droid")) {
+    credentials.push("factory");
+  }
+  if (resources.includes("live:gemini")) {
+    credentials.push("gemini");
+  }
+  if (resources.includes("live:opencode")) {
+    credentials.push("opencode");
   }
   return credentials;
 }
@@ -449,7 +459,7 @@ export function resolveDockerE2ePlan(options) {
   const configuredLanes = selectedLanes
     ? selectedLanes
     : releaseLanes
-      ? releaseLanes
+      ? applyLiveMode(releaseLanes, options.liveMode)
       : options.liveMode === "only"
         ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], options.liveMode)
         : applyLiveMode(retriedMainLanes, options.liveMode);

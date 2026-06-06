@@ -1,3 +1,4 @@
+// Together setup module handles plugin onboarding behavior.
 import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
@@ -8,7 +9,7 @@ import {
   TOGETHER_MODEL_CATALOG,
 } from "./models.js";
 
-export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
+export const TOGETHER_DEFAULT_MODEL_REF = "together/meta-llama/Llama-3.3-70B-Instruct-Turbo";
 
 const togetherPresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: TOGETHER_DEFAULT_MODEL_REF,

@@ -1,3 +1,4 @@
+// Matrix tests cover send plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
@@ -606,6 +607,34 @@ describe("sendMessageMatrix threads", () => {
       "m.relates_to"?: {
         rel_type?: string;
         event_id?: string;
+        is_falling_back?: boolean;
+        "m.in_reply_to"?: { event_id?: string };
+      };
+    };
+
+    expect(content["m.relates_to"]).toEqual({
+      rel_type: "m.thread",
+      event_id: "$thread",
+    });
+    expect(content["m.relates_to"]).not.toHaveProperty("is_falling_back");
+    expect(content["m.relates_to"]).not.toHaveProperty("m.in_reply_to");
+  });
+
+  it("includes thread fallback metadata only with an explicit reply target", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "hello thread", {
+      client,
+      cfg: {} as never,
+      threadId: "$thread",
+      replyToId: "$reply",
+    });
+
+    const content = sentContent(sendMessage) as {
+      "m.relates_to"?: {
+        rel_type?: string;
+        event_id?: string;
+        is_falling_back?: boolean;
         "m.in_reply_to"?: { event_id?: string };
       };
     };
@@ -614,7 +643,7 @@ describe("sendMessageMatrix threads", () => {
       rel_type: "m.thread",
       event_id: "$thread",
       is_falling_back: true,
-      "m.in_reply_to": { event_id: "$thread" },
+      "m.in_reply_to": { event_id: "$reply" },
     });
   });
 
@@ -716,6 +745,30 @@ describe("sendSingleTextMessageMatrix", () => {
     );
   });
 
+  it("supports partial draft preview sends without activating mention-looking text", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix(
+      "room:!room:example",
+      "Working...\n- `read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed`",
+      {
+        client,
+        cfg: {} as never,
+        includeMentions: false,
+        live: true,
+      },
+    );
+
+    const content = sentContent(sendMessage);
+    expect(content.msgtype).toBe("m.text");
+    expect(content).not.toHaveProperty("m.mentions");
+    expect(content["org.matrix.msc4357.live"]).toEqual({});
+    expect((content as { formatted_body?: string }).formatted_body).toContain(
+      "<code>read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed</code>",
+    );
+    expect((content as { formatted_body?: string }).formatted_body).not.toContain("matrix.to");
+  });
+
   it("does not activate mentions inside Matrix tool-progress code spans", async () => {
     const { client, sendMessage } = makeClient();
 
@@ -735,6 +788,23 @@ describe("sendSingleTextMessageMatrix", () => {
     const formattedBody = (sentContent(sendMessage) as { formatted_body?: string }).formatted_body;
     expect(formattedBody).toContain("<code>@room ping @alice:example.org !room:example.org</code>");
     expect(formattedBody).not.toContain("matrix.to");
+  });
+
+  it("does not activate filename-embedded Matrix mentions in normal text", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix(
+      "room:!room:example",
+      "read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt failed",
+      {
+        client,
+        cfg: {} as never,
+      },
+    );
+
+    const content = sentContent(sendMessage);
+    expect(content["m.mentions"]).toEqual({});
+    expect((content as { formatted_body?: string }).formatted_body).not.toContain("matrix.to");
   });
 
   it("merges extra content fields into single-event sends", async () => {
@@ -870,6 +940,52 @@ describe("editMessageMatrix mentions", () => {
     const content = sentContent(sendMessage);
     expect(content[MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]).toBe(true);
     expect(newContent(content)[MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]).toBe(true);
+  });
+
+  it("edits threaded originals with a pure replace relation", async () => {
+    const { client, getEvent, sendMessage } = makeClient();
+    getEvent.mockResolvedValue({
+      content: {
+        body: "before",
+        msgtype: "m.text",
+        "m.relates_to": {
+          rel_type: "m.thread",
+          event_id: "$thread",
+        },
+      },
+    });
+
+    await editMessageMatrix("room:!room:example", "$original", "done", {
+      client,
+      cfg: {} as never,
+      threadId: "$thread",
+    });
+
+    const content = sentContent(sendMessage);
+    expect(content["m.relates_to"]).toEqual({
+      rel_type: "m.replace",
+      event_id: "$original",
+    });
+    expect(newContent(content)).not.toHaveProperty("m.relates_to");
+  });
+
+  it("rejects thread edits when the original event is not already in that thread", async () => {
+    const { client, getEvent, sendMessage } = makeClient();
+    getEvent.mockResolvedValue({
+      content: {
+        body: "before",
+        msgtype: "m.text",
+      },
+    });
+
+    await expect(
+      editMessageMatrix("room:!room:example", "$original", "done", {
+        client,
+        cfg: {} as never,
+        threadId: "$thread",
+      }),
+    ).rejects.toThrow("cannot add or change the original event thread relation");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });
 

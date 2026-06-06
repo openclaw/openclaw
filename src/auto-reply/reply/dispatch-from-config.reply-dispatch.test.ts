@@ -1,3 +1,4 @@
+// Tests dispatch-from-config reply dispatch integration and final payload routing.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.js";
@@ -34,6 +35,7 @@ function firstReplyDispatchCall() {
     | [
         {
           sessionKey?: string;
+          toolsAllow?: string[];
           sendPolicy?: string;
           inboundAudio?: boolean;
         },
@@ -83,6 +85,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     sessionBindingMocks.touch.mockReset();
     sessionStoreMocks.currentEntry = undefined;
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
+    sessionStoreMocks.readSessionEntry.mockReset().mockReturnValue(undefined);
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
     sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
     sessionStoreMocks.updateSessionStoreEntry.mockClear();
@@ -126,6 +129,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       dispatcher: createDispatcher(),
       fastAbortResolver: async () => ({ handled: false, aborted: false }),
       formatAbortReplyTextResolver: () => "⚙️ Agent was aborted.",
+      replyOptions: { toolsAllow: ["message"] },
       replyResolver: async () => ({ text: "model reply" }),
     });
 
@@ -138,6 +142,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledOnce();
     const [replyDispatchEvent, replyDispatchRuntime] = firstReplyDispatchCall() ?? [];
     expect(replyDispatchEvent?.sessionKey).toBe("agent:test:session");
+    expect(replyDispatchEvent?.toolsAllow).toEqual(["message"]);
     expect(replyDispatchEvent?.sendPolicy).toBe("allow");
     expect(replyDispatchEvent?.inboundAudio).toBe(false);
     expect(replyDispatchRuntime?.cfg).toBe(emptyConfig);
@@ -169,6 +174,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(result).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
+      sendPolicyDenied: true,
+      noVisibleReplyFallbackEligible: true,
     });
   });
 

@@ -1,3 +1,4 @@
+// Codex plugin module implements elicitation bridge behavior.
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
@@ -44,6 +45,7 @@ const MCP_TOOL_APPROVAL_SOURCE_KEY = "source";
 const MCP_TOOL_APPROVAL_CONNECTOR_SOURCE = "connector";
 const CODEX_APPS_SERVER_NAME = "codex_apps";
 const COMPUTER_USE_APPROVAL_TITLE = "Computer Use approval";
+const EMPTY_OBJECT_SCHEMA: JsonObject = { type: "object", properties: {} };
 const PLUGIN_APP_ID_META_KEYS = ["app_id", "appId", "codex_app_id", "codexAppId"];
 const PLUGIN_CONNECTOR_ID_META_KEYS = ["connector_id", "connectorId"];
 const PLUGIN_NAME_META_KEYS = ["plugin_name", "pluginName", "codex_plugin_name", "codexPluginName"];
@@ -363,13 +365,14 @@ function readComputerUseApprovalElicitation(
     !serverName ||
     !expectedServerName ||
     serverName !== expectedServerName ||
-    readString(requestParams, "mode") !== "form" ||
-    !isJsonObject(requestParams?.requestedSchema)
+    readString(requestParams, "mode") !== "form"
   ) {
     return undefined;
   }
 
-  const requestedSchema = requestParams.requestedSchema;
+  const requestedSchema = isJsonObject(requestParams?.requestedSchema)
+    ? requestParams.requestedSchema
+    : EMPTY_OBJECT_SCHEMA;
   if (
     readString(requestedSchema, "type") !== "object" ||
     !isJsonObject(requestedSchema.properties)
@@ -506,7 +509,7 @@ function formatDisplayJsonValue(value: JsonValue, depth = MAX_DISPLAY_VALUE_DEPT
     let count = 0;
     let truncated = false;
     for (const key in value) {
-      if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      if (!Object.hasOwn(value, key)) {
         continue;
       }
       if (count >= MAX_DISPLAY_VALUE_OBJECT_KEYS) {

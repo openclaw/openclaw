@@ -1,14 +1,20 @@
+/**
+ * Bridges Codex app-server approval requests into OpenClaw policy hooks and
+ * plugin approval UX.
+ */
 import {
   type AgentApprovalEventData,
   buildAgentHookContextChannelFields,
   formatApprovalDisplayPath,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
+  resolveNativeHookRelayDeferredToolApproval,
   type EmbeddedRunAttemptParams,
   type NativeHookRelayProcessResponse,
   type NativeHookRelayRegistrationHandle,
   runBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
   approvalRequestExplicitlyUnavailable,
@@ -52,13 +58,21 @@ type SanitizedApprovalPreview = {
   omitted: boolean;
 };
 
+/**
+ * Handles one app-server approval request for the active thread/turn, returning
+ * the app-server response payload when the request belongs to this run.
+ */
 export async function handleCodexAppServerApprovalRequest(params: {
   method: string;
   requestParams: JsonValue | undefined;
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
   turnId: string;
-  nativeHookRelay?: Pick<NativeHookRelayRegistrationHandle, "allowedEvents" | "relayId">;
+  nativeHookRelay?: Pick<
+    NativeHookRelayRegistrationHandle,
+    "allowedEvents" | "generation" | "relayId"
+  >;
+  autoApprove?: boolean;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
@@ -96,6 +110,35 @@ export async function handleCodexAppServerApprovalRequest(params: {
       });
       return buildApprovalResponse(params.method, context.requestParams, "denied");
     }
+    if (
+      policyOutcome?.outcome === "approved-once" ||
+      policyOutcome?.outcome === "approved-session"
+    ) {
+      emitApprovalEvent(params.paramsForRun, {
+        phase: "resolved",
+        kind: context.kind,
+        status: "approved",
+        title: context.title,
+        ...context.eventDetails,
+        ...approvalEventScope(params.method, policyOutcome.outcome),
+        message: approvalResolutionMessage(policyOutcome.outcome),
+      });
+      return buildApprovalResponse(params.method, context.requestParams, policyOutcome.outcome);
+    }
+    if (params.autoApprove === true) {
+      emitApprovalEvent(params.paramsForRun, {
+        phase: "resolved",
+        kind: context.kind,
+        status: "approved",
+        title: context.title,
+        ...context.eventDetails,
+        ...approvalEventScope(params.method, "approved-session"),
+        message: "Codex app-server approval auto-approved by runtime policy.",
+      });
+      return buildApprovalResponse(params.method, context.requestParams, "approved-session");
+    }
+    // Native hook policy did not decide; fall back to the OpenClaw approval
+    // route so user-facing runs still get an approval prompt.
     const requestResult = await requestPluginApproval({
       paramsForRun: params.paramsForRun,
       title: context.title,
@@ -177,6 +220,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
   }
 }
 
+/** Converts an OpenClaw approval outcome into the app-server method response. */
 export function buildApprovalResponse(
   method: string,
   requestParams: JsonObject | undefined,
@@ -295,14 +339,20 @@ function buildApprovalContext(params: {
 }
 
 type ApprovalContext = ReturnType<typeof buildApprovalContext>;
-type ApprovalPolicyOutcome = { outcome: "denied"; reason: string } | { outcome: "no-decision" };
+type ApprovalPolicyOutcome =
+  | { outcome: "denied"; reason: string }
+  | { outcome: "approved-once" | "approved-session" }
+  | { outcome: "no-decision" };
 
 async function runOpenClawToolPolicyForApprovalRequest(params: {
   method: string;
   requestParams: JsonObject | undefined;
   paramsForRun: EmbeddedRunAttemptParams;
   context: ApprovalContext;
-  nativeHookRelay?: Pick<NativeHookRelayRegistrationHandle, "allowedEvents" | "relayId">;
+  nativeHookRelay?: Pick<
+    NativeHookRelayRegistrationHandle,
+    "allowedEvents" | "generation" | "relayId"
+  >;
   signal?: AbortSignal;
 }): Promise<ApprovalPolicyOutcome | undefined> {
   const policyRequest = buildOpenClawToolPolicyRequest(params.method, params.requestParams);
@@ -317,9 +367,16 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     policyRequest,
     nativeHookRelay: params.nativeHookRelay,
     cwd,
+    signal: params.signal,
   });
   if (nativeRelayOutcome?.blocked) {
     return { outcome: "denied", reason: nativeRelayOutcome.reason };
+  }
+  if (
+    nativeRelayOutcome?.outcome === "approved-once" ||
+    nativeRelayOutcome?.outcome === "approved-session"
+  ) {
+    return { outcome: nativeRelayOutcome.outcome };
   }
   if (nativeRelayOutcome?.handled) {
     return { outcome: "no-decision" };
@@ -335,7 +392,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     toolName: policyRequest.toolName,
     params: policyRequest.params,
     ...(params.context.itemId ? { toolCallId: params.context.itemId } : {}),
-    approvalMode: "report",
+    approvalMode: "request",
     signal: params.signal,
     ctx: {
       ...(params.paramsForRun.agentId ? { agentId: params.paramsForRun.agentId } : {}),
@@ -357,6 +414,13 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
         "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
     };
   }
+  if (outcome.approvalResolution) {
+    return {
+      // Generic plugin approval `allow-always` is plugin-owned durability, not
+      // Codex session trust. Keep the app-server request scoped to this item.
+      outcome: "approved-once",
+    };
+  }
   return undefined;
 }
 
@@ -365,8 +429,12 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
   requestParams: JsonObject | undefined;
   context: ApprovalContext;
   policyRequest: { toolName: string; params: JsonObject };
-  nativeHookRelay?: Pick<NativeHookRelayRegistrationHandle, "allowedEvents" | "relayId">;
+  nativeHookRelay?: Pick<
+    NativeHookRelayRegistrationHandle,
+    "allowedEvents" | "generation" | "relayId"
+  >;
   cwd?: string;
+  signal?: AbortSignal;
 }): Promise<
   | {
       handled: true;
@@ -376,6 +444,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
   | {
       handled: true;
       blocked?: false;
+      outcome?: "approved-once" | "approved-session";
     }
   | undefined
 > {
@@ -403,18 +472,42 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
       toolUseId: params.context.itemId,
     })
   ) {
+    const approvalOutcome = await resolveNativeHookRelayDeferredToolApproval({
+      relayId: params.nativeHookRelay.relayId,
+      toolUseId: params.context.itemId,
+      signal: params.signal,
+    });
+    if (approvalOutcome?.outcome === "denied") {
+      return { handled: true, blocked: true, reason: approvalOutcome.reason };
+    }
+    if (approvalOutcome?.outcome === "approved-once") {
+      return { handled: true, outcome: approvalOutcome.outcome };
+    }
     return { handled: true };
   }
   try {
     const response = await invokeNativeHookRelay({
       provider: "codex",
       relayId: params.nativeHookRelay.relayId,
+      generation: params.nativeHookRelay.generation,
       event: "pre_tool_use",
       rawPayload: payload,
+      requireGeneration: true,
     });
     const decision = readNativeRelayPreToolUseDecision(response);
     if (decision.blocked) {
       return { handled: true, blocked: true, reason: decision.reason };
+    }
+    const approvalOutcome = await resolveNativeHookRelayDeferredToolApproval({
+      relayId: params.nativeHookRelay.relayId,
+      toolUseId: params.context.itemId,
+      signal: params.signal,
+    });
+    if (approvalOutcome?.outcome === "denied") {
+      return { handled: true, blocked: true, reason: approvalOutcome.reason };
+    }
+    if (approvalOutcome?.outcome === "approved-once") {
+      return { handled: true, outcome: approvalOutcome.outcome };
     }
     return { handled: true };
   } catch (error) {
@@ -877,10 +970,7 @@ function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string 
 }
 
 function readStringArray(record: JsonObject, key: string): string[] {
-  const value = record[key];
-  return Array.isArray(value)
-    ? value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean)
-    : [];
+  return normalizeTrimmedStringList(record[key]);
 }
 
 function sanitizePermissionHostValue(value: string): string {

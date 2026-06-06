@@ -1,3 +1,4 @@
+// Imessage tests cover monitor.watch subscribe retry plugin behavior.
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
@@ -132,7 +133,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     const monitorErrorPromise = monitorIMessageProvider({
       config: { channels: { imessage: {} } } as never,
       runtime: runtime as never,
-    }).catch((error) => error);
+    }).catch((error: unknown) => error);
 
     await vi.runAllTimersAsync();
     const monitorError = await monitorErrorPromise;

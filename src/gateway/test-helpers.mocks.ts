@@ -1,3 +1,5 @@
+// Gateway integration test module mocks.
+// Centralizes Vitest mock wiring for agent, channel, plugin, and runtime seams.
 import path from "node:path";
 import { vi } from "vitest";
 import {
@@ -14,7 +16,7 @@ import {
   getReplyFromConfig,
   getGatewayTestHoistedState,
   mockGetReplyFromConfigOnce,
-  piSdkMock,
+  agentDiscoveryMock,
   runBtwSideQuestion,
   sendWhatsAppMock,
   sessionStoreSaveDelayMs,
@@ -34,7 +36,7 @@ export {
   embeddedRunMock,
   getReplyFromConfig,
   mockGetReplyFromConfigOnce,
-  piSdkMock,
+  agentDiscoveryMock,
   runBtwSideQuestion,
   sendWhatsAppMock,
   sessionStoreSaveDelayMs,
@@ -49,14 +51,14 @@ const gatewayTestHoisted = getGatewayTestHoistedState();
 
 function createEmbeddedRunMockExports() {
   return {
-    compactEmbeddedPiSession: (...args: unknown[]) =>
-      embeddedRunMock.compactEmbeddedPiSession(...args),
-    isEmbeddedPiRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-    abortEmbeddedPiRun: (sessionId: string) => {
+    compactEmbeddedAgentSession: (...args: unknown[]) =>
+      embeddedRunMock.compactEmbeddedAgentSession(...args),
+    isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
+    abortEmbeddedAgentRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
     },
-    waitForEmbeddedPiRunEnd: async (sessionId: string) => {
+    waitForEmbeddedAgentRunEnd: async (sessionId: string) => {
       embeddedRunMock.waitCalls.push(sessionId);
       return embeddedRunMock.waitResults.get(sessionId) ?? true;
     },
@@ -93,9 +95,9 @@ function createDispatchInboundMessageMockExports(
   };
 }
 
-vi.mock("../agents/pi-model-discovery.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-model-discovery.js")>(
-    "../agents/pi-model-discovery.js",
+vi.mock("../agents/agent-model-discovery.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/agent-model-discovery.js")>(
+    "../agents/agent-model-discovery.js",
   );
 
   const createActualRegistry = (...args: Parameters<typeof actual.discoverModels>) => {
@@ -128,31 +130,31 @@ vi.mock("../agents/pi-model-discovery.js", async () => {
     private readonly actualRegistry?: ReturnType<typeof createActualRegistry>;
 
     constructor(authStorage: unknown, modelsFile: string) {
-      if (!piSdkMock.enabled) {
+      if (!agentDiscoveryMock.enabled) {
         this.actualRegistry = createActualRegistry(authStorage as never, path.dirname(modelsFile));
       }
     }
 
     getAll() {
-      if (!piSdkMock.enabled) {
+      if (!agentDiscoveryMock.enabled) {
         return this.actualRegistry?.getAll() ?? [];
       }
-      piSdkMock.discoverCalls += 1;
-      return piSdkMock.models as Array<{ provider?: string; id?: string }>;
+      agentDiscoveryMock.discoverCalls += 1;
+      return agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>;
     }
 
     getAvailable() {
-      if (!piSdkMock.enabled) {
+      if (!agentDiscoveryMock.enabled) {
         return this.actualRegistry?.getAvailable() ?? [];
       }
-      return piSdkMock.models as Array<{ provider?: string; id?: string }>;
+      return agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>;
     }
 
     find(provider: string, modelId: string) {
-      if (!piSdkMock.enabled) {
+      if (!agentDiscoveryMock.enabled) {
         return this.actualRegistry?.find(provider, modelId);
       }
-      return (piSdkMock.models as Array<{ provider?: string; id?: string }>).find(
+      return (agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>).find(
         (model) => model.provider === provider && model.id === modelId,
       );
     }
@@ -160,6 +162,8 @@ vi.mock("../agents/pi-model-discovery.js", async () => {
 
   return {
     ...actual,
+    discoverModels: (authStorage: Parameters<typeof actual.discoverModels>[0], agentDir: string) =>
+      new MockModelRegistry(authStorage, path.join(agentDir, "models.json")),
     ModelRegistry: MockModelRegistry,
   };
 });
@@ -191,7 +195,9 @@ vi.mock("../config/sessions.js", async () => {
     saveSessionStore: vi.fn(async (storePath: string, store: unknown) => {
       const delay = sessionStoreSaveDelayMs.value;
       if (delay > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await new Promise((resolve) => {
+          setTimeout(resolve, delay);
+        });
       }
       return actual.saveSessionStore(storePath, store as never);
     }),
@@ -229,30 +235,28 @@ vi.mock("../config/io.js", async () => {
   };
 });
 
-vi.mock("../agents/pi-embedded.js", async () => {
-  return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded.js")>(
-    "../agents/pi-embedded.js",
+vi.mock("../agents/embedded-agent.js", async () => {
+  return await importEmbeddedRunMockModule<typeof import("../agents/embedded-agent.js")>(
+    "../agents/embedded-agent.js",
   );
 });
 
-vi.mock("/src/agents/pi-embedded.js", async () => {
-  return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded.js")>(
-    "../agents/pi-embedded.js",
+vi.mock("/src/agents/embedded-agent.js", async () => {
+  return await importEmbeddedRunMockModule<typeof import("../agents/embedded-agent.js")>(
+    "../agents/embedded-agent.js",
   );
 });
 
-vi.mock("../agents/pi-embedded-runner/runs.js", async () => {
-  return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded-runner/runs.js")>(
-    "../agents/pi-embedded-runner/runs.js",
-    { includeActiveCount: true },
-  );
+vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
+  return await importEmbeddedRunMockModule<
+    typeof import("../agents/embedded-agent-runner/runs.js")
+  >("../agents/embedded-agent-runner/runs.js", { includeActiveCount: true });
 });
 
-vi.mock("/src/agents/pi-embedded-runner/runs.js", async () => {
-  return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded-runner/runs.js")>(
-    "../agents/pi-embedded-runner/runs.js",
-    { includeActiveCount: true },
-  );
+vi.mock("/src/agents/embedded-agent-runner/runs.js", async () => {
+  return await importEmbeddedRunMockModule<
+    typeof import("../agents/embedded-agent-runner/runs.js")
+  >("../agents/embedded-agent-runner/runs.js", { includeActiveCount: true });
 });
 
 vi.mock("../commands/health.js", () => ({

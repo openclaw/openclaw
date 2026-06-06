@@ -1,3 +1,4 @@
+// Feishu plugin module implements mention behavior.
 import type { FeishuMessageEvent } from "./event-types.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { isFeishuGroupChatType } from "./types.js";
@@ -41,7 +42,7 @@ export function extractMentionTargets(
         return false;
       }
       // Must have open_id
-      return !!m.id.open_id;
+      return Boolean(m.id.open_id);
     })
     .map((m) => ({
       openId: m.id.open_id!,

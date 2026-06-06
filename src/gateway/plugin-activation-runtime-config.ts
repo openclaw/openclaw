@@ -1,8 +1,13 @@
+// Plugin/channel activation config merge helpers.
+// Carries activation enablement into runtime config without copying stale state.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 
+// Activation config carries only operator-controlled enable/allow surfaces into
+// runtime config. Other runtime fields stay canonical to avoid stale activation
+// state overriding live config reloads.
 function hasOwnValue(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
 function mergeChannelActivationSections(params: {
@@ -94,6 +99,7 @@ function mergePluginActivationSections(params: {
   };
 }
 
+/** Merges plugin/channel activation enablement into the runtime config shape. */
 export function mergeActivationSectionsIntoRuntimeConfig(params: {
   runtimeConfig: OpenClawConfig;
   activationConfig: OpenClawConfig;

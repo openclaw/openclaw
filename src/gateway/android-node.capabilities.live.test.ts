@@ -1,3 +1,4 @@
+// Android node capability live tests verify paired node command allowlists and remote policy behavior.
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
@@ -218,6 +219,15 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.health", payload);
       expectRecord(obj.memory, "device.health memory payload");
+    },
+  },
+  "device.apps": {
+    buildParams: () => ({ query: "calendar", includeSystem: true, limit: 5 }),
+    timeoutMs: 20_000,
+    outcome: "success",
+    onSuccess: (payload) => {
+      const obj = assertObjectPayload("device.apps", payload);
+      expect(Array.isArray(obj.apps)).toBe(true);
     },
   },
   "notifications.list": {

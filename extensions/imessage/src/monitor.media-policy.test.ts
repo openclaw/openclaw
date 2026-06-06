@@ -1,3 +1,4 @@
+// Imessage tests cover monitor.media policy plugin behavior.
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
@@ -56,11 +57,13 @@ describe("iMessage monitor attachment policy", () => {
     readChannelAllowFromStoreMock.mockResolvedValue([]);
 
     const attachmentPath = "/Users/openclaw/Library/Messages/Attachments/AA/BB/photo.heic";
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    let onNotification:
+      | ((message: { method: string; params: unknown }) => void | Promise<void>)
+      | undefined;
     const client = {
       request: vi.fn(async () => ({ subscription: 1 })),
       waitForClose: vi.fn(async () => {
-        onNotification?.({
+        void onNotification?.({
           method: "message",
           params: {
             message: {
@@ -109,7 +112,7 @@ describe("iMessage monitor attachment policy", () => {
       } as never,
     });
 
-    expect(readChannelAllowFromStoreMock).toHaveBeenCalled();
+    await vi.waitFor(() => expect(readChannelAllowFromStoreMock).toHaveBeenCalled());
     expect(stageIMessageAttachmentsMock).not.toHaveBeenCalled();
   });
 });

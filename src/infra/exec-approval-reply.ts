@@ -1,3 +1,8 @@
+// Builds reply payloads for exec approval prompts and outcomes.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type {
   InteractiveReply,
@@ -6,10 +11,6 @@ import type {
   MessagePresentationButton,
 } from "../interactive/payload.js";
 import { formatHumanList } from "../shared/human-list.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { formatApprovalDisplayPath } from "./approval-display-paths.js";
 import {
   describeNativeExecApprovalClientSetup,
@@ -162,6 +163,7 @@ function buildApprovalInteractiveButtons(
 ): InteractiveReplyButton[] {
   return descriptors.map((descriptor) => ({
     label: descriptor.label,
+    action: { type: "command", command: descriptor.command },
     value: descriptor.command,
     style: descriptor.style,
   }));
@@ -172,6 +174,7 @@ function buildApprovalPresentationButtons(
 ): MessagePresentationButton[] {
   return descriptors.map((descriptor) => ({
     label: descriptor.label,
+    action: { type: "command", command: descriptor.command },
     value: descriptor.command,
     style: descriptor.style,
   }));

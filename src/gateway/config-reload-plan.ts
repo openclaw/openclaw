@@ -1,3 +1,5 @@
+// Gateway config reload planner.
+// Maps changed config paths to hot-reload actions, no-ops, or full restarts.
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import {
   getActivePluginChannelRegistryVersion,
@@ -49,6 +51,8 @@ type GatewayReloadPlanOptions = {
   forceChangedPaths?: Iterable<string>;
 };
 
+const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
+
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
   { prefix: "gateway.reload", kind: "none" },
@@ -97,6 +101,10 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
+  // Auth cooldown readers resolve values from the active runtime config for each
+  // auth failure decision, so cooldown tuning needs a snapshot refresh but not
+  // a gateway restart.
+  { prefix: "auth.cooldowns", kind: "hot" },
   {
     prefix: "agents.list",
     kind: "hot",
@@ -140,6 +148,8 @@ function listReloadRules(): ReloadRule[] {
   const registry = getActivePluginRegistry();
   const activeRegistryVersion = getActivePluginRegistryVersion();
   const channelRegistryVersion = getActivePluginChannelRegistryVersion();
+  // Plugin/channel reload rules are process-stable until the active registry
+  // version changes; cache them to keep every config diff cheap.
   if (
     registry !== cachedRegistry ||
     activeRegistryVersion !== cachedActiveRegistryVersion ||
@@ -253,9 +263,15 @@ function getPluginInstallRecords(config: unknown): Record<string, unknown> {
   return isPlainObject(installs) ? installs : {};
 }
 
-export function listPluginInstallTimestampMetadataPaths(
+function listPluginInstallRecordDiffPaths(
   prevConfig: unknown,
   nextConfig: unknown,
+  visit: (record: {
+    id: string;
+    prevRecord: unknown;
+    nextRecord: unknown;
+    paths: string[];
+  }) => void,
 ): string[] {
   const prevInstalls = getPluginInstallRecords(prevConfig);
   const nextInstalls = getPluginInstallRecords(nextConfig);
@@ -263,39 +279,45 @@ export function listPluginInstallTimestampMetadataPaths(
   const paths: string[] = [];
 
   for (const id of ids) {
-    const prevRecord = prevInstalls[id];
-    const nextRecord = nextInstalls[id];
-    if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
-      continue;
-    }
-    for (const key of ["installedAt", "resolvedAt"] as const) {
-      if (prevRecord[key] !== nextRecord[key]) {
-        paths.push(`plugins.installs.${id}.${key}`);
-      }
-    }
+    visit({ id, prevRecord: prevInstalls[id], nextRecord: nextInstalls[id], paths });
   }
 
   return paths;
+}
+
+export function listPluginInstallTimestampMetadataPaths(
+  prevConfig: unknown,
+  nextConfig: unknown,
+): string[] {
+  return listPluginInstallRecordDiffPaths(
+    prevConfig,
+    nextConfig,
+    ({ id, prevRecord, nextRecord, paths }) => {
+      if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
+        return;
+      }
+      for (const key of PLUGIN_INSTALL_TIMESTAMP_KEYS) {
+        if (prevRecord[key] !== nextRecord[key]) {
+          paths.push(`plugins.installs.${id}.${key}`);
+        }
+      }
+    },
+  );
 }
 
 export function listPluginInstallWholeRecordPaths(
   prevConfig: unknown,
   nextConfig: unknown,
 ): string[] {
-  const prevInstalls = getPluginInstallRecords(prevConfig);
-  const nextInstalls = getPluginInstallRecords(nextConfig);
-  const ids = new Set([...Object.keys(prevInstalls), ...Object.keys(nextInstalls)]);
-  const paths: string[] = [];
-
-  for (const id of ids) {
-    const prevRecord = prevInstalls[id];
-    const nextRecord = nextInstalls[id];
-    if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
-      paths.push(`plugins.installs.${id}`);
-    }
-  }
-
-  return paths;
+  return listPluginInstallRecordDiffPaths(
+    prevConfig,
+    nextConfig,
+    ({ id, prevRecord, nextRecord, paths }) => {
+      if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
+        paths.push(`plugins.installs.${id}`);
+      }
+    },
+  );
 }
 
 export function buildGatewayReloadPlan(

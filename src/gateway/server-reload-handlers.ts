@@ -1,10 +1,16 @@
-import { resetModelCatalogCache } from "../agents/model-catalog.js";
-import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
+// Gateway hot-reload handlers.
+// Applies config reload plans to hooks, cron, heartbeat, plugins, channels, and restarts.
+import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import {
   getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
-} from "../agents/pi-embedded-runner/run-state.js";
+} from "../agents/embedded-agent-runner/run-state.js";
+import { resetModelCatalogCache } from "../agents/model-catalog.js";
+import {
+  clearCurrentProviderAuthState,
+  warmCurrentProviderAuthStateOffMainThread,
+} from "../agents/model-provider-auth.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
@@ -86,12 +92,20 @@ const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
 
+function resetPreparedModelRuntimeStateForHotReload(): void {
+  resetModelCatalogCache();
+  clearCurrentProviderAuthState();
+  markGatewayModelCatalogStaleForReload();
+}
+
 async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
   timeoutMs: number;
   onWarn: (message: string) => void;
   label: string;
 }) {
+  // MCP runtime disposal may need async provider cleanup. Bound it so config
+  // reload can proceed and report the stale runtime risk.
   let timer: ReturnType<typeof setTimeout> | undefined;
   const disposePromise = params.dispose().catch((error: unknown) => {
     params.onWarn(`${params.label} failed: ${String(error)}`);
@@ -133,7 +147,7 @@ type GatewayReloadHandlerParams = {
   setState: (state: GatewayHotReloadState) => void;
   startChannel: GatewayChannelManager["startChannel"];
   stopChannel: GatewayChannelManager["stopChannel"];
-  stopPostReadySidecars?: () => void;
+  stopPostReadySidecars?: () => Promise<void> | void;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
@@ -302,20 +316,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const state = params.getState();
     const nextState = { ...state };
 
-    if (
-      plan.changedPaths.some(
-        (path) =>
-          path === "models" ||
-          path.startsWith("models.") ||
-          path === "agents.defaults.model" ||
-          path.startsWith("agents.defaults.model.") ||
-          path === "agents.defaults.models" ||
-          path.startsWith("agents.defaults.models."),
-      )
-    ) {
-      resetModelCatalogCache();
-      markGatewayModelCatalogStaleForReload();
-    }
+    resetPreparedModelRuntimeStateForHotReload();
 
     if (plan.reloadHooks) {
       try {
@@ -401,6 +402,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         channelsToRestart.add(channel);
       }
       activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+      resetPreparedModelRuntimeStateForHotReload();
     }
 
     if (plan.restartCron) {
@@ -432,7 +434,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (plan.restartGmailWatcher) {
-      params.stopPostReadySidecars?.();
+      await params.stopPostReadySidecars?.();
       const restartAbortController =
         params.createGmailRestartAbortController?.() ?? new AbortController();
       try {
@@ -442,7 +444,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             import("../hooks/gmail-watcher-lifecycle.js"),
           ]);
           if (!restartAbortController.signal.aborted) {
-            await stopGmailWatcher().catch((err) => {
+            await stopGmailWatcher().catch((err: unknown) => {
               params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
             });
           }
@@ -502,6 +504,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     applyGatewayLaneConcurrency(nextConfig);
 
+    void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err: unknown) => {
+      params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
+    });
+
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
     } else if (plan.noopPaths.length > 0) {
@@ -549,6 +555,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(
           nextConfig.gateway?.reload?.deferralTimeoutMs,
         ),
+        timeoutIntent: { force: true, reason: "config reload forced restart" },
         emitHooks: {
           beforeEmit: () =>
             markActiveMainSessionsForRestart(nextConfig, "config reload forced restart"),
@@ -560,20 +567,20 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           },
           onStillPending: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
-            const taskBlockers = formatTaskBlockers();
+            const taskBlockersValue = formatTaskBlockers();
             params.logReload.warn(
               `restart still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active${
-                taskBlockers ? ` (${taskBlockers})` : ""
+                taskBlockersValue ? ` (${taskBlockersValue})` : ""
               }`,
             );
           },
           onTimeout: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
-            const taskBlockers = formatTaskBlockers();
+            const taskBlockersLocal = formatTaskBlockers();
             restartPending = false;
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active${
-                taskBlockers ? ` (${taskBlockers})` : ""
+                taskBlockersLocal ? ` (${taskBlockersLocal})` : ""
               }; forcing restart`,
             );
           },

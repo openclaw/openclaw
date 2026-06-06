@@ -1,3 +1,6 @@
+// Node-host daemon lifecycle commands for install, status, start, stop, and restart.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
   DEFAULT_NODE_DAEMON_RUNTIME,
@@ -16,8 +19,6 @@ import {
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { colorize } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   runServiceRestart,
@@ -78,6 +79,7 @@ function resolveNodeDefaults(
   opts: NodeDaemonInstallOptions,
   config: Awaited<ReturnType<typeof loadNodeHostConfig>>,
 ) {
+  // CLI flags override node-host config; missing values fall back to loopback Gateway defaults.
   const host = normalizeOptionalString(opts.host) || config?.gateway?.host || "127.0.0.1";
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
@@ -111,7 +113,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const service = resolveNodeService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
@@ -136,7 +138,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const tlsFingerprint =
     normalizeOptionalString(opts.tlsFingerprint) || config?.gateway?.tlsFingerprint;
   const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
-  const { programArguments, workingDirectory, environment, description } =
+  const { programArguments, workingDirectory, environment, environmentValueSources, description } =
     await buildNodeInstallPlan({
       env: process.env,
       host,
@@ -168,6 +170,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         programArguments,
         workingDirectory,
         environment,
+        environmentValueSources,
         description,
       });
     },
@@ -218,7 +221,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
     service.readCommand(process.env).catch(() => null),
     service
       .readRuntime(process.env)
-      .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+      .catch((err: unknown): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
   ]);
 
   const payload = {
@@ -276,7 +279,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(errorText(hint));
     }
     return;
   }
@@ -284,7 +287,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.status === "stopped") {
     defaultRuntime.error(errorText("Service is loaded but not running."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(errorText(hint));
     }
   }
 }

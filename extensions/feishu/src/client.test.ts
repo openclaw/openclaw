@@ -1,3 +1,4 @@
+// Feishu tests cover client plugin behavior.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -320,6 +321,21 @@ describe("createFeishuClient HTTP timeout", () => {
     });
 
     await expectGetCallTimeout(60_000);
+  });
+
+  it("ignores non-decimal env timeout overrides", async () => {
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR] = value;
+
+      createFeishuClient({
+        appId: `app-${value}`,
+        appSecret: "secret-env-timeout", // pragma: allowlist secret
+        accountId: `timeout-env-invalid-${value}`,
+      });
+
+      await expectGetCallTimeout(FEISHU_HTTP_TIMEOUT_MS);
+      mockBaseHttpInstance.get.mockClear();
+    }
   });
 
   it("prefers direct timeout over env override", async () => {

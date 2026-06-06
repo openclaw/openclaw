@@ -1,3 +1,8 @@
+/**
+ * Plans root and plugin-owned model catalog writes. Setup and doctor flows use
+ * this module to merge implicit provider discovery, explicit config, and
+ * preserved secrets before touching models.json.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
@@ -14,8 +19,15 @@ import {
   resolveImplicitProviders,
   type ProviderConfig,
 } from "./models-config.providers.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  resolvePluginModelCatalogOwnerPluginId,
+} from "./plugin-model-catalog.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+
+/** Dependency hook for resolving implicit model providers while planning models.json. */
 export type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
@@ -28,18 +40,58 @@ export type ResolveImplicitProvidersForModelsJson = (params: {
   providerDiscoveryEntriesOnly?: boolean;
 }) => Promise<Record<string, ProviderConfig>>;
 
+/** Planned models.json write/noop/skip result plus plugin catalog sidecar writes. */
 export type ModelsJsonPlan =
   | {
       action: "skip";
+      pluginCatalogWrites?: Record<string, string>;
     }
   | {
       action: "noop";
+      pluginCatalogWrites?: Record<string, string>;
     }
   | {
       action: "write";
       contents: string;
+      pluginCatalogWrites?: Record<string, string>;
     };
 
+function splitProvidersByPluginOwner(params: {
+  providers: Record<string, ProviderConfig>;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
+}): {
+  rootProviders: Record<string, ProviderConfig>;
+  pluginProviders: Record<string, Record<string, ProviderConfig>>;
+} {
+  const rootProviders: Record<string, ProviderConfig> = {};
+  const pluginProviders: Record<string, Record<string, ProviderConfig>> = {};
+  for (const [providerId, provider] of Object.entries(params.providers)) {
+    const pluginId = resolvePluginModelCatalogOwnerPluginId({
+      providerId,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+    });
+    if (!pluginId) {
+      rootProviders[providerId] = provider;
+      continue;
+    }
+    const pluginCatalog = (pluginProviders[pluginId] ??= {});
+    pluginCatalog[providerId] = provider;
+  }
+  return { rootProviders, pluginProviders };
+}
+
+function buildPluginCatalogWrites(
+  pluginProviders: Record<string, Record<string, ProviderConfig>>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(pluginProviders).map(([pluginId, providers]) => [
+      encodePluginModelCatalogRelativePath(pluginId),
+      `${JSON.stringify({ generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers }, null, 2)}\n`,
+    ]),
+  );
+}
+
+/** Resolves providers for models.json with injectable implicit-provider discovery. */
 export async function resolveProvidersForModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -105,6 +157,23 @@ function resolveProvidersForMode(params: {
   });
 }
 
+function isWritableProviderConfig(provider: ProviderConfig): boolean {
+  if (!Array.isArray(provider.models) || provider.models.length === 0) {
+    return true;
+  }
+  return Boolean(provider.baseUrl?.trim() && provider.apiKey);
+}
+
+function filterWritableProviders(
+  providers: Record<string, ProviderConfig>,
+): Record<string, ProviderConfig> {
+  const next = Object.fromEntries(
+    Object.entries(providers).filter(([, provider]) => isWritableProviderConfig(provider)),
+  );
+  return Object.keys(next).length === Object.keys(providers).length ? providers : next;
+}
+
+/** Plans root and plugin-owned model catalog writes with injectable provider discovery. */
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -147,11 +216,19 @@ export async function planOpenClawModelsJsonWithDeps(
   );
 
   if (Object.keys(providers).length === 0) {
+    if (params.cfg.models?.mode === "replace") {
+      return {
+        action: "write",
+        contents: `${JSON.stringify({ providers: {} }, null, 2)}\n`,
+        pluginCatalogWrites: {},
+      };
+    }
     return { action: "skip" };
   }
 
   const mode = cfg.models?.mode ?? "merge";
   const secretRefManagedProviders = new Set<string>();
+  const manifestPlugins = params.pluginMetadataSnapshot?.manifestRegistry.plugins;
   const normalizedProviders =
     normalizeProviders({
       providers,
@@ -161,6 +238,7 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceProviders: params.sourceConfigForSecrets?.models?.providers,
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
+      manifestPlugins,
     }) ?? providers;
   const mergedProviders = resolveProvidersForMode({
     mode,
@@ -169,7 +247,9 @@ export async function planOpenClawModelsJsonWithDeps(
     secretRefManagedProviders,
   });
   const normalizedMergedProviders =
-    normalizeProviderCatalogModelsForConfig(mergedProviders) ?? mergedProviders;
+    normalizeProviderCatalogModelsForConfig(mergedProviders, {
+      manifestPlugins,
+    }) ?? mergedProviders;
   const secretEnforcedProviders =
     enforceSourceManagedProviderSecrets({
       providers: normalizedMergedProviders,
@@ -177,19 +257,34 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
-  const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
-  const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
+  const finalProviders = applyNativeStreamingUsageCompat(
+    filterWritableProviders(secretEnforcedProviders),
+  );
+  const splitProviders = splitProvidersByPluginOwner({
+    providers: finalProviders,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+  });
+  const pluginCatalogWrites = buildPluginCatalogWrites(splitProviders.pluginProviders);
+  const nextContents = `${JSON.stringify(
+    {
+      providers: splitProviders.rootProviders,
+    },
+    null,
+    2,
+  )}\n`;
 
-  if (params.existingRaw === nextContents) {
-    return { action: "noop" };
+  if (params.existingRaw === nextContents && Object.keys(pluginCatalogWrites).length === 0) {
+    return { action: "noop", pluginCatalogWrites };
   }
 
   return {
     action: "write",
     contents: nextContents,
+    pluginCatalogWrites,
   };
 }
 
+/** Plans root and plugin-owned model catalog writes for the current runtime. */
 export async function planOpenClawModelsJson(
   params: Parameters<typeof planOpenClawModelsJsonWithDeps>[0],
 ): Promise<ModelsJsonPlan> {

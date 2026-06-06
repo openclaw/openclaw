@@ -1,14 +1,15 @@
-import type { Command } from "commander";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
-import { defaultRuntime } from "../../runtime.js";
+// Node status/list/describe commands and paired-node display formatting.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { sanitizeTerminalText } from "../../terminal/safe-text.js";
-import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+import { defaultRuntime } from "../../runtime.js";
 import { shortenHomeInString } from "../../utils.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
@@ -46,6 +47,7 @@ function resolveNodeVersions(node: {
     return { core: undefined, ui: undefined };
   }
   const platform = normalizeOptionalLowercaseString(node.platform) ?? "";
+  // Legacy nodes reported one version field; headless hosts use it as core, mobile nodes as UI.
   const headless =
     platform === "darwin" || platform === "linux" || platform === "win32" || platform === "windows";
   return headless ? { core: legacy, ui: undefined } : { core: undefined, ui: legacy };
@@ -180,6 +182,7 @@ function sanitizePairedNodeForListJson(node: PairedNodeListRow): Omit<PairedNode
   return copy as Omit<PairedNodeListRow, "token">;
 }
 
+/** Register node status, describe, and paired-node list commands. */
 export function registerNodesStatusCommands(nodes: Command) {
   nodesCallOpts(
     nodes
@@ -197,7 +200,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const { ok, warn, muted } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
-          const nodes = parseNodeList(result);
+          const nodesLocal = parseNodeList(result);
           const lastConnectedById =
             sinceMs !== undefined
               ? new Map(
@@ -206,7 +209,7 @@ export function registerNodesStatusCommands(nodes: Command) {
                   ),
                 )
               : null;
-          const filtered = nodes.filter((n) => {
+          const filtered = nodesLocal.filter((n) => {
             if (connectedOnly && !n.connected) {
               return false;
             }
@@ -236,7 +239,8 @@ export function registerNodesStatusCommands(nodes: Command) {
 
           const pairedCount = filtered.filter((n) => Boolean(n.paired)).length;
           const connectedCount = filtered.filter((n) => Boolean(n.connected)).length;
-          const filteredLabel = filtered.length !== nodes.length ? ` (of ${nodes.length})` : "";
+          const filteredLabel =
+            filtered.length !== nodesLocal.length ? ` (of ${nodesLocal.length})` : "";
           defaultRuntime.log(
             `Known: ${filtered.length}${filteredLabel} · Paired: ${pairedCount} · Connected: ${connectedCount}`,
           );
@@ -427,10 +431,6 @@ export function registerNodesStatusCommands(nodes: Command) {
           });
           const filteredLabel =
             hasFilters && filteredPaired.length !== paired.length ? ` (of ${paired.length})` : "";
-          defaultRuntime.log(
-            `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
-          );
-
           if (opts.json) {
             defaultRuntime.writeJson({
               pending: pendingRows,
@@ -438,6 +438,10 @@ export function registerNodesStatusCommands(nodes: Command) {
             });
             return;
           }
+
+          defaultRuntime.log(
+            `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
+          );
 
           if (pendingRows.length > 0) {
             const rendered = renderPendingPairingRequestsTable({

@@ -1,3 +1,4 @@
+// Package script tests validate root package script invariants.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -98,7 +99,45 @@ describe("package scripts", () => {
     expect(missingTargets).toEqual([]);
   });
 
+  it("keeps direct Node package scripts off POSIX-only env assignment prefixes", () => {
+    const packageJson = readPackageJson();
+    const directNodeEnvScripts = Object.entries(packageJson.scripts).flatMap(([name, script]) =>
+      script
+        .split(/\s*(?:&&|\|\||;)\s*/u)
+        .filter((command) => {
+          const tokens = tokenizeCommand(command);
+          let index = tokens[0] === "env" ? 1 : 0;
+          const hasEnvPrefix = ENV_ASSIGNMENT_RE.test(tokens[index] ?? "");
+          while (ENV_ASSIGNMENT_RE.test(tokens[index] ?? "")) {
+            index += 1;
+          }
+          return hasEnvPrefix && tokens[index] === "node";
+        })
+        .map((command) => `${name}: ${command}`),
+    );
+
+    expect(directNodeEnvScripts).toEqual([]);
+  });
+
+  it("enables live cache validation in the package script", () => {
+    expect(readPackageJson().scripts["test:live:cache"]).toBe(
+      "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import tsx scripts/check-live-cache.ts",
+    );
+  });
+
   it("uses the shipped package launcher for npm start", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
+  });
+
+  it("runs generated module formatting coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/format-generated-module.test.ts",
+    );
+  });
+
+  it("runs env launcher coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/run-with-env.test.ts",
+    );
   });
 });

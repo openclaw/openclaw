@@ -1,4 +1,5 @@
-import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
+// Control UI controller manages scope errors gateway state.
+import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { GatewayRequestError, resolveGatewayErrorDetailCode } from "../gateway.ts";
 
 export function isMissingOperatorReadScopeError(err: unknown): boolean {

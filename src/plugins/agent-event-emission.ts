@@ -1,5 +1,6 @@
+// Emits agent events requested by plugin hook contracts.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   isPluginJsonValue,
   type PluginAgentEventEmitParams,

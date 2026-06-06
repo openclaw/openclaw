@@ -1,3 +1,4 @@
+// Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
 
 export type CliCommandPluginLoadPolicy =
@@ -50,6 +51,7 @@ export type CliCommandCatalogEntry = {
   };
 };
 
+/** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["crestodian"],
@@ -124,7 +126,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: {
       loadPlugins: "never",
       pluginRegistry: { scope: "channels" },
-      routeConfigGuard: "when-suppressed",
       ensureCliPath: false,
       networkProxy: "bypass",
     },
@@ -180,7 +181,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["commitments"],
     policy: {
       ensureCliPath: false,
-      routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
       networkProxy: "bypass",
     },
@@ -225,7 +225,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: {
       ensureCliPath: false,
-      routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
       networkProxy: "bypass",
     },
@@ -236,7 +235,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: {
       ensureCliPath: false,
-      routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
       networkProxy: "bypass",
     },
@@ -246,7 +244,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["tasks"],
     policy: {
       ensureCliPath: false,
-      routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
       networkProxy: "bypass",
     },

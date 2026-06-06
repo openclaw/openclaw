@@ -1,3 +1,4 @@
+// Clickclack tests cover gateway plugin behavior.
 import { EventEmitter } from "node:events";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +20,12 @@ const mocks = vi.hoisted(() => ({
     thread: vi.fn(),
   },
   handleClickClackInbound: vi.fn(),
+  resolveClickClackInboundAccess: vi.fn(),
   resolveWorkspaceId: vi.fn(),
+}));
+
+vi.mock("./access.js", () => ({
+  resolveClickClackInboundAccess: mocks.resolveClickClackInboundAccess,
 }));
 
 vi.mock("./http-client.js", () => ({
@@ -76,6 +82,10 @@ describe("ClickClack gateway", () => {
       created_at: "2026-01-01T00:00:00.000Z",
     });
     mocks.client.events.mockResolvedValue([]);
+    mocks.resolveClickClackInboundAccess.mockResolvedValue({
+      shouldDispatch: true,
+      commandAuthorized: true,
+    });
     mocks.resolveWorkspaceId.mockResolvedValue("workspace-1");
     mocks.client.channelMessages.mockResolvedValue([
       {
@@ -112,7 +122,9 @@ describe("ClickClack gateway", () => {
     await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
 
     socket.emit("message", Buffer.from("{not json"));
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(runError).toBeUndefined();
     expect(ctx.log?.warn).toHaveBeenCalledWith(
       "[default] skipped malformed ClickClack websocket event",
@@ -135,8 +147,47 @@ describe("ClickClack gateway", () => {
     );
 
     await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
+    expect(mocks.handleClickClackInbound.mock.calls[0]?.[0].access).toEqual({
+      shouldDispatch: true,
+      commandAuthorized: true,
+    });
     abort.abort();
     await run;
     expect(runError).toBeUndefined();
+  });
+
+  it("drops messages denied by ClickClack sender access before inbound handling", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    mocks.resolveClickClackInboundAccess.mockResolvedValue({
+      shouldDispatch: false,
+      commandAuthorized: false,
+    });
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          id: "evt-1",
+          cursor: "cursor-1",
+          type: "message.created",
+          workspace_id: "workspace-1",
+          channel_id: "chan-1",
+          seq: 2,
+          created_at: "2026-01-01T00:00:00.000Z",
+          payload: { message_id: "msg-1", author_id: "human-1" },
+        }),
+      ),
+    );
+
+    await vi.waitFor(() => expect(mocks.resolveClickClackInboundAccess).toHaveBeenCalledTimes(1));
+    expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
+    abort.abort();
+    await run;
   });
 });

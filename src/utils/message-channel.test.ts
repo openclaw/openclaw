@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+// Message channel tests cover channel id normalization and routing helpers.
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -79,5 +81,40 @@ describe("message-channel", () => {
       ]),
     );
     expect(isMarkdownCapableMessageChannel("demo-markdown-channel")).toBe(true);
+  });
+
+  it("reads Matrix markdown capability from bundled channel catalog metadata", async () => {
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.resolve("extensions");
+    vi.resetModules();
+    try {
+      const module = await import("./message-channel.js");
+      expect(module.isMarkdownCapableMessageChannel("matrix")).toBe(true);
+    } finally {
+      if (previousBundledPluginsDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+      }
+      vi.resetModules();
+    }
+  });
+
+  it("treats registered plugin channels without markdown metadata as plain text", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "qa-channel",
+          plugin: createChannelTestPluginBase({
+            id: "qa-channel",
+            label: "QA Channel",
+            docsPath: "/channels/qa-channel",
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    expect(isMarkdownCapableMessageChannel("qa-channel")).toBe(false);
   });
 });

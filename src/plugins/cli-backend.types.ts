@@ -1,5 +1,7 @@
+/** Type contracts for plugin-owned CLI backend integrations. */
 import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ContextEngineHostCapability } from "../context-engine/types.js";
 
 export type PluginTextReplacement = {
   from: string | RegExp;
@@ -72,8 +74,20 @@ export type CliBackendNormalizeConfigContext = {
 export type CliBackendPlugin = {
   /** Provider id used in model refs, for example `claude-cli/opus`. */
   id: string;
+  /** Canonical model provider whose models this CLI backend can execute. */
+  modelProvider?: string;
   /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
   config: CliBackendConfig;
+  /**
+   * Context-engine host capabilities provided by this backend when it is
+   * driven through the generic CLI runner.
+   */
+  contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
+  /**
+   * Backend-owned compaction for non-harness CLI sessions.
+   * Set only when the backend bounds its own transcript and persists resumable state.
+   */
+  ownsNativeCompaction?: boolean;
   /**
    * Optional live-smoke metadata owned by the backend plugin.
    *

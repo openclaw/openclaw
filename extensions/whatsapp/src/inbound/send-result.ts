@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements send result behavior.
 import type { WAMessage, WAMessageKey } from "baileys";
 import {
   createMessageReceiptFromOutboundResults,
@@ -5,7 +6,8 @@ import {
   type MessageReceipt,
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type WhatsAppSendKind = "media" | "poll" | "reaction" | "text";
 
@@ -85,7 +87,7 @@ export function combineWhatsAppSendResults(
   kind: WhatsAppSendKind,
   results: readonly WhatsAppSendResult[],
 ): WhatsAppSendResult {
-  const messageIds = [...new Set(results.flatMap(listWhatsAppSendResultMessageIds))];
+  const messageIds = uniqueStrings(results.flatMap(listWhatsAppSendResultMessageIds));
   const keys = results.flatMap((result) => result.keys);
   return {
     kind,
@@ -101,9 +103,9 @@ export function listWhatsAppSendResultMessageIds(result: WhatsAppSendResult): st
   if (receiptIds.length > 0) {
     return receiptIds;
   }
-  const keyIds = result.keys.map((key) => key.id.trim()).filter(Boolean);
+  const keyIds = normalizeStringEntries(result.keys.map((key) => key.id));
   if (keyIds.length > 0) {
-    return [...new Set(keyIds)];
+    return uniqueStrings(keyIds);
   }
   return [];
 }

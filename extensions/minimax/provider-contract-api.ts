@@ -1,10 +1,11 @@
+// Minimax API module exposes the plugin public contract.
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 const noopAuth = async () => ({ profiles: [] });
 const wizardGroup = {
   groupId: "minimax",
   groupLabel: "MiniMax",
-  groupHint: "M2.7 (recommended)",
+  groupHint: "M3 (recommended)",
 } as const;
 
 export function createMinimaxProvider(): ProviderPlugin {

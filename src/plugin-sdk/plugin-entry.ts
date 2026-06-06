@@ -1,3 +1,4 @@
+// Plugin entry contracts define the manifest-facing hooks implemented by plugin packages.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type {
@@ -7,6 +8,7 @@ import type {
   AgentPromptGuidanceEntry,
   AgentPromptSurfaceKind,
   MediaUnderstandingProviderPlugin,
+  TranscriptSourceProvider,
   MigrationApplyResult,
   MigrationDetection,
   MigrationItem,
@@ -69,6 +71,7 @@ import type {
   ProviderReplaySessionState,
   RealtimeTranscriptionProviderPlugin,
   ProviderResolvedUsageAuth,
+  ProviderUsageAuthToken,
   ProviderResolveDynamicModelContext,
   ProviderResolveTransportTurnStateContext,
   ProviderResolveWebSocketSessionPolicyContext,
@@ -127,6 +130,7 @@ export type {
   AgentPromptGuidanceEntry,
   AgentPromptSurfaceKind,
   MediaUnderstandingProviderPlugin,
+  TranscriptSourceProvider,
   MigrationApplyResult,
   MigrationDetection,
   MigrationItem,
@@ -205,6 +209,7 @@ export type {
   ProviderReasoningOutputMode,
   ProviderReasoningOutputModeContext,
   ProviderResolvedUsageAuth,
+  ProviderUsageAuthToken,
   ProviderToolSchemaDiagnostic,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
@@ -254,7 +259,7 @@ export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
-} from "../model-catalog/types.js";
+} from "@openclaw/model-catalog-core/model-catalog-types";
 export type { OpenClawConfig };
 
 export {

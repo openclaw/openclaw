@@ -1,4 +1,13 @@
+// Configure wizard Gateway port, bind, auth, and Tailscale prompts.
+import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
+import { parsePort } from "../cli/shared/parse-port.js";
 import { resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
@@ -11,10 +20,6 @@ import {
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
-import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, select, text } from "./configure.shared.js";
 import {
@@ -28,13 +33,13 @@ type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type GatewayTokenInputMode = "plaintext" | "ref";
 
 function validateGatewayPortInput(value: unknown): string | undefined {
-  const port = Number(typeof value === "string" ? value.trim() : value);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  if (parsePort(value) === null) {
     return formatPortRangeHint();
   }
   return undefined;
 }
 
+/** Prompt for local Gateway network/auth settings and return config plus call token. */
 export async function promptGatewayConfig(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
@@ -51,7 +56,7 @@ export async function promptGatewayConfig(
     }),
     runtime,
   );
-  const port = Number.parseInt(portRaw, 10);
+  const port = parsePort(portRaw) ?? resolveGatewayPort(cfg);
 
   let bind = guardCancel(
     await select({

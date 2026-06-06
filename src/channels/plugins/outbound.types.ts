@@ -1,3 +1,8 @@
+/**
+ * Channel outbound adapter types.
+ *
+ * Defines text/media/payload/poll contexts, presentation capabilities, and send results.
+ */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -98,6 +103,7 @@ export type ChannelDeliveryCapabilities = {
   durableFinal?: {
     text?: boolean;
     media?: boolean;
+    poll?: boolean;
     payload?: boolean;
     silent?: boolean;
     replyTo?: boolean;
@@ -192,6 +198,7 @@ export type ChannelOutboundAdapter = {
     target: ChannelOutboundTargetRef;
     messageId: string;
     pin: ReplyPayloadDeliveryPin;
+    gatewayClientScopes?: readonly string[];
   }) => Promise<void> | void;
   /**
    * @deprecated Use shouldTreatDeliveredTextAsVisible instead.

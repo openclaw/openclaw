@@ -1,3 +1,4 @@
+// Memory Core tests cover search manager plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -122,6 +123,7 @@ vi.mock("./qmd-manager.js", () => ({
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => ({
   checkQmdBinaryAvailability,
+  resolveQmdBinaryUnavailableReason: (result: { reason?: string }) => result.reason ?? "binary",
 }));
 
 vi.mock("../../manager-runtime.js", () => ({
@@ -138,7 +140,7 @@ import {
   closeMemorySearchManager,
   getMemorySearchManager,
 } from "./search-manager.js";
-const createQmdManagerMock = vi.mocked(QmdMemoryManager.create);
+const createQmdManagerMock = vi.mocked(QmdMemoryManager["create"]);
 
 type QmdManagerInstance = Awaited<ReturnType<typeof QmdMemoryManager.create>>;
 type SearchManagerResult = Awaited<ReturnType<typeof getMemorySearchManager>>;
@@ -146,7 +148,7 @@ type SearchManager = NonNullable<SearchManagerResult["manager"]>;
 
 function createQmdCfg(
   agentId: string,
-  workspace: string = "/tmp/workspace",
+  workspace = "/tmp/workspace",
   qmd: Record<string, unknown> = {},
 ): OpenClawConfig {
   return {
@@ -351,10 +353,27 @@ describe("getMemorySearchManager caching", () => {
     const cfg = createQmdCfg("missing-qmd");
     checkQmdBinaryAvailability.mockResolvedValueOnce({
       available: false,
+      reason: "binary",
       error: "spawn qmd ENOENT",
     });
 
     const result = await getMemorySearchManager({ cfg, agentId: "missing-qmd" });
+    const manager = requireManager(result);
+    const searchResults = await manager.search("hello");
+
+    expect(createQmdManagerMock).not.toHaveBeenCalled();
+    expect(mockMemoryIndexGet).toHaveBeenCalled();
+    expect(searchResults).toHaveLength(1);
+  });
+
+  it("treats legacy qmd unavailable results without a reason as binary failures", async () => {
+    const cfg = createQmdCfg("missing-qmd-legacy");
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      error: "spawn qmd ENOENT",
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId: "missing-qmd-legacy" });
     const manager = requireManager(result);
     const searchResults = await manager.search("hello");
 
@@ -606,7 +625,7 @@ describe("getMemorySearchManager caching", () => {
     );
     checkQmdBinaryAvailability
       .mockResolvedValueOnce({ available: true })
-      .mockResolvedValueOnce({ available: false, error: "spawn qmd ENOENT" });
+      .mockResolvedValueOnce({ available: false, reason: "binary", error: "spawn qmd ENOENT" });
 
     const first = await getMemorySearchManager({ cfg: firstCfg, agentId });
     const firstManager = requireManager(first);

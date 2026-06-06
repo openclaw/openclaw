@@ -1,3 +1,4 @@
+/** Verifies the official external plugin catalog manifests, install specs, and labels. */
 import { describe, expect, it } from "vitest";
 import {
   type OfficialExternalPluginCatalogEntry,
@@ -41,6 +42,14 @@ describe("official external plugin catalog", () => {
     );
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("line"))?.npmSpec).toBe(
       "@openclaw/line",
+    );
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("diffs-language-pack"))).toEqual(
+      {
+        npmSpec: "@openclaw/diffs-language-pack",
+        clawhubSpec: "clawhub:@openclaw/diffs-language-pack",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.5.27",
+      },
     );
   });
 

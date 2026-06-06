@@ -1,7 +1,9 @@
+// Gateway setup prompt shared constants.
+// Provides Tailscale copy and Control UI origin updates for CLI setup flows.
+import { isIpv6Address, parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
-import { isIpv6Address, parseCanonicalIpAddress } from "../shared/net/ip.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export const TAILSCALE_EXPOSURE_OPTIONS = [
   { value: "off", label: "Off", hint: "No Tailscale exposure" },
@@ -81,6 +83,8 @@ export async function maybeAddTailnetOriginToControlUiAllowedOrigins(params: {
 
   const existing = params.config.gateway?.controlUi?.allowedOrigins ?? [];
   const updatedOrigins = appendAllowedOrigin(existing, tsOrigin);
+  // Preserve all unrelated gateway/controlUi config while adding the derived
+  // tailnet origin, because setup writes partial gateway config objects.
   return {
     ...params.config,
     gateway: {

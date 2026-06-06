@@ -1,8 +1,14 @@
+// Snapshots script supports OpenClaw repository automation.
 import { die, run } from "./host-command.ts";
 import type { SnapshotInfo } from "./types.ts";
 
+const SNAPSHOT_LIST_TIMEOUT_MS = 120_000;
+
 export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
-  const output = run("prlctl", ["snapshot-list", vmName, "--json"], { quiet: true }).stdout;
+  const output = run("prlctl", ["snapshot-list", vmName, "--json"], {
+    quiet: true,
+    timeoutMs: SNAPSHOT_LIST_TIMEOUT_MS,
+  }).stdout;
   const payload = JSON.parse(output) as Record<string, { name?: string; state?: string }>;
   let best: SnapshotInfo | null = null;
   let bestScore = -1;
@@ -14,22 +20,30 @@ export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
         values.push(match[1]);
       }
     }
-    return values;
+    return values.flatMap((value) => {
+      const withoutLatest = value.replace(/\s+latest$/u, "").trim();
+      return withoutLatest && withoutLatest !== value ? [value, withoutLatest] : [value];
+    });
   };
   const normalizedHint = hint.trim().toLowerCase();
+  const normalizedHints = [normalizedHint, normalizedHint.replace(/\s+latest$/u, "").trim()].filter(
+    (value, index, values) => value && values.indexOf(value) === index,
+  );
   for (const [id, meta] of Object.entries(payload)) {
     const name = (meta.name ?? "").trim();
     if (!name) {
       continue;
     }
     let score = 0;
-    for (const alias of aliases(name.toLowerCase())) {
-      if (alias === normalizedHint) {
-        score = Math.max(score, 10);
-      } else if (normalizedHint && alias.includes(normalizedHint)) {
-        score = Math.max(score, 5 + normalizedHint.length / Math.max(alias.length, 1));
-      } else {
-        score = Math.max(score, stringSimilarity(normalizedHint, alias));
+    for (const hintAlias of normalizedHints) {
+      for (const alias of aliases(name.toLowerCase())) {
+        if (alias === hintAlias) {
+          score = Math.max(score, 10);
+        } else if (hintAlias && alias.includes(hintAlias)) {
+          score = Math.max(score, 5 + hintAlias.length / Math.max(alias.length, 1));
+        } else {
+          score = Math.max(score, stringSimilarity(hintAlias, alias));
+        }
       }
     }
     if ((meta.state ?? "").toLowerCase() === "poweroff") {

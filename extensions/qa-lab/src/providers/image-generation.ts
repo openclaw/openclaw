@@ -1,3 +1,8 @@
+// Qa Lab plugin module implements image generation behavior.
+import {
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QA_BASE_RUNTIME_PLUGIN_IDS } from "../qa-gateway-config.js";
 import type { QaProviderMode } from "./index.js";
 import { getQaProvider } from "./index.js";
@@ -15,9 +20,7 @@ function splitModelProviderId(modelRef: string) {
 }
 
 function uniqueNonEmpty(values: readonly (string | null | undefined)[]) {
-  return [
-    ...new Set(values.map((value) => value?.trim()).filter((value): value is string => !!value)),
-  ];
+  return uniqueStrings(normalizeTrimmedStringList(values));
 }
 
 export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchInput) {

@@ -1,3 +1,4 @@
+// Sync Moonshot Docs script supports OpenClaw repository automation.
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -119,7 +120,7 @@ async function syncMoonshotDocs() {
   await writeFile(conceptsDoc, conceptsText);
 }
 
-syncMoonshotDocs().catch((error) => {
+syncMoonshotDocs().catch((error: unknown) => {
   console.error(error);
   process.exitCode = 1;
 });

@@ -1,4 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// Discord plugin module implements runtime behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { createDiscordActionGate } from "../accounts.js";
 import { readStringParam, type OpenClawConfig } from "../runtime-api.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";

@@ -1,3 +1,4 @@
+// Discord tests cover draft stream plugin behavior.
 import { MessageFlags, Routes } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import { createDiscordDraftStream } from "./draft-stream.js";
@@ -55,6 +56,35 @@ describe("createDiscordDraftStream", () => {
       body: { content: "second draft", allowed_mentions: { parse: [] } },
     });
     expect(stream.messageId()).toBe("m1");
+  });
+
+  it("deletes the current preview without stopping later draft updates", async () => {
+    const rest = {
+      post: vi.fn().mockResolvedValueOnce({ id: "m1" }).mockResolvedValueOnce({ id: "m2" }),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "c1",
+      throttleMs: 250,
+    });
+
+    stream.update("temporary commentary");
+    await stream.flush();
+    await stream.deleteCurrentMessage();
+    stream.update("tool progress");
+    await stream.flush();
+
+    expect(rest.delete).toHaveBeenCalledWith(Routes.channelMessage("c1", "m1"));
+    expect(rest.post).toHaveBeenNthCalledWith(2, Routes.channelMessages("c1"), {
+      body: {
+        content: "tool progress",
+        allowed_mentions: { parse: [] },
+      },
+    });
+    expect(rest.patch).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBe("m2");
   });
 
   it("suppresses mentions in preview creates and edits", async () => {

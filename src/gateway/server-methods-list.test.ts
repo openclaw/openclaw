@@ -1,3 +1,6 @@
+/**
+ * Tests the registered gateway server method list and exported method names.
+ */
 import { describe, expect, it } from "vitest";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 
@@ -12,6 +15,12 @@ describe("GATEWAY_EVENTS", () => {
 describe("listGatewayMethods", () => {
   it("advertises plugin surface refresh for capability rotation", () => {
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
+  });
+
+  it("advertises ClawHub skill trust methods", () => {
+    const methods = listGatewayMethods();
+    expect(methods).toContain("skills.securityVerdicts");
+    expect(methods).toContain("skills.skillCard");
   });
 
   it("does not advertise hidden core handlers", () => {
@@ -44,6 +53,7 @@ describe("listGatewayMethods", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("talk.client.create");
     expect(methods).toContain("talk.client.toolCall");
+    expect(methods).toContain("talk.client.steer");
     expect(methods).toContain("talk.session.create");
     expect(methods).toContain("talk.session.join");
     expect(methods).toContain("talk.session.appendAudio");
@@ -52,6 +62,7 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.session.cancelTurn");
     expect(methods).toContain("talk.session.cancelOutput");
     expect(methods).toContain("talk.session.submitToolResult");
+    expect(methods).toContain("talk.session.steer");
     expect(methods).toContain("talk.session.close");
   });
 });

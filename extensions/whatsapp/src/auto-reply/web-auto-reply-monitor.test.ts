@@ -1,3 +1,4 @@
+// Whatsapp tests cover web auto reply monitor plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -75,7 +76,7 @@ async function runGroupGating(params: {
     groupHistoryLimit: 10,
     groupMemberNames: new Map(),
     logVerbose: (message) => verboseLogs.push(message),
-    replyLogger: { debug: () => {} },
+    replyLogger: { debug: () => {}, warn: () => {} },
   });
   return { result, groupHistories, verboseLogs };
 }

@@ -1,5 +1,7 @@
+// Resolves and checks packaged Control UI assets.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import * as controlUiFsRuntime from "./control-ui-assets.fs.runtime.js";
@@ -275,10 +277,7 @@ export type EnsureControlUiAssetsResult = {
 };
 
 function summarizeCommandOutput(text: string): string | undefined {
-  const lines = text
-    .split(/\r?\n/g)
-    .map((l) => l.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split(/\r?\n/g));
   if (!lines.length) {
     return undefined;
   }

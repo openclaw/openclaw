@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements ingest behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
@@ -5,6 +6,7 @@ import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 type IngestMemoryWikiSourceResult = {
@@ -48,7 +50,7 @@ export async function ingestMemoryWikiSource(params: {
   const pageRelativePath = path.join("sources", `${slug}.md`);
   const pagePath = path.join(params.config.vault.path, pageRelativePath);
   const created = !(await pathExists(pagePath));
-  const timestamp = new Date(params.nowMs ?? Date.now()).toISOString();
+  const timestamp = resolveMemoryWikiTimestamp(params.nowMs);
 
   const markdown = renderWikiMarkdown({
     frontmatter: {

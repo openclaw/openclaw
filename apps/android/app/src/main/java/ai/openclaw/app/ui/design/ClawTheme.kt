@@ -20,6 +20,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/**
+ * App color tokens consumed by ClawTheme and bridged into Material components.
+ */
 @Immutable
 internal data class ClawColors(
   val canvas: Color,
@@ -41,6 +44,9 @@ internal data class ClawColors(
   val dangerSoft: Color,
 )
 
+/**
+ * App spacing scale for Compose screens and shared controls.
+ */
 @Immutable
 internal data class ClawSpacing(
   val xxxs: Dp = 4.dp,
@@ -54,15 +60,22 @@ internal data class ClawSpacing(
   val touchTarget: Dp = 48.dp,
 )
 
+/**
+ * Radius scale for rows, panels, controls, sheets, and status pills.
+ */
 @Immutable
 internal data class ClawRadii(
   val row: Dp = 4.dp,
-  val panel: Dp = 7.dp,
-  val control: Dp = 8.dp,
-  val sheet: Dp = 12.dp,
-  val pill: Dp = 999.dp,
+  val panel: Dp = 5.dp,
+  val control: Dp = 6.dp,
+  val button: Dp = 8.dp,
+  val sheet: Dp = 10.dp,
+  val pill: Dp = 12.dp,
 )
 
+/**
+ * App text styles kept independent from Material typography names.
+ */
 @Immutable
 internal data class ClawTypography(
   val display: TextStyle,
@@ -121,6 +134,9 @@ private val LocalClawSpacing = staticCompositionLocalOf { ClawSpacing() }
 private val LocalClawRadii = staticCompositionLocalOf { ClawRadii() }
 private val LocalClawTypography = staticCompositionLocalOf { clawTypography(mobileFontFamily) }
 
+/**
+ * Composition-local access point for OpenClaw Android design tokens.
+ */
 internal object ClawTheme {
   val colors: ClawColors
     @Composable
@@ -143,6 +159,9 @@ internal object ClawTheme {
     get() = LocalClawTypography.current
 }
 
+/**
+ * Installs OpenClaw design tokens and maps them into MaterialTheme for Material3 controls.
+ */
 @Composable
 internal fun ClawDesignTheme(
   dark: Boolean = true,
@@ -166,6 +185,9 @@ internal fun ClawDesignTheme(
   }
 }
 
+/**
+ * Returns the system dark-mode preference for callers that expose theme selection.
+ */
 @Composable
 internal fun rememberClawDarkPreference(): Boolean = isSystemInDarkTheme()
 

@@ -1,3 +1,4 @@
+// Shared test setup installs common Vitest mocks and cleanup behavior.
 import { vi } from "vitest";
 
 const openAiCodexTokenRefreshTestHook = "__OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__";
@@ -5,7 +6,7 @@ type GlobalWithOpenAiCodexTokenRefreshTestHook = typeof globalThis & {
   [openAiCodexTokenRefreshTestHook]?: ((...args: unknown[]) => unknown) | undefined;
 };
 
-vi.mock("@earendil-works/pi-ai/oauth", () => ({
+vi.mock("../src/llm/oauth.js", () => ({
   getOAuthApiKey: () => undefined,
   getOAuthProviders: () => [],
   loginOpenAICodex: vi.fn(),
@@ -14,6 +15,7 @@ vi.mock("@earendil-works/pi-ai/oauth", () => ({
       ...args,
     ),
   ),
+  resetOAuthProviders: vi.fn(),
 }));
 
 vi.mock("@mariozechner/clipboard", () => ({

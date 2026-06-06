@@ -1,3 +1,4 @@
+// Audits config paths and values for diagnostics and safety checks.
 import path from "node:path";
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { resolveStateDir } from "./paths.js";
@@ -86,8 +87,7 @@ function parseFlagName(arg: string): string | null {
 export function redactConfigAuditArgv(argv: readonly string[]): string[] {
   const result: string[] = [];
   let redactNext = false;
-  for (let i = 0; i < argv.length; i++) {
-    const current = argv[i];
+  for (const current of argv) {
     if (typeof current !== "string") {
       result.push(current);
       redactNext = false;

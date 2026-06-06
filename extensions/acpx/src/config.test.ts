@@ -1,3 +1,4 @@
+// ACPX tests cover config plugin behavior.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -7,8 +8,12 @@ import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
 const requireFromTest = createRequire(import.meta.url);
 const TSX_IMPORT = requireFromTest.resolve("tsx");
 
-function expectedSourceMcpServerArgs(entrypoint: string): string[] {
-  return ["--import", TSX_IMPORT, path.resolve(entrypoint)];
+function expectedMcpServerArgs(params: { sourceEntry: string; distEntry: string }): string[] {
+  const distEntry = path.resolve(params.distEntry);
+  if (fs.existsSync(distEntry)) {
+    return [distEntry];
+  }
+  return ["--import", TSX_IMPORT, path.resolve(params.sourceEntry)];
 }
 
 describe("embedded acpx plugin config", () => {
@@ -164,7 +169,10 @@ describe("embedded acpx plugin config", () => {
     const server = resolved.mcpServers["openclaw-plugin-tools"];
     expect(server).toEqual({
       command: process.execPath,
-      args: expectedSourceMcpServerArgs("src/mcp/plugin-tools-serve.ts"),
+      args: expectedMcpServerArgs({
+        sourceEntry: "src/mcp/plugin-tools-serve.ts",
+        distEntry: "dist/mcp/plugin-tools-serve.js",
+      }),
     });
   });
 
@@ -179,7 +187,10 @@ describe("embedded acpx plugin config", () => {
     const server = resolved.mcpServers["openclaw-tools"];
     expect(server).toEqual({
       command: process.execPath,
-      args: expectedSourceMcpServerArgs("src/mcp/openclaw-tools-serve.ts"),
+      args: expectedMcpServerArgs({
+        sourceEntry: "src/mcp/openclaw-tools-serve.ts",
+        distEntry: "dist/mcp/openclaw-tools-serve.js",
+      }),
     });
   });
 

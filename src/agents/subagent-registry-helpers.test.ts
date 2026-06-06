@@ -1,3 +1,5 @@
+// Subagent registry helper tests cover orphan reconciliation and compact logging
+// for announce delivery give-up paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import { logAnnounceGiveUp, reconcileOrphanedRun } from "./subagent-registry-helpers.js";
@@ -65,8 +67,11 @@ describe("logAnnounceGiveUp", () => {
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const entry = createRunEntry({
       endedAt: 4_000,
-      announceRetryCount: 3,
-      lastAnnounceDeliveryError: "direct-primary: routed-dispatch-did-not-queue-final",
+      delivery: {
+        status: "failed",
+        attemptCount: 3,
+        lastError: "direct-primary: routed-dispatch-did-not-queue-final",
+      },
     });
 
     logAnnounceGiveUp(entry, "retry-limit");
@@ -78,9 +83,14 @@ describe("logAnnounceGiveUp", () => {
   });
 
   it("normalizes multiline delivery errors onto one gateway log line", () => {
+    // Gateway logs are line-oriented; multiline provider errors must be
+    // collapsed before they enter warning text.
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const entry = createRunEntry({
-      lastAnnounceDeliveryError: "gateway timeout\nphase: routed dispatch failed",
+      delivery: {
+        status: "failed",
+        lastError: "gateway timeout\nphase: routed dispatch failed",
+      },
     });
 
     logAnnounceGiveUp(entry, "expiry");

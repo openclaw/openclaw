@@ -1,3 +1,4 @@
+// Memory Core tests cover manager status state plugin behavior.
 import type { SQLInputValue } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
@@ -24,6 +25,17 @@ describe("memory manager status state", () => {
         hasMemorySource: true,
         statusOnly: true,
         hasIndexedMeta: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("marks status-only managers dirty when index identity mismatches", () => {
+    expect(
+      resolveInitialMemoryDirty({
+        hasMemorySource: false,
+        statusOnly: true,
+        hasIndexedMeta: true,
+        indexIdentityMismatched: true,
       }),
     ).toBe(true);
   });

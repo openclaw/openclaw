@@ -1,3 +1,4 @@
+// Lmstudio plugin module implements models behavior.
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -7,6 +8,7 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
+import { asPositiveSafeInteger, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_BASE_URL, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 
 export type LmstudioModelWire = {
@@ -76,13 +78,7 @@ function normalizeReasoningOptions(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return [
-    ...new Set(
-      value
-        .map((option) => normalizeReasoningOption(option))
-        .filter((option): option is string => option !== null),
-    ),
-  ];
+  return uniqueStrings(value.flatMap((option) => normalizeReasoningOption(option) ?? []));
 }
 
 function isLmstudioBinaryReasoningOptions(allowedOptions: readonly string[]): boolean {
@@ -98,13 +94,11 @@ function resolveLmstudioTransportReasoningEfforts(allowedOptions: readonly strin
       ? [...LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS]
       : [...LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS];
   }
-  return [
-    ...new Set(
-      allowedOptions
-        .map((option) => (option === "off" ? "none" : option))
-        .filter((option) => option !== "on"),
-    ),
-  ];
+  return uniqueStrings(
+    allowedOptions
+      .map((option) => (option === "off" ? "none" : option))
+      .filter((option) => option !== "on"),
+  );
 }
 
 function resolveLmstudioEnabledTransportReasoningOption(
@@ -216,11 +210,10 @@ export function resolveLoadedContextWindow(
   let contextWindow: number | null = null;
   for (const instance of loadedInstances) {
     // Discovery payload is external JSON, so tolerate malformed entries.
-    const length = instance?.config?.context_length;
-    if (length === undefined || !Number.isFinite(length) || length <= 0) {
+    const normalized = asPositiveSafeInteger(instance?.config?.context_length);
+    if (normalized === undefined) {
       continue;
     }
-    const normalized = Math.floor(length);
     contextWindow = contextWindow === null ? normalized : Math.max(contextWindow, normalized);
   }
   return contextWindow;
@@ -372,14 +365,8 @@ export function normalizeLmstudioConfiguredCatalogEntry(
   }
   const id = record.id.trim();
   const name = typeof record.name === "string" && record.name.trim().length > 0 ? record.name : id;
-  const contextWindow =
-    typeof record.contextWindow === "number" && record.contextWindow > 0
-      ? record.contextWindow
-      : undefined;
-  const contextTokens =
-    typeof record.contextTokens === "number" && record.contextTokens > 0
-      ? record.contextTokens
-      : undefined;
+  const contextWindow = asPositiveSafeInteger(record.contextWindow);
+  const contextTokens = asPositiveSafeInteger(record.contextTokens);
   const reasoning = typeof record.reasoning === "boolean" ? record.reasoning : undefined;
   const input = Array.isArray(record.input)
     ? record.input.filter(
@@ -476,12 +463,7 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
     return null;
   }
   const loadedContextWindow = resolveLoadedContextWindow(entry);
-  const advertisedContextWindow =
-    entry.max_context_length !== undefined &&
-    Number.isFinite(entry.max_context_length) &&
-    entry.max_context_length > 0
-      ? Math.floor(entry.max_context_length)
-      : null;
+  const advertisedContextWindow = asPositiveSafeInteger(entry.max_context_length) ?? null;
   const contextWindow = advertisedContextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
   // Keep native/advertised context window metadata in catalog, but use a practical
   // default target for model loading unless callers explicitly override it.

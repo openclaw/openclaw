@@ -1,10 +1,12 @@
+/** Validation and normalization for ACP session runtime options and config controls. */
 import { isAbsolute } from "node:path";
+import { normalizeText } from "@openclaw/acp-core/normalize-text";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { normalizeText } from "../normalize-text.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 
-export { normalizeText } from "../normalize-text.js";
+export { normalizeText } from "@openclaw/acp-core/normalize-text";
 
 const MAX_RUNTIME_MODE_LENGTH = 64;
 const MAX_MODEL_LENGTH = 200;
@@ -18,6 +20,7 @@ const MAX_BACKEND_OPTION_VALUE_LENGTH = 512;
 const MAX_BACKEND_EXTRAS = 32;
 
 const SAFE_OPTION_KEY_RE = /^[a-z0-9][a-z0-9._:-]*$/i;
+// User-facing config aliases accepted by ACP clients and normalized to session runtime options.
 const RUNTIME_CONFIG_OPTION_ALIASES = {
   model: ["model"],
   thinking: ["thinking", "effort", "reasoning_effort", "thought_level"],
@@ -134,7 +137,7 @@ export function parseRuntimeTimeoutSecondsInput(rawTimeout: unknown): number {
   if (!normalized || !/^\d+$/.test(normalized)) {
     failInvalidOption("Timeout must be a positive integer in seconds.");
   }
-  return validateRuntimeTimeoutSecondsInput(Number.parseInt(normalized, 10));
+  return validateRuntimeTimeoutSecondsInput(parseStrictPositiveInteger(normalized) ?? 0);
 }
 
 export function validateRuntimeConfigOptionInput(

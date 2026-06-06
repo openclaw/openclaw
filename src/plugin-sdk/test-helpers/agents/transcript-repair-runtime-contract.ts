@@ -1,4 +1,5 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+// Transcript repair runtime contract helpers build agent transcript repair fixtures.
+import type { AgentMessage } from "../../../agents/runtime/index.js";
 
 export const QUEUED_USER_MESSAGE_MARKER =
   "[Queued user message that arrived while the previous turn was still active]";

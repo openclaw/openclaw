@@ -1,3 +1,4 @@
+// Control UI module implements usage helpers behavior.
 export type UsageQueryTerm = {
   key?: string;
   value: string;
@@ -77,11 +78,15 @@ const parseQueryNumber = (value: string): number | null => {
     multiplier = 1_000_000;
     raw = raw.slice(0, -1);
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
+  if (!/^\d+(?:\.\d+)?$/.test(raw)) {
     return null;
   }
-  return parsed * multiplier;
+  const parsed = Number(raw);
+  const normalized = parsed * multiplier;
+  if (!Number.isFinite(normalized) || !Number.isSafeInteger(Math.round(normalized))) {
+    return null;
+  }
+  return normalized;
 };
 
 export const extractQueryTerms = (query: string): UsageQueryTerm[] => {

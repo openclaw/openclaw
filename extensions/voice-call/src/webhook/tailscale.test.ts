@@ -1,3 +1,4 @@
+// Voice Call tests cover tailscale plugin behavior.
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -5,7 +6,7 @@ const { spawnMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
 }));
 
-const tailscaleSpawnOptions = { stdio: ["ignore", "pipe", "pipe"] } as const;
+const tailscaleSpawnOptions = { stdio: ["ignore", "pipe", "ignore"] } as const;
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -18,12 +19,14 @@ vi.mock("node:child_process", async () => {
 });
 
 import {
+  appendTailscaleCommandStdout,
   cleanupTailscaleExposure,
   cleanupTailscaleExposureRoute,
   getTailscaleDnsName,
   getTailscaleSelfInfo,
   setupTailscaleExposure,
   setupTailscaleExposureRoute,
+  TAILSCALE_COMMAND_STDOUT_MAX_BYTES,
 } from "./tailscale.js";
 
 function createProc(params?: { code?: number; stdout?: string }) {
@@ -33,12 +36,17 @@ function createProc(params?: { code?: number; stdout?: string }) {
   };
   proc.stdout = new EventEmitter();
   proc.kill = vi.fn();
-  setTimeout(() => {
-    if (params?.stdout) {
-      proc.stdout.emit("data", Buffer.from(params.stdout));
+  const originalOn = proc.on.bind(proc);
+  proc.on = ((eventName: string | symbol, listener: (...args: unknown[]) => void) => {
+    const result = originalOn(eventName, listener);
+    if (eventName === "close") {
+      if (params?.stdout) {
+        proc.stdout.emit("data", Buffer.from(params.stdout));
+      }
+      listener(params?.code ?? 0);
     }
-    proc.emit("close", params?.code ?? 0);
-  }, 0);
+    return result;
+  }) as typeof proc.on;
   return proc;
 }
 
@@ -49,14 +57,20 @@ function createErrorProc() {
   };
   proc.stdout = new EventEmitter();
   proc.kill = vi.fn();
-  setTimeout(() => {
-    proc.emit("error", Object.assign(new Error("spawn tailscale ENOENT"), { code: "ENOENT" }));
-  }, 0);
+  const originalOn = proc.on.bind(proc);
+  proc.on = ((eventName: string | symbol, listener: (...args: unknown[]) => void) => {
+    const result = originalOn(eventName, listener);
+    if (eventName === "error") {
+      listener(Object.assign(new Error("spawn tailscale ENOENT"), { code: "ENOENT" }));
+    }
+    return result;
+  }) as typeof proc.on;
   return proc;
 }
 
 describe("voice-call tailscale helpers", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -104,6 +118,21 @@ describe("voice-call tailscale helpers", () => {
     await expect(getTailscaleSelfInfo()).resolves.toBeNull();
   });
 
+  it("tracks tailscale stdout without retaining over-limit output", () => {
+    let stdout = appendTailscaleCommandStdout({ bytes: 0, exceeded: false, text: "" }, "ok", 4);
+    stdout = appendTailscaleCommandStdout(stdout, "boom", 4);
+
+    expect(stdout).toEqual({ bytes: 6, exceeded: true, text: "" });
+  });
+
+  it("kills tailscale status when stdout exceeds the capture limit", async () => {
+    const proc = createProc({ stdout: "x".repeat(TAILSCALE_COMMAND_STDOUT_MAX_BYTES + 1) });
+    spawnMock.mockReturnValueOnce(proc);
+
+    await expect(getTailscaleSelfInfo()).resolves.toBeNull();
+    expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
   it("sets up and cleans up exposure routes with the selected mode", async () => {
     spawnMock
       .mockReturnValueOnce(
@@ -127,7 +156,7 @@ describe("voice-call tailscale helpers", () => {
     expect(spawnMock).toHaveBeenNthCalledWith(
       1,
       "tailscale",
-      ["status", "--json"],
+      ["status", "--json", "--peers=false"],
       tailscaleSpawnOptions,
     );
     expect(spawnMock).toHaveBeenNthCalledWith(

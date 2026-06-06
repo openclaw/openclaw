@@ -1,3 +1,4 @@
+// Imessage plugin module implements coalesce behavior.
 import type { IMessagePayload } from "./types.js";
 
 // Keep the coalescing contract narrow (caps, ID tracking, reply-context
@@ -23,6 +24,10 @@ export type CoalescedIMessagePayload = IMessagePayload & {
    * dedupe paths can still recognize them.
    */
   coalescedMessageGuids?: string[];
+  coalescedCatchupCursor?: {
+    lastSeenMs: number;
+    lastSeenRowid: number;
+  };
 };
 
 /**
@@ -91,6 +96,19 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
   const latestCreatedAt =
     createdAts.length > 0 ? createdAts.reduce((a, b) => (a > b ? a : b)) : first.created_at;
 
+  let maxRowid = -Infinity;
+  let maxDateMs = -Infinity;
+  for (const payload of payloads) {
+    if (typeof payload.id === "number" && Number.isFinite(payload.id)) {
+      maxRowid = Math.max(maxRowid, payload.id);
+    }
+    const dateMs =
+      typeof payload.created_at === "string" ? Date.parse(payload.created_at) : Number.NaN;
+    if (Number.isFinite(dateMs)) {
+      maxDateMs = Math.max(maxDateMs, dateMs);
+    }
+  }
+
   // Walk the unbounded `payloads` so even GUIDs whose text/attachments were
   // dropped by the cap are still remembered for downstream dedupe.
   const seenGuids = new Set<string>();
@@ -118,5 +136,9 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
     reply_to_text: entryWithReply?.reply_to_text ?? first.reply_to_text ?? null,
     reply_to_sender: entryWithReply?.reply_to_sender ?? first.reply_to_sender ?? null,
     coalescedMessageGuids: coalescedMessageGuids.length > 0 ? coalescedMessageGuids : undefined,
+    coalescedCatchupCursor:
+      Number.isFinite(maxRowid) && Number.isFinite(maxDateMs)
+        ? { lastSeenMs: maxDateMs, lastSeenRowid: maxRowid }
+        : undefined,
   };
 }

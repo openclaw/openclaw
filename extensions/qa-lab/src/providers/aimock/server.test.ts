@@ -1,3 +1,4 @@
+// Qa Lab tests cover server plugin behavior.
 import { describe, expect, it } from "vitest";
 import { startQaAimockServer } from "./server.js";
 
@@ -111,7 +112,7 @@ describe("qa aimock server", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "openai-codex/gpt-5.5",
+          model: "openai/gpt-5.5",
           stream: false,
           input: [makeResponsesInput("hello codex-compatible aimock")],
         }),
@@ -121,7 +122,7 @@ describe("qa aimock server", () => {
       const debug = await fetch(`${server.baseUrl}/debug/last-request`);
       expect(debug.status).toBe(200);
       const expectedBody = {
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         messages: [{ role: "user", content: "hello codex-compatible aimock" }],
         stream: false,
         _endpointType: "chat",
@@ -132,7 +133,7 @@ describe("qa aimock server", () => {
         prompt: "hello codex-compatible aimock",
         allInputText: "hello codex-compatible aimock",
         toolOutput: "",
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         providerVariant: "openai",
         imageInputCount: 0,
       });

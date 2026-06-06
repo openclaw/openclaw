@@ -1,14 +1,17 @@
-import { normalizeChatType } from "../channels/chat-type.js";
-import type { SessionChatType, SessionEntry } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+// Session send policy helpers decide when session output can be sent to targets.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatType } from "../channels/chat-type.js";
+import type { SessionChatType, SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deriveSessionChatType } from "./session-chat-type.js";
 
+/** Session send-policy decision after config and per-session overrides are evaluated. */
 export type SessionSendPolicyDecision = "allow" | "deny";
 
+/** Normalizes raw send-policy text into a decision. */
 export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecision | undefined {
   const value = normalizeOptionalLowercaseString(raw);
   if (value === "allow") {
@@ -71,6 +74,7 @@ function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   return undefined;
 }
 
+/** Resolves whether a session send is allowed by entry override and config rules. */
 export function resolveSendPolicy(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;

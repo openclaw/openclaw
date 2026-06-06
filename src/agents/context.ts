@@ -1,11 +1,16 @@
-// Lazy-load pi-coding-agent model metadata so we can infer context windows when
-// the agent reports a model id. This includes custom models.json entries.
+// Load session runtime model metadata so we can infer context windows when the
+// agent reports a model id. This includes custom models.json entries.
 
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { resolveDefaultAgentDir } from "./agent-scope.js";
+import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "./agent-scope.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -30,8 +35,16 @@ type ProviderConfigEntry = {
 };
 type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
 
-const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
-const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
+const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
+  "claude-opus-4-8",
+  "claude-opus-4.8",
+  "claude-opus-4-6",
+  "claude-opus-4.6",
+  "claude-opus-4-7",
+  "claude-opus-4.7",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
+] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -54,7 +67,7 @@ export function applyDiscoveredContextWindows(params: {
         : typeof model.contextWindow === "number"
           ? Math.trunc(model.contextWindow)
           : undefined;
-    const contextTokens = shouldUseDiscoveredAnthropicOpus47ContextWindow(model)
+    const contextTokens = shouldUseDiscoveredAnthropicGa1MContextWindow(model)
       ? ANTHROPIC_CONTEXT_1M_TOKENS
       : discoveredContextTokens;
     if (!contextTokens || contextTokens <= 0) {
@@ -151,19 +164,23 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
   }
 
   CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = (async () => {
+    const agentDir = resolveDefaultAgentDir(cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
     try {
-      await (await loadModelsConfigRuntime()).ensureOpenClawModelsJson(cfg);
+      await (
+        await loadModelsConfigRuntime()
+      ).ensureOpenClawModelsJson(cfg, agentDir, {
+        workspaceDir,
+      });
     } catch {
       // Continue with best-effort discovery/overrides.
     }
 
     try {
-      const { discoverAuthStorage, discoverModels } =
-        await import("./pi-model-discovery-runtime.js");
-      const agentDir = resolveDefaultAgentDir(cfg);
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir, {
         normalizeModels: false,
+        workspaceDir,
       }) as unknown as ModelRegistryLike;
       const models =
         typeof modelRegistry.getAvailable === "function"
@@ -251,7 +268,7 @@ function resolveConfiguredProviderContextTokens(
     return undefined;
   }
 
-  // Mirror the lookup order in pi-embedded-runner/model.ts: exact key first,
+  // Mirror the lookup order in embedded-agent-runner/model.ts: exact key first,
   // then normalized fallback. This prevents alias collisions from picking the
   // wrong configured cap based on Object.entries iteration order.
   function readProviderContextTokens(providerConfig: ProviderConfigEntry | undefined) {
@@ -301,7 +318,7 @@ function resolveConfiguredProviderContextTokens(
     return exactResult;
   }
 
-  // 2. Normalized fallback: covers alias keys such as "z.ai" → "zai".
+  // 2. Normalized fallback: covers case-only provider key differences.
   const normalizedProvider = normalizeProviderId(provider);
   return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
 }
@@ -311,28 +328,23 @@ function isAnthropic1MModel(provider: string, model: string): boolean {
     return false;
   }
   const modelId = resolveModelFamilyId(model);
-  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+  return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
-function shouldUseAnthropicOpus47ContextWindow(params: {
+function shouldUseAnthropicGa1MContextWindow(params: {
   provider?: string;
   model: string;
 }): boolean {
   const provider = params.provider ? normalizeProviderId(params.provider) : "";
-  return (
-    (provider === "anthropic" || provider === "claude-cli") && isClaudeOpus47Model(params.model)
-  );
+  return isAnthropic1MModel(provider, params.model);
 }
 
-function shouldUseDiscoveredAnthropicOpus47ContextWindow(model: ModelEntry): boolean {
+function shouldUseDiscoveredAnthropicGa1MContextWindow(model: ModelEntry): boolean {
   const provider =
     typeof model.provider === "string" ? normalizeProviderId(model.provider) : undefined;
   const modelId = model.id;
-  if (!isClaudeOpus47Model(modelId)) {
-    return false;
-  }
   if (provider) {
-    return provider === "anthropic" || provider === "claude-cli";
+    return isAnthropic1MModel(provider, modelId);
   }
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   const slash = normalized.indexOf("/");
@@ -340,17 +352,13 @@ function shouldUseDiscoveredAnthropicOpus47ContextWindow(model: ModelEntry): boo
     return false;
   }
   const inferredProvider = normalizeProviderId(normalized.slice(0, slash));
-  return inferredProvider === "claude-cli";
+  const inferredModel = normalized.slice(slash + 1);
+  return inferredProvider === "claude-cli" && isAnthropic1MModel(inferredProvider, inferredModel);
 }
 
 function resolveModelFamilyId(modelId: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
-}
-
-function isClaudeOpus47Model(model: string): boolean {
-  const modelId = resolveModelFamilyId(model);
-  return CLAUDE_OPUS_47_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
 export function resolveContextTokensForModel(params: {
@@ -393,7 +401,7 @@ export function resolveContextTokensForModel(params: {
     }
   }
 
-  if (explicitProvider && ref && shouldUseAnthropicOpus47ContextWindow(ref)) {
+  if (explicitProvider && ref && shouldUseAnthropicGa1MContextWindow(ref)) {
     return ANTHROPIC_CONTEXT_1M_TOKENS;
   }
 

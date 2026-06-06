@@ -1,10 +1,8 @@
+// Slack plugin module implements errors behavior.
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const NO_ERROR_DETAIL = "no error detail";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function redact(value: string): string {
   return redactSensitiveText(value);

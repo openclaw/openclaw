@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+// Gateway E2E harness starts test gateway processes and HTTP probes.
 import { request as httpRequest } from "node:http";
 import path from "node:path";
 import { GatewayClient } from "../../src/gateway/client.js";
@@ -20,9 +20,16 @@ export type ChatEventPayload = {
 
 export type GatewayInstance = OpenClawTestInstance;
 
-const GATEWAY_CONNECT_STATUS_TIMEOUT_MS = 2_000;
-const GATEWAY_NODE_STATUS_TIMEOUT_MS = 4_000;
+const GATEWAY_CONNECT_STATUS_TIMEOUT_MS = 10_000;
+const GATEWAY_NODE_STATUS_TIMEOUT_MS = 15_000;
 const GATEWAY_NODE_STATUS_POLL_MS = 20;
+const POST_JSON_TIMEOUT_MS = 15_000;
+const POST_JSON_MAX_RESPONSE_BYTES = 1024 * 1024;
+
+export type PostJsonOptions = {
+  maxResponseBytes?: number;
+  timeoutMs?: number;
+};
 
 export async function spawnGatewayInstance(name: string): Promise<GatewayInstance> {
   const inst = await createOpenClawTestInstance({ name });
@@ -43,10 +50,33 @@ export async function postJson(
   url: string,
   body: unknown,
   headers?: Record<string, string>,
+  options: PostJsonOptions = {},
 ): Promise<{ status: number; json: unknown }> {
   const payload = JSON.stringify(body);
   const parsed = new URL(url);
+  const timeoutMs = options.timeoutMs ?? POST_JSON_TIMEOUT_MS;
+  const maxResponseBytes = options.maxResponseBytes ?? POST_JSON_MAX_RESPONSE_BYTES;
   return await new Promise<{ status: number; json: unknown }>((resolve, reject) => {
+    let settled = false;
+    let responseBytes = 0;
+    let timeout: NodeJS.Timeout | undefined;
+
+    const finish = (result: { status: number; json: unknown } | { error: Error }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+      if ("error" in result) {
+        reject(result.error);
+        return;
+      }
+      resolve(result);
+    };
+
     const req = httpRequest(
       {
         method: "POST",
@@ -63,6 +93,14 @@ export async function postJson(
         let data = "";
         res.setEncoding("utf8");
         res.on("data", (chunk) => {
+          responseBytes += Buffer.byteLength(chunk, "utf8");
+          if (responseBytes > maxResponseBytes) {
+            const error = new Error(`POST ${url} response exceeded ${maxResponseBytes} bytes`);
+            req.destroy(error);
+            res.destroy(error);
+            finish({ error });
+            return;
+          }
           data += chunk;
         });
         res.on("end", () => {
@@ -74,11 +112,16 @@ export async function postJson(
               json = data;
             }
           }
-          resolve({ status: res.statusCode ?? 0, json });
+          finish({ status: res.statusCode ?? 0, json });
         });
+        res.on("error", (error) => finish({ error }));
       },
     );
-    req.on("error", reject);
+    timeout = setTimeout(() => {
+      req.destroy(new Error(`POST ${url} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timeout.unref?.();
+    req.on("error", (error) => finish({ error }));
     req.write(payload);
     req.end();
   });
@@ -151,7 +194,7 @@ async function connectStatusClient(
     });
 
     timer = setTimeout(() => {
-      finish(new Error("timeout waiting for node.list"));
+      finish(new Error(`timeout waiting for status client hello for ${inst.name}`));
     }, timeoutMs);
 
     client.start();
@@ -164,23 +207,42 @@ export async function waitForNodeStatus(
   timeoutMs = GATEWAY_NODE_STATUS_TIMEOUT_MS,
 ) {
   const deadline = Date.now() + timeoutMs;
-  const client = await connectStatusClient(
-    inst,
-    Math.min(GATEWAY_CONNECT_STATUS_TIMEOUT_MS, timeoutMs),
-  );
-  try {
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    let client: GatewayClient | undefined;
     while (Date.now() < deadline) {
-      const list = await client.request("node.list", {});
-      const match = list.nodes?.find((n) => n.nodeId === nodeId);
-      if (match?.connected && match?.paired) {
-        return;
+      try {
+        client = await connectStatusClient(
+          inst,
+          Math.min(2_000, GATEWAY_CONNECT_STATUS_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
+        );
+        break;
+      } catch (error) {
+        lastError = error;
+        await sleep(GATEWAY_NODE_STATUS_POLL_MS);
       }
-      await sleep(GATEWAY_NODE_STATUS_POLL_MS);
     }
-  } finally {
-    client.stop();
+    if (!client) {
+      break;
+    }
+    try {
+      while (Date.now() < deadline) {
+        const list = await client.request("node.list", {});
+        const match = list.nodes?.find((n) => n.nodeId === nodeId);
+        if (match?.connected && match?.paired) {
+          return;
+        }
+        await sleep(GATEWAY_NODE_STATUS_POLL_MS);
+      }
+    } catch (error) {
+      lastError = error;
+      await sleep(GATEWAY_NODE_STATUS_POLL_MS);
+    } finally {
+      client.stop();
+    }
   }
-  throw new Error(`timeout waiting for node status for ${nodeId}`);
+  const suffix = lastError instanceof Error ? `: ${lastError.message}` : "";
+  throw new Error(`timeout waiting for node status for ${nodeId}${suffix}`);
 }
 
 export async function waitForChatFinalEvent(params: {

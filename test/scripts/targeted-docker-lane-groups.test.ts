@@ -1,3 +1,4 @@
+// Targeted Docker Lane Groups tests cover targeted docker lane groups script behavior.
 import { describe, expect, it } from "vitest";
 import { planTargetedDockerLaneGroups } from "../../scripts/plan-targeted-docker-lane-groups.mjs";
 
@@ -64,5 +65,20 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     ).toEqual([
       { docker_lanes: "published-upgrade-survivor", label: "published-upgrade-survivor" },
     ]);
+  });
+
+  it("rejects malformed group size values", () => {
+    expect(() =>
+      planTargetedDockerLaneGroups({
+        groupSize: "2x",
+        lanes: "doctor-switch update-channel-switch",
+      }),
+    ).toThrow("groupSize must be a positive integer");
+    expect(() =>
+      planTargetedDockerLaneGroups({
+        groupSize: 0,
+        lanes: "doctor-switch update-channel-switch",
+      }),
+    ).toThrow("groupSize must be a positive integer");
   });
 });

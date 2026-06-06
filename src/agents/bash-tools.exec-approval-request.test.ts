@@ -1,3 +1,8 @@
+/**
+ * Exec approval request tests.
+ * Covers two-phase gateway registration, decision waiting, timeout fallback,
+ * and lazy command highlighting for host/node approval payloads.
+ */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
@@ -36,6 +41,7 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
+let registerExecApprovalRequest: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequest;
 let requestExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").requestExecApprovalDecision;
 let registerExecApprovalRequestForHost: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequestForHost;
 
@@ -72,8 +78,11 @@ function requireApprovalRequestPayload(callIndex: number): ApprovalRequestPayloa
 describe("requestExecApprovalDecision", () => {
   beforeAll(async () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ requestExecApprovalDecision, registerExecApprovalRequestForHost } =
-      await import("./bash-tools.exec-approval-request.js"));
+    ({
+      registerExecApprovalRequest,
+      requestExecApprovalDecision,
+      registerExecApprovalRequestForHost,
+    } = await import("./bash-tools.exec-approval-request.js"));
   });
 
   beforeEach(() => {
@@ -255,9 +264,11 @@ describe("requestExecApprovalDecision", () => {
           host: "gateway",
           id: "approval-id",
           nodeId: undefined,
+          requireDeliveryRoute: undefined,
           resolvedPath: undefined,
           security: "allowlist",
           sessionKey: undefined,
+          suppressDelivery: undefined,
           systemRunPlan: undefined,
           timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
           twoPhase: true,
@@ -271,6 +282,50 @@ describe("requestExecApprovalDecision", () => {
         { expectFinal: false },
       ],
     ]);
+  });
+
+  it("bounds missing registration expiries when the process clock is invalid", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id" });
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+
+    try {
+      await expect(
+        registerExecApprovalRequest({
+          id: "approval-id",
+          command: "echo hi",
+          cwd: "/tmp",
+          host: "gateway",
+          security: "allowlist",
+          ask: "on-miss",
+        }),
+      ).resolves.toMatchObject({ expiresAtMs: 0 });
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("replaces invalid gateway registration expiries with a bounded fallback", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({
+      id: "approval-id",
+      expiresAtMs: Number.MAX_VALUE,
+    });
+    const nowMs = 1_800_000_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+
+    try {
+      await expect(
+        registerExecApprovalRequest({
+          id: "approval-id",
+          command: "echo hi",
+          cwd: "/tmp",
+          host: "gateway",
+          security: "allowlist",
+          ask: "on-miss",
+        }),
+      ).resolves.toMatchObject({ expiresAtMs: nowMs + DEFAULT_APPROVAL_TIMEOUT_MS });
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("adds command spans to host approval registration payloads", async () => {
