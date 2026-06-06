@@ -76,7 +76,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   AVATAR_MAX_BYTES,
   isAvatarDataUrl,
@@ -916,12 +916,16 @@ function resolveTranscriptUsageFallback(params: {
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
  * longer present in config (deleted). Returns null for non-agent legacy/global
- * keys, or when the owning agent still exists (#65524).
+ * keys, ACP harness session keys, or when the owning agent still exists (#65524).
  */
 export function resolveDeletedAgentIdFromSessionKey(
   cfg: OpenClawConfig,
   sessionKey: string,
 ): string | null {
+  // ACP keys use agent:<harnessId>:acp:<uuid>; harness ids are not agents.list entries.
+  if (isAcpSessionKey(sessionKey)) {
+    return null;
+  }
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
     return null;

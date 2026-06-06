@@ -828,6 +828,24 @@ describe("gateway session utils", () => {
     expect(resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:discord:direct:u1")).toBe("main");
   });
 
+  test("resolveDeletedAgentIdFromSessionKey ignores ACP harness session keys", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    expect(
+      resolveDeletedAgentIdFromSessionKey(
+        cfg,
+        "agent:claude:acp:11111111-1111-4111-8111-111111111111",
+      ),
+    ).toBeNull();
+    expect(
+      resolveDeletedAgentIdFromSessionKey(
+        cfg,
+        "agent:cursor:acp:22222222-2222-4222-8222-222222222222",
+      ),
+    ).toBeNull();
+  });
+
   test("resolveSessionStoreKey canonicalizes bare keys to default agent", () => {
     const cfg = {
       session: { mainKey: "main" },
