@@ -1151,8 +1151,7 @@ describe("createMcpLoopbackServerConfig", () => {
 
   it("opens an auth-gated SSE stream on GET (Streamable HTTP notification channel)", async () => {
     server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
-    const token = runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined;
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
       method: "GET",
       headers: token ? { authorization: `Bearer ${token}` } : {},
@@ -1171,8 +1170,7 @@ describe("createMcpLoopbackServerConfig", () => {
 
   it("rejects a GET notification channel from a browser Origin (403)", async () => {
     server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
-    const token = runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined;
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
       method: "GET",
       headers: {
@@ -1186,8 +1184,7 @@ describe("createMcpLoopbackServerConfig", () => {
 
   it("acknowledges DELETE session teardown with 200 (stateless no-op)", async () => {
     server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
-    const token = runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined;
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
     const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
       method: "DELETE",
       headers: token ? { authorization: `Bearer ${token}` } : {},
@@ -1210,14 +1207,32 @@ describe("createMcpLoopbackServerConfig", () => {
 
   it("stays stateless: POST responses advertise no Mcp-Session-Id", async () => {
     server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
     const res = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      token: getActiveMcpLoopbackRuntime()?.ownerToken,
       headers: { "content-type": "application/json", "x-session-key": "agent:main:main" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
     expect(res.status).toBe(200);
     expect(res.headers.get("mcp-session-id")).toBeNull();
+  });
+
+  it("rejects a browser-Origin GET before auth (403, no bearer)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "GET",
+      headers: { origin: "https://evil.example" },
+    });
+    expect(res.status).toBe(403);
+    await res.body?.cancel();
+  });
+
+  it("rejects a browser-Origin DELETE before auth (403, no bearer)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "DELETE",
+      headers: { origin: "https://evil.example" },
+    });
+    expect(res.status).toBe(403);
   });
 });

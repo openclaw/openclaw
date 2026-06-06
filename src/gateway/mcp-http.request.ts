@@ -140,17 +140,20 @@ export function validateMcpLoopbackRequest(params: {
   }
 
   if (params.req.method === "GET") {
+    // Origin validation first (matches the POST path): a browser loopback request is
+    // rejected before bearer auth, so the local-loopback Origin boundary holds even for
+    // unauthenticated browser requests.
+    if (rejectsBrowserLoopbackRequest(params.req)) {
+      params.res.writeHead(403, { "Content-Type": "application/json" });
+      params.res.end(JSON.stringify({ error: "forbidden" }));
+      return null;
+    }
     const authHeader = getHeader(params.req, "authorization") ?? "";
     const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
     const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
     if (!ownerTokenMatched && !nonOwnerTokenMatched) {
       params.res.writeHead(401, { "Content-Type": "application/json" });
       params.res.end(JSON.stringify({ error: "unauthorized" }));
-      return null;
-    }
-    if (rejectsBrowserLoopbackRequest(params.req)) {
-      params.res.writeHead(403, { "Content-Type": "application/json" });
-      params.res.end(JSON.stringify({ error: "forbidden" }));
       return null;
     }
     logMcpLoopbackHttp("sse-open", { method: "GET", path: url.pathname });
@@ -173,17 +176,18 @@ export function validateMcpLoopbackRequest(params: {
     // Streamable HTTP session teardown. The loopback server is stateless — it owns no
     // session lifecycle — so this is an auth-gated no-op acknowledgement: clients that
     // send DELETE when closing the transport get a clean 200 rather than a 405.
+    // Origin validation first (matches the POST/GET paths), before bearer auth.
+    if (rejectsBrowserLoopbackRequest(params.req)) {
+      params.res.writeHead(403, { "Content-Type": "application/json" });
+      params.res.end(JSON.stringify({ error: "forbidden" }));
+      return null;
+    }
     const authHeader = getHeader(params.req, "authorization") ?? "";
     const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
     const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
     if (!ownerTokenMatched && !nonOwnerTokenMatched) {
       params.res.writeHead(401, { "Content-Type": "application/json" });
       params.res.end(JSON.stringify({ error: "unauthorized" }));
-      return null;
-    }
-    if (rejectsBrowserLoopbackRequest(params.req)) {
-      params.res.writeHead(403, { "Content-Type": "application/json" });
-      params.res.end(JSON.stringify({ error: "forbidden" }));
       return null;
     }
     logMcpLoopbackHttp("session-delete", { method: "DELETE", path: url.pathname });
