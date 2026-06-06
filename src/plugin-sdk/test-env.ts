@@ -1,4 +1,5 @@
 // Focused public test helpers for environment, network, and time fixtures.
+import { resolveFfmpegBin } from "./media-runtime.js";
 
 export {
   createAuthCaptureJsonFetch,
@@ -65,3 +66,17 @@ export { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 export { withServer } from "./test-helpers/http-test-server.js";
 export { createMockIncomingRequest } from "./test-helpers/mock-incoming-request.js";
 export { withTempHome } from "./test-helpers/temp-home.js";
+
+export function hasTrustedFfmpegForLiveVoiceNote(label: string): boolean {
+  try {
+    resolveFfmpegBin();
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("ffmpeg not found in trusted system directories")) {
+      console.warn(`[${label}:live] skip voice-note transcode: ffmpeg unavailable`);
+      return false;
+    }
+    throw error;
+  }
+}
