@@ -444,7 +444,21 @@ type ProviderExecutionAuth =
       providerConfig?: ModelProviderConfig;
     };
 
+const OPENAI_AUDIO_TRANSCRIPTIONS_API = "openai-audio-transcriptions";
+
+function resolveProviderExecutionAuthModelApi(params: {
+  capability: MediaUnderstandingCapability;
+  providerId: string;
+  providerConfig?: ModelProviderConfig;
+}): string | undefined {
+  if (params.capability === "audio" && params.providerId === "openai") {
+    return OPENAI_AUDIO_TRANSCRIPTIONS_API;
+  }
+  return typeof params.providerConfig?.api === "string" ? params.providerConfig.api : undefined;
+}
+
 async function resolveProviderExecutionAuth(params: {
+  capability: MediaUnderstandingCapability;
   providerId: string;
   provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
@@ -453,6 +467,11 @@ async function resolveProviderExecutionAuth(params: {
   workspaceDir?: string;
 }): Promise<ProviderExecutionAuth> {
   const providerConfig = params.cfg.models?.providers?.[params.providerId];
+  const modelApi = resolveProviderExecutionAuthModelApi({
+    capability: params.capability,
+    providerId: params.providerId,
+    providerConfig,
+  });
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
     providerId: params.providerId,
@@ -521,6 +540,7 @@ async function resolveProviderExecutionAuth(params: {
       preferredProfile: params.entry.preferredProfile,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
+      modelApi,
     });
     const apiKey = requireApiKey(auth, params.providerId);
     return {
@@ -548,6 +568,7 @@ async function resolveProviderExecutionAuth(params: {
 }
 
 async function resolveProviderExecutionContext(params: {
+  capability: MediaUnderstandingCapability;
   providerId: string;
   provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
@@ -557,6 +578,7 @@ async function resolveProviderExecutionContext(params: {
   workspaceDir?: string;
 }) {
   const auth = await resolveProviderExecutionAuth({
+    capability: params.capability,
     providerId: params.providerId,
     provider: params.provider,
     cfg: params.cfg,
@@ -742,6 +764,7 @@ export async function runProviderEntry(params: {
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
     const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
+      capability,
       providerId,
       provider,
       cfg,
@@ -824,6 +847,7 @@ export async function runProviderEntry(params: {
     );
   }
   const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
+    capability,
     providerId,
     provider,
     cfg,
