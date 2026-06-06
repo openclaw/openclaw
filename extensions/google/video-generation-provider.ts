@@ -19,6 +19,7 @@ import {
   resolveGoogleGenerativeAiApiOrigin,
   resolveGoogleVertexProject,
   resolveGoogleVertexLocation,
+  buildGoogleVertexHeaders,
 } from "./api.js";
 import {
   createGoogleVideoGenerationProviderMetadata,
@@ -529,9 +530,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
 
       let authHeaders = parseGeminiAuth(apiKey).headers;
       if (isVertex) {
-        authHeaders = await import("./api.js").then((mod) =>
-          mod.buildGoogleVertexHeaders({ headers: {} }, apiKey, undefined, fetch),
-        );
+        authHeaders = await buildGoogleVertexHeaders({ headers: {} }, apiKey, undefined, fetch);
       }
       const durationSeconds = resolveDurationSeconds(req.durationSeconds);
       const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL;

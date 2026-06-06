@@ -21,6 +21,7 @@ import {
   buildGoogleVertexHeaders,
   normalizeGoogleModelId,
   resolveGoogleGenerativeAiHttpRequestConfig,
+  resolveGoogleVertexHttpRequestConfig,
   resolveGoogleVertexBaseOrigin,
   resolveGoogleVertexLocation,
   resolveGoogleVertexProject,
@@ -199,19 +200,29 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       if (isVertex) {
         const project = resolveGoogleVertexProject();
         const location = resolveGoogleVertexLocation();
-        const configuredBaseUrl = req.cfg?.models?.providers?.["google-vertex"]?.baseUrl;
-        const origin = resolveGoogleVertexBaseOrigin({ baseUrl: configuredBaseUrl }, location);
+
+        const config = resolveGoogleVertexHttpRequestConfig({
+          apiKey: auth.apiKey,
+          baseUrl: req.cfg?.models?.providers?.["google-vertex"]?.baseUrl,
+          location,
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.["google-vertex"]?.request,
+          ),
+          capability: "image",
+          transport: "http",
+        });
+
+        const origin = resolveGoogleVertexBaseOrigin({ baseUrl: config.baseUrl }, location);
         requestUrl = `${origin}/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
-        const configuredHeaders = req.cfg?.models?.providers?.["google-vertex"]?.request?.headers;
+
         requestHeaders = await buildGoogleVertexHeaders(
-          { headers: configuredHeaders },
+          { headers: Object.fromEntries(config.headers.entries()) },
           auth.apiKey,
           undefined,
           fetch,
         );
-        allowPrivateNetwork =
-          req.cfg?.models?.providers?.["google-vertex"]?.request?.allowPrivateNetwork;
-        dispatcherPolicy = req.cfg?.models?.providers?.["google-vertex"]?.request?.dispatcherPolicy;
+        allowPrivateNetwork = config.allowPrivateNetwork;
+        dispatcherPolicy = config.dispatcherPolicy;
       } else {
         const config = resolveGoogleGenerativeAiHttpRequestConfig({
           apiKey: auth.apiKey,
