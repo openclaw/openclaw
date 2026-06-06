@@ -285,5 +285,8 @@ export function formatPrereleaseResolutionError(params: {
     normalizeLowercaseStringOrEmpty(params.spec.selector) === "latest"
       ? `Use "${params.spec.name}@beta" (or another prerelease tag) or an exact prerelease version to opt in explicitly.`
       : `Use an explicit prerelease tag or exact prerelease version if you want prerelease installs.`;
-  return `Resolved ${params.spec.raw} to prerelease version ${params.resolvedVersion}, but prereleases are only installed when explicitly requested. ${selectorHint}`;
+  const memoryRerankerHint = isOfficialMemoryRerankerNpmSpec(params.spec.raw)
+    ? ' For memory rerankers, the official package names are "@openclaw/memory-mmr" and "@openclaw/memory-external-reranker".'
+    : "";
+  return `Resolved ${params.spec.raw} to prerelease version ${params.resolvedVersion}, but prereleases are only installed when explicitly requested. ${selectorHint}${memoryRerankerHint}`;
 }
