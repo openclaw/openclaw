@@ -10,7 +10,10 @@ import {
   createWriteStream,
   existsSync,
   mkdirSync,
+  closeSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -53,6 +56,7 @@ export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   600,
 );
 export const CROSS_OS_COMMAND_CAPTURE_TAIL_BYTES = 16 * 1024 * 1024;
+const CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES = 2 * 1024 * 1024;
 const CROSS_OS_PROCESS_TREE_KILL_AFTER_MS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS",
   15_000,
@@ -153,6 +157,10 @@ const OMITTED_QA_EXTENSION_PREFIXES = [
 ];
 export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
 export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
+export const CROSS_OS_DISCORD_FETCH_TIMEOUT_MS = parsePositiveIntegerEnv(
+  "OPENCLAW_CROSS_OS_DISCORD_FETCH_TIMEOUT_MS",
+  10_000,
+);
 export const CROSS_OS_FETCH_BODY_MAX_CHARS = 1024 * 1024;
 export const CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS = 30_000;
 export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
@@ -204,10 +212,13 @@ export function parseArgs(argv) {
   return parsed;
 }
 
-function parsePositiveIntegerEnv(name, fallback) {
-  const raw = process.env[name]?.trim();
+export function parsePositiveIntegerEnv(name, fallback, env = process.env) {
+  const raw = env[name]?.trim();
   if (!raw) {
     return fallback;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
   }
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value <= 0) {
@@ -1014,6 +1025,15 @@ async function runUpgradeLane(params) {
           logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
           ignoreScripts: true,
         });
+        const fallbackInstalledVersion = readInstalledVersion(lane.prefixDir);
+        verifyWindowsPackagedUpgradeFallbackInstall({
+          installedVersion: fallbackInstalledVersion,
+          candidateVersion: params.build.candidateVersion,
+        });
+        appendFileSync(
+          updateLogPath,
+          `\n[release-checks] Windows fallback install verified candidate version ${fallbackInstalledVersion}\n`,
+        );
       });
     } else {
       verifyPackagedUpgradeUpdateResult(updateResult, {
@@ -1630,6 +1650,17 @@ export function shouldRunPackagedUpgradeStatusProbe({
   usedWindowsPackagedUpgradeFallback,
 } = {}) {
   return !(platform === "win32" && usedWindowsPackagedUpgradeFallback);
+}
+
+export function verifyWindowsPackagedUpgradeFallbackInstall({
+  installedVersion,
+  candidateVersion,
+}) {
+  if (installedVersion !== candidateVersion) {
+    throw new Error(
+      `Windows packaged upgrade fallback installed ${installedVersion || "unknown"}, expected ${candidateVersion}`,
+    );
+  }
 }
 
 export function resolveExplicitBaselineVersion(baselineSpec) {
@@ -2538,15 +2569,18 @@ export async function readBoundedCrossOsResponseText(
 async function waitForDiscordMessage(params) {
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
-    const response = await fetch(
-      `https://discord.com/api/v10/channels/${params.channelId}/messages?limit=20`,
-      {
-        headers: {
-          Authorization: `Bot ${params.token}`,
-        },
-      },
-    );
-    const text = await readBoundedCrossOsResponseText(response);
+    let response;
+    let text;
+    try {
+      response = await fetch(
+        `https://discord.com/api/v10/channels/${params.channelId}/messages?limit=20`,
+        buildDiscordFetchInit(params.token),
+      );
+      text = await readBoundedCrossOsResponseText(response);
+    } catch {
+      await sleep(2_000);
+      continue;
+    }
     if (!response.ok) {
       await sleep(2_000);
       continue;
@@ -2559,20 +2593,30 @@ async function waitForDiscordMessage(params) {
   throw new Error(`Discord host-side visibility check timed out for ${params.needle}.`);
 }
 
+export function buildDiscordFetchInit(token, init = {}) {
+  return {
+    ...init,
+    signal: init.signal ?? AbortSignal.timeout(CROSS_OS_DISCORD_FETCH_TIMEOUT_MS),
+    headers: {
+      ...init.headers,
+      Authorization: `Bot ${token}`,
+    },
+  };
+}
+
 async function postDiscordMessage(params) {
   const response = await fetch(
     `https://discord.com/api/v10/channels/${params.channelId}/messages`,
-    {
+    buildDiscordFetchInit(params.token, {
       method: "POST",
       headers: {
-        Authorization: `Bot ${params.token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         content: params.content,
         flags: 4096,
       }),
-    },
+    }),
   );
   const text = await readBoundedCrossOsResponseText(response);
   if (!response.ok) {
@@ -2591,12 +2635,9 @@ async function deleteDiscordMessage(params) {
   }
   await fetch(
     `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
-    {
+    buildDiscordFetchInit(params.token, {
       method: "DELETE",
-      headers: {
-        Authorization: `Bot ${params.token}`,
-      },
-    },
+    }),
   ).catch(() => undefined);
 }
 
@@ -3239,12 +3280,8 @@ export function shouldSkipOptionalCrossOsAgentTurnError(error, logPath) {
   if (!/Agent output did not contain the expected OK marker/u.test(message)) {
     return false;
   }
-  try {
-    const log = readFileSync(logPath, "utf8");
-    return /"status"\s*:\s*"timeout"|Request timed out before a response was generated/u.test(log);
-  } catch {
-    return false;
-  }
+  const log = readLogTextTail(logPath);
+  return /"status"\s*:\s*"timeout"|Request timed out before a response was generated/u.test(log);
 }
 
 function buildReleaseAgentTurnArgs(sessionId) {
@@ -3266,7 +3303,7 @@ function buildReleaseAgentTurnArgs(sessionId) {
 
 export function shouldRetryCrossOsAgentTurnError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /Agent output did not contain the expected OK marker|Agent turn used embedded fallback instead of gateway|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
+  return /Agent output did not contain the expected OK marker|Agent turn used embedded fallback instead of gateway|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly|rate limit reached|rate_limit_exceeded|HTTP 429|HTTP 503|upstream connect error|disconnect\/reset before headers|connection timeout/u.test(
     message,
   );
 }
@@ -3276,7 +3313,7 @@ export function agentTurnUsedEmbeddedFallback(result, options = {}) {
     typeof options.logText === "string"
       ? options.logText
       : typeof options.logPath === "string"
-        ? safeReadTextFile(options.logPath)
+        ? readLogTextTail(options.logPath)
         : "";
   return /EMBEDDED FALLBACK:/u.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}\n${logText}`);
 }
@@ -3293,12 +3330,8 @@ export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
   if (typeof options.logPath !== "string") {
     return false;
   }
-  try {
-    const logTexts = parseAgentPayloadTexts(readFileSync(options.logPath, "utf8"));
-    return logTexts.some((text) => text.trim() === "OK");
-  } catch {
-    return false;
-  }
+  const logTexts = parseAgentPayloadTexts(readLogTextTail(options.logPath));
+  return logTexts.some((text) => text.trim() === "OK");
 }
 
 function readLogFileSize(logPath) {
@@ -3310,18 +3343,51 @@ function readLogFileSize(logPath) {
 }
 
 function readLogTextSince(logPath, offsetBytes) {
+  return readLogTextWindow(logPath, {
+    offsetBytes,
+    maxBytes: CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES,
+  });
+}
+
+function readLogTextTail(logPath) {
+  return readLogTextWindow(logPath, {
+    maxBytes: CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES,
+  });
+}
+
+function readLogTextWindow(logPath, options = {}) {
+  const maxBytes = Math.max(
+    1,
+    Math.floor(options.maxBytes ?? CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES),
+  );
+  const offsetBytes =
+    typeof options.offsetBytes === "number" && Number.isFinite(options.offsetBytes)
+      ? Math.max(0, Math.floor(options.offsetBytes))
+      : 0;
+  let stat;
   try {
-    return readFileSync(logPath).subarray(offsetBytes).toString("utf8");
+    stat = statSync(logPath);
   } catch {
     return "";
   }
-}
-
-function safeReadTextFile(logPath) {
-  try {
-    return readFileSync(logPath, "utf8");
-  } catch {
+  if (!stat.isFile() || stat.size <= 0) {
     return "";
+  }
+
+  const tailStart = Math.max(0, stat.size - maxBytes);
+  const start = Math.min(stat.size, Math.max(offsetBytes, tailStart));
+  const length = stat.size - start;
+  if (length <= 0) {
+    return "";
+  }
+
+  const fd = openSync(logPath, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    const bytesRead = readSync(fd, buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    closeSync(fd);
   }
 }
 

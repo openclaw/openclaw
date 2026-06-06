@@ -1,8 +1,10 @@
+// Builds grouped Vitest duration reports or compares two grouped reports.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
@@ -55,11 +57,9 @@ function usage() {
   ].join("\n");
 }
 
-function parsePositiveInt(value, fallback) {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
+/**
+ * Parses report, compare, and Vitest-run options for grouped test reports.
+ */
 export function parseTestGroupReportArgs(argv) {
   const args = {
     allowFailures: false,
@@ -130,32 +130,32 @@ export function parseTestGroupReportArgs(argv) {
       continue;
     }
     if (arg === "--limit") {
-      args.limit = parsePositiveInt(argv[index + 1], args.limit);
+      args.limit = parsePositiveInt(argv[index + 1], "--limit");
       index += 1;
       continue;
     }
     if (arg === "--max-test-ms") {
-      args.maxTestMs = parsePositiveInt(argv[index + 1], args.maxTestMs);
+      args.maxTestMs = parsePositiveInt(argv[index + 1], "--max-test-ms");
       index += 1;
       continue;
     }
     if (arg === "--timeout-ms") {
-      args.timeoutMs = parsePositiveInt(argv[index + 1], args.timeoutMs);
+      args.timeoutMs = parsePositiveInt(argv[index + 1], "--timeout-ms");
       index += 1;
       continue;
     }
     if (arg === "--kill-grace-ms") {
-      args.killGraceMs = parsePositiveInt(argv[index + 1], args.killGraceMs);
+      args.killGraceMs = parsePositiveInt(argv[index + 1], "--kill-grace-ms");
       index += 1;
       continue;
     }
     if (arg === "--concurrency") {
-      args.concurrency = parsePositiveInt(argv[index + 1], args.concurrency);
+      args.concurrency = parsePositiveInt(argv[index + 1], "--concurrency");
       index += 1;
       continue;
     }
     if (arg === "--top-files") {
-      args.topFiles = parsePositiveInt(argv[index + 1], args.topFiles);
+      args.topFiles = parsePositiveInt(argv[index + 1], "--top-files");
       index += 1;
       continue;
     }
@@ -216,6 +216,9 @@ function formatSpawnError(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Runs a command, captures text output, and terminates timed-out process groups.
+ */
 export function spawnText(command, args, options) {
   const maxBuffer = 1024 * 1024 * 64;
   const timeoutMs = options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
@@ -411,10 +414,26 @@ function readReportInput(entry) {
   };
 }
 
+export function readReportInputs(entries) {
+  const missing = [];
+  const reports = [];
+  for (const entry of entries) {
+    if (!fs.existsSync(entry.reportPath)) {
+      missing.push(entry);
+      continue;
+    }
+    reports.push(readReportInput(entry));
+  }
+  return { missing, reports };
+}
+
 function readGroupedReport(reportPath) {
   return JSON.parse(fs.readFileSync(reportPath, "utf8"));
 }
 
+/**
+ * Resolves JSON report and per-run artifact directories from an output path.
+ */
 export function resolveReportArtifactDirs(outputPath) {
   const outputDir = path.dirname(outputPath);
   const outputExt = path.extname(outputPath);
@@ -460,6 +479,9 @@ function buildFullSuiteLeafRunPlans() {
   }
 }
 
+/**
+ * Resolves explicit or full-suite Vitest config plans for report generation.
+ */
 export function resolveRunPlans(args) {
   if (args.reports.length > 0) {
     return [];
@@ -481,6 +503,9 @@ export function resolveRunPlans(args) {
   }));
 }
 
+/**
+ * Builds env for full-suite report runs, including per-config cache paths.
+ */
 export function resolveFullSuiteVitestEnv(args, env = process.env, label = "") {
   if (
     !args.fullSuite ||
@@ -495,6 +520,9 @@ export function resolveFullSuiteVitestEnv(args, env = process.env, label = "") {
   };
 }
 
+/**
+ * Resolves bounded concurrency for grouped report run plans.
+ */
 export function resolveRunPlanConcurrency(args, runPlanCount) {
   if (runPlanCount <= 1) {
     return 1;
@@ -508,6 +536,9 @@ export function resolveRunPlanConcurrency(args, runPlanCount) {
   return Math.min(2, runPlanCount);
 }
 
+/**
+ * Builds concrete report run specs from parsed args and config plans.
+ */
 export function resolveReportRunSpecs(args, runPlans, params = {}) {
   const concurrency = params.concurrency ?? resolveRunPlanConcurrency(args, runPlans.length);
   const env = params.env ?? process.env;
@@ -648,9 +679,16 @@ async function main() {
     process.exit(exitCode);
   }
 
-  const reportInputs = runEntries
-    .filter((entry) => fs.existsSync(entry.reportPath))
-    .map(readReportInput);
+  const reportInputsResult = readReportInputs(runEntries);
+  if (reportInputsResult.missing.length > 0) {
+    for (const entry of reportInputsResult.missing) {
+      console.error(
+        `[test-group-report] missing JSON report for ${entry.config}: ${entry.reportPath}`,
+      );
+    }
+    process.exit(1);
+  }
+  const reportInputs = reportInputsResult.reports;
   const report = buildGroupedTestReport({
     groupBy: args.groupBy,
     maxTestMs: args.maxTestMs,

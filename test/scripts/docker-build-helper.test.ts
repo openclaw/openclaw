@@ -1,6 +1,8 @@
-import { execFileSync } from "node:child_process";
+// Docker Build Helper tests cover docker build helper script behavior.
+import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
@@ -10,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
@@ -74,6 +77,9 @@ const UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH =
   "scripts/e2e/lib/update-channel-switch/assertions.mjs";
 const RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH =
   "scripts/e2e/lib/release-upgrade-user-journey/scenario.sh";
+const RELEASE_TYPED_ONBOARDING_SCENARIO_PATH =
+  "scripts/e2e/lib/release-typed-onboarding/scenario.sh";
+const RELEASE_USER_JOURNEY_SCENARIO_PATH = "scripts/e2e/lib/release-user-journey/scenario.sh";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 const UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH =
   "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh";
@@ -104,6 +110,32 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
+function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string): string {
+  const script = readFileSync(CLEANUP_DOCKER_SMOKE_PATH, "utf8");
+  const match = script.match(/(resolve_default_cleanup_platform\(\) \{[\s\S]*?\n\})\n\nPLATFORM=/u);
+  if (!match) {
+    throw new Error("resolve_default_cleanup_platform was not found");
+  }
+  return execFileSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `${match[1]}\nuname() { if [[ "\${1:-}" == "-m" ]]; then printf "%s" "$FAKE_UNAME_ARCH"; else command uname "$@"; fi; }\nresolve_default_cleanup_platform`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        HOME: "/tmp",
+        PATH: process.env.PATH ?? "",
+        FAKE_UNAME_ARCH: hostArch,
+        ...env,
+      },
+    },
+  );
+}
+
 describe("docker build helper", () => {
   it("forces BuildKit for centralized Docker builds", () => {
     const helper = readFileSync(HELPER_PATH, "utf8");
@@ -115,7 +147,7 @@ describe("docker build helper", () => {
     expect(helper).toContain("docker_build_transient_failure()");
     expect(helper).toContain("OPENCLAW_DOCKER_BUILD_RETRIES");
     expect(helper).toContain("OPENCLAW_DOCKER_BUILD_TIMEOUT");
-    expect(helper).toContain('docker_build_run_command "$timeout_value" "${command[@]}"');
+    expect(helper).toContain('docker_build_run_logged "$label" "$timeout_value" "$log_file"');
     expect(helper).toContain("OPENCLAW_DOCKER_BUILD_REQUIRE_TIMEOUT");
     expect(helper).toContain("frontend grpc server closed unexpectedly");
   });
@@ -151,6 +183,15 @@ describe("docker build helper", () => {
     expect(installE2eSmoke).not.toContain("docker run --rm \\");
   });
 
+  it("runs cleanup smoke on the native ARM platform instead of pulling an amd64 tag", () => {
+    expect(runCleanupDefaultPlatform({ CI: "true" }, "aarch64")).toBe("linux/arm64");
+    expect(runCleanupDefaultPlatform({ GITHUB_ACTIONS: "true" }, "x86_64")).toBe("linux/amd64");
+    expect(runCleanupDefaultPlatform({}, "arm64")).toBe("linux/arm64");
+    expect(
+      runCleanupDefaultPlatform({ OPENCLAW_CLEANUP_SMOKE_PLATFORM: "linux/s390x" }, "x86_64"),
+    ).toBe("linux/s390x");
+  });
+
   it("lets Testbox fall back to building when a reused Docker image is missing", () => {
     const helper = readFileSync(HELPER_PATH, "utf8");
     const e2eImageHelper = readFileSync(DOCKER_E2E_IMAGE_HELPER_PATH, "utf8");
@@ -167,6 +208,9 @@ describe("docker build helper", () => {
     expect(liveBuild).toContain('source "$SCRIPT_ROOT_DIR/scripts/lib/docker-e2e-container.sh"');
     expect(liveBuild).toContain(
       'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_LIVE_DOCKER_PULL_TIMEOUT:-600s}}"',
+    );
+    expect(liveBuild).toContain(
+      'LIVE_IMAGE_PULL_ATTEMPTS="${OPENCLAW_LIVE_DOCKER_PULL_ATTEMPTS:-3}"',
     );
     expect(liveBuild).toContain('docker_e2e_docker_cmd image inspect "$LIVE_IMAGE_NAME"');
     expect(liveBuild).toContain('docker_e2e_docker_cmd pull "$LIVE_IMAGE_NAME"');
@@ -236,6 +280,219 @@ grep -q '^build -t demo-image .$' "$TMPDIR/docker-seen"
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
+  });
+
+  it("prints heartbeat progress for long successful centralized Docker builds", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-heartbeat-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "timeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "timeout"), 0o755);
+      writeFileSync(
+        join(binDir, "docker"),
+        `#!/bin/sh
+printf "captured docker build log\\n"
+/bin/sleep 2
+`,
+      );
+      chmodSync(join(binDir, "docker"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=1
+
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+
+output="$(docker_build_run e2e-build -t demo-image .)"
+[[ "$output" = *"Docker build e2e-build still running ("* ]]
+[[ "$output" = *"log bytes captured"* ]]
+[[ "$output" != *"captured docker build log"* ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops the tracked build command without retrying when interrupted", async () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-signal-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "docker"),
+        `#!/bin/bash
+set -euo pipefail
+count=0
+if [ -f "$TMPDIR/docker-count" ]; then
+  count="$(<"$TMPDIR/docker-count")"
+fi
+count="$((count + 1))"
+printf '%s\\n' "$count" >"$TMPDIR/docker-count"
+printf '%s\\n' "$$" >"$TMPDIR/docker.pid"
+printf 'rpc error: code = Unavailable\\n'
+trap 'printf "term\\n" >"$TMPDIR/docker.term"; exit 0' TERM
+while true; do
+  /bin/sleep 1
+done
+`,
+      );
+      chmodSync(join(binDir, "docker"), 0o755);
+      const rootDir = process.cwd();
+      writeFileSync(
+        join(workDir, "runner.sh"),
+        `#!/bin/bash
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_DOCKER_BUILD_RETRIES=3
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+docker_build_run e2e-build -t demo-image .
+`,
+      );
+      chmodSync(join(workDir, "runner.sh"), 0o755);
+
+      const waitForFile = async (filePath: string) => {
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          if (existsSync(filePath)) {
+            return;
+          }
+          await delay(100);
+        }
+        throw new Error(`file was not written: ${filePath}`);
+      };
+      const waitForExit = async (child: ReturnType<typeof spawn>) =>
+        await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+          child.once("exit", (code, signal) => resolve({ code, signal }));
+        });
+      const waitForDead = async (pid: number) => {
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          try {
+            process.kill(pid, 0);
+          } catch {
+            return;
+          }
+          await delay(100);
+        }
+        throw new Error(`process stayed alive: ${pid}`);
+      };
+      const runInterruptedBuild = async (signal: NodeJS.Signals, expectedCode: number) => {
+        rmSync(join(workDir, "docker.pid"), { force: true });
+        rmSync(join(workDir, "docker.term"), { force: true });
+        rmSync(join(workDir, "docker-count"), { force: true });
+        const runner = spawn(join(workDir, "runner.sh"), {
+          env: { ...process.env, TMPDIR: workDir },
+          stdio: "ignore",
+        });
+        try {
+          const pidPath = join(workDir, "docker.pid");
+          await waitForFile(pidPath);
+          const buildPid = Number.parseInt(readFileSync(pidPath, "utf8"), 10);
+
+          runner.kill(signal);
+          const exit = await waitForExit(runner);
+
+          expect(exit).toEqual({ code: expectedCode, signal: null });
+          await waitForFile(join(workDir, "docker.term"));
+          expect(readFileSync(join(workDir, "docker-count"), "utf8").trim()).toBe("1");
+          await waitForDead(buildPid);
+        } finally {
+          if (runner.exitCode === null && runner.signalCode === null) {
+            runner.kill("SIGKILL");
+          }
+        }
+      };
+
+      await runInterruptedBuild("SIGTERM", 143);
+      await runInterruptedBuild("SIGINT", 130);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not delay fast successful centralized Docker builds until the next heartbeat", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-fast-heartbeat-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "timeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "timeout"), 0o755);
+      writeFileSync(
+        join(binDir, "docker"),
+        `#!/bin/sh
+printf "quick docker build log\\n"
+`,
+      );
+      chmodSync(join(binDir, "docker"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=30
+
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+
+output="$(docker_build_run e2e-build -t demo-image .)"
+[[ -z "$output" ]]
+`;
+      const startedAt = Date.now();
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes zero-padded centralized Docker build heartbeat intervals", () => {
+    const rootDir = process.cwd();
+    const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+export ROOT_DIR
+export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=08
+
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+
+[[ "$(docker_build_heartbeat_seconds)" = "8" ]]
+`;
+
+    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
   });
 
   it("fails centralized Docker builds fast when timeout is unavailable", () => {
@@ -517,29 +774,33 @@ stderr="$(<"$TMPDIR/stderr")"
     }
   });
 
-  it("escalates Docker watchdog children that ignore parent termination", () => {
-    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-node-signal-"));
+  for (const [shellSignal, expectedStatus] of [
+    ["TERM", "143"],
+    ["HUP", "129"],
+  ] as const) {
+    it(`escalates Docker watchdog children that ignore parent SIG${shellSignal}`, () => {
+      const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-node-signal-"));
 
-    try {
-      const binDir = join(workDir, "bin");
-      mkdirSync(binDir);
-      writeFileSync(
-        join(binDir, "node"),
-        `#!/bin/bash\nexec ${shellQuote(process.execPath)} "$@"\n`,
-      );
-      writeFileSync(
-        join(binDir, "docker"),
-        `#!/bin/bash
+      try {
+        const binDir = join(workDir, "bin");
+        mkdirSync(binDir);
+        writeFileSync(
+          join(binDir, "node"),
+          `#!/bin/bash\nexec ${shellQuote(process.execPath)} "$@"\n`,
+        );
+        writeFileSync(
+          join(binDir, "docker"),
+          `#!/bin/bash
 printf "%s\\n" "$$" >"$TMPDIR/docker-pid"
 printf "%s\\n" "$PPID" >"$TMPDIR/watchdog-pid"
-trap "" TERM
+trap "" TERM HUP
 while true; do /bin/sleep 1; done
 `,
-      );
-      chmodSync(join(binDir, "node"), 0o755);
-      chmodSync(join(binDir, "docker"), 0o755);
-      const rootDir = process.cwd();
-      const script = `
+        );
+        chmodSync(join(binDir, "node"), 0o755);
+        chmodSync(join(binDir, "docker"), 0o755);
+        const rootDir = process.cwd();
+        const script = `
 set -euo pipefail
 ROOT_DIR=${shellQuote(rootDir)}
 TMPDIR=${shellQuote(workDir)}
@@ -558,12 +819,12 @@ for ((i = 0; i < 100; i += 1)); do
 done
 [ -s "$TMPDIR/docker-pid" ]
 [ -s "$TMPDIR/watchdog-pid" ]
-kill -TERM "$(/bin/cat "$TMPDIR/watchdog-pid")"
+kill -${shellSignal} "$(/bin/cat "$TMPDIR/watchdog-pid")"
 set +e
 wait "$watchdog_pid"
 status="$?"
 set -e
-[ "$status" = "143" ]
+[ "$status" = "${expectedStatus}" ]
 docker_pid="$(/bin/cat "$TMPDIR/docker-pid")"
 for ((i = 0; i < 100; i += 1)); do
   kill -0 "$docker_pid" 2>/dev/null || exit 0
@@ -573,11 +834,12 @@ echo "docker child still alive after watchdog termination" >&2
 exit 1
 `;
 
-      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-    } finally {
-      rmSync(workDir, { recursive: true, force: true });
-    }
-  });
+        execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+      } finally {
+        rmSync(workDir, { recursive: true, force: true });
+      }
+    });
+  }
 
   it("uses plain timeout when kill-after is unsupported", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-plain-timeout-"));
@@ -1111,9 +1373,19 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
 
     expect(sweep).toContain("cleanup() {");
     expect(sweep).toContain("openclaw_plugins_cleanup_fixture_servers");
+    expect(sweep).toContain(
+      'resource_dir="$(mktemp -d "/tmp/openclaw-plugin-lifecycle-matrix.XXXXXX")"',
+    );
+    expect(sweep).toContain('tarball_v1="$resource_dir/lifecycle-claw-1.0.0.tgz"');
+    expect(sweep).toContain('tarball_v2="$resource_dir/lifecycle-claw-2.0.0.tgz"');
+    expect(sweep).toContain('inspect_v1="$resource_dir/plugin-lifecycle-inspect-v1.json"');
+    expect(sweep).toContain('pack_root="$(mktemp -d "$resource_dir/pack.XXXXXX")"');
+    expect(sweep).toContain('registry_root="$(mktemp -d "$resource_dir/registry.XXXXXX")"');
     expect(sweep).toContain('rm -rf "$resource_dir"');
-    expect(sweep).toContain('rm -rf "$pack_root"');
-    expect(sweep).toContain('rm -rf "$registry_root"');
+    expect(sweep).not.toContain('resource_dir="/tmp/openclaw-plugin-lifecycle-matrix"');
+    expect(sweep).not.toContain("/tmp/lifecycle-claw-1.0.0.tgz");
+    expect(sweep).not.toContain("/tmp/lifecycle-claw-2.0.0.tgz");
+    expect(sweep).not.toContain("/tmp/plugin-lifecycle-inspect-v1.json");
     expect(sweep.match(/trap cleanup EXIT/g)).toHaveLength(2);
   });
 
@@ -1194,6 +1466,124 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     );
   });
 
+  it("keeps append-only mock E2E state under per-run scratch roots", () => {
+    const scripts = [
+      {
+        path: RELEASE_TYPED_ONBOARDING_SCENARIO_PATH,
+        scratch:
+          'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-typed-onboarding.XXXXXX")"',
+        logDir: 'LOG_DIR="$scenario_tmp/logs"',
+        requestLog: 'MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"',
+        expectedPaths: [
+          'INSTALL_LOG="$LOG_DIR/install.log"',
+          'ONBOARD_LOG="$LOG_DIR/onboard.log"',
+          'OPENAI_LOG="$LOG_DIR/openai.log"',
+          'AGENT_LOG="$LOG_DIR/agent.log"',
+          'input_fifo_dir="$(mktemp -d "$scenario_tmp/input.XXXXXX")"',
+        ],
+        removed: [
+          "/tmp/openclaw-release-typed-onboarding-openai.jsonl",
+          "/tmp/openclaw-release-typed-onboarding-install.log",
+          "/tmp/openclaw-release-typed-onboarding.log",
+          "/tmp/openclaw-release-typed-onboarding-openai.log",
+          "/tmp/openclaw-release-typed-onboarding-agent.log",
+          'mktemp -d "/tmp/openclaw-release-typed-onboarding.XXXXXX"',
+        ],
+      },
+      {
+        path: RELEASE_USER_JOURNEY_SCENARIO_PATH,
+        scratch:
+          'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-user-journey.XXXXXX")"',
+        logDir: 'LOG_DIR="$scenario_tmp/logs"',
+        requestLog: 'MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"',
+        extraState: 'CLICKCLACK_STATE="$scenario_tmp/clickclack.json"',
+        expectedPaths: [
+          'INSTALL_LOG="$LOG_DIR/install.log"',
+          'ONBOARD_LOG="$LOG_DIR/onboard.log"',
+          'OPENAI_LOG="$LOG_DIR/openai.log"',
+          'AGENT_LOG="$LOG_DIR/agent.log"',
+          'PLUGIN_A_INSTALL_PATH_FILE="$scenario_tmp/plugin-a-install-path.txt"',
+          'PLUGIN_A_SOURCE_PATH_FILE="$scenario_tmp/plugin-a-source-path.txt"',
+          'plugin_a_dir="$(mktemp -d "$scenario_tmp/plugin-a.XXXXXX")"',
+          'plugin_b_dir="$(mktemp -d "$scenario_tmp/plugin-b.XXXXXX")"',
+        ],
+        removed: [
+          "/tmp/openclaw-release-user-journey-openai.jsonl",
+          "/tmp/openclaw-release-user-journey-clickclack.json",
+          "/tmp/openclaw-release-user-journey-install.log",
+          "/tmp/openclaw-release-user-journey-onboard.log",
+          "/tmp/openclaw-release-user-journey-agent.log",
+          "/tmp/openclaw-release-user-journey-plugin-a-install-path.txt",
+          "/tmp/openclaw-release-user-journey-plugin-a-source-path.txt",
+          'mktemp -d "/tmp/openclaw-release-journey-plugin-a.XXXXXX"',
+          'mktemp -d "/tmp/openclaw-release-journey-plugin-b.XXXXXX"',
+        ],
+      },
+      {
+        path: RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH,
+        scratch:
+          'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-upgrade-user-journey.XXXXXX")"',
+        logDir: 'LOG_DIR="$scenario_tmp/logs"',
+        requestLog: 'MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"',
+        extraState: 'CLICKCLACK_STATE="$scenario_tmp/clickclack.json"',
+        expectedPaths: [
+          'BASELINE_INSTALL_LOG="$LOG_DIR/baseline-install.log"',
+          'CANDIDATE_INSTALL_LOG="$LOG_DIR/candidate-install.log"',
+          'ONBOARD_LOG="$LOG_DIR/onboard.log"',
+          'OPENAI_LOG="$LOG_DIR/openai.log"',
+          'PLUGIN_INSTALL_LOG="$LOG_DIR/plugin-install.log"',
+          'AGENT_LOG="$LOG_DIR/agent.log"',
+          'plugin_dir="$(mktemp -d "$scenario_tmp/plugin.XXXXXX")"',
+        ],
+        removed: [
+          "/tmp/openclaw-release-upgrade-user-journey-openai.jsonl",
+          "/tmp/openclaw-release-upgrade-user-journey-clickclack.json",
+          "/tmp/openclaw-release-upgrade-baseline-install.log",
+          "/tmp/openclaw-release-upgrade-candidate-install.log",
+          "/tmp/openclaw-release-upgrade-onboard.log",
+          "/tmp/openclaw-release-upgrade-agent.log",
+          'mktemp -d "/tmp/openclaw-release-upgrade-plugin.XXXXXX"',
+        ],
+      },
+      {
+        path: NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH,
+        scratch:
+          'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-channel-agent.XXXXXX")"',
+        requestLog: 'MOCK_REQUEST_LOG="$scenario_tmp/mock-openai-requests.jsonl"',
+        removed: ["/tmp/openclaw-mock-openai-requests.jsonl"],
+      },
+    ];
+
+    for (const {
+      path,
+      scratch,
+      logDir,
+      requestLog,
+      extraState,
+      expectedPaths,
+      removed,
+    } of scripts) {
+      const script = readFileSync(path, "utf8");
+
+      expect(script, path).toContain(scratch);
+      if (logDir) {
+        expect(script, path).toContain(logDir);
+      }
+      expect(script, path).toContain(requestLog);
+      expect(script, path).toContain('rm -rf "$scenario_tmp"');
+      if (extraState) {
+        expect(script, path).toContain(extraState);
+      }
+      for (const expectedPath of expectedPaths ?? []) {
+        expect(script, path).toContain(expectedPath);
+      }
+      for (const stalePath of removed) {
+        expect(script, path).not.toContain(stalePath);
+      }
+      expect(script, path).not.toMatch(/\/tmp\/openclaw-release-[\w-]+\.(?:log|json|err|txt)/u);
+    }
+  });
+
   it("kills timed Docker scenario runners after the grace period", () => {
     const multiNode = readFileSync(MULTI_NODE_UPDATE_DOCKER_E2E_PATH, "utf8");
     const upgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
@@ -1206,6 +1596,21 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     for (const script of [multiNode, upgradeSurvivor]) {
       expect(script).not.toContain('timeout "$DOCKER_RUN_TIMEOUT"');
     }
+  });
+
+  it("keeps multi-node update Docker artifacts isolated by default", () => {
+    const multiNode = readFileSync(MULTI_NODE_UPDATE_DOCKER_E2E_PATH, "utf8");
+
+    expect(multiNode).toContain(
+      'RUN_ID="${OPENCLAW_MULTI_NODE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"',
+    );
+    expect(multiNode).toContain(
+      'ARTIFACT_DIR="${OPENCLAW_MULTI_NODE_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/multi-node-update/$RUN_ID}"',
+    );
+    expect(multiNode).toContain('-v "$ARTIFACT_DIR:/tmp/artifacts"');
+    expect(multiNode).not.toContain(
+      'ARTIFACT_DIR="${OPENCLAW_MULTI_NODE_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/multi-node-update}"',
+    );
   });
 
   it("bounds upgrade survivor foreground OpenClaw CLI calls", () => {
@@ -1264,6 +1669,10 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
       'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status',
     );
     expect(publishedRunner).toContain('openclaw gateway --port "$port" --bind loopback');
+    expect(publishedRunner).toContain("start_gateway legacy-ready-log-ok");
+    expect(publishedRunner).toContain(
+      'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "${1:-strict}"',
+    );
 
     expect(updateRestartAuth).toContain(
       'command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"',
@@ -1272,6 +1681,9 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
       'openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN',
     );
     expect(updateRestartAuth).toContain('openclaw gateway --port "$port" --bind loopback');
+    expect(updateRestartAuth).toContain(
+      'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port"',
+    );
   });
 
   it("keeps the harness run wrapper available with pre-sourced Docker command helpers", () => {
@@ -1394,6 +1806,82 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(runner).not.toContain("docker_e2e_run_logged_with_harness plugins-run");
   });
 
+  it("prints heartbeat progress for long successful Docker E2E log captures", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-log-heartbeat-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+
+output="$(run_logged_print_heartbeat plugins-run 1 bash -c 'printf "captured container log\\\\n"; /bin/sleep 2')"
+[[ "$output" = *"still running plugins-run ("* ]]
+[[ "$output" = *"log bytes captured"* ]]
+[[ "$output" = *"captured container log"* ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not delay fast successful Docker E2E log captures until the next heartbeat", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-log-fast-heartbeat-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+
+output="$(run_logged_print_heartbeat plugins-run 30 bash -c 'printf "quick container log\\\\n"')"
+[[ "$output" = "quick container log" ]]
+`;
+      const startedAt = Date.now();
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes zero-padded Docker E2E log heartbeat intervals", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-log-zero-heartbeat-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+
+output="$(run_logged_print_heartbeat plugins-run 08 bash -c 'printf "captured container log\\\\n"; /bin/sleep 9')"
+[[ "$output" = *"still running plugins-run (8s elapsed,"* ]]
+[[ "$output" = *"log bytes captured"* ]]
+[[ "$output" = *"captured container log"* ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("includes procps in the shared Docker E2E image for process watchdogs", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
 
@@ -1494,6 +1982,13 @@ test -f "$TMPDIR/docker-cmd-seen"
     );
   });
 
+  it("requires TCP readiness for the gateway network runner", () => {
+    const runner = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain("openclaw_e2e_probe_tcp 127.0.0.1 $PORT");
+    expect(runner).not.toMatch(/openclaw_e2e_probe_tcp[^\n]*\|\|[^\n]*gateway-net-e2e\.log/u);
+  });
+
   it("copies root lifecycle scripts before cleanup-smoke installs dependencies", () => {
     const dockerfile = readFileSync(CLEANUP_SMOKE_DOCKERFILE_PATH, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
@@ -1569,6 +2064,14 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-300");
+    expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_PROFILE_FILE");
+    expect(wrapper).toContain("OPENCLAW_PROFILE_FILE");
+    expect(wrapper).toContain("OPENCLAW_TESTBOX_PROFILE_FILE");
+    expect(wrapper).toContain("read_profile_env_value");
+    expect(wrapper).toContain('source "$PROFILE_FILE"');
+    expect(wrapper).not.toContain("set -a");
+    expect(wrapper).toContain('export "$key"');
+    expect(wrapper).toContain("Profile file: $PROFILE_STATUS");
     expect(runner).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");
     expect(runner).toContain("OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS");
     expect(runner).toContain(
@@ -1743,8 +2246,9 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(runner).toContain('tee "$RUN_LOG"');
     expect(runner).not.toContain('cat "$RUN_LOG"');
     expect(probe).toContain('"openclaw.plugin.json"');
-    expect(runtimeSmoke).toContain("process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS");
-    expect(runtimeSmoke).toContain("900000");
+    expect(runtimeSmoke).toContain(
+      'readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS", 900000)',
+    );
     expect(sweep).toContain("read -r plugin_id plugin_dir requires_config");
     expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins install "$plugin_id"');
     expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force');
@@ -1809,10 +2313,31 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(scenario).toContain(
       'gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"',
     );
-    expect(scenario).toContain('openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360');
+    expect(scenario).toContain('openclaw_e2e_wait_mock_openai "$MOCK_PORT"');
+    expect(scenario).toContain(
+      'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$PORT"',
+    );
+    expect(scenario).not.toContain("fetch('http://127.0.0.1:${MOCK_PORT}/health')");
     expect(scenario).not.toContain('kill "$gateway_pid"');
     expect(scenario).not.toContain('kill "$mock_pid"');
     expect(scenario).not.toContain('node "$entry" gateway --port "$PORT"');
+  });
+
+  it("keeps OpenAI web search smoke logs isolated per run", () => {
+    const scenario = readFileSync(OPENAI_WEB_SEARCH_MINIMAL_SCENARIO_PATH, "utf8");
+
+    expect(scenario).toContain(
+      'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-openai-web-search-minimal.XXXXXX")"',
+    );
+    expect(scenario).toContain('MOCK_REQUEST_LOG="$scenario_tmp/requests.jsonl"');
+    expect(scenario).toContain('GATEWAY_LOG="$scenario_tmp/gateway.log"');
+    expect(scenario).toContain('MOCK_LOG="$scenario_tmp/mock.log"');
+    expect(scenario).toContain('CLIENT_SUCCESS_LOG="$scenario_tmp/client-success.log"');
+    expect(scenario).toContain('CLIENT_REJECT_LOG="$scenario_tmp/client-reject.log"');
+    expect(scenario).toContain('rm -rf "$scenario_tmp"');
+    expect(scenario).not.toContain("/tmp/openclaw-openai-web-search-minimal-requests.jsonl");
+    expect(scenario).not.toContain("/tmp/openclaw-openai-web-search-minimal-client-success.log");
+    expect(scenario).not.toContain("/tmp/openclaw-openai-web-search-minimal-client-reject.log");
   });
 
   it("keeps ClawHub plugin Docker smoke hermetic by default", () => {

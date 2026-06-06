@@ -1,3 +1,8 @@
+/**
+ * sessions_list built-in tool.
+ *
+ * Lists visible sessions and optionally hydrates titles, last messages, and transcript-derived metadata.
+ */
 import path from "node:path";
 import {
   normalizeOptionalLowercaseString,
@@ -75,6 +80,7 @@ function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
     : undefined;
 }
 
+/** Creates the sessions-list tool with gateway-backed listing and local transcript enrichment. */
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
@@ -180,6 +186,8 @@ export function createSessionsListTool(opts?: {
           continue;
         }
 
+        // Gateway listings include pseudo/global rows for UI callers. The tool only exposes real
+        // sessions and the explicit global session when the requester is already global.
         if (key === "unknown") {
           continue;
         }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Runs gateway startup and QA scenarios while checking hot CPU observations.
 import { spawnSync as defaultSpawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,7 +12,10 @@ import {
   parsePositiveInt,
   parsePositiveNumber,
 } from "./lib/numeric-options.mjs";
-import { collectGatewayCpuObservations } from "./lib/plugin-gateway-gauntlet.mjs";
+import {
+  collectGatewayCpuObservations,
+  readQaSuiteSummary,
+} from "./lib/plugin-gateway-gauntlet.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 const DEFAULT_STARTUP_CASES = ["default", "oneInternalHook", "allInternalHooks"];
@@ -182,23 +186,51 @@ function hasPrivateQaDist(repoRoot, fsImpl = fs) {
   });
 }
 
-function buildPrivateQaEnv(env) {
+function buildPrivateQaEnv(env, qaState) {
   return {
     ...env,
+    ...(qaState
+      ? {
+          HOME: qaState.home,
+          USERPROFILE: qaState.home,
+          OPENCLAW_HOME: qaState.home,
+          OPENCLAW_STATE_DIR: qaState.stateDir,
+          OPENCLAW_CONFIG_PATH: qaState.configPath,
+        }
+      : {}),
     OPENCLAW_BUILD_PRIVATE_QA: "1",
     OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
     OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD ?? "1",
+    OPENCLAW_TEST_DISABLE_UPDATE_CHECK: env.OPENCLAW_TEST_DISABLE_UPDATE_CHECK ?? "1",
+  };
+}
+
+function createQaState(outputDir) {
+  const root = path.join(outputDir, "qa-state-root");
+  const home = path.join(root, "home");
+  const stateDir = path.join(root, "state");
+  return {
+    configPath: path.join(stateDir, "openclaw.json"),
+    home,
+    root,
+    stateDir,
   };
 }
 
 async function runGatewayCpuScenarios(options, params = {}) {
   const repoRoot = params.cwd ?? process.cwd();
   const baseEnv = params.env ?? process.env;
-  const qaBuildEnv = buildPrivateQaEnv(baseEnv);
   fs.mkdirSync(options.outputDir, { recursive: true });
 
   const startupOutput = path.join(options.outputDir, "gateway-startup-bench.json");
   const qaOutputDir = path.join(options.outputDir, "qa-suite");
+  const qaSummaryPath = path.join(qaOutputDir, "qa-suite-summary.json");
+  const qaState = options.skipQa ? null : createQaState(options.outputDir);
+  if (qaState) {
+    fs.mkdirSync(qaState.home, { recursive: true });
+    fs.mkdirSync(qaState.stateDir, { recursive: true });
+  }
+  const qaBuildEnv = buildPrivateQaEnv(baseEnv, qaState);
   const qaOutputArg = toRepoRelativePath(repoRoot, qaOutputDir);
   const steps = [];
 
@@ -248,6 +280,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
     privateQaBuildFailed = privateQaBuild.status !== 0;
   }
 
+  let qaStep = null;
   if (!options.skipQa) {
     const qaCommand = pnpmCommand(
       [
@@ -264,15 +297,17 @@ async function runGatewayCpuScenarios(options, params = {}) {
       ],
       { cwd: repoRoot, env: qaBuildEnv },
     );
-    steps.push(
-      privateQaBuildFailed
-        ? { name: "qa suite", signal: null, status: 1 }
-        : runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params),
-    );
+    qaStep = privateQaBuildFailed
+      ? { name: "qa suite", signal: null, status: 1 }
+      : runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params);
+    steps.push(qaStep);
   }
 
   const startup = readJsonIfExists(startupOutput);
-  const qa = readJsonIfExists(path.join(qaOutputDir, "qa-suite-summary.json"));
+  const qaSummaryResult = options.skipQa ? null : readQaSuiteSummary(qaSummaryPath);
+  const qaSummaryFailure =
+    qaStep?.status === 0 ? (qaSummaryResult?.diagnosticFailure ?? null) : null;
+  const qa = qaSummaryResult?.summary ?? null;
   const observations = collectGatewayCpuObservations({
     startup,
     qa,
@@ -283,9 +318,13 @@ async function runGatewayCpuScenarios(options, params = {}) {
     generatedAt: new Date().toISOString(),
     outputDir: options.outputDir,
     startupOutput: fs.existsSync(startupOutput) ? startupOutput : null,
-    qaSummary: fs.existsSync(path.join(qaOutputDir, "qa-suite-summary.json"))
-      ? path.join(qaOutputDir, "qa-suite-summary.json")
-      : null,
+    qaSummary: fs.existsSync(qaSummaryPath) ? qaSummaryPath : null,
+    ...(qaSummaryFailure
+      ? {
+          qaSummaryFailure,
+          qaSummaryFailureDetail: qaSummaryResult?.diagnosticDetail ?? null,
+        }
+      : {}),
     options: {
       startupCases: options.startupCases,
       qaScenarios: options.qaScenarios,
@@ -293,6 +332,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
       warmup: options.warmup,
       cpuCoreWarn: options.cpuCoreWarn,
       hotWallWarnMs: options.hotWallWarnMs,
+      qaStateDir: qaState?.stateDir ?? null,
     },
     steps,
     observations,
@@ -309,8 +349,12 @@ async function runGatewayCpuScenarios(options, params = {}) {
         .join(", ")}`,
     );
   }
+  if (qaSummaryFailure) {
+    console.error(`[gateway-cpu] fail QA summary: ${qaSummaryResult?.diagnosticDetail}`);
+  }
 
-  const exitCode = steps.some((step) => step.status !== 0) || observations.length > 0 ? 1 : 0;
+  const exitCode =
+    steps.some((step) => step.status !== 0) || observations.length > 0 || qaSummaryFailure ? 1 : 0;
   return { exitCode, summary };
 }
 
@@ -322,6 +366,9 @@ async function main(params = {}) {
   }
 }
 
+/**
+ * Test-only access to the gateway CPU scenario parser and runner helpers.
+ */
 export const testing = {
   hasPrivateQaDist,
   parseArgs,

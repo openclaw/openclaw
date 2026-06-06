@@ -1,3 +1,6 @@
+/**
+ * Tests for doctor gateway methods and repair command dispatch.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -411,8 +414,8 @@ describe("doctor.memory.status", () => {
           version: 1,
           updatedAt: recentIso,
           entries: {
-            "memory:memory/2026-04-03.md:1:2": {
-              path: "memory/2026-04-03.md",
+            "memory:memory/2026-04-03-1503.md:1:2": {
+              path: "memory/2026-04-03-1503.md",
               startLine: 1,
               endLine: 2,
               snippet: "Emma prefers shorter, lower-pressure check-ins.",
@@ -422,8 +425,8 @@ describe("doctor.memory.status", () => {
               lastRecalledAt: recentIso,
               promotedAt: undefined,
             },
-            "memory:memory/2026-04-02.md:1:2": {
-              path: "memory/2026-04-02.md",
+            "memory:memory/daily/2026-04-02-1015.md:1:2": {
+              path: "memory/daily/2026-04-02-1015.md",
               startLine: 1,
               endLine: 2,
               snippet: "Use the Happy Together calendar for flights.",
@@ -456,8 +459,8 @@ describe("doctor.memory.status", () => {
               dailyCount: 4,
               promotedAt: olderIso,
             },
-            "memory:memory/2026-04-04.md:1:2": {
-              path: "memory/2026-04-04.md",
+            "memory:memory/notes/2026-04-04-0800.md:1:2": {
+              path: "memory/notes/2026-04-04-0800.md",
               startLine: 1,
               endLine: 2,
               snippet: "Always book the covered valet option at Park & Greet BCN.",
@@ -480,11 +483,11 @@ describe("doctor.memory.status", () => {
           version: 1,
           updatedAt: recentIso,
           entries: {
-            "memory:memory/2026-04-03.md:1:2": {
+            "memory:memory/2026-04-03-1503.md:1:2": {
               lightHits: 2,
               remHits: 3,
             },
-            "memory:memory/2026-04-02.md:1:2": {
+            "memory:memory/daily/2026-04-02-1015.md:1:2": {
               lightHits: 9,
               remHits: 9,
             },
@@ -595,7 +598,7 @@ describe("doctor.memory.status", () => {
         promotedToday: 2,
       });
       expectRecordFields((dreaming.shortTermEntries as unknown[])[0], {
-        path: "memory/2026-04-03.md",
+        path: "memory/2026-04-03-1503.md",
         snippet: "Emma prefers shorter, lower-pressure check-ins.",
         totalSignalCount: 3,
         lightHits: 2,
@@ -603,17 +606,17 @@ describe("doctor.memory.status", () => {
         phaseHitCount: 5,
       });
       expectRecordFields((dreaming.signalEntries as unknown[])[0], {
-        path: "memory/2026-04-03.md",
+        path: "memory/2026-04-03-1503.md",
         totalSignalCount: 3,
       });
       expectRecordFields(
-        findRecordByField(dreaming.promotedEntries, "path", "memory/2026-04-04.md"),
+        findRecordByField(dreaming.promotedEntries, "path", "memory/notes/2026-04-04-0800.md"),
         {
           promotedAt: recentIso,
         },
       );
       expectRecordFields(
-        findRecordByField(dreaming.promotedEntries, "path", "memory/2026-04-02.md"),
+        findRecordByField(dreaming.promotedEntries, "path", "memory/daily/2026-04-02-1015.md"),
         {
           promotedAt: recentIso,
         },

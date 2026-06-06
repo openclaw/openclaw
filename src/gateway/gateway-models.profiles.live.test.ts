@@ -1,3 +1,4 @@
+// Live model profile gateway tests sweep configured providers, auth profiles, model listing, and smoke prompts.
 import { randomBytes, randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -21,14 +22,19 @@ import {
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { collectAnthropicApiKeys } from "../agents/live-auth-keys.js";
+import { appendPrioritizedDynamicLiveModels } from "../agents/live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
+  DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   getHighSignalLiveModelPriorityIndex,
   getHighSignalLiveModelProviders,
   isHighSignalLiveModelRef,
+  isSmallLiveModelRef,
+  listPrioritizedSmallLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
+  selectSmallLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "../agents/live-model-filter.js";
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
@@ -46,6 +52,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { ModelRegistry } from "../llm/model-registry.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
 import type { ProviderThinkingModelCompat } from "../plugins/provider-thinking.types.js";
@@ -85,10 +92,7 @@ const GATEWAY_LIVE_PROBE_TIMEOUT_MS = Math.max(
   30_000,
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS, 90_000),
 );
-const GATEWAY_LIVE_SETUP_TIMEOUT_MS = Math.max(
-  1_000,
-  toInt(process.env.OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS, 60_000),
-);
+const GATEWAY_LIVE_SETUP_TIMEOUT_MS = resolveGatewayLiveSetupTimeoutMs();
 const GATEWAY_LIVE_MODEL_TIMEOUT_MS = resolveGatewayLiveModelTimeoutMs();
 const GATEWAY_LIVE_SESSION_CONTROL_TIMEOUT_MS = resolveGatewayLiveSessionControlTimeoutMs();
 const GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS = resolveGatewayLiveTranscriptTimeoutMs();
@@ -113,6 +117,9 @@ const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "google/gemini-3.1-flash-lite",
 ]);
 const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
+  // Hosted DeepSeek V4 Flash can surface its internal tool-call sentinel
+  // instead of the readback nonce after the tool-read probe succeeds.
+  "deepinfra/deepseek-ai/DeepSeek-V4-Flash",
   "google/gemini-3-flash-preview",
   "google/gemini-3.1-pro-preview",
 ]);
@@ -165,6 +172,7 @@ function providerListFromExplicitModelFilter(params: {
 
 function providerScopedModelRegistryProviders(params: {
   providerList: string[] | undefined;
+  useSmall: boolean;
   useExplicit: boolean;
   modelFilter: Set<string> | null;
   providerFilter: Set<string> | null;
@@ -173,7 +181,14 @@ function providerScopedModelRegistryProviders(params: {
     return params.providerList;
   }
   if (!params.useExplicit) {
-    return getHighSignalLiveModelProviders().filter((provider) =>
+    const providers = params.useSmall
+      ? [
+          ...new Set(
+            listPrioritizedSmallLiveModelRefs().map((ref) => normalizeProviderId(ref.provider)),
+          ),
+        ].toSorted((left, right) => left.localeCompare(right))
+      : getHighSignalLiveModelProviders();
+    return providers.filter((provider) =>
       params.providerFilter ? params.providerFilter.has(provider) : true,
     );
   }
@@ -181,6 +196,29 @@ function providerScopedModelRegistryProviders(params: {
     modelFilter: params.modelFilter,
     providerFilter: params.providerFilter,
   });
+}
+
+function filterGatewayLiveModelRefsByProvider(
+  refs: readonly { provider: string; id: string }[],
+  providerFilter: ReadonlySet<string> | null,
+): Array<{ provider: string; id: string }> {
+  if (!providerFilter) {
+    return [...refs];
+  }
+  const providers = new Set(
+    [...providerFilter].map((provider) => normalizeProviderId(provider)).filter(Boolean),
+  );
+  return refs.filter((ref) => providers.has(normalizeProviderId(ref.provider)));
+}
+
+function isWantedSmallGatewayLiveModel(params: {
+  model: Pick<Model, "provider" | "id">;
+  targetMatcher: ReturnType<typeof createLiveTargetMatcher>;
+}): boolean {
+  return (
+    params.targetMatcher.matchesProvider(params.model.provider) &&
+    isSmallLiveModelRef({ provider: params.model.provider, id: params.model.id })
+  );
 }
 
 function shouldSuppressGatewayLiveOllamaWarnings(): boolean {
@@ -214,17 +252,27 @@ function toInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function resolveGatewayLiveSetupTimeoutMs(
+  raw = process.env.OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS,
+): number {
+  return Math.max(1_000, toInt(raw, 180_000));
+}
+
 function resolveGatewayLiveMaxModels(): number {
   const gatewayRaw = process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS?.trim();
   if (gatewayRaw) {
     return Math.max(0, toInt(gatewayRaw, 0));
   }
   const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
-  const useExplicitModels = Boolean(rawModels) && rawModels !== "modern" && rawModels !== "all";
+  const useSmallModels = rawModels === "small";
+  const useExplicitModels =
+    Boolean(rawModels) && rawModels !== "modern" && rawModels !== "all" && !useSmallModels;
   return resolveHighSignalLiveModelLimit({
     rawMaxModels: process.env.OPENCLAW_LIVE_MAX_MODELS,
     useExplicitModels,
-    defaultLimit: DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
+    defaultLimit: useSmallModels
+      ? DEFAULT_SMALL_LIVE_MODEL_LIMIT
+      : DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   });
 }
 
@@ -329,6 +377,7 @@ function assertGatewayLiveSelectedSomeModels(params: {
   modelFilter: ReadonlySet<string> | null;
   providerFilter: ReadonlySet<string> | null;
   total: number;
+  useSmall: boolean;
   useExplicit: boolean;
   wantedCount: number;
 }): void {
@@ -344,7 +393,7 @@ function assertGatewayLiveSelectedSomeModels(params: {
   ) {
     return;
   }
-  const mode = params.useExplicit ? "explicit" : "high-signal";
+  const mode = params.useExplicit ? "explicit" : params.useSmall ? "small" : "high-signal";
   throw new Error(
     `[${params.label}] selected no ${mode} live models for providers=${formatGatewayLiveFilterSet(params.providerFilter)} models=${formatGatewayLiveFilterSet(params.modelFilter)} from ${params.total} registry model(s); update the live model selection or pass explicit live model refs.`,
   );
@@ -755,6 +804,14 @@ describe("resolveGatewayLiveTranscriptTimeoutMs", () => {
 });
 
 describe("gateway live timeout floors", () => {
+  it("defaults setup budget above slow ARM model discovery", () => {
+    expect(resolveGatewayLiveSetupTimeoutMs("")).toBe(180_000);
+  });
+
+  it("keeps explicit shorter setup budgets available for targeted probes", () => {
+    expect(resolveGatewayLiveSetupTimeoutMs("60000")).toBe(60_000);
+  });
+
   it("never goes below the probe timeout", () => {
     expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
     expect(resolveGatewayLiveTranscriptTimeoutMs(240_000, 180_000)).toBe(240_000);
@@ -845,6 +902,7 @@ describe("assertGatewayLiveSelectedSomeModels", () => {
         modelFilter: null,
         providerFilter: null,
         total: 0,
+        useSmall: false,
         useExplicit: false,
         wantedCount: 0,
       }),
@@ -859,6 +917,7 @@ describe("assertGatewayLiveSelectedSomeModels", () => {
         modelFilter: null,
         providerFilter: new Set(["openai"]),
         total: 42,
+        useSmall: false,
         useExplicit: false,
         wantedCount: 0,
       }),
@@ -873,6 +932,7 @@ describe("assertGatewayLiveSelectedSomeModels", () => {
         modelFilter: null,
         providerFilter: new Set(["minimax", "minimax-portal"]),
         total: 0,
+        useSmall: false,
         useExplicit: false,
         wantedCount: 0,
       }),
@@ -920,6 +980,14 @@ describe("resolveGatewayLiveMaxModels", () => {
     expect(resolveGatewayLiveMaxModels()).toBe(DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
   });
 
+  it("defaults small gateway sweeps to the curated small-model cap", () => {
+    process.env.OPENCLAW_LIVE_GATEWAY_MODELS = "small";
+    delete process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
+    delete process.env.OPENCLAW_LIVE_MAX_MODELS;
+
+    expect(resolveGatewayLiveMaxModels()).toBe(DEFAULT_SMALL_LIVE_MODEL_LIMIT);
+  });
+
   it("keeps explicit gateway model lists uncapped unless a cap is provided", () => {
     process.env.OPENCLAW_LIVE_GATEWAY_MODELS = "openai/gpt-5.5,anthropic/claude-opus-4-6";
     delete process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
@@ -954,6 +1022,24 @@ function createExplicitLiveFallbackModel(provider: string, id: string): Model {
   };
 }
 
+function createGatewayLiveTestRegistry(overrides: Partial<ModelRegistry>): ModelRegistry {
+  return {
+    find() {
+      return undefined;
+    },
+    getAll() {
+      return [];
+    },
+    getAvailable() {
+      return [];
+    },
+    hasConfiguredAuth() {
+      return true;
+    },
+    ...overrides,
+  };
+}
+
 describe("resolveExplicitLiveModelCandidates", () => {
   it("uses targeted registry lookup for explicit provider/model filters", () => {
     const model = createGatewayLiveTestModel("xai", "grok-4.3");
@@ -963,7 +1049,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
       env: {},
     });
     const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: {
+      modelRegistry: createGatewayLiveTestRegistry({
         find(provider, modelId) {
           expect(provider).toBe("xai");
           expect(modelId).toBe("grok-4.3");
@@ -972,7 +1058,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
         getAll() {
           throw new Error("explicit model lookup should not enumerate registry");
         },
-      },
+      }),
       modelFilter: new Set(["xai/grok-4.3"]),
       providerFilter: new Set(["xai"]),
       targetMatcher: matcher,
@@ -989,7 +1075,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
       env: {},
     });
     const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: {
+      modelRegistry: createGatewayLiveTestRegistry({
         find(provider, modelId) {
           expect(provider).toBe("google");
           expect(modelId).toBe("gemini-3.1-pro-preview");
@@ -998,7 +1084,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
         getAll() {
           throw new Error("explicit model lookup should not enumerate registry");
         },
-      },
+      }),
       modelFilter: new Set(["google/gemini-3-pro-preview"]),
       providerFilter: new Set(["google"]),
       targetMatcher: matcher,
@@ -1014,7 +1100,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
       env: {},
     });
     const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: {
+      modelRegistry: createGatewayLiveTestRegistry({
         find(provider, modelId) {
           expect(provider).toBe("openai");
           expect(modelId).toBe("gpt-5.5");
@@ -1023,7 +1109,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
         getAll() {
           throw new Error("explicit model lookup should not enumerate registry");
         },
-      },
+      }),
       modelFilter: new Set(["openai/gpt-5.5"]),
       providerFilter: new Set(["openai"]),
       targetMatcher: matcher,
@@ -1045,14 +1131,14 @@ describe("resolveExplicitLiveModelCandidates", () => {
 
     expect(
       resolveExplicitLiveModelCandidates({
-        modelRegistry: {
+        modelRegistry: createGatewayLiveTestRegistry({
           find() {
             throw new Error("ambiguous model-only lookup should not use direct find");
           },
           getAll() {
             return [];
           },
-        },
+        }),
         modelFilter: new Set(["grok-4.3"]),
         providerFilter: null,
         targetMatcher: matcher,
@@ -1066,6 +1152,7 @@ describe("providerScopedModelRegistryProviders", () => {
     expect(
       providerScopedModelRegistryProviders({
         providerList: undefined,
+        useSmall: false,
         useExplicit: false,
         modelFilter: null,
         providerFilter: null,
@@ -1077,6 +1164,7 @@ describe("providerScopedModelRegistryProviders", () => {
     expect(
       providerScopedModelRegistryProviders({
         providerList: undefined,
+        useSmall: false,
         useExplicit: false,
         modelFilter: null,
         providerFilter: new Set(["openai", "not-high-signal"]),
@@ -1084,10 +1172,65 @@ describe("providerScopedModelRegistryProviders", () => {
     ).toEqual(["openai"]);
   });
 
+  it("uses curated small-model providers for small sweeps", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useSmall: true,
+        useExplicit: false,
+        modelFilter: null,
+        providerFilter: null,
+      }),
+    ).toEqual(["lmstudio", "ollama", "openrouter", "sglang", "vllm", "zai"]);
+  });
+
+  it("intersects small gateway sweeps with provider filters", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useSmall: true,
+        useExplicit: false,
+        modelFilter: null,
+        providerFilter: new Set(["ollama", "openai"]),
+      }),
+    ).toEqual(["ollama"]);
+  });
+
+  it("filters prioritized small refs before dynamic lookup", () => {
+    expect(
+      filterGatewayLiveModelRefsByProvider(
+        listPrioritizedSmallLiveModelRefs(),
+        new Set(["ollama"]),
+      ),
+    ).toEqual([{ provider: "ollama", id: "gemma3:4b" }]);
+  });
+
+  it("does not count small models outside a provider-scoped gateway sweep", () => {
+    const matcher = createLiveTargetMatcher({
+      providerFilter: new Set(["ollama"]),
+      modelFilter: null,
+      env: {},
+    });
+
+    expect(
+      isWantedSmallGatewayLiveModel({
+        model: createGatewayLiveTestModel("openrouter", "qwen/qwen3.5-9b"),
+        targetMatcher: matcher,
+      }),
+    ).toBe(false);
+    expect(
+      isWantedSmallGatewayLiveModel({
+        model: createGatewayLiveTestModel("ollama", "gemma3:4b"),
+        targetMatcher: matcher,
+      }),
+    ).toBe(true);
+  });
+
   it("uses explicit provider-qualified model refs without enumerating the full registry", () => {
     expect(
       providerScopedModelRegistryProviders({
         providerList: undefined,
+        useSmall: false,
         useExplicit: true,
         modelFilter: new Set(["openai/gpt-5.2", "anthropic/claude-sonnet-4-6"]),
         providerFilter: null,
@@ -1099,6 +1242,7 @@ describe("providerScopedModelRegistryProviders", () => {
     expect(
       providerScopedModelRegistryProviders({
         providerList: undefined,
+        useSmall: false,
         useExplicit: true,
         modelFilter: new Set(["gpt-5.2"]),
         providerFilter: new Set(["openai"]),
@@ -1110,6 +1254,7 @@ describe("providerScopedModelRegistryProviders", () => {
     expect(
       providerScopedModelRegistryProviders({
         providerList: undefined,
+        useSmall: false,
         useExplicit: true,
         modelFilter: new Set(["gpt-5.2"]),
         providerFilter: null,
@@ -1341,6 +1486,15 @@ function isToolNonceProbeMiss(error: string): boolean {
   return msg.includes("tool probe missing nonce") || msg.includes("exec+read probe missing nonce");
 }
 
+function isTransientToolReadProbeErrorForLiveModel(error: string): boolean {
+  const msg = error.toLowerCase();
+  return (
+    msg.includes("tool-read: agent-wait") &&
+    msg.includes("failovererror") &&
+    msg.includes("unknown error occurred")
+  );
+}
+
 function isExecReadNonceProbeMiss(error: string): boolean {
   return error.toLowerCase().includes("exec+read probe missing nonce");
 }
@@ -1387,11 +1541,27 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "openrouter/ai21/jamba-large-1.7", expected: true },
     { modelKey: "xai/grok-4.1-fast", expected: true },
     { modelKey: "zai/glm-5.1", expected: true },
+    { modelKey: "deepinfra/deepseek-ai/DeepSeek-V4-Flash", expected: true },
     { modelKey: "google/gemini-3-flash-preview", expected: true },
     { modelKey: "google/gemini-3.1-pro-preview", expected: true },
     { modelKey: "openai/gpt-5.4", expected: false },
   ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
     expect(shouldSkipToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);
+  });
+});
+
+describe("isTransientToolReadProbeErrorForLiveModel", () => {
+  it("matches generic provider failover during the tool-read phase", () => {
+    expect(
+      isTransientToolReadProbeErrorForLiveModel(
+        "[all-models] 1/1 google/gemini-3.1-pro-preview: tool-read: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: An unknown error occurred)",
+      ),
+    ).toBe(true);
+    expect(
+      isTransientToolReadProbeErrorForLiveModel(
+        "[all-models] 1/1 google/gemini-3.1-pro-preview: prompt: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: An unknown error occurred)",
+      ),
+    ).toBe(false);
   });
 });
 
@@ -2059,10 +2229,7 @@ type GatewayModelSuiteParams = {
   providerOverrides?: Record<string, ModelProviderConfig>;
 };
 
-type LiveModelRegistry = {
-  find(provider: string, modelId: string): Model | null | undefined;
-  getAll(): Array<Model>;
-};
+type LiveModelRegistry = ModelRegistry;
 
 function toGatewayLiveModel(params: {
   provider: string;
@@ -2160,6 +2327,12 @@ function createStaticLiveModelRegistry(models: Array<Model>): LiveModelRegistry 
     },
     getAll() {
       return models;
+    },
+    getAvailable() {
+      return models;
+    },
+    hasConfiguredAuth() {
+      return true;
     },
   };
 }
@@ -2837,21 +3010,42 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 toolReadAttempt += 1
               ) {
                 const strictReply = toolReadAttempt > 0;
-                toolText = await requestGatewayAgentText({
-                  client,
-                  sessionKey,
-                  idempotencyKey: `idem-${runIdTool}-tool-${toolReadAttempt + 1}`,
-                  modelKey,
-                  message: strictReply
-                    ? "OpenClaw live tool probe (local, safe): " +
-                      `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                      `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`
-                    : "OpenClaw live tool probe (local, safe): " +
-                      `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                      "Then reply with the two nonce values you read (include both).",
-                  thinkingLevel,
-                  context: `${progressLabel}: tool-read`,
-                });
+                try {
+                  toolText = await requestGatewayAgentText({
+                    client,
+                    sessionKey,
+                    idempotencyKey: `idem-${runIdTool}-tool-${toolReadAttempt + 1}`,
+                    modelKey,
+                    message: strictReply
+                      ? "OpenClaw live tool probe (local, safe): " +
+                        `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                        `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`
+                      : "OpenClaw live tool probe (local, safe): " +
+                        `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                        "Then reply with the two nonce values you read (include both).",
+                    thinkingLevel,
+                    context: `${progressLabel}: tool-read`,
+                  });
+                } catch (error) {
+                  const message = String(error instanceof Error ? error.message : error);
+                  if (
+                    isTransientToolReadProbeErrorForLiveModel(message) &&
+                    toolReadAttempt + 1 < maxToolReadAttempts
+                  ) {
+                    logProgress(
+                      `${progressLabel}: tool-read retry (${toolReadAttempt + 2}/${maxToolReadAttempts}) transient provider failover`,
+                    );
+                    continue;
+                  }
+                  if (
+                    isTransientToolReadProbeErrorForLiveModel(message) &&
+                    shouldSkipToolNonceProbeMissForLiveModel(modelKey)
+                  ) {
+                    logProgress(`${progressLabel}: skip (${modelKey} tool-read provider failover)`);
+                    return "skip";
+                  }
+                  throw error;
+                }
                 if (
                   isEmptyStreamText(toolText) &&
                   shouldSkipEmptyResponseForLiveModel({
@@ -3345,10 +3539,12 @@ describeLive("gateway live (dev agent, profile keys)", () => {
 
         const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
-        const useExplicit = Boolean(rawModels) && !useModern;
+        const useSmall = rawModels === "small";
+        const useExplicit = Boolean(rawModels) && !useModern && !useSmall;
         const filter = useExplicit ? parseFilter(rawModels) : null;
         const providerScopedModelProviders = providerScopedModelRegistryProviders({
           providerList,
+          useSmall,
           useExplicit,
           modelFilter: filter,
           providerFilter: PROVIDERS,
@@ -3382,6 +3578,30 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           modelRegistry = authBacked.modelRegistry;
           all = authBacked.all;
         }
+        if (useSmall) {
+          const augmented = await withGatewayLiveSetupTimeout(
+            appendPrioritizedDynamicLiveModels({
+              models: all,
+              config: cfg,
+              agentDir,
+              workspaceDir,
+              env: process.env,
+              modelRegistry,
+              refs: filterGatewayLiveModelRefsByProvider(
+                listPrioritizedSmallLiveModelRefs(),
+                PROVIDERS,
+              ),
+            }),
+            "[all-models] load dynamic small model refs",
+          );
+          if (augmented.added.length > 0) {
+            logProgress(
+              `[all-models] loaded ${augmented.added.length} prioritized dynamic small model refs`,
+            );
+            all = augmented.models;
+            modelRegistry = createStaticLiveModelRegistry(all);
+          }
+        }
         const maxModels = GATEWAY_LIVE_MAX_MODELS;
         const targetMatcher = createLiveTargetMatcher({
           providerFilter: PROVIDERS,
@@ -3400,24 +3620,27 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         if (!wanted) {
           wanted = filter
             ? all.filter((m) => targetMatcher.matchesModel(m.provider, m.id))
-            : all.filter(
-                (m) =>
-                  !shouldExcludeProviderFromDefaultHighSignalLiveSweep({
-                    provider: m.provider,
-                    useExplicitModels: useExplicit,
-                    providerFilter: PROVIDERS,
-                    config: cfg,
-                    env: process.env,
-                  }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
-              );
+            : useSmall
+              ? all.filter((m) => isWantedSmallGatewayLiveModel({ model: m, targetMatcher }))
+              : all.filter(
+                  (m) =>
+                    !shouldExcludeProviderFromDefaultHighSignalLiveSweep({
+                      provider: m.provider,
+                      useExplicitModels: useExplicit,
+                      providerFilter: PROVIDERS,
+                      config: cfg,
+                      env: process.env,
+                    }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
+                );
         }
         logProgress(`[all-models] wanted=${wanted.length} total=${all.length}`);
         assertGatewayLiveSelectedSomeModels({
-          allowProviderDriftSkip: useModern,
+          allowProviderDriftSkip: useModern || useSmall,
           label: "all-models",
           modelFilter: filter,
           providerFilter: PROVIDERS,
           total: all.length,
+          useSmall,
           useExplicit,
           wantedCount: wanted.length,
         });
@@ -3468,13 +3691,16 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           logProgress("[all-models] no API keys found; skipping");
           return;
         }
-        const selectedCandidates = selectHighSignalLiveItems(
+        const selectCandidates = useSmall ? selectSmallLiveItems : selectHighSignalLiveItems;
+        const selectedCandidates = selectCandidates(
           candidates,
           maxModels > 0 ? maxModels : candidates.length,
           (model) => ({ provider: model.provider, id: model.id }),
           (model) => model.provider,
         );
-        logProgress(`[all-models] selection=${useExplicit ? "explicit" : "high-signal"}`);
+        logProgress(
+          `[all-models] selection=${useExplicit ? "explicit" : useSmall ? "small" : "high-signal"}`,
+        );
         if (selectedCandidates.length < candidates.length) {
           logProgress(
             `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
@@ -3489,7 +3715,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           label: "all-models",
           cfg,
           candidates: selectedCandidates,
-          allowNotFoundSkip: useModern,
+          allowNotFoundSkip: useModern || useSmall,
           extraToolProbes: ENABLE_EXTRA_TOOL_PROBES,
           extraImageProbes: ENABLE_EXTRA_IMAGE_PROBES,
           thinkingLevel: THINKING_LEVEL,

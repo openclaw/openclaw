@@ -1,3 +1,4 @@
+// Discord tests cover receive recovery plugin behavior.
 import { OpusError } from "libopus-wasm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -6,6 +7,8 @@ import {
   enableDaveReceivePassthrough,
   noteVoiceDecryptFailure,
 } from "./receive-recovery.js";
+
+const OPUS_INVALID_PACKET_CODE = -4;
 
 describe("voice receive recovery", () => {
   it("treats passthrough-disabled decrypt errors as decrypt failures", () => {
@@ -33,8 +36,27 @@ describe("voice receive recovery", () => {
   });
 
   it("treats corrupt Opus packets as non-recoverable decode noise", () => {
-    expect(analyzeVoiceReceiveError(new OpusError(-4, "not inspected", "decode"))).toEqual({
+    expect(
+      analyzeVoiceReceiveError(new OpusError(OPUS_INVALID_PACKET_CODE, "not inspected", "decode")),
+    ).toEqual({
       message: "not inspected",
+      isAbortLike: false,
+      isDecodeCorruption: true,
+      shouldAttemptPassthrough: false,
+      countsAsDecryptFailure: false,
+    });
+  });
+
+  it("treats structurally equivalent Opus errors as decode corruption", () => {
+    const analysis = analyzeVoiceReceiveError({
+      name: "OpusError",
+      message: "libopus decode failed (-4): corrupted stream",
+      code: OPUS_INVALID_PACKET_CODE,
+      codeName: "InvalidPacket",
+      operation: "decode",
+    });
+
+    expect(analysis).toMatchObject({
       isAbortLike: false,
       isDecodeCorruption: true,
       shouldAttemptPassthrough: false,

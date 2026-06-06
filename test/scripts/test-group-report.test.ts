@@ -1,3 +1,5 @@
+// Test Group Report tests cover test group report script behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +20,7 @@ import {
   resolveRunPlans,
   spawnText,
 } from "../../scripts/test-group-report.mjs";
+import { withEnv } from "../../src/test-utils/env.js";
 
 describe("scripts/test-group-report grouping", () => {
   it("groups repo files by stable product area", () => {
@@ -91,6 +94,28 @@ describe("scripts/test-group-report aggregation", () => {
         status: "passed",
       },
     ]);
+  });
+
+  it("fails missing report inputs instead of writing an empty green report", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-"));
+    const missingReport = path.join(tempDir, "missing.json");
+    const output = path.join(tempDir, "group-report.json");
+    try {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/test-group-report.mjs", "--report", missingReport, "--output", output],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`[test-group-report] missing JSON report for missing`);
+      expect(fs.existsSync(output)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -319,6 +344,24 @@ describe("scripts/test-group-report arg parsing", () => {
       timeoutMs: 5000,
     });
   });
+
+  it("rejects malformed positive integer flags", () => {
+    for (const flag of [
+      "--limit",
+      "--top-files",
+      "--max-test-ms",
+      "--timeout-ms",
+      "--kill-grace-ms",
+      "--concurrency",
+    ]) {
+      expect(() => parseTestGroupReportArgs([flag, "20x"])).toThrow(
+        `${flag} must be a positive integer`,
+      );
+      expect(() => parseTestGroupReportArgs([flag, "0"])).toThrow(
+        `${flag} must be a positive integer`,
+      );
+    }
+  });
 });
 
 describe("scripts/test-group-report child process guard", () => {
@@ -460,37 +503,26 @@ describe("scripts/test-group-report run plans", () => {
   });
 
   it("uses leaf configs for full-suite profiling without requiring parallel env", () => {
-    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
-    const previousLeaf = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
-    delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
-    delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
-    try {
-      const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
+    withEnv(
+      {
+        OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
+        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
+      },
+      () => {
+        const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
 
-      expect(plans.map((plan) => plan.config)).not.toContain(
-        "test/vitest/vitest.full-agentic.config.ts",
-      );
-      expect(plans.map((plan) => plan.config)).toContain(
-        "test/vitest/vitest.agents-tools.config.ts",
-      );
-    } finally {
-      if (previousParallel === undefined) {
-        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
-      } else {
-        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
-      }
-      if (previousLeaf === undefined) {
-        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
-      } else {
-        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previousLeaf;
-      }
-    }
+        expect(plans.map((plan) => plan.config)).not.toContain(
+          "test/vitest/vitest.full-agentic.config.ts",
+        );
+        expect(plans.map((plan) => plan.config)).toContain(
+          "test/vitest/vitest.agents-tools.config.ts",
+        );
+      },
+    );
   });
 
   it("preserves full-suite shard file args and unique report labels", () => {
-    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
-    process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = "6";
-    try {
+    withEnv({ OPENCLAW_TEST_PROJECTS_PARALLEL: "6" }, () => {
       const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
       const gatewayServerPlans = plans.filter(
         (plan) => plan.config === "test/vitest/vitest.gateway-server.config.ts",
@@ -504,13 +536,7 @@ describe("scripts/test-group-report run plans", () => {
       expect(gatewayServerPlans.flatMap((plan) => plan.forwardedArgs)).toContain(
         "src/gateway/server.node-pairing-authz.test.ts",
       );
-    } finally {
-      if (previousParallel === undefined) {
-        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
-      } else {
-        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
-      }
-    }
+    });
   });
 });
 

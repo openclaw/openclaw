@@ -1,3 +1,5 @@
+// Session patch tests cover model/provider edits, subagent patching, provider
+// aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, describe, expect, test } from "vitest";
 import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -479,11 +481,13 @@ describe("gateway sessions patch", () => {
     expect(entry.liveModelSwitchPending).toBe(true);
   });
 
-  test("marks model reset patches as pending live model switches", async () => {
+  test("clears pending live model switches for model reset patches", async () => {
     const store = mainStoreEntry({
       sessionId: "sess-live-reset",
       providerOverride: "anthropic",
       modelOverride: ANTHROPIC_SONNET_ID,
+      modelOverrideSource: "user",
+      liveModelSwitchPending: true,
     });
     const entry = await applyMainModelPatch({
       store,
@@ -492,7 +496,8 @@ describe("gateway sessions patch", () => {
     });
 
     expectModelSelection(entry, undefined, undefined);
-    expect(entry.liveModelSwitchPending).toBe(true);
+    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.liveModelSwitchPending).toBeUndefined();
   });
 
   test.each([

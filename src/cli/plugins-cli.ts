@@ -1,3 +1,4 @@
+// Commander registration for plugin list/search/inspect/install/update/authoring commands.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -52,6 +53,7 @@ export type PluginAuthoringInitOptions = {
 };
 
 function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
+  // Plugin runtime modules are heavy; load each command surface once on first use.
   let promise: Promise<T> | undefined;
   return () => (promise ??= load());
 }
@@ -134,7 +136,7 @@ export function registerPluginsCli(program: Command) {
     .option("--dry-run", "Show what would be removed without making changes", false)
     .action(async (id: string, opts: PluginUninstallOptions) => {
       const { runPluginUninstallCommand } = await import("./plugins-uninstall-command.js");
-      await runPluginUninstallCommand(id, opts);
+      await runPluginUninstallCommand(id, { ...opts, invalidateRuntimeCache: false });
     });
 
   plugins
@@ -151,7 +153,7 @@ export function registerPluginsCli(program: Command) {
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option(
       "--dangerously-force-unsafe-install",
-      "Bypass built-in dangerous-code install blocking (plugin hooks may still block)",
+      "Deprecated no-op; install policy and plugin hooks may still block",
       false,
     )
     .option(
@@ -182,7 +184,7 @@ export function registerPluginsCli(program: Command) {
     .option("--dry-run", "Show what would change without writing", false)
     .option(
       "--dangerously-force-unsafe-install",
-      "Bypass built-in dangerous-code update blocking for plugins (plugin hooks may still block)",
+      "Deprecated no-op; install policy and plugin hooks may still block",
       false,
     )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {

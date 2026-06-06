@@ -1,3 +1,4 @@
+// Openclaw E2E Instance tests cover openclaw e2e instance script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -146,6 +147,110 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     expect(result.status).not.toBe(0);
     expect(result.stdout).not.toContain("value=");
     expect(result.stderr).toContain("decoded to an empty script");
+  });
+
+  it("requires /readyz after the gateway ready log", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-readyz-required-"));
+    try {
+      const logPath = path.join(tempDir, "gateway.log");
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            "openclaw_e2e_probe_http() { return 1; }",
+            "sleep 30 &",
+            'gateway_pid="$!"',
+            "trap 'kill \"$gateway_pid\" >/dev/null 2>&1 || true' EXIT",
+            `printf '[gateway] ready ws://127.0.0.1:23456\\n' >${shellQuote(logPath)}`,
+            `if openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2; then`,
+            '  echo "gateway readiness passed without /readyz" >&2',
+            "  exit 1",
+            "fi",
+          ].join("\n"),
+        ],
+        {
+          encoding: "utf8",
+          env: shellTestEnv({}),
+          timeout: 5_000,
+        },
+      );
+
+      expectShellSuccess(result);
+      expect(result.stdout).toContain(
+        "Gateway log reported ready, but /readyz probe never succeeded",
+      );
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("probes /readyz on the explicit gateway port", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-readyz-port-"));
+    try {
+      const logPath = path.join(tempDir, "gateway.log");
+      const probePath = path.join(tempDir, "probe-url.txt");
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            `openclaw_e2e_probe_http() { printf "%s\\n" "$1" >${shellQuote(probePath)}; return 0; }`,
+            "sleep 30 &",
+            'gateway_pid="$!"',
+            "trap 'kill \"$gateway_pid\" >/dev/null 2>&1 || true' EXIT",
+            `printf '[gateway] ready\\n' >${shellQuote(logPath)}`,
+            `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 23456`,
+          ].join("\n"),
+        ],
+        {
+          encoding: "utf8",
+          env: shellTestEnv({}),
+          timeout: 5_000,
+        },
+      );
+
+      expectShellSuccess(result);
+      expect(fs.readFileSync(probePath, "utf8").trim()).toBe("http://127.0.0.1:23456/readyz");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("allows explicit legacy ready-log mode without /readyz", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-readyz-legacy-"));
+    try {
+      const logPath = path.join(tempDir, "gateway.log");
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            "openclaw_e2e_probe_http() { return 1; }",
+            "sleep 30 &",
+            'gateway_pid="$!"',
+            "trap 'kill \"$gateway_pid\" >/dev/null 2>&1 || true' EXIT",
+            `printf '[gateway] ready\\n' >${shellQuote(logPath)}`,
+            `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 23456 legacy-ready-log-ok`,
+          ].join("\n"),
+        ],
+        {
+          encoding: "utf8",
+          env: shellTestEnv({}),
+          timeout: 5_000,
+        },
+      );
+
+      expectShellSuccess(result);
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("wraps package installs with the configured timeout", () => {
@@ -374,28 +479,33 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     }
   });
 
-  it("escalates Node watchdog children that ignore parent termination", () => {
-    const tempDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-e2e-instance-node-watchdog-signal-"),
-    );
-    try {
-      writeNodeShim(tempDir);
-      const childPath = path.join(tempDir, "ignore-term.cjs");
-      const pidPath = path.join(tempDir, "child.pid");
-      const watchdogPidPath = path.join(tempDir, "watchdog.pid");
-      fs.writeFileSync(
-        childPath,
-        [
-          "const fs = require('node:fs');",
-          "fs.writeFileSync(process.argv[2], String(process.pid));",
-          "fs.writeFileSync(process.argv[3], String(process.ppid));",
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
-          "",
-        ].join("\n"),
+  for (const [shellSignal, expectedStatus] of [
+    ["TERM", "143"],
+    ["HUP", "129"],
+  ] as const) {
+    it(`escalates Node watchdog children that ignore parent SIG${shellSignal}`, () => {
+      const tempDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "openclaw-e2e-instance-node-watchdog-signal-"),
       );
+      try {
+        writeNodeShim(tempDir);
+        const childPath = path.join(tempDir, "ignore-term.cjs");
+        const pidPath = path.join(tempDir, "child.pid");
+        const watchdogPidPath = path.join(tempDir, "watchdog.pid");
+        fs.writeFileSync(
+          childPath,
+          [
+            "const fs = require('node:fs');",
+            "fs.writeFileSync(process.argv[2], String(process.pid));",
+            "fs.writeFileSync(process.argv[3], String(process.ppid));",
+            "process.on('SIGTERM', () => {});",
+            "process.on('SIGHUP', () => {});",
+            "setInterval(() => {}, 1000);",
+            "",
+          ].join("\n"),
+        );
 
-      const script = `
+        const script = `
 set -euo pipefail
 source ${shellQuote(helperPath)}
 export OPENCLAW_E2E_TIMEOUT_KILL_GRACE_MS=100
@@ -407,12 +517,12 @@ for ((i = 0; i < 100; i += 1)); do
 done
 [ -s ${shellQuote(pidPath)} ]
 [ -s ${shellQuote(watchdogPidPath)} ]
-kill -TERM "$(/bin/cat ${shellQuote(watchdogPidPath)})"
+kill -${shellSignal} "$(/bin/cat ${shellQuote(watchdogPidPath)})"
 set +e
 wait "$wrapper_pid"
 status="$?"
 set -e
-[ "$status" = "143" ]
+[ "$status" = "${expectedStatus}" ]
 child_pid="$(/bin/cat ${shellQuote(pidPath)})"
 for ((i = 0; i < 100; i += 1)); do
   kill -0 "$child_pid" 2>/dev/null || exit 0
@@ -422,19 +532,20 @@ echo "child still alive after watchdog termination" >&2
 exit 1
 `;
 
-      const result = spawnSync("/bin/bash", ["-c", script], {
-        encoding: "utf8",
-        env: shellTestEnv({
-          PATH: tempDir,
-        }),
-        timeout: 5_000,
-      });
+        const result = spawnSync("/bin/bash", ["-c", script], {
+          encoding: "utf8",
+          env: shellTestEnv({
+            PATH: tempDir,
+          }),
+          timeout: 5_000,
+        });
 
-      expectShellSuccess(result);
-    } finally {
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
-  });
+        expectShellSuccess(result);
+      } finally {
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
+    });
+  }
 
   it("terminates only the tracked gateway process", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-gateway-terminate-"));
@@ -475,6 +586,97 @@ fi
 
       expectShellSuccess(result);
     } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("terminates descendants in the tracked process group", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-process-group-"));
+    const parentPidPath = path.join(tempDir, "parent.pid");
+    const childPidPath = path.join(tempDir, "child.pid");
+    const childTermPath = path.join(tempDir, "child.term");
+    try {
+      const parentPath = path.join(tempDir, "parent.cjs");
+      const childPath = path.join(tempDir, "child.cjs");
+      const logPath = path.join(tempDir, "tracked.log");
+      fs.writeFileSync(
+        childPath,
+        [
+          "const fs = require('node:fs');",
+          "fs.writeFileSync(process.argv[2], String(process.pid));",
+          "process.on('SIGTERM', () => {",
+          "  fs.writeFileSync(process.argv[3], 'terminated');",
+          "  process.exit(0);",
+          "});",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+      );
+      fs.writeFileSync(
+        parentPath,
+        [
+          "const fs = require('node:fs');",
+          "const { spawn } = require('node:child_process');",
+          "fs.writeFileSync(process.argv[3], String(process.pid));",
+          "const child = spawn(process.execPath, [process.argv[2], process.argv[4], process.argv[5]], {",
+          "  stdio: 'ignore',",
+          "});",
+          "child.unref();",
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+      );
+
+      const script = `
+set -euo pipefail
+source ${shellQuote(helperPath)}
+tracked_pid="$(openclaw_e2e_start_tracked_process ${shellQuote(logPath)} ${shellQuote(process.execPath)} ${shellQuote(parentPath)} ${shellQuote(childPath)} ${shellQuote(parentPidPath)} ${shellQuote(childPidPath)} ${shellQuote(childTermPath)})"
+for ((i = 0; i < 100; i += 1)); do
+  [ -s ${shellQuote(parentPidPath)} ] && [ -s ${shellQuote(childPidPath)} ] && break
+  /bin/sleep 0.02
+done
+[ -s ${shellQuote(parentPidPath)} ]
+[ -s ${shellQuote(childPidPath)} ]
+child_pid="$(/bin/cat ${shellQuote(childPidPath)})"
+openclaw_e2e_stop_process "$tracked_pid"
+for ((i = 0; i < 100; i += 1)); do
+  [ -s ${shellQuote(childTermPath)} ] && break
+  /bin/sleep 0.02
+done
+[ -s ${shellQuote(childTermPath)} ] || {
+  echo "tracked child did not receive SIGTERM" >&2
+  exit 1
+}
+for ((i = 0; i < 100; i += 1)); do
+  kill -0 "$child_pid" 2>/dev/null || exit 0
+  /bin/sleep 0.02
+done
+echo "tracked child still alive after group termination" >&2
+exit 1
+`;
+
+      const result = spawnSync("/bin/bash", ["-c", script], {
+        encoding: "utf8",
+        env: shellTestEnv({
+          PATH: hostPath,
+        }),
+        timeout: 5_000,
+      });
+
+      expectShellSuccess(result);
+    } finally {
+      for (const pidPath of [childPidPath, parentPidPath]) {
+        if (!fs.existsSync(pidPath)) {
+          continue;
+        }
+        const pid = Number(fs.readFileSync(pidPath, "utf8"));
+        if (Number.isInteger(pid) && pid > 1) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {}
+        }
+      }
       fs.rmSync(tempDir, { force: true, recursive: true });
     }
   });
@@ -593,6 +795,52 @@ fi
       expect(logPath.startsWith(`${logDir}${path.sep}`)).toBe(true);
       expect(path.basename(logPath)).toMatch(new RegExp(`^openclaw-${logLabel}\\..+\\.log$`, "u"));
       expect(fs.readFileSync(logPath, "utf8")).toContain("fixture output");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("installs the trash shim under isolated test state", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-trash-shim-"));
+    try {
+      const homeDir = path.join(tempDir, "home");
+      const stateDir = path.join(tempDir, "state");
+      const pathFile = path.join(tempDir, "path.txt");
+      const binDirFile = path.join(tempDir, "bin-dir.txt");
+      fs.mkdirSync(homeDir, { recursive: true });
+      fs.mkdirSync(stateDir, { recursive: true });
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            "openclaw_e2e_install_trash_shim",
+            "openclaw_e2e_install_trash_shim",
+            `printf "%s" "$PATH" > ${shellQuote(pathFile)}`,
+            `printf "%s" "$OPENCLAW_E2E_BIN_DIR" > ${shellQuote(binDirFile)}`,
+            "command -v trash >/dev/null",
+          ].join("; "),
+        ],
+        {
+          encoding: "utf8",
+          env: shellTestEnv({
+            HOME: homeDir,
+            OPENCLAW_STATE_DIR: stateDir,
+            PATH: hostPath,
+          }),
+        },
+      );
+
+      expectShellSuccess(result);
+      const binDir = fs.readFileSync(binDirFile, "utf8");
+      const pathEntries = fs.readFileSync(pathFile, "utf8").split(path.delimiter);
+      expect(binDir).toBe(path.join(stateDir, "e2e-bin"));
+      expect(binDir).not.toBe("/tmp/openclaw-bin");
+      expect(pathEntries.filter((entry) => entry === binDir)).toHaveLength(1);
+      expect(fs.existsSync(path.join(binDir, "trash"))).toBe(true);
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }

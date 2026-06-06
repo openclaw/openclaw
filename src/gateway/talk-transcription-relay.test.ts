@@ -1,3 +1,6 @@
+/**
+ * Tests talk transcription relay behavior between realtime events and clients.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSessionCreateRequest } from "../realtime-transcription/provider-types.js";
@@ -8,6 +11,7 @@ import {
   sendTalkTranscriptionRelayAudio,
   stopTalkTranscriptionRelaySession,
 } from "./talk-transcription-relay.js";
+import { expectRecordFields, isRecord, requireRecord } from "./test-helpers.assertions.js";
 
 type BroadcastEvent = { event: string; payload: unknown; connIds: string[] };
 
@@ -63,27 +67,6 @@ async function createStartedRelaySession(
   return { provider, events, session };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(isRecord(value), `${label} must be an object`).toBe(true);
-  return value as Record<string, unknown>;
-}
-
-function expectRecordFields(
-  value: unknown,
-  label: string,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
-  }
-  return record;
-}
-
 function findPayloadByType(events: BroadcastEvent[], type: string): Record<string, unknown> {
   const event = events.find((candidate) => {
     const payload = candidate.payload;
@@ -130,9 +113,13 @@ describe("talk transcription gateway relay", () => {
       sttRequest?.onPartial?.("hel");
       sttRequest?.onTranscript?.("hello world");
     });
-    const { events, session } = await createStartedRelaySession(sttSession, { model: "stt-model" }, (req) => {
-      sttRequest = req;
-    });
+    const { events, session } = await createStartedRelaySession(
+      sttSession,
+      { model: "stt-model" },
+      (req) => {
+        sttRequest = req;
+      },
+    );
 
     expectRecordFields(session, "session", {
       provider: "stt-test",
