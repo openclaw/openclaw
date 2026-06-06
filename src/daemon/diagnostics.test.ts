@@ -21,19 +21,23 @@ function makeTempStateDir(): string {
 }
 
 describe("readLastGatewayErrorLine", () => {
-  it("ignores stale launchd stderr when stderr is suppressed", async () => {
+  it("reads the launchd supervisor stderr now that it is a real log file", async () => {
     const stateDir = makeTempStateDir();
     const homeDir = makeTempStateDir();
     const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
-    const stateLogs = resolveGatewayLogPaths(env);
     const launchdLogs = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
-    fs.mkdirSync(stateLogs.logDir, { recursive: true });
     fs.mkdirSync(launchdLogs.logDir, { recursive: true });
-    fs.writeFileSync(stateLogs.stderrPath, "failed to bind gateway socket stale\n", "utf8");
+    // launchd now routes the supervised gateway's stderr to gateway.err.log, so
+    // the most recent stderr failure must win over older stdout output.
     fs.writeFileSync(launchdLogs.stdoutPath, "gateway stdout current\n", "utf8");
+    fs.writeFileSync(
+      launchdLogs.stderrPath,
+      "refusing to bind gateway to 0.0.0.0:8080 without auth\n",
+      "utf8",
+    );
 
     await expect(readLastGatewayErrorLine(env, { platform: "darwin" })).resolves.toBe(
-      "gateway stdout current",
+      "refusing to bind gateway to 0.0.0.0:8080 without auth",
     );
   });
 
