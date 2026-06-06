@@ -754,6 +754,7 @@ public struct AgentParams: Codable, Sendable {
     public let acpturnsource: String?
     public let internalruntimehandoffid: String?
     public let internalevents: [[String: AnyCodable]]?
+    public let sourceclilanebusyrejection: Bool?
     public let inputprovenance: [String: AnyCodable]?
     public let suppresspromptpersistence: Bool?
     public let sessioneffects: AnyCodable?
@@ -795,6 +796,7 @@ public struct AgentParams: Codable, Sendable {
         acpturnsource: String?,
         internalruntimehandoffid: String?,
         internalevents: [[String: AnyCodable]]?,
+        sourceclilanebusyrejection: Bool?,
         inputprovenance: [String: AnyCodable]?,
         suppresspromptpersistence: Bool?,
         sessioneffects: AnyCodable?,
@@ -835,6 +837,7 @@ public struct AgentParams: Codable, Sendable {
         self.acpturnsource = acpturnsource
         self.internalruntimehandoffid = internalruntimehandoffid
         self.internalevents = internalevents
+        self.sourceclilanebusyrejection = sourceclilanebusyrejection
         self.inputprovenance = inputprovenance
         self.suppresspromptpersistence = suppresspromptpersistence
         self.sessioneffects = sessioneffects
@@ -877,6 +880,7 @@ public struct AgentParams: Codable, Sendable {
         case acpturnsource = "acpTurnSource"
         case internalruntimehandoffid = "internalRuntimeHandoffId"
         case internalevents = "internalEvents"
+        case sourceclilanebusyrejection = "sourceCliLaneBusyRejection"
         case inputprovenance = "inputProvenance"
         case suppresspromptpersistence = "suppressPromptPersistence"
         case sessioneffects = "sessionEffects"
