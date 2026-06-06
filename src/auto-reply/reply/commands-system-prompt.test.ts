@@ -235,6 +235,9 @@ describe("resolveCommandsSystemPromptBundle", () => {
 
     expect(vi.mocked(createOpenClawCodingTools)).toHaveBeenCalledWith(
       expect.objectContaining({
+        continueWorkOpts: expect.objectContaining({
+          requestContinuation: expect.any(Function),
+        }),
         requestCompactionOpts: expect.objectContaining({
           getContextUsage: expect.any(Function),
           triggerCompaction: expect.any(Function),
@@ -243,16 +246,14 @@ describe("resolveCommandsSystemPromptBundle", () => {
     );
   });
 
-  it("omits requestCompactionOpts when continuation.enabled is not true", async () => {
+  it("omits continuation tool opts when continuation.enabled is not true", async () => {
     const params = makeParams();
 
     await resolveCommandsSystemPromptBundle(params);
 
-    expect(vi.mocked(createOpenClawCodingTools)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requestCompactionOpts: undefined,
-      }),
-    );
+    const call = vi.mocked(createOpenClawCodingTools).mock.calls.at(-1)?.[0];
+    expect(call?.requestCompactionOpts).toBeUndefined();
+    expect(call?.continueWorkOpts).toBeUndefined();
   });
 
   it("uses the resolved session key and forwards full-access block reasons", async () => {
