@@ -382,6 +382,68 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       },
     );
 
+    it("excludes the inherited gateway service PID when the caller has been reparented to launchd — suicide-kill regression", () => {
+      // Regression for the rh-bot SIGKILL cycle diagnosed 2026-06-05.
+      //
+      // Scenario: a user `~/.zshrc` contains a legacy auto-start block
+      //   `(openclaw gateway >/dev/null 2>&1 &)`
+      // and codex 0.135.0 spawns `/bin/zsh -c "set -e; . shell_snapshot"`
+      // per turn for tool execution context. The backgrounded subshell
+      // exits, the new `openclaw gateway` is reparented to launchd
+      // (process.ppid === 1), and the ancestor walk can no longer see the
+      // launchd-managed parent gateway. lsof reports the parent gateway
+      // on the port, the cleanup SIGKILLs it, launchd respawns it via
+      // `KeepAlive: { Crashed: true }`, and the cycle repeats on every
+      // chat request.
+      //
+      // Fix: the gateway-cli captures `OPENCLAW_GATEWAY_SERVICE_PID` from
+      // its inherited env BEFORE overwriting it with `process.pid`, then
+      // hands the captured value to `cleanStaleGatewayProcessesSync`.
+      // The cleanup adds it to the exclusion set so the parent gateway
+      // is left alone even though it is now an unrelated sibling on the
+      // port from the caller's perspective.
+      const launchdManagedGatewayPid = process.pid + 4001;
+      const unrelatedStalePid = process.pid + 4002;
+      mockSpawnSync.mockReturnValue({
+        error: null,
+        status: 0,
+        stdout: lsofOutput([
+          { pid: launchdManagedGatewayPid, cmd: "openclaw-gateway" },
+          { pid: unrelatedStalePid, cmd: "openclaw-gateway" },
+        ]),
+        stderr: "",
+      });
+      // Stub ppid to 1 (launchd) so the ancestor walk cannot reach the
+      // running gateway. Without the inherited-PID protection, the
+      // launchd-managed gateway PID would be returned and killed.
+      const pids = withStubbedPpid(1, () =>
+        findGatewayPidsOnPortSync(18789, undefined, launchdManagedGatewayPid),
+      );
+      expect(pids).not.toContain(launchdManagedGatewayPid);
+      expect(pids).toContain(unrelatedStalePid);
+    });
+
+    it("ignores a non-positive inherited gateway PID rather than poisoning the kill list", () => {
+      // Defensive: callers may pass undefined or zero when the env var is
+      // missing or malformed. The helper must treat those as no-op rather
+      // than excluding pid 0 (which would silently mask a genuine kernel
+      // pid 0 listener — there is no such thing in practice, but the
+      // guard documents the contract).
+      const stalePid = process.pid + 4101;
+      mockSpawnSync.mockReturnValue({
+        error: null,
+        status: 0,
+        stdout: lsofOutput([{ pid: stalePid, cmd: "openclaw-gateway" }]),
+        stderr: "",
+      });
+      const pidsUndef = findGatewayPidsOnPortSync(18789, undefined, undefined);
+      const pidsZero = findGatewayPidsOnPortSync(18789, undefined, 0);
+      const pidsNegative = findGatewayPidsOnPortSync(18789, undefined, -1);
+      expect(pidsUndef).toContain(stalePid);
+      expect(pidsZero).toContain(stalePid);
+      expect(pidsNegative).toContain(stalePid);
+    });
+
     it("excludes PID 1 when the direct parent gateway is the container entrypoint — container topology", () => {
       // Codex P1: in container deployments the gateway is the container
       // entrypoint and therefore runs as PID 1 of its namespace. A sidecar

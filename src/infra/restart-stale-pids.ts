@@ -154,8 +154,25 @@ function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null
  * `/proc/<pid>/status` payloads) — there is no reachable override for
  * runtime callers to mutate.
  */
-export function getSelfAndAncestorPidsSync(spawnTimeoutMs = SPAWN_TIMEOUT_MS): Set<number> {
+export function getSelfAndAncestorPidsSync(
+  spawnTimeoutMs = SPAWN_TIMEOUT_MS,
+  additionalProtectedPid?: number,
+): Set<number> {
   const pids = new Set<number>([process.pid]);
+  // Additional protected PID. The caller passes an inherited gateway service
+  // PID captured from `OPENCLAW_GATEWAY_SERVICE_PID` BEFORE the current
+  // process overwrites that env with its own PID. This closes the suicide-
+  // kill loophole when ancestor walk cannot see the parent gateway because
+  // the caller was reparented to the supervisor (PID 1 / launchd) between
+  // spawn and cleanup — e.g. `~/.zshrc` running `(openclaw gateway &)`
+  // inside a shell snapshot whose parent zsh has already exited.
+  if (
+    additionalProtectedPid != null &&
+    Number.isFinite(additionalProtectedPid) &&
+    additionalProtectedPid > 0
+  ) {
+    pids.add(additionalProtectedPid);
+  }
   const immediateParent = getParentPid();
   if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
     return pids;
@@ -256,12 +273,16 @@ function verifyGatewayPidByArgvSync(pid: number, spawnTimeoutMs: number): boolea
   return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
 }
 
-function parsePidsFromLsofOutput(stdout: string, spawnTimeoutMs: number): number[] {
+function parsePidsFromLsofOutput(
+  stdout: string,
+  spawnTimeoutMs: number,
+  additionalProtectedPid?: number,
+): number[] {
   // Deduplicate: dual-stack listeners (IPv4 + IPv6) cause lsof to emit the
   // same PID twice. Return each PID at most once to avoid double-killing.
   // Exclude self and ancestors — terminating any ancestor cascade-kills the
   // caller via the supervisor, recreating the #68451 restart loop.
-  const excluded = getSelfAndAncestorPidsSync(spawnTimeoutMs);
+  const excluded = getSelfAndAncestorPidsSync(spawnTimeoutMs, additionalProtectedPid);
   const pids: number[] = [];
   for (const entry of parseLsofEntries(stdout)) {
     if (excluded.has(entry.pid)) {
@@ -284,8 +305,11 @@ function parsePidsFromLsofOutput(stdout: string, spawnTimeoutMs: number): number
  * and its ancestors (same invariant as the lsof path — see
  * `getSelfAndAncestorPidsSync`).
  */
-function filterVerifiedWindowsGatewayPids(rawPids: number[]): number[] {
-  const excluded = getSelfAndAncestorPidsSync();
+function filterVerifiedWindowsGatewayPids(
+  rawPids: number[],
+  additionalProtectedPid?: number,
+): number[] {
+  const excluded = getSelfAndAncestorPidsSync(SPAWN_TIMEOUT_MS, additionalProtectedPid);
   return uniqueValues(rawPids)
     .filter((pid) => Number.isFinite(pid) && pid > 0 && !excluded.has(pid))
     .filter((pid) => {
@@ -297,8 +321,9 @@ function filterVerifiedWindowsGatewayPids(rawPids: number[]): number[] {
 function filterVerifiedWindowsGatewayPidsResult(
   rawPids: number[],
   processArgsResult: (pid: number) => WindowsProcessArgsResult,
+  additionalProtectedPid?: number,
 ): WindowsListeningPidsResult {
-  const excluded = getSelfAndAncestorPidsSync();
+  const excluded = getSelfAndAncestorPidsSync(SPAWN_TIMEOUT_MS, additionalProtectedPid);
   const verified: number[] = [];
   for (const pid of uniqueValues(rawPids)) {
     if (!Number.isFinite(pid) || pid <= 0 || excluded.has(pid)) {
@@ -315,32 +340,51 @@ function filterVerifiedWindowsGatewayPidsResult(
   return { ok: true, pids: verified };
 }
 
-function findVerifiedWindowsGatewayPidsOnPortSync(port: number): number[] {
-  return filterVerifiedWindowsGatewayPids(readWindowsListeningPidsOnPortSync(port));
+function findVerifiedWindowsGatewayPidsOnPortSync(
+  port: number,
+  additionalProtectedPid?: number,
+): number[] {
+  return filterVerifiedWindowsGatewayPids(
+    readWindowsListeningPidsOnPortSync(port),
+    additionalProtectedPid,
+  );
 }
 
-function findVerifiedWindowsGatewayPidsOnPortResultSync(port: number): WindowsListeningPidsResult {
+function findVerifiedWindowsGatewayPidsOnPortResultSync(
+  port: number,
+  additionalProtectedPid?: number,
+): WindowsListeningPidsResult {
   const result = readWindowsListeningPidsResultSync(port);
   if (!result.ok) {
     return result;
   }
-  return filterVerifiedWindowsGatewayPidsResult(result.pids, (pid) =>
-    readWindowsProcessArgsResultSync(pid),
+  return filterVerifiedWindowsGatewayPidsResult(
+    result.pids,
+    (pid) => readWindowsProcessArgsResultSync(pid),
+    additionalProtectedPid,
   );
 }
 
 /**
  * Find PIDs of gateway processes listening on the given port using synchronous lsof.
  * Returns only PIDs that belong to openclaw gateway processes (not the current process).
+ *
+ * `additionalProtectedPid`: see `getSelfAndAncestorPidsSync`. When the caller
+ * has captured an inherited gateway service PID from
+ * `OPENCLAW_GATEWAY_SERVICE_PID` (before overwriting it with its own PID),
+ * pass it through here so the cleanup cannot kill a launchd-managed
+ * grandparent that became a sibling after the caller was reparented to the
+ * supervisor.
  */
 export function findGatewayPidsOnPortSync(
   port: number,
   spawnTimeoutMs = SPAWN_TIMEOUT_MS,
+  additionalProtectedPid?: number,
 ): number[] {
   if (process.platform === "win32") {
     // Use the shared Windows port inspection (PowerShell / netstat) with
     // command-line verification to find only openclaw gateway processes.
-    return findVerifiedWindowsGatewayPidsOnPortSync(port);
+    return findVerifiedWindowsGatewayPidsOnPortSync(port, additionalProtectedPid);
   }
   const lsof = resolveLsofCommandSync();
   const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
@@ -367,7 +411,7 @@ export function findGatewayPidsOnPortSync(
     );
     return [];
   }
-  return parsePidsFromLsofOutput(res.stdout, spawnTimeoutMs);
+  return parsePidsFromLsofOutput(res.stdout, spawnTimeoutMs, additionalProtectedPid);
 }
 
 /**
@@ -584,8 +628,18 @@ function waitForPortFreeSync(port: number): void {
  * the port and enter an EADDRINUSE restart loop.
  *
  * Called before service restart commands to prevent port conflicts.
+ *
+ * `additionalProtectedPid`: the caller may pass an inherited gateway service
+ * PID (captured from `OPENCLAW_GATEWAY_SERVICE_PID` BEFORE the caller
+ * overwrites that env with its own PID) to keep the running launchd-managed
+ * gateway out of the kill set even when the ancestor walk has lost the link
+ * via reparenting. See `getSelfAndAncestorPidsSync` for the suicide-kill
+ * scenario this closes.
  */
-export function cleanStaleGatewayProcessesSync(portOverride?: number): number[] {
+export function cleanStaleGatewayProcessesSync(
+  portOverride?: number,
+  additionalProtectedPid?: number,
+): number[] {
   try {
     const port =
       typeof portOverride === "number" && Number.isFinite(portOverride) && portOverride > 0
@@ -594,14 +648,17 @@ export function cleanStaleGatewayProcessesSync(portOverride?: number): number[] 
     const stalePids =
       process.platform === "win32"
         ? (() => {
-            const result = findVerifiedWindowsGatewayPidsOnPortResultSync(port);
+            const result = findVerifiedWindowsGatewayPidsOnPortResultSync(
+              port,
+              additionalProtectedPid,
+            );
             if (result.ok) {
               return result.pids;
             }
             waitForPortFreeSync(port);
             return [];
           })()
-        : findGatewayPidsOnPortSync(port);
+        : findGatewayPidsOnPortSync(port, SPAWN_TIMEOUT_MS, additionalProtectedPid);
     if (stalePids.length === 0) {
       return [];
     }

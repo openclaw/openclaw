@@ -475,9 +475,29 @@ async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void
   }
 }
 
+function parseInheritedGatewayServicePid(value: string | undefined): number | undefined {
+  if (!value || value.trim().length === 0) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 export async function runGatewayCommand(opts: GatewayRunOpts) {
   normalizeStateDirEnv(process.env);
   installQaParentWatchdog();
+  // Capture any inherited gateway service PID BEFORE we overwrite the env
+  // with our own PID. If we are a child openclaw process (e.g. a shell-
+  // spawned `(openclaw gateway &)` from a user's `~/.zshrc` that codex
+  // ran via a per-turn shell snapshot), this env still names the running
+  // launchd-managed gateway. We hand it to the stale-process cleanup below
+  // so that cleanup cannot suicide-kill that parent across a reparenting
+  // boundary — the subshell that spawned us exits, the new openclaw process
+  // is reparented to launchd, and `getSelfAndAncestorPidsSync` can no
+  // longer reach the parent gateway through `process.ppid`.
+  const inheritedGatewayServicePid = parseInheritedGatewayServicePid(
+    process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV],
+  );
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
     process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
   }
@@ -593,7 +613,12 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   const bindExplicitRaw = bindExplicitRawStr as GatewayBindMode | undefined;
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
     const { cleanStaleGatewayProcessesSync } = await import("../../infra/restart-stale-pids.js");
-    const stale = cleanStaleGatewayProcessesSync(port);
+    // Pass the inherited gateway PID so the cleanup never SIGKILLs the
+    // launchd-managed parent when we were spawned underneath it. The
+    // ancestor walk inside the cleanup loses that parent when our spawning
+    // shell exits before we reach lsof, leaving `process.ppid === 1` and
+    // the parent gateway visible as an unrelated sibling on the port.
+    const stale = cleanStaleGatewayProcessesSync(port, inheritedGatewayServicePid);
     if (stale.length > 0) {
       gatewayLog.info(
         `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
