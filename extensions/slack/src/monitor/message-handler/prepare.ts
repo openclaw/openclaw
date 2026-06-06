@@ -697,8 +697,10 @@ export async function prepareSlackMessage(params: {
   if (assistantThreadContextToCache) {
     ctx.saveSlackAssistantThreadContext(assistantThreadContextToCache);
   }
+  const channelReplyToMode =
+    channelConfig?.replyToMode ?? resolveSlackReplyToMode(account, channelChatType);
   const willImplicitlyThreadReply =
-    isRoom && !channelRequireMention && resolveSlackReplyToMode(account, channelChatType) !== "off";
+    isRoom && !channelRequireMention && channelReplyToMode !== "off";
   const seedTopLevelRoomThreadBySource =
     opts.source === "app_mention" ||
     opts.wasMentioned === true ||
@@ -712,6 +714,7 @@ export async function prepareSlackMessage(params: {
     isGroupDm,
     isRoom,
     isRoomish,
+    channelConfig,
     seedTopLevelRoomThread: seedTopLevelRoomThreadBySource,
     assistantThreadTs: assistantThreadContext?.threadTs,
   });
@@ -756,6 +759,7 @@ export async function prepareSlackMessage(params: {
       isGroupDm,
       isRoom,
       isRoomish,
+      channelConfig,
       seedTopLevelRoomThread: true,
       assistantThreadTs: assistantThreadContext?.threadTs,
     });
