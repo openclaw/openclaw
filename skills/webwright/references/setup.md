@@ -48,8 +48,18 @@ The webwright repo ships builtin configs (e.g. `base.yaml`, `model_openai.yaml`,
 edit them, or keep project-specific configs in your workspace. Later `-c` specs
 override earlier ones, and a `key=value` spec applies an inline override.
 
+## Enable the skill
+
+This bundled skill is opt-in: it stays hidden from the model until you enable it
+(an unset `skills.entries.webwright.enabled` counts as off):
+
+```bash
+openclaw config set skills.entries.webwright.enabled true
+```
+
 ## Requirements summary
 
+- `skills.entries.webwright.enabled: true` (the opt-in above)
 - Python >= 3.10
 - Playwright >= 1.45 with Chromium (`playwright install chromium`)
 - A provider API key in the environment

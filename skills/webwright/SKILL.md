@@ -33,8 +33,18 @@ which is more robust and repeatable than click-by-click automation.
 
 ## Preflight (do this before the first run)
 
-Run `webwright doctor` first — it checks Python, Playwright, Chromium, the
-provider key, and plugins in one shot. Then confirm:
+This skill is opt-in. It only becomes available once
+`skills.entries.webwright.enabled` is `true` (an unset value counts as off), so
+enable it first:
+
+```bash
+openclaw config set skills.entries.webwright.enabled true
+```
+
+Run `webwright doctor` next as a setup check. Note its key check is
+OpenAI-specific: it always runs an `OpenAI Key` check, so if you intend to use
+Anthropic or OpenRouter, a doctor `OpenAI Key FAIL` is expected and is NOT a
+blocker — verify your chosen provider's key separately (step 3). Then confirm:
 
 1. `webwright` is on PATH (this skill is gated on it). If missing, see
    `references/setup.md`.
@@ -77,8 +87,13 @@ See `references/cli.md` for every flag, config stacking, and the output layout.
 - Always pass `-o` pointing inside the workspace; never inside OpenClaw state dirs.
 - Always pass `--start-url` and a specific, scoped `-t` task.
 - Browser runs take real actions on live sites and spend API tokens. Only run on
-  user-authorized tasks and sites. Do not perform destructive actions or submit
-  credentials unless the user explicitly provided them for this task.
+  user-authorized tasks and sites, and avoid destructive actions.
+- Never put secrets in the `-t` task text. The task is sent to the model provider
+  and recorded in run artifacts (trajectories, logs, process args), so passwords
+  or tokens placed there are exposed. For login-walled tasks, pass credentials via
+  environment variables and tell the agent the env var NAMES to read in its
+  generated script (e.g. "log in using $SITE_USER / $SITE_PASS"), or pre-authenticate
+  a persistent browser profile — never the literal secret values.
 - Pick exactly one model config (`model_openai.yaml`, `model_claude.yaml`,
   `model_openrouter.yaml`) whose matching API key is present in the environment.
 
