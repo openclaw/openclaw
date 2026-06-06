@@ -224,7 +224,11 @@ export function createTelegramBotCore(
       const answer = typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
         ? () => ctx.answerCallbackQuery()
         : () => bot.api.answerCallbackQuery(ctx.callbackQuery.id);
-      await answer().catch(() => {});
+      await answer()
+        .then(() => {
+          (ctx as Record<string, unknown>).callbackQueryAnswered = true;
+        })
+        .catch(() => {});
     }
     return next();
   });

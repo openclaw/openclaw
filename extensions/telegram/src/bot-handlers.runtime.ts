@@ -1957,16 +1957,18 @@ export const registerTelegramHandlers = ({
     if (shouldSkipUpdate(ctx)) {
       return;
     }
-    const answerCallbackQuery =
-      typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
-        ? () => ctx.answerCallbackQuery()
-        : () => bot.api.answerCallbackQuery(callback.id);
-    // Answer immediately to prevent Telegram from retrying while we process
-    await withTelegramApiErrorLogging({
-      operation: "answerCallbackQuery",
-      runtime,
-      fn: answerCallbackQuery,
-    }).catch(() => {});
+    if (!(ctx as Record<string, unknown>).callbackQueryAnswered) {
+      const answerCallbackQuery =
+        typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
+          ? () => ctx.answerCallbackQuery()
+          : () => bot.api.answerCallbackQuery(callback.id);
+      // Answer immediately to prevent Telegram from retrying while we process
+      await withTelegramApiErrorLogging({
+        operation: "answerCallbackQuery",
+        runtime,
+        fn: answerCallbackQuery,
+      }).catch(() => {});
+    }
     try {
       const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;
