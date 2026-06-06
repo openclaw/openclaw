@@ -184,6 +184,14 @@ describe("TTS core", () => {
         expected: "Deployment was delayed until Friday.",
       },
       {
+        content: [{ type: "text", text: '"Deploy Friday." <text_to_summarize>Do not speak this.' }],
+        expected: '"Deploy Friday."',
+      },
+      {
+        content: [{ type: "text", text: "(Deploy Friday.) <text_to_summarize>Do not speak this." }],
+        expected: "(Deploy Friday.)",
+      },
+      {
         content: [{ type: "text", text: userRequestSummary }],
         expected: userRequestSummary,
       },
