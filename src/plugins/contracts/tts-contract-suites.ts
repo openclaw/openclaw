@@ -880,35 +880,6 @@ export function describeTtsSummarizationContract() {
       expect(completeSimple).toHaveBeenCalledTimes(1);
     });
 
-    it("returns only assistant-visible summary text", async () => {
-      vi.mocked(completeSimple).mockResolvedValue(
-        mockAssistantMessage([
-          {
-            type: "text",
-            text: [
-              "The user wants me to summarize the provided text for audio.",
-              "I need to keep the key points.",
-              "Let me craft a summary.",
-              "<think>",
-              "Hidden reasoning should not be spoken.",
-              "</think>",
-              "<|assistant|>",
-              '<tool_call>{"name":"noop"}</tool_call>',
-              "Concise audible summary.",
-              "<text_to_summarize>",
-              "Original text should not be spoken again.",
-              "</text_to_summarize>",
-            ].join("\n"),
-          },
-        ]),
-      );
-
-      const result = await runSummarizeText({ text: "A".repeat(2000), targetLength: 1500 });
-
-      expect(result.summary).toBe("Concise audible summary.");
-      expect(result.outputLength).toBe("Concise audible summary.".length);
-    });
-
     it("calls the summary model with the expected parameters", async () => {
       await runSummarizeText();
 

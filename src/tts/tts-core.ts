@@ -78,100 +78,17 @@ const TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE =
   /(?:^|\r?\n)[ \t]*<\s*text_to_summarize\b[^>]*>[\s\S]*?(?:\r?\n[ \t]*<\s*\/\s*text_to_summarize\s*>|$)/gi;
 const SUMMARY_PROMPT_INSTRUCTIONS_ECHO_RE =
   /^you are an assistant that summarizes texts concisely while keeping the most important information\.\s+summarize the text to approximately \d+ characters\.\s+maintain the original tone and style\.\s+reply only with the summary, without additional explanations\.\s*/i;
-const USER_SUMMARY_PROMPT_ECHO_RE = /^the user (?:wants|asks|asked|requested) me to summarize\b/i;
-const SELF_SUMMARY_PROMPT_ECHO_SENTENCE_RE =
-  /^i (?:need|should|will|'ll) (?:to )?(?:summarize|include|keep|maintain|craft|write|produce)(?:\s+(?:the\s+)?(?:summary|key points?|important information|original tone|tone and style))?\.?$/i;
-const CRAFT_SUMMARY_PROMPT_ECHO_SENTENCE_RE =
-  /^let me (?:craft|write|produce|summarize)(?:\s+(?:a\s+)?summary)?\.?$/i;
-const GENERIC_USER_SUMMARY_TARGET_RE =
-  /\b(?:(?:provided|following|above|original|given|this)\s+(?:text|content|message|response|passage)|text to summarize|key points?|important information|original tone|tone and style|approximately|characters?|concise|audio|tts)\b/i;
-const PROMPT_ECHO_SEPARATOR_RE = /\s*(?::|—|–|\s-\s)\s*/;
-const BARE_USER_SUMMARY_PROMPT_ECHO_RE =
-  /^the user (?:wants|asks|asked|requested) me to summarize$/i;
+const USER_SUMMARY_PROMPT_ECHO = String.raw`the user (?:wants|asks|asked|requested) me to summarize`;
+const LEADING_SUMMARY_PROMPT_ECHO_RE = new RegExp(
+  String.raw`^(?:(?:${USER_SUMMARY_PROMPT_ECHO}(?:\s+(?:(?:the\s+)?(?:provided|following|above|original|given|this)\s+(?:text|content|message|response|passage)|text to summarize))?(?:\s+for\s+(?:audio|tts))?\.|${USER_SUMMARY_PROMPT_ECHO}\s*(?::|—|–|\s-\s)|i (?:need|should|will|'ll) (?:to )?(?:summarize|include|keep|maintain|craft|write|produce)(?:\s+(?:the\s+)?(?:summary|key points?|important information|original tone|tone and style))?\.|let me (?:craft|write|produce|summarize)(?:\s+(?:a\s+)?summary)?\.)\s*)+`,
+  "i",
+);
 
 function stripExactTextToSummarizePromptBlock(text: string, sourceText: string): string {
   return text.replace(`<text_to_summarize>\n${sourceText}\n</text_to_summarize>`, "");
 }
 
-function findFirstSentenceEnd(text: string): { index: number; found: boolean } {
-  const match = /^(.*?(?:[.!?](?=\s|$)|\r?\n+))/s.exec(text);
-  return { index: match?.[0].length ?? text.length, found: Boolean(match) };
-}
-
-function splitPromptEchoPrefix(text: string): { prefix: string; rest: string } | undefined {
-  const match = PROMPT_ECHO_SEPARATOR_RE.exec(text);
-  if (!match || match.index === 0) {
-    return undefined;
-  }
-  const restStart = match.index + match[0].length;
-  const rest = text.slice(restStart).trimStart();
-  if (!rest) {
-    return undefined;
-  }
-  return {
-    prefix: text.slice(0, match.index).trim(),
-    rest,
-  };
-}
-
-function isLeadingSummaryPromptEchoSentence(sentence: string): boolean {
-  if (USER_SUMMARY_PROMPT_ECHO_RE.test(sentence)) {
-    return GENERIC_USER_SUMMARY_TARGET_RE.test(sentence);
-  }
-  return (
-    SELF_SUMMARY_PROMPT_ECHO_SENTENCE_RE.test(sentence) ||
-    CRAFT_SUMMARY_PROMPT_ECHO_SENTENCE_RE.test(sentence)
-  );
-}
-
-function isSeparatedSummaryPromptEchoPrefix(prefix: string): boolean {
-  return (
-    BARE_USER_SUMMARY_PROMPT_ECHO_RE.test(prefix) || isLeadingSummaryPromptEchoSentence(prefix)
-  );
-}
-
-function stripLeadingSummaryPromptEcho(text: string): string {
-  let remaining = text.trimStart();
-  let stripped = false;
-  while (remaining) {
-    const separated = splitPromptEchoPrefix(remaining);
-    if (separated && isSeparatedSummaryPromptEchoPrefix(separated.prefix)) {
-      stripped = true;
-      remaining = separated.rest;
-      continue;
-    }
-
-    const sentenceEnd = findFirstSentenceEnd(remaining);
-    const sentence = remaining.slice(0, sentenceEnd.index).trim();
-    if (!isLeadingSummaryPromptEchoSentence(sentence)) {
-      break;
-    }
-    if (!sentenceEnd.found) {
-      break;
-    }
-    stripped = true;
-    remaining = remaining.slice(sentenceEnd.index).trimStart();
-  }
-  return stripped ? remaining : text;
-}
-
-function truncateSummaryToTargetLength(text: string, targetLength: number): string {
-  if (text.length <= targetLength) {
-    return text;
-  }
-  const truncated = text.slice(0, targetLength - 3).trimEnd();
-  const wordBoundary = truncated.lastIndexOf(" ");
-  const minimumBoundary = Math.floor(targetLength * 0.6);
-  const body =
-    wordBoundary >= minimumBoundary ? truncated.slice(0, wordBoundary).trimEnd() : truncated;
-  return `${body}...`;
-}
-
-function sanitizeSummaryForSpeech(
-  summary: string,
-  targetLength: number,
-  sourceText: string,
-): string {
+function sanitizeSummaryForSpeech(summary: string, sourceText: string): string {
   const withoutAssistantScaffolding = sanitizeAssistantVisibleText(summary).trim();
   const withoutPromptInstructions = withoutAssistantScaffolding
     .replace(SUMMARY_PROMPT_INSTRUCTIONS_ECHO_RE, "")
@@ -183,8 +100,8 @@ function sanitizeSummaryForSpeech(
   const withoutPromptBlock = withoutExactPromptBlock
     .replace(TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE, "")
     .trim();
-  const withoutPromptEcho = stripLeadingSummaryPromptEcho(withoutPromptBlock).trim();
-  return truncateSummaryToTargetLength(withoutPromptEcho, targetLength).trim();
+  const withoutPromptEcho = withoutPromptBlock.replace(LEADING_SUMMARY_PROMPT_ECHO_RE, "").trim();
+  return withoutPromptEcho.trim();
 }
 
 /** Summarize long text before synthesis using the configured summary model. */
@@ -253,9 +170,9 @@ export async function summarizeText(
         .filter(isTextContentBlock)
         .map((block) => block.text.trim())
         .filter(Boolean)
-        .join(" ")
+        .join("\n")
         .trim();
-      const sanitizedSummary = sanitizeSummaryForSpeech(summary, targetLength, text);
+      const sanitizedSummary = sanitizeSummaryForSpeech(summary, text);
 
       if (!sanitizedSummary) {
         throw new Error("No summary returned");

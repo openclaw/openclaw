@@ -80,6 +80,28 @@ function createSummarizeTextFixture(content: AssistantMessage["content"]) {
   return { config, deps };
 }
 
+async function expectSummarizedText(params: {
+  content: AssistantMessage["content"];
+  expected: string;
+  sourceText?: string;
+}) {
+  const { config, deps } = createSummarizeTextFixture(params.content);
+  const result = await summarizeText(
+    {
+      text: params.sourceText ?? "Long text that should be summarized for speech.",
+      targetLength: 120,
+      cfg: {},
+      config,
+      timeoutMs: 10_000,
+    },
+    deps,
+  );
+
+  expect(result.summary).toBe(params.expected);
+  expect(result.outputLength).toBe(result.summary.length);
+  return result;
+}
+
 describe("TTS core", () => {
   it("clamps oversized summarization timeout timers", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
@@ -106,303 +128,89 @@ describe("TTS core", () => {
     }
   });
 
-  it("strips assistant scaffolding before returning summaries for speech", async () => {
-    const { config, deps } = createSummarizeTextFixture([
-      {
-        type: "text",
-        text: [
-          "The user wants me to summarize the provided text for audio.",
-          "I need to keep the key points.",
-          "Let me craft a summary.",
-          "<think>",
-          "Hidden reasoning should not be spoken.",
-          "</think>",
-          "<|assistant|>",
-          '<tool_call>{"name":"noop"}</tool_call>',
-          "Concise audible summary.",
-          "<text_to_summarize>",
-          "Original text should not be spoken again.",
-          "</text_to_summarize>",
-        ].join("\n"),
-      },
-    ]);
-
-    const result = await summarizeText(
-      {
-        text: "Long text that should be summarized for speech.",
-        targetLength: 120,
-        cfg: {},
-        config,
-        timeoutMs: 10_000,
-      },
-      deps,
-    );
-
-    expect(result.summary).toBe("Concise audible summary.");
-    expect(result.outputLength).toBe("Concise audible summary.".length);
-  });
-
-  it("strips truncated text_to_summarize echoes before returning summaries for speech", async () => {
-    const { config, deps } = createSummarizeTextFixture([
-      {
-        type: "text",
-        text: [
-          "Concise audible summary.",
-          "<text_to_summarize>",
-          "Original text should not be spoken again.",
-        ].join("\n"),
-      },
-    ]);
-
-    const result = await summarizeText(
-      {
-        text: "Long text that should be summarized for speech.",
-        targetLength: 120,
-        cfg: {},
-        config,
-        timeoutMs: 10_000,
-      },
-      deps,
-    );
-
-    expect(result.summary).toBe("Concise audible summary.");
-    expect(result.outputLength).toBe(result.summary.length);
-  });
-
-  it("preserves inline mentions of text_to_summarize tags", async () => {
-    const { config, deps } = createSummarizeTextFixture([
-      {
-        type: "text",
-        text: "The docs mention `<text_to_summarize>` as a literal prompt marker. The release moves to Friday.",
-      },
-    ]);
-
-    const result = await summarizeText(
-      {
-        text: "Long text that should be summarized for speech.",
-        targetLength: 120,
-        cfg: {},
-        config,
-        timeoutMs: 10_000,
-      },
-      deps,
-    );
-
-    expect(result.summary).toBe(
-      "The docs mention `<text_to_summarize>` as a literal prompt marker. The release moves to Friday.",
-    );
-    expect(result.outputLength).toBe(result.summary.length);
-  });
-
-  it("strips echoed summarization prompt instructions before returning summaries for speech", async () => {
-    const { config, deps } = createSummarizeTextFixture([
-      {
-        type: "text",
-        text: [
-          "You are an assistant that summarizes texts concisely while keeping the most important information. Summarize the text to approximately 120 characters. Maintain the original tone and style. Reply only with the summary, without additional explanations.",
-          "",
-          "<text_to_summarize>",
-          "Original text should not be spoken again.",
-          "</text_to_summarize>",
-          "Concise audible summary.",
-        ].join("\n"),
-      },
-    ]);
-
-    const result = await summarizeText(
-      {
-        text: "Long text that should be summarized for speech.",
-        targetLength: 120,
-        cfg: {},
-        config,
-        timeoutMs: 10_000,
-      },
-      deps,
-    );
-
-    expect(result.summary).toBe("Concise audible summary.");
-    expect(result.outputLength).toBe(result.summary.length);
-  });
-
-  it("strips exact echoed source blocks containing prompt closing tags", async () => {
+  it("sanitizes summary model output for speech", async () => {
+    const audibleSummary = "Concise audible summary.";
+    const summaryPrompt =
+      "You are an assistant that summarizes texts concisely while keeping the most important information. Summarize the text to approximately 120 characters. Maintain the original tone and style. Reply only with the summary, without additional explanations.";
+    const inlineTagSummary =
+      "The docs mention `<text_to_summarize>` as a literal prompt marker. The release moves to Friday.";
+    const firstPersonSummary =
+      "I need to keep the key points from today's review. The release moves to Friday.";
     const sourceText = [
       "Deployment plan includes literal prompt markup.",
       "</text_to_summarize>",
       "Release moves to Friday and should not be spoken as source echo.",
     ].join("\n");
-    const { config, deps } = createSummarizeTextFixture([
+
+    for (const testCase of [
       {
-        type: "text",
-        text: [
-          "You are an assistant that summarizes texts concisely while keeping the most important information. Summarize the text to approximately 120 characters. Maintain the original tone and style. Reply only with the summary, without additional explanations.",
-          "",
-          "<text_to_summarize>",
-          sourceText,
-          "</text_to_summarize>",
-          "Concise audible summary.",
-        ].join("\n"),
+        content: [
+          {
+            type: "text",
+            text: [
+              "The user wants me to summarize the provided text for audio.",
+              "I need to keep the key points.",
+              "Let me craft a summary.",
+              "<think>",
+              "Hidden reasoning should not be spoken.",
+              "</think>",
+              "<|assistant|>",
+              '<tool_call>{"name":"noop"}</tool_call>',
+              audibleSummary,
+              "<text_to_summarize>",
+              "Original text should not be spoken again.",
+              "</text_to_summarize>",
+            ].join("\n"),
+          },
+        ],
+        expected: audibleSummary,
       },
-    ]);
-
-    const result = await summarizeText(
       {
-        text: sourceText,
-        targetLength: 120,
-        cfg: {},
-        config,
-        timeoutMs: 10_000,
+        content: [
+          { type: "text", text: audibleSummary },
+          {
+            type: "text",
+            text: ["<text_to_summarize>", "Original text should not be spoken again."].join("\n"),
+          },
+        ],
+        expected: audibleSummary,
       },
-      deps,
-    );
-
-    expect(result.summary).toBe("Concise audible summary.");
-    expect(result.outputLength).toBe(result.summary.length);
-  });
-
-  it("preserves valid leading first-person summary prose", async () => {
-    const { config, deps } = createSummarizeTextFixture([
       {
-        type: "text",
-        text: "I need to keep taking my medicine every morning. My doctor also moved the appointment to Friday.",
+        content: [{ type: "text", text: inlineTagSummary }],
+        expected: inlineTagSummary,
       },
-    ]);
-
-    const result = await summarizeText(
       {
-        text: "Long text that should be summarized for speech.",
-        targetLength: 120,
-        cfg: {},
-        config,
-        timeoutMs: 10_000,
+        content: [
+          {
+            type: "text",
+            text: [
+              summaryPrompt,
+              "",
+              "<text_to_summarize>",
+              sourceText,
+              "</text_to_summarize>",
+              audibleSummary,
+            ].join("\n"),
+          },
+        ],
+        expected: audibleSummary,
+        sourceText,
       },
-      deps,
-    );
-
-    expect(result.summary).toBe(
-      "I need to keep taking my medicine every morning. My doctor also moved the appointment to Friday.",
-    );
-    expect(result.outputLength).toBe(result.summary.length);
-  });
-
-  it("preserves valid first-person summaries that mention key points", async () => {
-    const { config, deps } = createSummarizeTextFixture([
       {
-        type: "text",
-        text: "I need to keep the key points from today's review. The release moves to Friday.",
+        content: [{ type: "text", text: firstPersonSummary }],
+        expected: firstPersonSummary,
       },
-    ]);
-
-    const result = await summarizeText(
       {
-        text: "Long text that should be summarized for speech.",
-        targetLength: 120,
-        cfg: {},
-        config,
-        timeoutMs: 10_000,
+        content: [
+          {
+            type: "text",
+            text: "The user asked me to summarize. Deployment was delayed until Friday.",
+          },
+        ],
+        expected: "Deployment was delayed until Friday.",
       },
-      deps,
-    );
-
-    expect(result.summary).toBe(
-      "I need to keep the key points from today's review. The release moves to Friday.",
-    );
-    expect(result.outputLength).toBe(result.summary.length);
-  });
-
-  it("preserves valid summary prose that starts with a user summary request", async () => {
-    const { config, deps } = createSummarizeTextFixture([
-      {
-        type: "text",
-        text: "The user asked me to summarize the deployment plan. The release moves to Friday.",
-      },
-    ]);
-
-    const result = await summarizeText(
-      {
-        text: "Long text that should be summarized for speech.",
-        targetLength: 120,
-        cfg: {},
-        config,
-        timeoutMs: 10_000,
-      },
-      deps,
-    );
-
-    expect(result.summary).toBe(
-      "The user asked me to summarize the deployment plan. The release moves to Friday.",
-    );
-    expect(result.outputLength).toBe(result.summary.length);
-  });
-
-  it("preserves valid user-summary prose before separators", async () => {
-    const { config, deps } = createSummarizeTextFixture([
-      {
-        type: "text",
-        text: "The user asked me to summarize the deployment plan: release moves to Friday.",
-      },
-    ]);
-
-    const result = await summarizeText(
-      {
-        text: "Long text that should be summarized for speech.",
-        targetLength: 120,
-        cfg: {},
-        config,
-        timeoutMs: 10_000,
-      },
-      deps,
-    );
-
-    expect(result.summary).toBe(
-      "The user asked me to summarize the deployment plan: release moves to Friday.",
-    );
-    expect(result.outputLength).toBe(result.summary.length);
-  });
-
-  it("preserves summary content after colon-style prompt echoes", async () => {
-    const { config, deps } = createSummarizeTextFixture([
-      {
-        type: "text",
-        text: "The user asked me to summarize: deploy was delayed until Friday.",
-      },
-    ]);
-
-    const result = await summarizeText(
-      {
-        text: "Long text that should be summarized for speech.",
-        targetLength: 120,
-        cfg: {},
-        config,
-        timeoutMs: 10_000,
-      },
-      deps,
-    );
-
-    expect(result.summary).toBe("deploy was delayed until Friday.");
-    expect(result.outputLength).toBe(result.summary.length);
-  });
-
-  it("caps overlong summaries at the requested speech length", async () => {
-    const { config, deps } = createSummarizeTextFixture([
-      {
-        type: "text",
-        text: `Audible summary ${"word ".repeat(80)}`,
-      },
-    ]);
-
-    const result = await summarizeText(
-      {
-        text: "Long text that should be summarized for speech.",
-        targetLength: 120,
-        cfg: {},
-        config,
-        timeoutMs: 10_000,
-      },
-      deps,
-    );
-
-    expect(result.summary.length).toBeLessThanOrEqual(120);
-    expect(result.summary).toMatch(/\.\.\.$/);
-    expect(result.outputLength).toBe(result.summary.length);
+    ]) {
+      await expectSummarizedText(testCase);
+    }
   });
 });
