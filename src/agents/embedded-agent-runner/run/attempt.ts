@@ -3859,7 +3859,7 @@ export async function runEmbeddedAttempt(
           const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
             messages: messagesForCurrentPrompt,
             prompt: promptForModel,
-            timezone: boundaryUserTimezone,
+            ...(boundaryOptions ? { timezone: boundaryOptions.timezone } : {}),
           });
           if (systemPromptReport) {
             systemPromptReport.currentTurn = {
