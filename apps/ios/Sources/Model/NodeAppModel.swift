@@ -111,6 +111,7 @@ final class NodeAppModel {
     var gatewayStatusText: String = "Offline"
     var nodeStatusText: String = "Offline"
     var operatorStatusText: String = "Offline"
+    private(set) var isAppleReviewDemoModeEnabled: Bool = false
     var isOperatorGatewayConnected: Bool {
         self.operatorConnected
     }
@@ -458,6 +459,7 @@ final class NodeAppModel {
                         await self.operatorGateway.disconnect()
                         await self.nodeGateway.disconnect()
                         await MainActor.run {
+                            guard !self.isAppleReviewDemoModeEnabled else { return }
                             self.setOperatorConnected(false)
                             self.gatewayConnected = false
                             // Foreground recovery must actively restart the saved gateway config.
@@ -549,6 +551,7 @@ final class NodeAppModel {
             await self.operatorGateway.disconnect()
             await self.nodeGateway.disconnect()
             await MainActor.run {
+                guard !self.isAppleReviewDemoModeEnabled else { return }
                 self.setOperatorConnected(false)
                 self.gatewayConnected = false
                 self.talkMode.updateGatewayConnected(false)
@@ -586,6 +589,12 @@ final class NodeAppModel {
     }
 
     func setTalkEnabled(_ enabled: Bool) {
+        if self.isAppleReviewDemoModeEnabled {
+            UserDefaults.standard.set(false, forKey: "talk.enabled")
+            self.talkMode.setEnabled(false)
+            self.talkMode.statusText = "Demo mode only"
+            return
+        }
         UserDefaults.standard.set(enabled, forKey: "talk.enabled")
         if enabled {
             // Voice wake holds the microphone continuously; talk mode needs exclusive access for STT.
@@ -911,6 +920,7 @@ final class NodeAppModel {
                 await self.operatorGateway.disconnect()
                 await self.nodeGateway.disconnect()
                 await MainActor.run {
+                    guard !self.isAppleReviewDemoModeEnabled else { return }
                     self.setOperatorConnected(false)
                     self.gatewayConnected = false
                     self.gatewayStatusText = "Reconnecting…"
@@ -1958,6 +1968,7 @@ extension NodeAppModel {
 
     /// Preferred entry-point: apply a single config object and start both sessions.
     func applyGatewayConnectConfig(_ cfg: GatewayConnectConfig, forceReconnect: Bool = false) {
+        self.isAppleReviewDemoModeEnabled = false
         self.connectToGateway(
             url: cfg.url,
             // Preserve the caller-provided stableID (may be empty) and let connectToGateway
@@ -1981,6 +1992,7 @@ extension NodeAppModel {
     }
 
     func disconnectGateway() {
+        self.isAppleReviewDemoModeEnabled = false
         self.gatewayAutoReconnectEnabled = false
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
@@ -2016,6 +2028,7 @@ extension NodeAppModel {
 
 extension NodeAppModel {
     private func prepareForGatewayConnect(url: URL, stableID: String) {
+        self.isAppleReviewDemoModeEnabled = false
         self.gatewayAutoReconnectEnabled = true
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
@@ -2058,6 +2071,7 @@ extension NodeAppModel {
     }
 
     private func applyGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
+        guard !self.isAppleReviewDemoModeEnabled else { return }
         self.lastGatewayProblem = problem
         self.gatewayStatusText = problem.statusText
         self.gatewayServerName = nil
@@ -2083,6 +2097,7 @@ extension NodeAppModel {
     }
 
     private func applyOperatorGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
+        guard !self.isAppleReviewDemoModeEnabled else { return }
         self.operatorGatewayProblem = problem
         self.lastGatewayProblem = problem
         self.gatewayStatusText = problem.statusText
@@ -2314,12 +2329,15 @@ extension NodeAppModel {
                         sessionBox: sessionBox,
                         onConnected: { [weak self] in
                             guard let self else { return }
-                            await MainActor.run {
+                            let shouldUseConnection = await MainActor.run {
+                                guard !self.isAppleReviewDemoModeEnabled else { return false }
                                 self.setOperatorConnected(true)
                                 self.clearOperatorGatewayConnectionProblemIfCurrent()
                                 self.forceOperatorTalkPermissionUpgradeRequest = false
                                 self.talkMode.updateGatewayConnected(true)
+                                return true
                             }
+                            guard shouldUseConnection else { return }
                             GatewayDiagnostics.log(
                                 "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
                             await self.talkMode.reloadConfig()
@@ -2334,6 +2352,7 @@ extension NodeAppModel {
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
                             await MainActor.run {
+                                guard !self.isAppleReviewDemoModeEnabled else { return }
                                 self.setOperatorConnected(false)
                                 self.talkMode.updateGatewayConnected(false)
                                 LiveActivityManager.shared.endActivity(reason: "operator_disconnected")
@@ -2356,8 +2375,9 @@ extension NodeAppModel {
                 } catch {
                     attempt += 1
                     GatewayDiagnostics.log("operator gateway connect error: \(error.localizedDescription)")
-                    let problem = await MainActor.run {
+                    let problem: GatewayConnectionProblem? = await MainActor.run {
                         let nextProblem = GatewayConnectionProblemMapper.map(error: error)
+                        guard !self.isAppleReviewDemoModeEnabled else { return nil }
                         if let nextProblem {
                             if nextProblem.needsPairingApproval || nextProblem.pauseReconnect {
                                 self.applyOperatorGatewayConnectionProblem(nextProblem)
@@ -2423,6 +2443,7 @@ extension NodeAppModel {
                     continue
                 }
                 await MainActor.run {
+                    guard !self.isAppleReviewDemoModeEnabled else { return }
                     self.gatewayStatusText = (attempt == 0) ? "Connecting…" : "Reconnecting…"
                     self.gatewayServerName = nil
                     self.gatewayRemoteAddress = nil
@@ -2449,7 +2470,8 @@ extension NodeAppModel {
                         sessionBox: sessionBox,
                         onConnected: { [weak self] in
                             guard let self else { return }
-                            await MainActor.run {
+                            let shouldUseConnection = await MainActor.run {
+                                guard !self.isAppleReviewDemoModeEnabled else { return false }
                                 self.clearGatewayConnectionProblem()
                                 self.gatewayStatusText = "Connected"
                                 self.gatewayServerName = url.host ?? "gateway"
@@ -2457,7 +2479,9 @@ extension NodeAppModel {
                                 self.screen.errorText = nil
                                 UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
                                 LiveActivityManager.shared.handleReconnect()
+                                return true
                             }
+                            guard shouldUseConnection else { return }
                             let usedBootstrapToken =
                                 reconnectAuth.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
                                 reconnectAuth.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2506,6 +2530,7 @@ extension NodeAppModel {
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
                             await MainActor.run {
+                                guard !self.isAppleReviewDemoModeEnabled else { return }
                                 if self.shouldKeepGatewayProblemStatus(forDisconnectReason: reason),
                                    let lastGatewayProblem = self.lastGatewayProblem
                                 {
@@ -2551,10 +2576,11 @@ extension NodeAppModel {
                     }
 
                     attempt += 1
-                    let problem = await MainActor.run {
+                    let problem: GatewayConnectionProblem? = await MainActor.run {
                         let nextProblem = GatewayConnectionProblemMapper.map(
                             error: error,
                             preserving: self.lastGatewayProblem)
+                        guard !self.isAppleReviewDemoModeEnabled else { return nil }
                         if let nextProblem {
                             self.applyGatewayConnectionProblem(nextProblem)
                         } else {
@@ -2595,6 +2621,7 @@ extension NodeAppModel {
             }
 
             await MainActor.run {
+                guard !self.isAppleReviewDemoModeEnabled else { return }
                 self.lastGatewayProblem = nil
                 self.gatewayStatusText = "Offline"
                 LiveActivityManager.shared.endActivity(reason: "gateway_loop_stopped")
@@ -2730,6 +2757,52 @@ extension NodeAppModel {
     private func setOperatorConnected(_ connected: Bool) {
         self.operatorConnected = connected
         self.operatorStatusText = connected ? "Connected" : "Offline"
+    }
+}
+
+extension NodeAppModel {
+    func enterAppleReviewDemoMode() {
+        self.isAppleReviewDemoModeEnabled = true
+        self.gatewayAutoReconnectEnabled = false
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
+        self.lastGatewayProblem = nil
+        self.operatorGatewayProblem = nil
+        self.nodeGatewayTask?.cancel()
+        self.nodeGatewayTask = nil
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
+        self.voiceWakeSyncTask?.cancel()
+        self.voiceWakeSyncTask = nil
+        self.gatewayHealthMonitor.stop()
+        LiveActivityManager.shared.endActivity(reason: "apple_review_demo")
+
+        Task {
+            await self.operatorGateway.disconnect()
+            await self.nodeGateway.disconnect()
+        }
+
+        self.gatewayStatusText = "Connected"
+        self.nodeStatusText = "Connected"
+        self.gatewayServerName = AppleReviewDemoMode.gatewayName
+        self.gatewayRemoteAddress = AppleReviewDemoMode.gatewayAddress
+        self.connectedGatewayID = AppleReviewDemoMode.gatewayID
+        self.activeGatewayConnectConfig = nil
+        self.gatewayConnected = true
+        self.setOperatorConnected(false)
+        UserDefaults.standard.set(false, forKey: "talk.enabled")
+        UserDefaults.standard.set(false, forKey: "talk.background.enabled")
+        self.talkMode.updateGatewayConnected(false)
+        self.talkMode.setEnabled(false)
+        self.talkMode.statusText = "Demo mode only"
+        self.seamColorHex = nil
+        self.mainSessionBaseKey = "main"
+        self.selectedAgentId = nil
+        self.gatewayDefaultAgentId = "main"
+        self.gatewayAgents = AppleReviewDemoMode.agents
+        self.focusedChatSessionKey = nil
+        self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        self.homeCanvasRevision &+= 1
     }
 }
 

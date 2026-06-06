@@ -1,6 +1,7 @@
 // Bench Test Changed tests cover bench test changed script behavior.
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { formatRss, parseMaxRssBytes } from "../../scripts/bench-test-changed.mjs";
 
 function runBenchTestChanged(args: string[]) {
   return spawnSync(process.execPath, ["scripts/bench-test-changed.mjs", ...args], {
@@ -10,6 +11,12 @@ function runBenchTestChanged(args: string[]) {
 }
 
 describe("bench-test-changed script", () => {
+  it("formats macOS time RSS bytes as MiB", () => {
+    expect(parseMaxRssBytes("  2097152  maximum resident set size\n")).toBe(2_097_152);
+    expect(formatRss(2_097_152)).toBe("2.0MB");
+    expect(formatRss(-1_048_576)).toBe("-1.0MB");
+  });
+
   it("rejects malformed max worker values before inspecting git state", () => {
     const malformed = runBenchTestChanged(["--max-workers", "2abc"]);
 
@@ -32,6 +39,22 @@ describe("bench-test-changed script", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("--max-workers requires a value");
+    expect(result.stderr).not.toContain("at ");
+
+    const nextFlag = runBenchTestChanged(["--max-workers", "--no-rss"]);
+
+    expect(nextFlag.status).toBe(1);
+    expect(nextFlag.stdout).toBe("");
+    expect(nextFlag.stderr).toContain("--max-workers requires a value");
+    expect(nextFlag.stderr).not.toContain("at ");
+  });
+
+  it("rejects unknown options before collecting changed paths", () => {
+    const result = runBenchTestChanged(["--max-worker", "4"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Unknown option: --max-worker");
     expect(result.stderr).not.toContain("at ");
   });
 });

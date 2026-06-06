@@ -86,7 +86,7 @@ function scanLogs() {
       return;
     }
     if (stat.isDirectory()) {
-      for (const child of fs.readdirSync(entry)) {
+      for (const child of fs.readdirSync(entry).toSorted()) {
         visit(path.join(entry, child));
       }
       return;
@@ -100,6 +100,11 @@ function scanLogs() {
   };
   for (const root of roots) {
     visit(root);
+  }
+  if (files.length === 0) {
+    throw new Error(
+      "kitchen-sink log scan found no files under the isolated scratch root or OpenClaw home",
+    );
   }
 
   const deny = [
@@ -443,7 +448,13 @@ function assertInstalled() {
     expectIncludes(inspect.services, "kitchen-sink-service", "services");
     if (surfaceMode === "full") {
       expectIncludesAny(inspect.commands, ["kitchen", "kitchen-sink-command"], "commands");
-      expectIncludesAny(toolNames, ["kitchen_sink_text", "kitchen-sink-tool"], "tools");
+      for (const toolName of [
+        "kitchen_sink_text",
+        "kitchen_sink_search",
+        "kitchen_sink_image_job",
+      ]) {
+        expectIncludes(toolNames, toolName, "tools");
+      }
     } else {
       expectIncludes(inspect.commands, "kitchen", "commands");
       expectIncludes(toolNames, "kitchen_sink_text", "tools");

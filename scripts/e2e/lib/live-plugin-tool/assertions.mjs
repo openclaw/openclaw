@@ -52,15 +52,16 @@ function agentErrorPath() {
   return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_ERROR_PATH || "/tmp/openclaw-agent.err";
 }
 
-function scanFileForNeedles(file, pendingNeedles) {
+function scanFileForNeedles(file, needles) {
+  const pendingNeedles = new Set(needles);
   let stat;
   try {
     stat = fs.statSync(file);
   } catch {
-    return;
+    return pendingNeedles;
   }
   if (!stat.isFile() || stat.size <= 0 || pendingNeedles.size === 0) {
-    return;
+    return pendingNeedles;
   }
 
   const maxNeedleLength = Math.max(...Array.from(pendingNeedles, (needle) => needle.length));
@@ -88,6 +89,7 @@ function scanFileForNeedles(file, pendingNeedles) {
   } finally {
     fs.closeSync(fd);
   }
+  return pendingNeedles;
 }
 
 function scanSessionTranscripts(sessionsDir, needles) {
@@ -105,7 +107,7 @@ function scanSessionTranscripts(sessionsDir, needles) {
   }
 
   const pendingDirs = [sessionsDir];
-  while (pendingDirs.length > 0 && pendingNeedles.size > 0) {
+  while (pendingDirs.length > 0) {
     const dir = pendingDirs.pop();
     const entries = fs
       .readdirSync(dir, { withFileTypes: true })
@@ -123,9 +125,9 @@ function scanSessionTranscripts(sessionsDir, needles) {
       if (checkedFiles.length < SESSION_FILE_LIST_LIMIT) {
         checkedFiles.push(path.relative(sessionsDir, entryPath));
       }
-      scanFileForNeedles(entryPath, pendingNeedles);
-      if (pendingNeedles.size === 0) {
-        break;
+      if (scanFileForNeedles(entryPath, needles).size === 0) {
+        pendingNeedles.clear();
+        return { checkedFiles, filesChecked, missingDir: false, pendingNeedles };
       }
     }
   }

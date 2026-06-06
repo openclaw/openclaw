@@ -58,4 +58,13 @@ describe("OpenClaw performance workflow", () => {
     expect(publish.if).toContain("steps.clawgrit_reports.outputs.ready == 'true'");
     expect(publish.run).toContain("timeout 120s git");
   });
+
+  it("requires the shared Kova report gate before tolerating partial verdicts", () => {
+    const runKova = findStep("Run Kova");
+
+    expect(runKova.run).toContain(
+      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"',
+    );
+    expect(runKova.run).not.toContain("report.summary?.statuses ?? {}");
+  });
 });

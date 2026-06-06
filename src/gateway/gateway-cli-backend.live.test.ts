@@ -17,11 +17,13 @@ import {
   getFreeGatewayPort,
   matchesCliBackendReply,
   parseImageMode,
-  resolveCliModelSwitchProbeTarget,
+  parseJsonStringArray,
   resolveCliBackendLiveArgs,
   resolveCliBackendLiveModelSelection,
-  parseJsonStringArray,
+  resolveCliBackendLiveProviderSkipDecision,
+  resolveCliModelSwitchProbeTarget,
   restoreCliBackendLiveEnv,
+  shouldAllowCliBackendLiveProviderSkip,
   shouldRunCliImageProbe,
   shouldRunCliModelSwitchProbe,
   shouldRunCliMcpProbe,
@@ -48,6 +50,7 @@ const CLI_CI_SAFE_CODEX_CONFIG = isTruthyEnvValue(
 const CLI_MCP_SCHEMA_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CLI_BACKEND_MCP_SCHEMA_PROBE,
 );
+const CLI_ALLOW_PROVIDER_SKIP = shouldAllowCliBackendLiveProviderSkip();
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
 const MCP_SCHEMA_PROBE_PLUGIN_ID = "mcp-schema-probe";
@@ -137,19 +140,36 @@ async function requestWithProviderCapacityRetry<T>(
       return await request();
     } catch (error) {
       if (!isProviderCapacityError(error) || attempt >= maxAttempts) {
-        if (
-          shouldSkipLiveProviderDrift({
-            error,
-            allowAuth: true,
-            allowBilling: true,
-          })
-        ) {
-          console.warn(`SKIP: ${label} skipped because provider account/auth drift blocked it.`);
-          return undefined;
+        const driftSkip = shouldSkipLiveProviderDrift({
+          error,
+          allowAuth: true,
+          allowBilling: true,
+        });
+        if (driftSkip) {
+          const decision = resolveCliBackendLiveProviderSkipDecision({
+            allowProviderSkip: CLI_ALLOW_PROVIDER_SKIP,
+            label,
+            providerId,
+            reasonLabel: driftSkip.label,
+          });
+          if (decision.action === "skip") {
+            console.warn(`SKIP: ${decision.message}`);
+            return undefined;
+          }
+          throw new Error(decision.message, { cause: error });
         }
         if (providerId === "claude-cli" && isProviderCapacityError(error)) {
-          console.warn(`SKIP: ${label} skipped because Claude API stayed overloaded.`);
-          return undefined;
+          const decision = resolveCliBackendLiveProviderSkipDecision({
+            allowProviderSkip: CLI_ALLOW_PROVIDER_SKIP,
+            label,
+            providerId,
+            reasonLabel: "Claude API capacity",
+          });
+          if (decision.action === "skip") {
+            console.warn(`SKIP: ${decision.message}`);
+            return undefined;
+          }
+          throw new Error(decision.message, { cause: error });
         }
         throw error;
       }

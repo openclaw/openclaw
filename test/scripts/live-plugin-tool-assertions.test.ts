@@ -87,13 +87,11 @@ describe("live plugin tool assertions", () => {
       });
       mkdirSync(sessionsDir, { recursive: true });
       writeFileSync(
-        path.join(sessionsDir, "tool.jsonl"),
-        `${"x".repeat(64 * 1024 - "e2e_slug_".length)}e2e_slug_probe\n`,
-        "utf8",
-      );
-      writeFileSync(
-        path.join(sessionsDir, "reply.jsonl"),
-        `${"x".repeat(64 * 1024 - "live-plugin-".length)}live-plugin-slug\n`,
+        path.join(sessionsDir, "session.jsonl"),
+        [
+          `${"x".repeat(64 * 1024 - "e2e_slug_".length)}e2e_slug_probe`,
+          `${"x".repeat(64 * 1024 - "live-plugin-".length)}live-plugin-slug`,
+        ].join("\n"),
         "utf8",
       );
 
@@ -101,6 +99,28 @@ describe("live plugin tool assertions", () => {
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects split transcript evidence across unrelated files", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+    const sessionsDir = path.join(root, "state", "agents", "main", "sessions");
+
+    try {
+      writeJson(path.join(root, "agent.json"), {
+        payloads: [{ text: "live-plugin-slug" }],
+      });
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(path.join(sessionsDir, "tool.jsonl"), "e2e_slug_probe\n", "utf8");
+      writeFileSync(path.join(sessionsDir, "reply.jsonl"), "live-plugin-slug\n", "utf8");
+
+      const result = runAssertion(root);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("session transcript did not show");
+      expect(result.stderr).toContain("after checking 2 jsonl file(s)");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
