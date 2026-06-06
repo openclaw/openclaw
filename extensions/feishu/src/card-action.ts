@@ -136,6 +136,7 @@ function buildSyntheticMessageEvent(
   chatType: "p2p" | "group",
 ): FeishuMessageEvent {
   const replyTargetMessageId = event.context.open_message_id ?? event.open_message_id;
+  const isCardActionTemporaryId = event.open_message_id?.startsWith("card-action-c-");
   return {
     sender: {
       sender_id: {
@@ -146,8 +147,8 @@ function buildSyntheticMessageEvent(
     },
     message: {
       message_id: `card-action-${event.token}`,
-      ...(replyTargetMessageId ? { reply_target_message_id: replyTargetMessageId } : {}),
-      ...(!replyTargetMessageId ? { suppress_reply_target: true } : {}),
+      ...(replyTargetMessageId && !isCardActionTemporaryId ? { reply_target_message_id: replyTargetMessageId } : {}),
+      ...(!replyTargetMessageId || isCardActionTemporaryId ? { suppress_reply_target: true } : {}),
       chat_id: event.context.chat_id || event.operator.open_id,
       chat_type: chatType,
       message_type: "text",
