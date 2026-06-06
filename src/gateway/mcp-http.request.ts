@@ -169,13 +169,36 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
+  if (params.req.method === "DELETE") {
+    // Streamable HTTP session teardown. The loopback server is stateless — it owns no
+    // session lifecycle — so this is an auth-gated no-op acknowledgement: clients that
+    // send DELETE when closing the transport get a clean 200 rather than a 405.
+    const authHeader = getHeader(params.req, "authorization") ?? "";
+    const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
+    const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
+    if (!ownerTokenMatched && !nonOwnerTokenMatched) {
+      params.res.writeHead(401, { "Content-Type": "application/json" });
+      params.res.end(JSON.stringify({ error: "unauthorized" }));
+      return null;
+    }
+    if (rejectsBrowserLoopbackRequest(params.req)) {
+      params.res.writeHead(403, { "Content-Type": "application/json" });
+      params.res.end(JSON.stringify({ error: "forbidden" }));
+      return null;
+    }
+    logMcpLoopbackHttp("session-delete", { method: "DELETE", path: url.pathname });
+    params.res.writeHead(200, { "Content-Type": "application/json" });
+    params.res.end(JSON.stringify({ ok: true }));
+    return null;
+  }
+
   if (params.req.method !== "POST") {
     logMcpLoopbackHttp("reject", {
       reason: "method_not_allowed",
       method: params.req.method ?? "",
       path: url.pathname,
     });
-    params.res.writeHead(405, { Allow: "GET, POST" });
+    params.res.writeHead(405, { Allow: "GET, POST, DELETE" });
     params.res.end();
     return null;
   }

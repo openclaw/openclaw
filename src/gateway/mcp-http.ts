@@ -142,7 +142,6 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
 }> {
   const ownerToken = crypto.randomBytes(32).toString("hex");
   const nonOwnerToken = crypto.randomBytes(32).toString("hex");
-  const mcpSessionId = crypto.randomUUID();
   const toolCache = new McpLoopbackToolCache();
 
   const httpServer = createHttpServer((req, res) => {
@@ -227,10 +226,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         const payload = Array.isArray(parsed)
           ? JSON.stringify(responses)
           : JSON.stringify(responses[0]);
-        res.writeHead(200, {
-          "Content-Type": "application/json",
-          "Mcp-Session-Id": mcpSessionId,
-        });
+        res.writeHead(200, { "Content-Type": "application/json" });
         res.end(payload);
       } catch (error) {
         logWarn(`mcp loopback: request handling failed: ${formatErrorMessage(error)}`);
