@@ -44,6 +44,10 @@ export type UserTurnInput = {
   idempotencyKey?: string;
   provenance?: InputProvenance;
   mediaOnlyText?: string;
+  /** Sender identity from the originating channel (e.g. Telegram group chat). */
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
 };
 
 type UserTurnTranscriptUpdateMode = "inline" | "none";
@@ -305,7 +309,29 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...mediaFields,
   } as PersistedUserTurnMessage;
-  return applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage;
+  let withProvenance = applyInputProvenanceToUserMessage(
+    message,
+    params.provenance,
+  ) as PersistedUserTurnMessage;
+  // Add sender metadata __openclaw block for group chat sessions.
+  if (params.senderId) {
+    const openclawMeta: Record<string, unknown> = {
+      ...((withProvenance as { __openclaw?: unknown }).__openclaw as
+        | Record<string, unknown>
+        | undefined),
+      from: {
+        id: params.senderId,
+        ...(params.senderName ? { first_name: params.senderName } : {}),
+        ...(params.senderUsername ? { username: params.senderUsername } : {}),
+      },
+      senderId: params.senderId,
+    };
+    withProvenance = {
+      ...(withProvenance as unknown as Record<string, unknown>),
+      __openclaw: openclawMeta,
+    } as PersistedUserTurnMessage;
+  }
+  return withProvenance;
 }
 
 function resolvePersistedUserTurnMessage(

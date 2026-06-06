@@ -733,4 +733,114 @@ describe("user turn transcript persistence", () => {
       ]);
     });
   });
+
+  describe("sender metadata in group chat sessions", () => {
+    it("persists __openclaw sender metadata when senderId is provided", async () => {
+      const dir = createTempDir("openclaw-user-turn-sender-metadata-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello from Ram",
+          timestamp: 123,
+          senderId: "8489979671",
+          senderName: "Ram Shenoy",
+          senderUsername: "ramshenoy",
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).toMatchObject({
+        role: "user",
+        content: "hello from Ram",
+      });
+      // Check the __openclaw block in the returned message.
+      expect(appended?.message).toHaveProperty("__openclaw");
+      expect((appended?.message as Record<string, unknown>).__openclaw).toMatchObject({
+        from: {
+          id: "8489979671",
+          first_name: "Ram Shenoy",
+          username: "ramshenoy",
+        },
+        senderId: "8489979671",
+      });
+
+      // Check the JSONL record also contains the __openclaw block.
+      const messages = readTranscriptMessages(transcriptPath);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        content: "hello from Ram",
+        __openclaw: {
+          from: {
+            id: "8489979671",
+            first_name: "Ram Shenoy",
+            username: "ramshenoy",
+          },
+          senderId: "8489979671",
+        },
+      });
+    });
+
+    it("persists senderId without name/username when only senderId is provided", async () => {
+      const dir = createTempDir("openclaw-user-turn-sender-id-only-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello",
+          timestamp: 456,
+          senderId: "999888777",
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).toHaveProperty("__openclaw");
+      expect((appended?.message as Record<string, unknown>).__openclaw).toMatchObject({
+        from: {
+          id: "999888777",
+        },
+        senderId: "999888777",
+      });
+
+      const messages = readTranscriptMessages(transcriptPath);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        content: "hello",
+        __openclaw: {
+          from: { id: "999888777" },
+          senderId: "999888777",
+        },
+      });
+    });
+
+    it("does not add __openclaw when senderId is absent", async () => {
+      const dir = createTempDir("openclaw-user-turn-no-sender-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "direct message",
+          timestamp: 789,
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).not.toHaveProperty("__openclaw");
+      const messages = readTranscriptMessages(transcriptPath);
+      expect(messages[0]).not.toHaveProperty("__openclaw");
+    });
+  });
 });
