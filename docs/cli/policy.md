@@ -416,8 +416,13 @@ allowlist such as `["all"]`.
 #### Exec approvals
 
 Exec approvals policy observes the runtime `~/.openclaw/exec-approvals.json`
-file artifact. It treats omitted approval defaults the same way the runtime does: missing `defaults.security` is `full`, and missing agent
-security inherits that default. Evidence includes `defaults`, `agents.*`, and
+file artifact. Actual posture rules such as `execApprovals.defaults.*` or
+`execApprovals.agents.*` require readable artifact evidence; a missing or
+invalid artifact is reported as unobservable evidence instead of becoming a
+best-effort pass against synthetic runtime defaults. Once the artifact is
+readable, omitted approval fields inherit runtime defaults: missing
+`defaults.security` is `full`, and missing agent security inherits that
+default. Evidence includes `defaults`, `agents.*`, and
 `agents.*.allowlist[].pattern` plus optional `argPattern`, effective
 `autoAllowSkills` posture, and entry source. It does not include socket
 path/token, `commandText`, `lastUsedCommand`, resolved paths, or timestamps.

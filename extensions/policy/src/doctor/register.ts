@@ -4467,12 +4467,14 @@ function execApprovalsFileFindings(
   },
 ): readonly HealthFinding[] {
   const requireFile = readPolicyBoolean(execApprovalsPolicy, ["requireFile"]) === true;
-  if (requireFile && params.file === null) {
+  const needsArtifactEvidence =
+    requireFile || execApprovalsPolicyNeedsArtifactEvidence(execApprovalsPolicy);
+  if (needsArtifactEvidence && params.file === null) {
     return [
       {
         checkId: CHECK_IDS.policyExecApprovalsMissing,
         severity: "error",
-        message: "exec-approvals.json is required by policy but was not found.",
+        message: "exec-approvals.json evidence is required by policy but was not found.",
         source: "policy",
         path: params.displayName,
         target: "oc://exec-approvals.json",
@@ -4487,7 +4489,7 @@ function execApprovalsFileFindings(
     return [];
   }
   const parsed = parseExecApprovalsFile(params.file.raw);
-  if (parsed.ok || !requireFile) {
+  if (parsed.ok || !needsArtifactEvidence) {
     return [];
   }
   return [
@@ -4502,6 +4504,12 @@ function execApprovalsFileFindings(
       fixHint: "Fix exec-approvals.json so it is valid JSON.",
     },
   ];
+}
+
+function execApprovalsPolicyNeedsArtifactEvidence(
+  execApprovalsPolicy: Record<string, unknown>,
+): boolean {
+  return isRecord(execApprovalsPolicy.defaults) || isRecord(execApprovalsPolicy.agents);
 }
 
 function execApprovalsRuleFindings(

@@ -8183,7 +8183,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([]);
   });
 
-  it("uses runtime defaults for missing scoped-only exec approvals artifacts", async () => {
+  it("requires exec approvals artifacts for scoped exec approval rules", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(
@@ -8206,19 +8206,14 @@ describe("registerPolicyDoctorChecks", () => {
 
     expect(result.findings).toEqual([
       expect.objectContaining({
-        checkId: "policy/exec-approvals-agent-security-unapproved",
-        ocPath: "oc://exec-approvals.json",
-        requirement: "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowSecurity",
-      }),
-      expect.objectContaining({
-        checkId: "policy/exec-approvals-agent-security-unapproved",
-        ocPath: "oc://exec-approvals.json",
-        requirement: "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowSecurity",
+        checkId: "policy/exec-approvals-missing",
+        target: "oc://exec-approvals.json",
+        requirement: "oc://policy.jsonc/scopes/restricted/execApprovals",
       }),
     ]);
   });
 
-  it("uses runtime defaults for invalid scoped-only exec approvals artifacts", async () => {
+  it("rejects invalid exec approvals artifacts for scoped exec approval rules", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(
@@ -8242,16 +8237,26 @@ describe("registerPolicyDoctorChecks", () => {
 
     expect(result.findings).toEqual([
       expect.objectContaining({
-        checkId: "policy/exec-approvals-agent-security-unapproved",
-        ocPath: "oc://exec-approvals.json",
-        requirement: "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowSecurity",
-      }),
-      expect.objectContaining({
-        checkId: "policy/exec-approvals-agent-security-unapproved",
-        ocPath: "oc://exec-approvals.json",
-        requirement: "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowSecurity",
+        checkId: "policy/exec-approvals-invalid",
+        target: "oc://exec-approvals.json",
+        requirement: "oc://policy.jsonc/scopes/restricted/execApprovals",
       }),
     ]);
+  });
+
+  it("does not require exec approvals artifacts for requireFile false alone", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { requireFile: false } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([]);
   });
 
   it("applies wildcard exec approvals to scoped agents", async () => {
