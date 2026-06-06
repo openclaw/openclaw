@@ -216,6 +216,100 @@ describe("CLI startup benchmark script spawners", () => {
     }
   });
 
+  it("fails reused reports with timed-out samples", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-budget-timeout-test-"));
+    try {
+      const baselinePath = path.join(tmpDir, "baseline.json");
+      const reportPath = path.join(tmpDir, "current.json");
+      const timedOutCase = {
+        id: "version",
+        name: "--version",
+        contract: {
+          firstOutputBudgetMs: 1000,
+          exitBudgetMs: 2000,
+        },
+        samples: [
+          {
+            ms: 10,
+            firstOutputMs: 5,
+            maxRssMb: 10,
+            exitCode: 0,
+            signal: null,
+            timedOut: true,
+          },
+        ],
+        summary: {
+          durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+          firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
+          maxRssMb: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+        },
+      };
+      fs.writeFileSync(baselinePath, JSON.stringify({ primary: { cases: [timedOutCase] } }));
+      fs.writeFileSync(reportPath, JSON.stringify({ primary: { cases: [timedOutCase] } }));
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/test-cli-startup-bench-budget.mjs",
+          "--baseline",
+          baselinePath,
+          "--report",
+          reportPath,
+          "--skip-baseline",
+        ],
+        { cwd: process.cwd(), encoding: "utf8" },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("[test-cli-startup-bench-budget] --version timed out.");
+      expect(result.stderr).toContain(
+        "[test-cli-startup-bench-budget] --version exited timeout; response contract requires a clean exit.",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails reused reports with missing RSS samples", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-budget-rss-test-"));
+    try {
+      const baselinePath = path.join(tmpDir, "baseline.json");
+      const reportPath = path.join(tmpDir, "current.json");
+      const missingRssCase = {
+        id: "version",
+        name: "--version",
+        samples: [{ ms: 10, firstOutputMs: 5, maxRssMb: null, exitCode: 0, signal: null }],
+        summary: {
+          durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+          firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
+          maxRssMb: null,
+        },
+      };
+      fs.writeFileSync(baselinePath, JSON.stringify({ primary: { cases: [missingRssCase] } }));
+      fs.writeFileSync(reportPath, JSON.stringify({ primary: { cases: [missingRssCase] } }));
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/test-cli-startup-bench-budget.mjs",
+          "--baseline",
+          baselinePath,
+          "--report",
+          reportPath,
+          "--skip-baseline",
+        ],
+        { cwd: process.cwd(), encoding: "utf8" },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "[test-cli-startup-bench-budget] --version did not report max RSS.",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects malformed startup budget env vars before reading reports", () => {
     const result = spawnSync(process.execPath, ["scripts/test-cli-startup-bench-budget.mjs"], {
       cwd: process.cwd(),

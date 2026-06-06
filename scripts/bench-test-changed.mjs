@@ -1,6 +1,7 @@
 // Benchmarks `pnpm test:changed` planning/runtime behavior across repeated runs.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { formatMs } from "./lib/vitest-report-cli-utils.mjs";
 
@@ -35,7 +36,7 @@ function positiveIntegerFlag(flag, key) {
   };
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const args = parseFlagArgs(
     argv,
     {
@@ -103,16 +104,16 @@ function listChangedPaths(opts) {
   return runGitList(["diff", "--name-only", `${opts.ref}...HEAD`], opts.cwd);
 }
 
-function parseMaxRssKb(output) {
+export function parseMaxRssBytes(output) {
   const match = output.match(/(\d+)\s+maximum resident set size/u);
   return match ? Number.parseInt(match[1], 10) : null;
 }
 
-function formatRss(valueKb) {
-  if (valueKb === null) {
+export function formatRss(valueBytes) {
+  if (valueBytes === null) {
     return "n/a";
   }
-  return `${(valueKb / 1024).toFixed(1)}MB`;
+  return `${(valueBytes / 1024 / 1024).toFixed(1)}MB`;
 }
 
 function runBenchCommand(params) {
@@ -136,7 +137,7 @@ function runBenchCommand(params) {
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   return {
     elapsedMs,
-    maxRssKb: params.rss ? parseMaxRssKb(output) : null,
+    maxRssBytes: params.rss ? parseMaxRssBytes(output) : null,
     status: result.status ?? 1,
     output,
   };
@@ -145,81 +146,92 @@ function runBenchCommand(params) {
 function printRunSummary(label, result) {
   console.log(
     `${label.padEnd(8, " ")} wall=${formatMs(result.elapsedMs).padStart(9, " ")} rss=${formatRss(
-      result.maxRssKb,
+      result.maxRssBytes,
     ).padStart(9, " ")}`,
   );
 }
 
-let opts;
-try {
-  opts = parseArgs(process.argv.slice(2));
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-}
-const changedPaths = listChangedPaths(opts);
-if (changedPaths.length === 0) {
+function main() {
+  let opts;
+  try {
+    opts = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+  const changedPaths = listChangedPaths(opts);
+  if (changedPaths.length === 0) {
+    console.log(
+      opts.mode === "worktree"
+        ? "[bench-test-changed] no changed paths in worktree"
+        : `[bench-test-changed] no changed paths for ${opts.ref}...HEAD`,
+    );
+    process.exit(0);
+  }
+
   console.log(
     opts.mode === "worktree"
-      ? "[bench-test-changed] no changed paths in worktree"
-      : `[bench-test-changed] no changed paths for ${opts.ref}...HEAD`,
+      ? "[bench-test-changed] mode=worktree"
+      : `[bench-test-changed] ref=${opts.ref}`,
   );
-  process.exit(0);
+  console.log("[bench-test-changed] changed paths:");
+  for (const changedPath of changedPaths) {
+    console.log(`- ${changedPath}`);
+  }
+
+  const routedCommand =
+    opts.mode === "worktree"
+      ? [process.execPath, "scripts/test-projects.mjs", ...changedPaths]
+      : [process.execPath, "scripts/test-projects.mjs", "--changed", opts.ref];
+  const rootCommand = [
+    process.execPath,
+    "scripts/run-vitest.mjs",
+    "run",
+    "--config",
+    "vitest.config.ts",
+    ...changedPaths,
+  ];
+
+  console.log(`[bench-test-changed] routed: ${routedCommand.map(quoteArg).join(" ")}`);
+  const routed = runBenchCommand({
+    command: routedCommand,
+    cwd: opts.cwd,
+    rss: opts.rss,
+    ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
+  });
+  if (routed.status !== 0) {
+    process.stderr.write(routed.output);
+    process.exit(routed.status);
+  }
+
+  console.log(`[bench-test-changed] root:   ${rootCommand.map(quoteArg).join(" ")}`);
+  const root = runBenchCommand({
+    command: rootCommand,
+    cwd: opts.cwd,
+    rss: opts.rss,
+    ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
+  });
+  if (root.status !== 0) {
+    process.stderr.write(root.output);
+    process.exit(root.status);
+  }
+
+  printRunSummary("routed", routed);
+  printRunSummary("root", root);
+  console.log(
+    `[bench-test-changed] delta wall=${formatMs(root.elapsedMs - routed.elapsedMs)} rss=${
+      routed.maxRssBytes !== null && root.maxRssBytes !== null
+        ? formatRss(root.maxRssBytes - routed.maxRssBytes)
+        : "n/a"
+    }`,
+  );
 }
 
-console.log(
-  opts.mode === "worktree"
-    ? "[bench-test-changed] mode=worktree"
-    : `[bench-test-changed] ref=${opts.ref}`,
-);
-console.log("[bench-test-changed] changed paths:");
-for (const changedPath of changedPaths) {
-  console.log(`- ${changedPath}`);
+const isMain =
+  typeof process.argv[1] === "string" &&
+  process.argv[1].length > 0 &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (isMain) {
+  main();
 }
-
-const routedCommand =
-  opts.mode === "worktree"
-    ? [process.execPath, "scripts/test-projects.mjs", ...changedPaths]
-    : [process.execPath, "scripts/test-projects.mjs", "--changed", opts.ref];
-const rootCommand = [
-  process.execPath,
-  "scripts/run-vitest.mjs",
-  "run",
-  "--config",
-  "vitest.config.ts",
-  ...changedPaths,
-];
-
-console.log(`[bench-test-changed] routed: ${routedCommand.map(quoteArg).join(" ")}`);
-const routed = runBenchCommand({
-  command: routedCommand,
-  cwd: opts.cwd,
-  rss: opts.rss,
-  ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
-});
-if (routed.status !== 0) {
-  process.stderr.write(routed.output);
-  process.exit(routed.status);
-}
-
-console.log(`[bench-test-changed] root:   ${rootCommand.map(quoteArg).join(" ")}`);
-const root = runBenchCommand({
-  command: rootCommand,
-  cwd: opts.cwd,
-  rss: opts.rss,
-  ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
-});
-if (root.status !== 0) {
-  process.stderr.write(root.output);
-  process.exit(root.status);
-}
-
-printRunSummary("routed", routed);
-printRunSummary("root", root);
-console.log(
-  `[bench-test-changed] delta wall=${formatMs(root.elapsedMs - routed.elapsedMs)} rss=${
-    routed.maxRssKb !== null && root.maxRssKb !== null
-      ? formatRss(root.maxRssKb - routed.maxRssKb)
-      : "n/a"
-  }`,
-);

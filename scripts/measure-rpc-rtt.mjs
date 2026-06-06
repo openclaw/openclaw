@@ -31,7 +31,27 @@ function usage() {
   ].join("\n");
 }
 
-function parseArgs(argv) {
+function readFlagValue(argv, index, flag) {
+  const value = argv[index + 1];
+  if (!value) {
+    throw new Error(`${flag} requires a value.`);
+  }
+  return value;
+}
+
+function parsePositiveInt(value, flag) {
+  const text = String(value ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+export function parseArgs(argv) {
   const args = {
     iterations: DEFAULT_ITERATIONS,
     methods: DEFAULT_METHODS,
@@ -39,31 +59,32 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--output-dir") {
-      args.outputDir = argv[(index += 1)];
+      args.outputDir = readFlagValue(argv, index, arg);
+      index += 1;
       continue;
     }
     if (arg === "--repo-root") {
-      args.repoRoot = argv[(index += 1)];
+      args.repoRoot = readFlagValue(argv, index, arg);
+      index += 1;
       continue;
     }
     if (arg === "--iterations") {
-      args.iterations = Number(argv[(index += 1)]);
+      args.iterations = parsePositiveInt(readFlagValue(argv, index, arg), arg);
+      index += 1;
       continue;
     }
     if (arg === "--methods") {
-      args.methods = argv[(index += 1)]
+      args.methods = readFlagValue(argv, index, arg)
         .split(",")
         .map((entry) => entry.trim())
         .filter(Boolean);
+      index += 1;
       continue;
     }
     throw new Error(`Unknown argument: ${arg}\n${usage()}`);
   }
   if (!args.outputDir) {
     throw new Error(usage());
-  }
-  if (!Number.isInteger(args.iterations) || args.iterations < 1) {
-    throw new Error("--iterations must be a positive integer.");
   }
   if (args.methods.length === 0) {
     throw new Error("--methods must include at least one gateway method.");

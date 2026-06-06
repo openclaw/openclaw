@@ -5,6 +5,7 @@ import {
   cleanupTempRoot,
   installGatewayParentCleanup,
   isGatewayProcessAlive,
+  parseArgs,
   signalGatewayProcess,
   startGateway,
   stopGateway,
@@ -12,6 +13,36 @@ import {
 } from "../../scripts/measure-rpc-rtt.mjs";
 
 describe("scripts/measure-rpc-rtt.mjs", () => {
+  it("parses bounded RPC RTT options strictly", () => {
+    expect(
+      parseArgs([
+        "--output-dir",
+        "/tmp/rpc-rtt",
+        "--repo-root",
+        "/repo",
+        "--iterations",
+        "3",
+        "--methods",
+        "health, config.get ",
+      ]),
+    ).toMatchObject({
+      iterations: 3,
+      methods: ["health", "config.get"],
+      outputDir: "/tmp/rpc-rtt",
+      repoRoot: "/repo",
+    });
+
+    expect(() => parseArgs(["--output-dir", "/tmp/rpc-rtt", "--iterations", "1e3"])).toThrow(
+      "--iterations must be a positive integer.",
+    );
+    expect(() => parseArgs(["--output-dir", "/tmp/rpc-rtt", "--iterations", "0"])).toThrow(
+      "--iterations must be a positive integer.",
+    );
+    expect(() => parseArgs(["--output-dir", "/tmp/rpc-rtt", "--methods"])).toThrow(
+      "--methods requires a value.",
+    );
+  });
+
   it("closes parent gateway log handles after spawning", async () => {
     const child = Object.assign(new EventEmitter(), {
       exitCode: null,

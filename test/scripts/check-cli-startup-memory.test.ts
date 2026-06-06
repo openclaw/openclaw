@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/check-cli-startup-memory.mjs";
 
@@ -21,6 +22,26 @@ afterEach(() => {
 });
 
 describe("check-cli-startup-memory", () => {
+  it("resolves the repository root from the script location", () => {
+    const repoRoot = path.resolve(__dirname, "..", "..");
+    const scriptUrl = pathToFileURL(path.join(repoRoot, "scripts/check-cli-startup-memory.mjs"));
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `const mod = await import(${JSON.stringify(scriptUrl.href)}); console.log(mod.testing.repoRoot);`,
+      ],
+      {
+        cwd: path.join(repoRoot, "test/scripts"),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(repoRoot);
+  });
+
   it("keeps the Linux help startup budget tight while allowing macOS RSS overhead", () => {
     expect(testing.resolveDefaultLimitsMb("linux").help).toBe(100);
     expect(testing.resolveDefaultLimitsMb("darwin").help).toBeGreaterThan(100);

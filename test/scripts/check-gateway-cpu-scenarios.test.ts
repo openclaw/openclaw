@@ -78,6 +78,7 @@ describe("gateway CPU scenario guard", () => {
 
   it("prepares CLI startup artifacts before running the startup bench", async () => {
     const outputDir = makeTempRoot();
+    const startupOutput = path.join(outputDir, "gateway-startup-bench.json");
     const calls: Array<{ command: string; args: string[] }> = [];
     const options = testing.parseArgs([
       "--output-dir",
@@ -93,6 +94,9 @@ describe("gateway CPU scenario guard", () => {
       silent: true,
       spawnSync: (command: string, args: string[]) => {
         calls.push({ command, args });
+        if (args.includes("scripts/bench-gateway-startup.ts")) {
+          writeFileSync(startupOutput, `${JSON.stringify({ results: [{ id: "default" }] })}\n`);
+        }
         return { status: 0 };
       },
     });
@@ -103,6 +107,62 @@ describe("gateway CPU scenario guard", () => {
       "--import",
     ]);
     expect(calls[1]?.args).toContain("scripts/bench-gateway-startup.ts");
+  });
+
+  it("fails successful startup benches that do not write a report", async () => {
+    const outputDir = makeTempRoot();
+    const options = testing.parseArgs([
+      "--output-dir",
+      outputDir,
+      "--runs",
+      "1",
+      "--warmup",
+      "0",
+      "--skip-qa",
+    ]);
+
+    const result = await testing.runGatewayCpuScenarios(options, {
+      silent: true,
+      spawnSync: () => ({ status: 0 }),
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.summary).toMatchObject({
+      startupOutput: null,
+      startupReportFailure: "startup-report-missing",
+    });
+    expect(result.summary.startupReportFailureDetail).toContain("expected startup bench report");
+  });
+
+  it("fails successful startup benches that write malformed reports", async () => {
+    const outputDir = makeTempRoot();
+    const startupOutput = path.join(outputDir, "gateway-startup-bench.json");
+    const options = testing.parseArgs([
+      "--output-dir",
+      outputDir,
+      "--runs",
+      "1",
+      "--warmup",
+      "0",
+      "--skip-qa",
+    ]);
+
+    const result = await testing.runGatewayCpuScenarios(options, {
+      silent: true,
+      spawnSync: (_command: string, args: string[]) => {
+        if (args.includes("scripts/bench-gateway-startup.ts")) {
+          writeFileSync(startupOutput, `${JSON.stringify({ results: [] })}\n`);
+        }
+        return { status: 0 };
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.summary).toMatchObject({
+      startupOutput,
+      startupReportFailure: "startup-report-invalid",
+      startupReportFailureDetail: "startup report has no measured results",
+    });
   });
 
   it("does not run the startup bench when the startup build fails", async () => {

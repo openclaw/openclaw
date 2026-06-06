@@ -150,7 +150,6 @@ import {
   resolveSessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
@@ -3351,14 +3350,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         messageThreadId,
         explicitDeliverRoute,
       } = originatingRoute;
-      // Inject timestamp so agents know the current date/time.
-      // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
-      // See: https://github.com/moltbot/moltbot/issues/3658
-      const stampedMessage = injectTimestamp(messageForAgent, timestampOptsFromConfig(cfg));
-
+      // The per-message timestamp prefix is now applied at the single LLM
+      // boundary (normalizeMessagesForLlmBoundary), derived from each message's
+      // own timestamp, so the current turn and all historical turns carry
+      // identical bytes on the wire. BodyForAgent uses the same bare text as
+      // Body; the transient gateway stamp is removed (stamping the live turn
+      // here would diverge from bare stored history and bust the prompt cache).
+      // See: https://github.com/openclaw/openclaw/issues/3658
       const ctx: MsgContext = {
         Body: messageForAgent,
-        BodyForAgent: stampedMessage,
+        BodyForAgent: messageForAgent,
         BodyForCommands: commandBody,
         RawBody: parsedMessage,
         CommandBody: commandBody,
