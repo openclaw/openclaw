@@ -79,13 +79,12 @@ const TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE =
 const SUMMARY_PROMPT_INSTRUCTIONS_ECHO_RE =
   /^you are an assistant that summarizes texts concisely while keeping the most important information\.\s+summarize the text to approximately \d+ characters\.\s+maintain the original tone and style\.\s+reply only with the summary, without additional explanations\.\s*/i;
 const USER_SUMMARY_PROMPT_ECHO_RE = /^the user (?:wants|asks|asked|requested) me to summarize\b/i;
-const SELF_SUMMARY_PROMPT_ECHO_RE =
-  /^i (?:need|should|will|'ll) (?:to )?(?:summarize|include|keep|maintain|craft|write|produce)\b/i;
-const CRAFT_SUMMARY_PROMPT_ECHO_RE = /^let me (?:craft|write|produce|summarize)\b/i;
+const SELF_SUMMARY_PROMPT_ECHO_SENTENCE_RE =
+  /^i (?:need|should|will|'ll) (?:to )?(?:summarize|include|keep|maintain|craft|write|produce)(?:\s+(?:the\s+)?(?:summary|key points?|important information|original tone|tone and style))?\.?$/i;
+const CRAFT_SUMMARY_PROMPT_ECHO_SENTENCE_RE =
+  /^let me (?:craft|write|produce|summarize)(?:\s+(?:a\s+)?summary)?\.?$/i;
 const GENERIC_USER_SUMMARY_TARGET_RE =
   /\b(?:(?:provided|following|above|original|given|this)\s+(?:text|content|message|response|passage)|text to summarize|key points?|important information|original tone|tone and style|approximately|characters?|concise|audio|tts)\b/i;
-const SUMMARY_PROMPT_META_RE =
-  /\b(?:summari[sz]e|summary|key points?|important information|original tone|tone and style|approximately|characters?|concise|audio|text to summarize)\b/i;
 const PROMPT_ECHO_SEPARATOR_RE = /\s*(?::|—|–|\s-\s)\s*/;
 const BARE_USER_SUMMARY_PROMPT_ECHO_RE =
   /^the user (?:wants|asks|asked|requested) me to summarize$/i;
@@ -119,10 +118,10 @@ function isLeadingSummaryPromptEchoSentence(sentence: string): boolean {
   if (USER_SUMMARY_PROMPT_ECHO_RE.test(sentence)) {
     return GENERIC_USER_SUMMARY_TARGET_RE.test(sentence);
   }
-  if (SELF_SUMMARY_PROMPT_ECHO_RE.test(sentence) || CRAFT_SUMMARY_PROMPT_ECHO_RE.test(sentence)) {
-    return SUMMARY_PROMPT_META_RE.test(sentence);
-  }
-  return false;
+  return (
+    SELF_SUMMARY_PROMPT_ECHO_SENTENCE_RE.test(sentence) ||
+    CRAFT_SUMMARY_PROMPT_ECHO_SENTENCE_RE.test(sentence)
+  );
 }
 
 function isSeparatedSummaryPromptEchoPrefix(prefix: string): boolean {
