@@ -617,7 +617,10 @@ class NodeRuntime(
           }
         val response = operatorSession.request("chat.send", params.toString())
         val ack = parseChatSendAck(json, response)
-        if (ack.isTerminal) null else (ack.runId ?: idempotencyKey)
+        ack.copy(runId = ack.runId ?: idempotencyKey)
+      },
+      refreshAfterTerminalSuccess = {
+        chat.refresh()
       },
       speakAssistantReply = { text ->
         // Voice-tab replies should speak through the dedicated reply speaker.

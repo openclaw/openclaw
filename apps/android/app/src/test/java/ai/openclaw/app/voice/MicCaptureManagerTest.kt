@@ -35,7 +35,7 @@ class MicCaptureManagerTest {
           sendToGateway = { message, onRunIdKnown ->
             sentMessages += message
             onRunIdKnown("run-1")
-            null
+            ChatSendAck(runId = "run-1", status = "started")
           },
         )
 
@@ -85,7 +85,7 @@ class MicCaptureManagerTest {
           sendToGateway = { message, onRunIdKnown ->
             sentMessages += message
             onRunIdKnown("run-1")
-            "run-1"
+            ChatSendAck(runId = "run-1", status = "started")
           },
         )
 
