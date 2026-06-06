@@ -188,8 +188,12 @@ function formatRawCatalogLabel(entry: ModelCatalogEntry): string {
   return appendAgentRuntimeSuffix(rawLabel, entry);
 }
 
+function resolveExplicitCatalogAlias(entry: ModelCatalogEntry): string {
+  return entry.alias?.trim() ?? "";
+}
+
 function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
-  return entry.alias?.trim() || entry.name.trim();
+  return resolveExplicitCatalogAlias(entry) || entry.name.trim();
 }
 
 function createQualifiedCatalogKey(entry: ModelCatalogEntry): string {
@@ -228,6 +232,12 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
   const displayLookup = new Map<string, string>();
   for (const entry of catalog) {
     const qualifiedKey = createQualifiedCatalogKey(entry);
+    const explicitAlias = resolveExplicitCatalogAlias(entry);
+    if (explicitAlias) {
+      displayLookup.set(qualifiedKey, explicitAlias);
+      continue;
+    }
+
     const name = resolveCatalogDisplayName(entry);
     if (!name) {
       displayLookup.set(qualifiedKey, formatRawCatalogLabel(entry));

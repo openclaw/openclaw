@@ -53,12 +53,17 @@ describe("chat-model-ref helpers", () => {
     ).toBe("openrouter/google/gemma-4-26b-a4b-it");
   });
 
-  it("prefers alias over name for picker labels", () => {
+  it("preserves explicit aliases verbatim for picker labels", () => {
     const aliasedModel = {
       id: "moonshotai/kimi-k2.5",
       alias: "Kimi K2.5 (NVIDIA)",
       name: "Kimi K2.5",
       provider: "nvidia",
+      agentRuntime: {
+        id: "codex",
+        label: "OpenAI Codex",
+        source: "model" as const,
+      },
     };
 
     expect(buildChatModelOption(aliasedModel, [aliasedModel])).toEqual({
