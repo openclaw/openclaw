@@ -724,6 +724,28 @@ function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {
   return session?.status === "running" && session.endedAt == null;
 }
 
+type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
+
+function normalizeSteerChatSendAckStatus(payload: unknown): SteerChatSendAckStatus {
+  if (!payload || typeof payload !== "object") {
+    return "started";
+  }
+  const status = (payload as Record<string, unknown>).status;
+  return status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
+    ? status
+    : "started";
+}
+
+function formatTerminalSteerAckContent(status: SteerChatSendAckStatus): string | undefined {
+  if (status === "timeout") {
+    return "The active run ended before the steer message was accepted.";
+  }
+  if (status === "error") {
+    return "Steer failed before it reached the run; try again.";
+  }
+  return undefined;
+}
+
 /** Soft inject — queues a message into the active run via chat.send (deliver: false). */
 async function executeSteer(
   client: GatewayBrowserClient,
@@ -750,17 +772,24 @@ async function executeSteer(
         content: "No active run. Use the chat input or `/redirect` instead.",
       };
     }
-    await client.request("chat.send", {
-      sessionKey: resolved.key,
-      ...selectedGlobalScope(resolved.key, context),
-      message: resolved.message,
-      deliver: false,
-      idempotencyKey: generateUUID(),
-    });
-    return {
-      content: "Steered.",
-      pendingCurrentRun: resolved.key === sessionKey,
-    };
+    const ackStatus = normalizeSteerChatSendAckStatus(
+      await client.request("chat.send", {
+        sessionKey: resolved.key,
+        ...selectedGlobalScope(resolved.key, context),
+        message: resolved.message,
+        deliver: false,
+        idempotencyKey: generateUUID(),
+      }),
+    );
+    const terminalAckContent = formatTerminalSteerAckContent(ackStatus);
+    if (terminalAckContent) {
+      return { content: terminalAckContent };
+    }
+    const result: SlashCommandResult = { content: "Steered." };
+    if (ackStatus === "started" || ackStatus === "in_flight") {
+      result.pendingCurrentRun = resolved.key === sessionKey;
+    }
+    return result;
   } catch (err) {
     return { content: `Failed to steer: ${String(err)}` };
   }
