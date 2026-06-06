@@ -298,6 +298,12 @@ export type ChannelProgressDraftLine = {
   toolName?: string;
   /** Whether final formatting should add a bullet/line prefix. */
   prefix?: boolean;
+  /**
+   * Skip per-line character compaction for this line. Tool lines are compacted to
+   * keep file paths/args short, but assistant commentary is prose and must render in
+   * full (it spills to a new message at the channel limit instead of truncating).
+   */
+  noCompact?: boolean;
 };
 
 function compactStrings(values: readonly (string | undefined | null)[]): string[] {
@@ -1061,12 +1067,14 @@ export function formatChannelProgressDraftText(params: {
       const isLabelLine = typeof line === "object" && line !== null && "draftLabel" in line;
       const prefix =
         !isLabelLine && typeof line === "object" && line !== null ? line.prefix !== false : true;
+      const noCompact =
+        !isLabelLine && typeof line === "object" && line !== null && line.noCompact === true;
       const rawText = isLabelLine
         ? line.draftLabel
         : typeof line === "string"
           ? line
           : getProgressDraftLineText(line);
-      const text = compactChannelProgressDraftLine(rawText, maxLineChars);
+      const text = noCompact ? rawText : compactChannelProgressDraftLine(rawText, maxLineChars);
       return text ? { text, isLabelLine, prefix } : undefined;
     })
     .filter((line): line is { text: string; isLabelLine: boolean; prefix: boolean } =>
