@@ -33,6 +33,7 @@ describe("gateway cli backend live helpers", () => {
     delete process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    delete process.env.OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY_OLD;
   });
@@ -150,6 +151,43 @@ describe("gateway cli backend live helpers", () => {
     process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE = "0";
 
     expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-sonnet-4-6")).toBe(false);
+  });
+
+  it("requires provider results by default for explicit CLI backend live probes", async () => {
+    const {
+      CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV,
+      resolveCliBackendLiveProviderSkipDecision,
+      shouldAllowCliBackendLiveProviderSkip,
+    } = await import("./gateway-cli-backend.live-helpers.js");
+
+    expect(shouldAllowCliBackendLiveProviderSkip({})).toBe(false);
+    expect(
+      resolveCliBackendLiveProviderSkipDecision({
+        allowProviderSkip: false,
+        label: "agent request",
+        providerId: "claude-cli",
+        reasonLabel: "auth drift",
+      }),
+    ).toEqual({
+      action: "fail",
+      message:
+        'agent request for provider "claude-cli" was blocked by auth drift. Set OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1 only for advisory live probes.',
+    });
+
+    expect(
+      shouldAllowCliBackendLiveProviderSkip({ [CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV]: "1" }),
+    ).toBe(true);
+    expect(
+      resolveCliBackendLiveProviderSkipDecision({
+        allowProviderSkip: true,
+        label: "agent request",
+        providerId: "claude-cli",
+        reasonLabel: "Claude API capacity",
+      }),
+    ).toEqual({
+      action: "skip",
+      message: 'agent request for provider "claude-cli" was blocked by Claude API capacity.',
+    });
   });
 
   it("allows live env overrides for fresh and resume CLI args", async () => {

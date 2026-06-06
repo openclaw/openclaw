@@ -406,12 +406,40 @@ async function runVitestJsonReport(params) {
 }
 
 function readReportInput(entry) {
+  const report = JSON.parse(fs.readFileSync(entry.reportPath, "utf8"));
+  if (!report || typeof report !== "object" || !Array.isArray(report.testResults)) {
+    throw new Error("missing testResults array");
+  }
+  if (report.testResults.length === 0) {
+    throw new Error("empty testResults array");
+  }
   return {
     config: entry.config,
-    report: JSON.parse(fs.readFileSync(entry.reportPath, "utf8")),
+    report,
     reportPath: entry.reportPath,
     run: entry.run ?? null,
   };
+}
+
+export function readReportInputs(entries) {
+  const invalid = [];
+  const missing = [];
+  const reports = [];
+  for (const entry of entries) {
+    if (!fs.existsSync(entry.reportPath)) {
+      missing.push(entry);
+      continue;
+    }
+    try {
+      reports.push(readReportInput(entry));
+    } catch (error) {
+      invalid.push({
+        entry,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { invalid, missing, reports };
 }
 
 function readGroupedReport(reportPath) {
@@ -666,9 +694,24 @@ async function main() {
     process.exit(exitCode);
   }
 
-  const reportInputs = runEntries
-    .filter((entry) => fs.existsSync(entry.reportPath))
-    .map(readReportInput);
+  const reportInputsResult = readReportInputs(runEntries);
+  if (reportInputsResult.missing.length > 0) {
+    for (const entry of reportInputsResult.missing) {
+      console.error(
+        `[test-group-report] missing JSON report for ${entry.config}: ${entry.reportPath}`,
+      );
+    }
+    process.exit(1);
+  }
+  if (reportInputsResult.invalid.length > 0) {
+    for (const { entry, reason } of reportInputsResult.invalid) {
+      console.error(
+        `[test-group-report] invalid JSON report for ${entry.config}: ${entry.reportPath} (${reason})`,
+      );
+    }
+    process.exit(1);
+  }
+  const reportInputs = reportInputsResult.reports;
   const report = buildGroupedTestReport({
     groupBy: args.groupBy,
     maxTestMs: args.maxTestMs,

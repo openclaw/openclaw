@@ -53,7 +53,7 @@ function fullSurfaceInspectPayload(pluginId: string) {
       hookCount: 30,
     },
     services: ["kitchen-sink-service"],
-    tools: [{ names: ["kitchen_sink_text"] }],
+    tools: [{ names: ["kitchen_sink_text", "kitchen_sink_search", "kitchen_sink_image_job"] }],
     typedHooks: Array.from({ length: 30 }, (_, index) => `hook-${index}`),
   };
 }
@@ -65,9 +65,11 @@ function diagnosticErrors(messages: string[]) {
 function runAssertInstalled({
   diagnostics = [],
   env = {},
+  inspectPayload,
 }: {
   diagnostics?: Array<{ level: string; message: string }>;
   env?: NodeJS.ProcessEnv;
+  inspectPayload?: ReturnType<typeof fullSurfaceInspectPayload>;
 } = {}) {
   const label = `diagnostics-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const pluginId = "openclaw-kitchen-sink-fixture";
@@ -87,7 +89,7 @@ function runAssertInstalled({
       diagnostics,
       plugins: [{ id: pluginId, status: "loaded" }],
     });
-    writeJson(inspectJsonPath, fullSurfaceInspectPayload(pluginId));
+    writeJson(inspectJsonPath, inspectPayload ?? fullSurfaceInspectPayload(pluginId));
     writeJson(inspectAllJsonPath, { diagnostics: [] });
     writeJson(installsPath, {
       installRecords: {
@@ -226,6 +228,18 @@ describe("kitchen-sink plugin assertions", () => {
     });
 
     expect(result.status).toBe(0);
+  });
+
+  it("requires the full kitchen-sink tool surface in full mode", () => {
+    const inspectPayload = fullSurfaceInspectPayload("openclaw-kitchen-sink-fixture");
+    inspectPayload.tools = [{ names: ["kitchen_sink_text"] }];
+    const result = runAssertInstalled({
+      diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
+      inspectPayload,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("tools missing kitchen_sink_search");
   });
 
   it("requires ClawHub kitchen-sink fixtures to expose context engines", () => {

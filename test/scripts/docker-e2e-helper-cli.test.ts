@@ -1,5 +1,8 @@
 // Docker E2E Helper Cli tests cover docker e2e helper cli script behavior.
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 function runHelper(script: string, ...args: string[]) {
@@ -62,4 +65,50 @@ describe("Docker E2E helper CLIs", () => {
       "node scripts/docker-e2e-rerun.mjs <run-id|summary.json|failures.json>",
     );
   });
+
+  it.each(["summary.json", "failures.json"])(
+    "prints local cleanup reruns without synthesizing Docker lane reruns from %s",
+    (fileName) => {
+      const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-rerun-`);
+      try {
+        const cleanupFailure = {
+          lane: "cleanup-smoke",
+          logFile: "cleanup-smoke.log",
+          name: "cleanup-smoke",
+          rerunCommand: "pnpm test:docker:cleanup",
+          status: 42,
+          targetable: false,
+        };
+        const payload =
+          fileName === "summary.json"
+            ? {
+                failures: [cleanupFailure],
+                lanes: [
+                  {
+                    name: "gateway-network",
+                    status: 0,
+                  },
+                ],
+                status: "failed",
+              }
+            : {
+                lanes: [cleanupFailure],
+                status: "failed",
+              };
+        const file = path.join(root, fileName);
+        writeFileSync(file, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+
+        const result = runHelper("scripts/docker-e2e-rerun.mjs", file, "--ref", "abc123");
+
+        expect(result.status).toBe(0);
+        expect(result.stderr).toBe("");
+        expect(result.stdout).toContain("Failed Docker E2E entries: cleanup-smoke");
+        expect(result.stdout).toContain("No targetable failed Docker E2E lanes found.");
+        expect(result.stdout).toContain("- cleanup-smoke: pnpm test:docker:cleanup");
+        expect(result.stdout).not.toContain("docker_lanes='cleanup-smoke'");
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 });

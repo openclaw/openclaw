@@ -631,6 +631,7 @@ describe("overflow compaction in run loop", () => {
       livenessState: "abandoned",
       timeoutPhase: "provider",
       providerStarted: true,
+      aborted: true,
     });
   });
 

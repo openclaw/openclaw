@@ -1,0 +1,104 @@
+// Kova report gate tests cover tolerated PARTIAL performance verdict handling.
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { evaluateToleratedPartialKovaReport } from "../../scripts/lib/kova-report-gate.mjs";
+
+const tempRoots: string[] = [];
+const SCRIPT_PATH = "scripts/lib/kova-report-gate.mjs";
+
+function partialReport(overrides: Record<string, unknown> = {}) {
+  return {
+    gate: { verdict: "PARTIAL", blockingCount: 0 },
+    summary: { statuses: { PASS: 3 } },
+    baseline: { comparison: { regressionCount: 0 } },
+    ...overrides,
+  };
+}
+
+function writeReport(report: unknown): string {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-kova-report-"));
+  tempRoots.push(root);
+  const reportPath = join(root, "report.json");
+  writeFileSync(reportPath, `${JSON.stringify(report)}\n`);
+  return reportPath;
+}
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+describe("scripts/lib/kova-report-gate.mjs", () => {
+  it("accepts partial reports only when selected scenarios passed", () => {
+    expect(evaluateToleratedPartialKovaReport(partialReport())).toEqual({ ok: true });
+  });
+
+  it("rejects partial reports with missing status summaries", () => {
+    expect(
+      evaluateToleratedPartialKovaReport(
+        partialReport({
+          summary: {},
+        }),
+      ),
+    ).toEqual({ ok: false, reason: "missing status summary" });
+  });
+
+  it("rejects partial reports without PASS records", () => {
+    expect(
+      evaluateToleratedPartialKovaReport(
+        partialReport({
+          summary: { statuses: { PASS: 0 } },
+        }),
+      ),
+    ).toEqual({ ok: false, reason: "status summary had no PASS records" });
+  });
+
+  it("rejects partial reports with non-pass records", () => {
+    expect(
+      evaluateToleratedPartialKovaReport(
+        partialReport({
+          summary: { statuses: { PASS: 2, FAIL: 1 } },
+        }),
+      ),
+    ).toEqual({ ok: false, reason: "non-pass statuses present: FAIL=1" });
+  });
+
+  it("exits non-zero for malformed tolerated-partial candidates", () => {
+    const result = spawnSync(
+      process.execPath,
+      [SCRIPT_PATH, writeReport(partialReport({ summary: {} }))],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("missing status summary");
+  });
+
+  it("runs the CLI guard from paths that need file URL escaping", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-kova report-"));
+    tempRoots.push(root);
+    const scriptDir = join(root, "script dir");
+    mkdirSync(scriptDir);
+    const scriptPath = join(scriptDir, "kova-report-gate.mjs");
+    copyFileSync(SCRIPT_PATH, scriptPath);
+
+    const result = spawnSync(
+      process.execPath,
+      [scriptPath, writeReport(partialReport({ summary: {} }))],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("missing status summary");
+  });
+});
