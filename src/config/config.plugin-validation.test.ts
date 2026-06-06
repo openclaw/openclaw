@@ -1362,6 +1362,15 @@ describe("config plugin validation", () => {
     expectRemovedPluginWarnings(res, removedId, removedId);
   });
 
+  // Regression for #90244: skill-workshop was extracted into a built-in tool;
+  // upgraded configs that still reference plugins.entries.skill-workshop must warn,
+  // not block startup with "plugin not found".
+  it("warns for removed skill-workshop plugin id instead of failing validation", () => {
+    const removedId = "skill-workshop";
+    const res = validateRemovedPluginConfig(removedId);
+    expectRemovedPluginWarnings(res, removedId, removedId);
+  });
+
   it("does not auto-allow config-loaded overrides of bundled web search plugin ids", () => {
     const res = validateInSuite({
       plugins: {

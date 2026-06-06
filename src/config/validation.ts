@@ -50,7 +50,11 @@ import { coerceSecretRef } from "./types.secrets.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
-const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+const LEGACY_REMOVED_PLUGIN_IDS = new Set([
+  "google-antigravity-auth",
+  "google-gemini-cli-auth",
+  "skill-workshop",
+]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
 type UnknownIssueRecord = Record<string, unknown>;
