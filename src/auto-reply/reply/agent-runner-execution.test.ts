@@ -2405,6 +2405,67 @@ describe("runAgentTurnWithFallback", () => {
     expect(call?.args).toEqual({ command: "ls -la" });
   });
 
+  it("bridges CLI commentary agent events into onItemEvent for live preview", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+        "../../infra/agent-events.js",
+      );
+      // Inter-tool commentary surfaces as a stream:"item", kind:"preamble" agent event.
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "item",
+        data: {
+          kind: "preamble",
+          itemId: "commentary-1",
+          progressText: "Let me check the files.",
+        },
+      });
+      return { payloads: [{ text: "done" }], meta: {} };
+    });
+
+    const onItemEvent = vi.fn<NonNullable<GetReplyOptions["onItemEvent"]>>(async () => undefined);
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { onItemEvent },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(onItemEvent).toHaveBeenCalledTimes(1);
+    const call = onItemEvent.mock.calls[0]?.[0];
+    expect(call?.kind).toBe("preamble");
+    expect(call?.progressText).toBe("Let me check the files.");
+    expect(call?.itemId).toBe("commentary-1");
+  });
+
   it("does not bridge CLI tool deltas when silentExpected is set", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({

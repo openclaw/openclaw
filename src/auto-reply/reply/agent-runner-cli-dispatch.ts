@@ -173,6 +173,32 @@ function createToolEventBridge(params: {
   });
 }
 
+// Bridges CLI inter-tool commentary (assistant text emitted before a tool call, surfaced by the
+// parser as a `stream:"item", kind:"preamble"` agent event) into a channel callback. Without this,
+// CLI commentary lands on the agent-event bus with no subscriber and is silently dropped — the
+// tool/assistant/reasoning streams each have a bridge, but the item/preamble stream had none.
+function createCommentaryEventBridge(params: {
+  runId: string;
+  suppressed?: boolean;
+  deliver?: (payload: { text: string; itemId?: string }) => Promise<void>;
+}) {
+  return createAgentEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressed,
+    deliver: params.deliver,
+    read: (evt) => {
+      if (evt.stream !== "item" || evt.data.kind !== "preamble") {
+        return undefined;
+      }
+      const text = typeof evt.data.progressText === "string" ? evt.data.progressText.trim() : "";
+      if (!text) {
+        return undefined;
+      }
+      return { text, itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined };
+    },
+  });
+}
+
 export async function runCliAgentWithLifecycle(params: {
   runId: string;
   provider: string;
@@ -185,6 +211,7 @@ export async function runCliAgentWithLifecycle(params: {
   onAssistantText?: (text: string) => Promise<void>;
   onReasoningText?: (text: string) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
+  onCommentaryText?: (payload: { text: string; itemId?: string }) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
 }): Promise<EmbeddedAgentRunResult> {
@@ -219,6 +246,11 @@ export async function runCliAgentWithLifecycle(params: {
     suppressed: params.suppressAssistantBridge,
     deliver: params.onToolEvent,
   });
+  const commentaryBridge = createCommentaryEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressAssistantBridge,
+    deliver: params.onCommentaryText,
+  });
   let lifecycleTerminalEmitted = false;
   try {
     const rawResult = await runCliAgent(params.runParams);
@@ -226,9 +258,11 @@ export async function runCliAgentWithLifecycle(params: {
     assistantBridge.unsubscribe();
     reasoningBridge.unsubscribe();
     toolBridge.unsubscribe();
+    commentaryBridge.unsubscribe();
     await assistantBridge.drain();
     await reasoningBridge.drain();
     await toolBridge.drain();
+    await commentaryBridge.drain();
 
     const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
     if (cliText) {
@@ -256,9 +290,11 @@ export async function runCliAgentWithLifecycle(params: {
     assistantBridge.unsubscribe();
     reasoningBridge.unsubscribe();
     toolBridge.unsubscribe();
+    commentaryBridge.unsubscribe();
     await assistantBridge.drain();
     await reasoningBridge.drain();
     await toolBridge.drain();
+    await commentaryBridge.drain();
     await params.onErrorBeforeLifecycle?.(err);
     if (emitLifecycleTerminal) {
       emitAgentEvent({
