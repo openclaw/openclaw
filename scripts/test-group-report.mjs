@@ -65,6 +65,10 @@ function readRequiredValue(argv, index, flag) {
   return value;
 }
 
+function readPositiveIntValue(argv, index, flag) {
+  return parsePositiveInt(readRequiredValue(argv, index, flag), flag);
+}
+
 /**
  * Parses report, compare, and Vitest-run options for grouped test reports.
  */
@@ -138,32 +142,32 @@ export function parseTestGroupReportArgs(argv) {
       continue;
     }
     if (arg === "--limit") {
-      args.limit = parsePositiveInt(argv[index + 1], "--limit");
+      args.limit = readPositiveIntValue(argv, index, "--limit");
       index += 1;
       continue;
     }
     if (arg === "--max-test-ms") {
-      args.maxTestMs = parsePositiveInt(argv[index + 1], "--max-test-ms");
+      args.maxTestMs = readPositiveIntValue(argv, index, "--max-test-ms");
       index += 1;
       continue;
     }
     if (arg === "--timeout-ms") {
-      args.timeoutMs = parsePositiveInt(argv[index + 1], "--timeout-ms");
+      args.timeoutMs = readPositiveIntValue(argv, index, "--timeout-ms");
       index += 1;
       continue;
     }
     if (arg === "--kill-grace-ms") {
-      args.killGraceMs = parsePositiveInt(argv[index + 1], "--kill-grace-ms");
+      args.killGraceMs = readPositiveIntValue(argv, index, "--kill-grace-ms");
       index += 1;
       continue;
     }
     if (arg === "--concurrency") {
-      args.concurrency = parsePositiveInt(argv[index + 1], "--concurrency");
+      args.concurrency = readPositiveIntValue(argv, index, "--concurrency");
       index += 1;
       continue;
     }
     if (arg === "--top-files") {
-      args.topFiles = parsePositiveInt(argv[index + 1], "--top-files");
+      args.topFiles = readPositiveIntValue(argv, index, "--top-files");
       index += 1;
       continue;
     }

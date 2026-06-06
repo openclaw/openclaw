@@ -5,14 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-function runSummary(report: unknown) {
+function runSummary(report: unknown, extraArgs: string[] = []) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-kova-summary-"));
   const reportPath = join(root, "report.json");
   const outputPath = join(root, "summary.md");
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   const result = spawnSync(
     process.execPath,
-    ["scripts/kova-ci-summary.mjs", "--report", reportPath, "--output", outputPath],
+    ["scripts/kova-ci-summary.mjs", "--report", reportPath, "--output", outputPath, ...extraArgs],
     {
       cwd: process.cwd(),
       encoding: "utf8",
@@ -48,6 +48,19 @@ describe("scripts/kova-ci-summary", () => {
     expect(noEvidence.result.stderr).toContain(
       "invalid Kova report: missing records or performance groups",
     );
+  });
+
+  it("rejects unknown flags instead of silently dropping report metadata", () => {
+    const result = runSummary(
+      {
+        records: [{ scenario: "gateway", state: "clean", status: "pass" }],
+        summary: { statuses: { pass: 1 } },
+      },
+      ["--report-urlz", "https://example.test/report"],
+    ).result;
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("unknown argument: --report-urlz");
   });
 
   it("renders a Kova summary when status and evidence are present", () => {

@@ -50,6 +50,9 @@ describe("test perf budget script", () => {
     expect(() => testing.parseArgs(["--max-regression-pct"], {})).toThrow(
       "--max-regression-pct requires a value",
     );
+    expect(() => testing.parseArgs(["--max-wall-ms", "--baseline-wall-ms", "1000"], {})).toThrow(
+      "--max-wall-ms requires a value",
+    );
   });
 
   it("requires timed file evidence in the Vitest JSON report", () => {

@@ -219,12 +219,16 @@ function value(input) {
 
 function parseArgs(argv) {
   const parsed = {};
+  const knownKeys = new Set(["report", "output", "lane", "reporturl", "artifacturl"]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (!arg.startsWith("--")) {
       usage(`unexpected argument: ${arg}`);
     }
     const key = arg.slice(2).replaceAll("-", "");
+    if (!knownKeys.has(key)) {
+      usage(`unknown argument: ${arg}`);
+    }
     const valueLocal = argv[index + 1];
     if (!valueLocal || valueLocal.startsWith("--")) {
       usage(`${arg} requires a value`);
@@ -243,7 +247,7 @@ function parseArgs(argv) {
 
 function usage(message, status = 2) {
   const text =
-    "usage: node scripts/kova-ci-summary.mjs --report <report.json> [--output <summary.md>] [--lane <name>]\n";
+    "usage: node scripts/kova-ci-summary.mjs --report <report.json> [--output <summary.md>] [--lane <name>] [--report-url <url>] [--artifact-url <url>]\n";
   if (message) {
     console.error(`error: ${message}`);
   }

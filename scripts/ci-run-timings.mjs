@@ -386,7 +386,13 @@ export function parseRunTimingArgs(args) {
       index = recentOption.nextIndex;
       continue;
     }
-    explicitRunId ??= arg;
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown CI run timing option: ${arg}`);
+    }
+    if (explicitRunId) {
+      throw new Error(`Unexpected CI run id argument: ${arg}`);
+    }
+    explicitRunId = arg;
   }
 
   return {
@@ -409,9 +415,13 @@ function consumePositiveIntFlag(args, index, flag) {
   if (arg !== flag) {
     return null;
   }
+  const rawValue = args[index + 1];
+  if (!rawValue || rawValue.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
   return {
     nextIndex: index + 1,
-    value: parsePositiveInt(args[index + 1], flag),
+    value: parsePositiveInt(rawValue, flag),
   };
 }
 

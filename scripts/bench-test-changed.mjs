@@ -26,10 +26,14 @@ function positiveIntegerFlag(flag, key) {
       if (argv[index] !== flag) {
         return null;
       }
+      const rawValue = argv[index + 1];
+      if (!rawValue || rawValue.startsWith("--")) {
+        throw new Error(`${flag} requires a value`);
+      }
       return {
         nextIndex: index + 1,
         apply(target) {
-          target[key] = parsePositiveInteger(argv[index + 1], flag);
+          target[key] = parsePositiveInteger(rawValue, flag);
         },
       };
     },
@@ -51,7 +55,6 @@ export function parseArgs(argv) {
       positiveIntegerFlag("--max-workers", "maxWorkers"),
     ],
     {
-      allowUnknownOptions: true,
       onUnhandledArg(arg, target) {
         if (arg === "--no-rss") {
           target.rss = false;

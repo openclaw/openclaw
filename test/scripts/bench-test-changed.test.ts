@@ -40,5 +40,21 @@ describe("bench-test-changed script", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("--max-workers requires a value");
     expect(result.stderr).not.toContain("at ");
+
+    const nextFlag = runBenchTestChanged(["--max-workers", "--no-rss"]);
+
+    expect(nextFlag.status).toBe(1);
+    expect(nextFlag.stdout).toBe("");
+    expect(nextFlag.stderr).toContain("--max-workers requires a value");
+    expect(nextFlag.stderr).not.toContain("at ");
+  });
+
+  it("rejects unknown options before collecting changed paths", () => {
+    const result = runBenchTestChanged(["--max-worker", "4"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Unknown option: --max-worker");
+    expect(result.stderr).not.toContain("at ");
   });
 });

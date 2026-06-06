@@ -33,7 +33,7 @@ function usage() {
 
 function readFlagValue(argv, index, flag) {
   const value = argv[index + 1];
-  if (!value) {
+  if (!value || value.startsWith("--")) {
     throw new Error(`${flag} requires a value.`);
   }
   return value;

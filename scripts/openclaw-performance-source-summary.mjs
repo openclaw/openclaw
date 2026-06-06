@@ -4,16 +4,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
-function parseArgs(argv) {
+function readOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const options = { baselineSourceDir: null, sourceDir: null, output: null };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const readValue = () => {
-      const value = argv[index + 1];
-      if (!value) {
-        throw new Error(`Missing value for ${arg}`);
-      }
+      const value = readOptionValue(argv, index, arg);
       index += 1;
       return value;
     };
@@ -445,9 +451,16 @@ async function main() {
   }
 }
 
-main().catch(
-  /** @param {unknown} error */ (error) => {
-    console.error(error instanceof Error ? error.stack : String(error));
-    process.exitCode = 1;
-  },
-);
+function isCliEntry() {
+  const cliArg = process.argv[1];
+  return cliArg ? import.meta.url === pathToFileURL(cliArg).href : false;
+}
+
+if (isCliEntry()) {
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.stack : String(error));
+      process.exitCode = 1;
+    },
+  );
+}
