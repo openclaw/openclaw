@@ -5,7 +5,7 @@
 1. Memory check is Priority 0.
 2. DB-backed recall is primary.
 3. Flat-file memory fallback is retired. If DB recall is unavailable, repair/restore DB memory or ask the operator before any exceptional non-DB fallback.
-4. The workspace root RESURRECTION.md is the filesystem-first restore map when DB recall is unavailable, and ZORG_MEMORYDB_MASTER_RULES.md is the master recovery contract for upgrade/regression lockout. If an OpenClaw upgrade, config rewrite, or package replacement bypasses normal rule priority, consult those files and repair DB recall before unrelated work.
+4. The workspace root ZORG_MEMORYDB_MASTER_RULES.md is the master recovery contract for upgrade/regression lockout. If an OpenClaw upgrade, config rewrite, or package replacement bypasses normal rule priority, consult that file and repair DB recall before unrelated work.
 5. Weak first-pass recall requires deeper recall, not an immediate conclusion.
 6. Before claiming inability, search prior working solutions, runbooks, project records, backups, mirrors, and related operational facts.
 7. Preserve all source history forever; never prune, delete, truncate, age out, compact-by-removal, or discard original/source data for performance. The database must grow continuously.
@@ -30,8 +30,6 @@ When an operator reports that the assistant violated a standing rule, the assist
 
 For implementation changes, no mutation may occur before the assistant summarizes the exact intended change and receives operator authorization, unless the operator is explicitly ordering correction/restoration of the assistant's own prior failed work. That exception is narrow and covers only the failed scope. Fake, placeholder, mock, display-only, or disconnected UI/code is prohibited; unavailable real sources must be shown as unavailable/degraded rather than simulated.
 
-Self-healing repair is not an approval loop. If a previously working assistant-managed process, cron job, recall route, communication route, contact/CRM process, API integration, helper path, or other owned workflow stops working, the assistant must repair the exact failed scope without asking the operator for `GO`. The repair path is: check DB memory, prior run history, scripts, docs, credentials paths, and live configuration; restore the prior working behavior; verify the real affected surface; then report the correction. Ask only when the repair would require an unrelated new change, destructive action outside the failed scope, external/private disclosure beyond the existing grant, or a genuinely unresolved decision.
-
 ## Screenshot delivery rule
 
 When a screenshot is captured as verification, proof, or a deliverable for the operator, saving the file is only a staging step. The screenshot must be delivered in the active channel unless the operator explicitly asked only for a local path or artifact.
@@ -54,17 +52,26 @@ Clean installs must enforce DB-only memory in both rules and runtime configurati
 
 The `memory/` subdirectory is retired. It must not be used for daily notes, project notes, people research, source notes, heartbeat state, JSON logs, or any durable memory. If a `memory/` directory appears during or after install, the auto-heal path archives/imports it into PostgreSQL, removes it from the filesystem, and records the repair in DB memory.
 
-Runtime memory writers are part of the clean-install contract. Bundled
-session-memory hooks, memoryFlush/compaction paths, heartbeat notes, and
-generated-note paths must not create retired markdown memory files such as
-`memory/YYYY-MM-DD.md` or `memory/YYYY-MM-DD-HHMM.md`. If such a file appears,
-the repair path imports it into PostgreSQL, removes the file after successful
-import, and patches the writer path back to DB-only behavior.
+Runtime writers must also honor DB-only memory. The bundled OpenClaw
+`session-memory` hook and pre-compaction `memoryFlush` path must not create
+`memory/YYYY-MM-DD.md`, `memory/YYYY-MM-DD-HHMM.md`, or any equivalent markdown
+memory file. DB-only installs patch those writer paths through
+`scripts/enforce_db_memory_search.py`; session summaries should be written to
+PostgreSQL or skipped, and file-backed compaction memory flush should be
+disabled unless a future DB-native writer is wired in. Directory permission
+denials are not the enforcement mechanism: if a retired memory file still
+appears, it is emergency import input and must be archived/imported into
+PostgreSQL before the filesystem copy is removed.
 
-Operational replies that report memory, repair, publication, or system changes
-must include the operator request timestamp, actual response/send timestamp, and
-elapsed duration computed from those two timestamps. Work-start time is useful
-for diagnostics but must not be substituted for request time.
+## User-visible timing rule
+
+Operational progress updates, blocker reports, completion claims, and final
+source-channel replies must include concrete timestamps when timing is relevant
+or after timing behavior has been challenged. Use the inbound message timestamp
+as the request time, the actual send time as the response time, and compute
+duration from those two real values only. Do not pre-calculate duration before
+the response is sent, and do not invent rounded timing when exact metadata is
+available.
 
 ## End-to-end ingestion definition
 
@@ -103,6 +110,26 @@ Recommended order:
 
 Fresh downloads start with empty tables. Populate core markdown rules into DB and, for legacy workspaces, archive any retired `memory/` directory into `public.zorg_memory_file_archive` plus line-indexed `zorg_memory` rows before removing the filesystem directory. Then refresh materialized views. Do not recreate `memory/` as a durable memory surface.
 
+## Canonical rule update path
+
+Active operating rules belong in `public.zorg_logic_rules`. Older compatibility
+surfaces such as `public.zorg_rules` and `public.zorg_rule_catalog` may remain in
+the schema for upgrade compatibility, but they must not remain active recall
+sources after a canonical migration. Use
+`db/public_canonical_rules_update_2026_06_02.sql` as the public-safe upgrade path
+for installs that need the current canonical-rule cleanup: it seeds sanitized
+public rules into `zorg_logic_rules`. The expected public seed count is 93
+active rules scoped as `public_safe` or `public_safe_only`; the SQL raises an
+error if that full public set is not present after application. The same update
+disables active rows in the compatibility tables and raises existing
+chat-response timing rule weights through
+`zorg_logic_rule_dynamic_weights` without creating replacement timing rules.
+
+This update is structural and public-safe. It publishes rule shape, sanitized
+rule text, and dynamic-weight behavior only. It does not publish private memory
+rows, contacts, transcripts, credentials, account data, live database dumps, or
+operator-private context.
+
 ## Additive semantic evolution
 
 The DB-memory structure should evolve like a vector/semantic memory graph while preserving all source rows. New recall layers should be additive only:
@@ -115,23 +142,6 @@ The DB-memory structure should evolve like a vector/semantic memory graph while 
 - materialized recall surfaces that combine text, vector scores, graph weights, recency, hard-rule priority, and user corrections
 
 Superseded or bad process records are marked as superseded/deprecated with additive metadata. They are not deleted from source history.
-
-Live ANN maintenance remains source-preserving. A 2026-06-01 maintenance pass
-backfilled every eligible unified search-surface row into
-`memory_ann_embeddings`, including missing logic-rule rows; refreshed planner
-statistics on ANN, model-embedding, query-cache, semantic-edge, and neural
-result tables; added a bounded batch of `ann_nearest_neighbor` edges; and
-marked low-information derived ANN rows inactive when the payload was only a
-standalone HTML marker or date fragment. The original source rows, structured
-rules, and legacy embedding slots remain intact and rebuildable.
-
-## Operator-visible rule recall repair
-
-When the operator reports that replies are still missing active rules, treat the reply format itself as part of the recall test. The assistant should retrieve the active database rules for memory-first behavior, visible timestamp/time-summary requirements, verified-memory wording, summary-before-mutation approval gates, backup gates, publication gates, rule-failure lockout, and completion verification before sending the next visible response.
-
-If a visible reply misses one of those rules, repair recall additively. Add recall hints, query observations, weighted semantic edges, and dynamic rule weights so phrasings such as "timestamps," "last replies," "all rules," "reply incorrectly," "vector database," and "neural connections" retrieve the governing rules together. Run the required temporary local PostgreSQL backup before production recall/vector/neural/weighted-memory changes; do not commit, mirror, or push live DB dumps to GitHub. Refresh derived recall surfaces after the additive update and verify natural-language queries return the corrected rules near the top before reporting completion.
-
-The public-safe structure is the repair pattern only: do not publish private operator messages, live database rows, transcripts, contact data, credentials, or private memory contents.
 
 ## Fast-path optimization rule
 
@@ -181,35 +191,15 @@ This matters because people often trust concrete lived examples more readily tha
 
 Installations should periodically verify that recall uses the PostgreSQL backend exclusively and has not fallen back to retired markdown memory files. If a `memory/` directory or markdown fallback route appears, the system should archive/import those files into PostgreSQL, remove the filesystem directory, restore DB-only routing, refresh recall/search surfaces, and record the repair in DB memory. Successful self-healing is silent; notify only when blocked or unsafe.
 
-## Root markdown DB-first policy
-
-Workspace root markdown files are bootstrap and recovery pointers, not the durable long-form rule store. Keep `AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md`, and `HEARTBEAT.md` small enough to point a future agent at backend DB repair and verification.
-
-Long-form operating rules, user/project history, and durable process context belong in structured DB recall, especially `zorg_logic_rules` and related recall surfaces. Before shrinking existing root markdown, sync the rules into structured recall, import the reduced markdown lines, refresh recall views, and verify natural-language recall finds the DB repair rule. See [`root-markdown-db-first.md`](root-markdown-db-first.md).
-
 ## Database recovery and tuning gate
 
-A DB-backed memory system should be treated as mission-critical state. Before any production schema/index/materialized-view/recall-routing/vector/weighted-memory change, create and verify a temporary local PostgreSQL backup only. Do not commit, mirror, or push live database dumps to GitHub. Public distribution repos must never contain private database dumps or rows.
+A DB-backed memory system should be treated as mission-critical state. Before any production schema/index/materialized-view/recall-routing/vector/weighted-memory change, create and verify a temporary local PostgreSQL backup only. Do not commit, mirror, or push database dumps to GitHub. Public distribution repos must never contain private database dumps or rows.
 
 Performance/tuning cron jobs should be worded LLM instruction jobs. They may apply production DB/index changes only after a concrete recall failure where data existed in the DB but did not return in first-pass recall and was recovered only by deeper search, alternate query, direct inspection, or operator correction. Without that failure signal, they should restrict themselves to benchmarks, research, sandbox/temp experiments, and additive design work such as vector structures, neural-style weights, cue associations, and recall scoring prototypes.
 
-Baseline recovery locations should be documented in local operator markdown. The current public-safe rollback path is a temporary local PostgreSQL dump location such as `/home/openclaw/.openclaw/backups/postgres/tmp/`. Separately approved encrypted/private mirrors may exist in a private environment, but they are not part of the public `Zorg_MemoryDB` update path.
+Baseline rollback is handled with temporary local PostgreSQL dumps only. In Stefan's install the temporary path is `/home/openclaw/.openclaw/backups/postgres/tmp/`. Do not commit, mirror, or push database backups to GitHub; purge temporary backup artifacts after verification.
 
-Fresh-install note: local temporary rollback backup remains the minimum requirement. Off-host recovery may be recommended only as a separately approved private operations setup, never as an automatic public-repo publication step.
-
-## Canonical rule update path
-
-Active operating rules belong in `zorg_logic_rules`. Older compatibility
-surfaces such as `zorg_rules` and `zorg_rule_catalog` may remain in a database
-for upgrade compatibility, but they must not remain active rule-recall sources
-after a canonical migration.
-
-Use `zorg/db/public_canonical_rules_update_2026_06_02.sql` as the public-safe
-upgrade path for installs that need the current canonical-rule cleanup. It seeds
-sanitized public rules into `zorg_logic_rules`, disables active rows in
-compatibility tables when those tables exist, and raises existing chat-response
-timing rule weights through `zorg_logic_rule_dynamic_weights` without creating
-replacement timing rules.
+Fresh-install note: local temporary backup remains the minimum rollback requirement. Off-host or encrypted recovery may be recommended as a separately approved private operations setup, but it must not be mixed into the public `Zorg_MemoryDB` update path or used to publish live DB dumps to GitHub.
 
 ## LLM-governed operations, not scripted policy
 
@@ -231,23 +221,13 @@ Meeting scheduling should check existing calendar events and relevant email thre
 
 When a public short post points to a long-form news/feed article, it should link to the exact verified article anchor. The model should verify the full per-article anchor in the live page HTML before posting. If character limits are tight, shorten prose or hashtags; do not truncate, guess, or replace the article anchor with a feed-top URL.
 
-## GitHub publication preflight rule
-
-For Zorg/OpenClaw-owned GitHub publication, release, or documentation jobs, the assistant must reuse the repository's known working path before pushing. For `Zorg_MemoryDB`, use a clean current `origin/main` worktree when the live workspace is divergent, verify `package.json` and `pnpm-lock.yaml` agree, run `corepack pnpm install --frozen-lockfile` when package metadata is present or touched, and run `corepack pnpm check:docs` before docs/release pushes.
-
-After pushing, verify the pushed commit with `gh run list/view --repo StefRush2099/Zorg_MemoryDB`. Do not report publication complete while relevant required GitHub Actions are failing, queued, or still in progress; inspect failed logs and repair only the exact failed scope.
-
 <!-- SCORCHED_MEMORY_RECALL_RULE -->
 
 ## Absolute Priority 0: Exhaustive Memory Before Response
 
-The operator does not ask for work in context unless the needed information, access path, rule, contact, precedent, or working solution likely already exists somewhere in durable memory, project history, live configuration, runbooks, prompts, cron jobs, or related system state. Memory has priority over fresh reasoning because current context is often only the symptom; durable memory contains the prior working path that explains what broke.
+The operator does not ask for work in context unless the needed information, access path, rule, contact, precedent, or working solution likely already exists somewhere in durable memory, project history, live configuration, runbooks, prompts, cron jobs, or related system state. A fast or shallow miss is never evidence of absence.
 
-For an existing system, job, setting, integration, or workflow failure, assume the process previously had a function and a working path. A failure state is evidence that something drifted, broke, or was forgotten, not evidence that the process never existed. The assistant built or configured this environment and is responsible for recovering its own prior work by finding the stored history, path, prompt, script, credential location, job payload, or runbook that made it work before.
-
-Before replying, asking a question, claiming uncertainty, or reporting a blocker, the assistant must scour backend DB memory and related live state deeply and creatively: use broader queries, alternate names, relationship terms, adjacent projects, prior similar tasks, contact records, operational history, runbooks, cron payloads, scripts, credentials-path references, and live configuration clues until the relevant context is found or genuinely exhausted. A fast or shallow miss is never evidence of absence.
-
-If the first deep search finds no useful result for an existing problem, search the entire memory again with a different framing. Use past examples where memory was missed as query guidance: ask what previously worked, what job/process created the surface, what helper or credential path was used, what repair fixed a similar failure, and what rule was violated by stopping early. Immediate answers are disallowed when memory could contain the answer.
+Before replying, asking a question, claiming uncertainty, or reporting a blocker, the assistant must scour the backend memory system deeply and creatively: use broader queries, alternate names, relationship terms, adjacent projects, prior similar tasks, contact records, operational history, runbooks, cron payloads, and live configuration clues until the relevant context is found or genuinely exhausted. Immediate answers are disallowed when memory could contain the answer.
 
 If deep scouring finds information that the first query missed, treat that as a recall-structure failure and immediately add additive retrieval support: aliases, recall hints, semantic/relationship edges, query observations, indexes, materialized/search support, or rule surfaces so the same phrasing is fast and reliable next time. Preserve all source data; improve recall additively only.
 

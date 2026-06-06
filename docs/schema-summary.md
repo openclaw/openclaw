@@ -6,7 +6,7 @@ Main recall objects:
 
 - `zorg_memory` - durable memory and remembered context
 - `zorg_memory_file_archive` - archive of retired legacy `memory/` files before filesystem removal
-- `md_agents`, `md_soul`, `md_user`, `md_tools`, `md_identity`, `md_heartbeat` - line-imported bootstrap and backend-memory repair pointers. Long-form operating rules should be promoted into structured DB recall rather than duplicated in root markdown.
+- `md_agents`, `md_soul`, `md_user`, `md_tools`, `md_identity`, `md_heartbeat` - line-imported core markdown context
 - `memory_projects`, `memory_hosts`, `memory_services`, `memory_runbooks`, `memory_relationships` - structured operational context
 - `zorg_operational_facts` - promoted operational facts
 - `zorg_memory_search_mv` - unified search surface
@@ -98,12 +98,26 @@ Tables/views/functions:
 - `zorg_logic_rule_applications` — optional audit trail when a rule/check is applied to a task.
 - `zorg_logic_rules_recall_v` — recall projection for logic rules.
 - `zorg_get_logic_context(query, limit)` — logic-specific recall path.
+- `zorg_logic_rule_dynamic_weights` — additive neural/feedback-style weights
+  for promoting or demoting existing rules without creating duplicate rule rows.
+- `zorg_logic_rule_dynamic_ranking_v` — active rule view that combines static
+  priority with dynamic weights.
+
+Active rule recall should use `zorg_logic_rules` plus dynamic weights. The older
+`zorg_rules` and `zorg_rule_catalog` compatibility tables should have zero active
+rows after canonical migration. For existing installs, apply
+`db/public_canonical_rules_update_2026_06_02.sql` to seed the current public-safe
+canonical rules. The expected public seed count is 93 active
+`public_safe`/`public_safe_only` rules; the SQL checks that count directly,
+disables compatibility-table active rows, and raises the existing
+operator-visible chat timing rules so bottom time-summary formatting ranks
+ahead of ordinary rules.
 
 The CRM dedupe miss is the model lesson: when a new database/list/import/CRM/memory feature is built, duplicate detection, canonicalization, count reconciliation, source preservation, recall integration, privacy checks, representative searches, and performance checks are standard final checks before declaring completion.
 
 ## Private DB backup/recovery requirement
 
-Schema/index/recall changes require a verified full database backup first. Keep full dumps only in local/private recovery locations, never in this public structural repo. Fresh installs should configure a private GitHub recovery target equivalent to `Zorg_Hive/backups/postgres/openclaw/`.
+Schema/index/recall changes require a verified temporary local database backup first. Do not commit, mirror, or push database backups to GitHub. Keep dumps out of this public structural repo and purge temporary backup artifacts after verification.
 
 Fresh-install note: if no private GitHub/offsite DB backup target exists, local backup is the minimum, but the agent should explicitly recommend setting up a private GitHub repository because private repos are free and off-host recovery is critical for durable memory.
 
@@ -174,6 +188,19 @@ Primary objects:
 - `scripts/memory_semantic_worker.py` - bounded external worker for semantic nodes, weighted edges, query observations, and recall hints.
 
 This layer follows PostgreSQL queue best practice by using `FOR UPDATE SKIP LOCKED` in the worker and keeping triggers lightweight. It does not execute generated code inside PostgreSQL triggers and does not remove original memory data.
+
+## 2026-05-30 recall-router timeout fallback
+
+The OpenClaw-facing `scripts/memory_recall_router.py` must not report the database as unavailable just because the weighted/deep recall query path is slow. The router now applies a short local `statement_timeout` to the primary `zorg_weighted_recall_context(...)` / `zorg_recall_context(...)` call and, only when PostgreSQL cancels that statement for timeout, falls back to a bounded query against `zorg_memory_search_fast_mv`.
+
+The fallback is intentionally read-only and additive: it uses the already-materialized fast search surface, returns normal structured recall rows, marks the mode with `fallback-fast-mv`, and preserves the timeout text in `fallback_error` for diagnostics. It does not prune, delete, compact, or bypass source memory. This keeps the runtime memory wrapper available while deeper weighted/vector recall tuning can be repaired separately.
+
+For concrete lookup queries, the fast fallback ranking must not blindly place
+generic rule rows ahead of specific recall hints, host rows, or project facts.
+Rank by query token coverage first, then prefer direct recall/host/project
+surfaces before query observations and broad logic rules. Rule rows remain in
+the result set, but direct facts should surface first when the operator asks for
+an exact path, host, service, or project target.
 
 ## 2026-05-14 non-destructive index tuning
 
