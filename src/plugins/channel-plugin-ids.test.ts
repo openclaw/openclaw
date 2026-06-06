@@ -193,6 +193,17 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         },
       },
       {
+        id: "generic-embedding",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+        contracts: {
+          embeddingProviders: ["generic-embed"],
+        },
+      },
+      {
         id: "google",
         channels: [],
         origin: "bundled",
@@ -1016,6 +1027,18 @@ describe("resolveGatewayStartupPluginIds", () => {
         },
       } as OpenClawConfig,
       ["browser", "openai", "ollama", "memory-core"],
+    ],
+    [
+      "includes generic embedding provider owners for configured memory search at startup",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "generic-embed" },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "generic-embedding", "memory-core"],
     ],
     [
       "ignores sentinel memory embedding providers that no plugin owns",

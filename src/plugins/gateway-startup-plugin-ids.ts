@@ -1207,7 +1207,11 @@ function manifestOwnsConfiguredMemoryEmbeddingProvider(params: {
   if (params.configuredMemoryEmbeddingProviderIds.size === 0) {
     return false;
   }
-  return (params.manifest?.contracts?.memoryEmbeddingProviders ?? []).some((providerId) => {
+  const embeddingProviderIds = [
+    ...(params.manifest?.contracts?.memoryEmbeddingProviders ?? []),
+    ...(params.manifest?.contracts?.embeddingProviders ?? []),
+  ];
+  return embeddingProviderIds.some((providerId) => {
     const normalized = normalizeOptionalLowercaseString(providerId);
     return normalized ? params.configuredMemoryEmbeddingProviderIds.has(normalized) : false;
   });

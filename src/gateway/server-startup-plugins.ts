@@ -201,11 +201,14 @@ export async function prepareGatewayPluginBootstrap(params: {
  */
 export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   config: OpenClawConfig;
-  pluginRegistry: Partial<Pick<PluginRegistry, "memoryEmbeddingProviders">>;
+  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>;
   log: Pick<GatewayPluginBootstrapLog, "warn">;
 }): void {
   const registeredProviderIds = new Set(
-    (params.pluginRegistry.memoryEmbeddingProviders ?? []).map((entry) => entry.provider.id),
+    [
+      ...(params.pluginRegistry.memoryEmbeddingProviders ?? []),
+      ...(params.pluginRegistry.embeddingProviders ?? []),
+    ].map((entry) => entry.provider.id),
   );
   const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
     config: params.config,

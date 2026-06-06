@@ -437,9 +437,10 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
 });
 
 describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
-  function registry(providerIds: string[]) {
+  function registry(providerIds: string[], options: { embeddingProviderIds?: string[] } = {}) {
     return {
       memoryEmbeddingProviders: providerIds.map((id) => ({ provider: { id } })),
+      embeddingProviders: (options.embeddingProviderIds ?? []).map((id) => ({ provider: { id } })),
     } as never;
   }
 
@@ -496,6 +497,20 @@ describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
         agents: { defaults: { memorySearch: { provider: "openai", fallback: "ollama" } } },
       } as OpenClawConfig,
       pluginRegistry: registry(["openai", "ollama"]),
+      log,
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when a generic embedding provider can serve configured memory search", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "generic-embed" } } },
+      } as OpenClawConfig,
+      pluginRegistry: registry([], { embeddingProviderIds: ["generic-embed"] }),
       log,
     });
     expect(log.warn).not.toHaveBeenCalled();
