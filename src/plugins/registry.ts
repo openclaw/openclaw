@@ -2541,6 +2541,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       source: record.source,
+      receivesConversationContent:
+        record.origin === "bundled"
+          ? policy?.allowConversationAccess !== false
+          : policy?.allowConversationAccess === true,
     } as TypedPluginHookRegistration);
   };
 

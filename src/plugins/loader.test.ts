@@ -7166,6 +7166,44 @@ module.exports = {
     ).toBe(true);
   });
 
+  it("keeps after_compaction registered while marking summary access by policy", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "after-compaction-policy",
+      filename: "after-compaction-policy.cjs",
+      body: `module.exports = { id: "after-compaction-policy", register(api) {
+  api.on("after_compaction", () => undefined);
+} };`,
+    });
+
+    const metadataOnlyRegistry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["after-compaction-policy"],
+      },
+    });
+    const trustedRegistry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["after-compaction-policy"],
+        entries: {
+          "after-compaction-policy": {
+            hooks: {
+              allowConversationAccess: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(metadataOnlyRegistry.typedHooks.map((entry) => entry.hookName)).toEqual([
+      "after_compaction",
+    ]);
+    expect(metadataOnlyRegistry.typedHooks[0]?.receivesConversationContent).toBe(false);
+    expect(trustedRegistry.typedHooks.map((entry) => entry.hookName)).toEqual(["after_compaction"]);
+    expect(trustedRegistry.typedHooks[0]?.receivesConversationContent).toBe(true);
+  });
+
   it("ignores unknown typed hooks from plugins and keeps loading", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

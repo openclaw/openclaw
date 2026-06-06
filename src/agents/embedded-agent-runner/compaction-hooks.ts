@@ -131,6 +131,7 @@ export type CompactionHookRunner = {
       tokenCount?: number;
       compactedCount: number;
       sessionFile: string;
+      summary?: string;
     },
     context: {
       sessionId: string;
@@ -293,6 +294,7 @@ export async function runAfterCompactionHooks(params: {
   tokensAfter?: number;
   compactedCount: number;
   sessionFile: string;
+  summary?: string;
   summaryLength?: number;
   tokensBefore?: number;
   firstKeptEntryId?: string;
@@ -338,6 +340,7 @@ export async function runAfterCompactionHooks(params: {
           tokenCount: params.tokensAfter,
           compactedCount: params.compactedCount,
           sessionFile: params.sessionFile,
+          ...(typeof params.summary === "string" ? { summary: params.summary } : {}),
         },
         {
           sessionId: params.sessionId,

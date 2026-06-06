@@ -10,6 +10,7 @@ export function createMockPluginRegistry(
     hookName: string;
     handler: (...args: unknown[]) => unknown;
     pluginId?: string;
+    receivesConversationContent?: boolean;
   }>,
 ): PluginRegistry {
   const pluginIds =
@@ -32,6 +33,7 @@ export function createMockPluginRegistry(
       handler: h.handler,
       priority: 0,
       source: "test",
+      receivesConversationContent: h.receivesConversationContent,
     })),
     tools: [],
     channels: [],
@@ -82,6 +84,7 @@ export function addTestHook(params: {
   handler: PluginHookRegistration["handler"];
   priority?: number;
   timeoutMs?: number;
+  receivesConversationContent?: boolean;
 }) {
   params.registry.typedHooks.push({
     pluginId: params.pluginId,
@@ -90,6 +93,7 @@ export function addTestHook(params: {
     priority: params.priority ?? 0,
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     source: "test",
+    receivesConversationContent: params.receivesConversationContent,
   } as PluginHookRegistration);
 }
 
@@ -101,6 +105,7 @@ function addTestHooks(
     handler: PluginHookRegistration["handler"];
     priority?: number;
     timeoutMs?: number;
+    receivesConversationContent?: boolean;
   }>,
 ) {
   for (const hook of hooks) {
@@ -111,6 +116,9 @@ function addTestHooks(
       handler: hook.handler,
       ...(hook.priority !== undefined ? { priority: hook.priority } : {}),
       ...(hook.timeoutMs !== undefined ? { timeoutMs: hook.timeoutMs } : {}),
+      ...(hook.receivesConversationContent !== undefined
+        ? { receivesConversationContent: hook.receivesConversationContent }
+        : {}),
     });
   }
 }
@@ -124,16 +132,18 @@ export function addStaticTestHooks<TResult>(
       result: TResult;
       priority?: number;
       handler?: () => TResult | Promise<TResult>;
+      receivesConversationContent?: boolean;
     }>;
   },
 ) {
   addTestHooks(
     registry,
-    params.hooks.map(({ pluginId, result, priority, handler }) => ({
+    params.hooks.map(({ pluginId, result, priority, handler, receivesConversationContent }) => ({
       pluginId,
       hookName: params.hookName,
       handler: (handler ?? (() => result)) as PluginHookRegistration["handler"],
       ...(priority !== undefined ? { priority } : {}),
+      ...(receivesConversationContent !== undefined ? { receivesConversationContent } : {}),
     })),
   );
 }

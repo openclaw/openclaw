@@ -233,6 +233,68 @@ describe("before_tool_call terminal block semantics", () => {
   });
 });
 
+describe("after_compaction summary exposure", () => {
+  let registry: PluginRegistry;
+
+  beforeEach(() => {
+    registry = createEmptyPluginRegistry();
+  });
+
+  it("redacts summary text for hook handlers without conversation access", async () => {
+    const defaultHandler = vi.fn();
+    const trustedHandler = vi.fn();
+    addStaticTestHooks(registry, {
+      hookName: "after_compaction",
+      hooks: [
+        {
+          pluginId: "metadata-only",
+          result: undefined,
+          handler: defaultHandler,
+          receivesConversationContent: false,
+        },
+        {
+          pluginId: "trusted",
+          result: undefined,
+          handler: trustedHandler,
+          receivesConversationContent: true,
+        },
+      ],
+    });
+    const runner = createHookRunner(registry);
+
+    await runner.runAfterCompaction(
+      {
+        messageCount: 2,
+        compactedCount: 1,
+        tokenCount: 20,
+        sessionFile: "/tmp/session.jsonl",
+        summary: "private transcript-derived summary",
+      },
+      {},
+    );
+
+    expect(defaultHandler).toHaveBeenCalledWith(
+      {
+        messageCount: 2,
+        compactedCount: 1,
+        tokenCount: 20,
+        sessionFile: "/tmp/session.jsonl",
+      },
+      {},
+    );
+    expect(trustedHandler).toHaveBeenCalledWith(
+      {
+        messageCount: 2,
+        compactedCount: 1,
+        tokenCount: 20,
+        sessionFile: "/tmp/session.jsonl",
+        summary: "private transcript-derived summary",
+      },
+      {},
+    );
+  });
+});
+
 describe("message_sending terminal cancel semantics", () => {
   let registry: PluginRegistry;
 

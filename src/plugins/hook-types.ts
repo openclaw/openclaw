@@ -400,6 +400,13 @@ export type PluginHookAfterCompactionEvent = {
   tokenCount?: number;
   compactedCount: number;
   sessionFile?: string;
+  /**
+   * Compaction summary text produced by the runtime, when available.
+   *
+   * This is transcript-derived content and is only delivered to plugin hook
+   * handlers that are trusted for conversation access.
+   */
+  summary?: string;
 };
 
 export type PluginHookInboundClaimResult = {
@@ -1184,4 +1191,5 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   priority?: number;
   timeoutMs?: number;
   source: string;
+  receivesConversationContent?: boolean;
 };

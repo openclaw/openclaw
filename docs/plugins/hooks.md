@@ -137,7 +137,9 @@ observation-only.
 **Sessions and compaction**
 
 - `session_start` / `session_end` - track session lifecycle boundaries. The event's `reason` is one of `new`, `reset`, `idle`, `daily`, `compaction`, `deleted`, `shutdown`, `restart`, or `unknown`. The `shutdown` and `restart` values fire from the gateway shutdown finalizer when the process is stopped or restarted while sessions are still active, so downstream plugins (such as memory or transcript stores) can finalize ghost rows that would otherwise be left in an open state across restarts. The finalizer is bounded so a slow plugin cannot block SIGTERM/SIGINT.
-- `before_compaction` / `after_compaction` - observe or annotate compaction cycles
+- `before_compaction` / `after_compaction` - observe or annotate compaction cycles.
+  `after_compaction.summary` is transcript-derived content and is only present
+  for plugins trusted with conversation access.
 - `before_reset` - observe session-reset events (`/reset`, programmatic resets)
 
 **Subagents**
@@ -362,7 +364,7 @@ host will allow before continuing with the natural final answer.
 
 Non-bundled plugins that need raw conversation hooks (`before_model_resolve`,
 `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
-`agent_end`, or `before_agent_run`) must set:
+`agent_end`, or `before_agent_run`) or `after_compaction.summary` must set:
 
 ```json
 {
