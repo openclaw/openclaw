@@ -254,6 +254,53 @@ describe("xai stream wrappers", () => {
     expect(payload.tools[0]?.function).not.toHaveProperty("strict");
   });
 
+  it("skips unreadable tool payload entries while preserving healthy siblings", () => {
+    const payload = {
+      tools: [
+        {
+          type: "function",
+          get function() {
+            throw new Error("xai tool function getter exploded");
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "broken_strict",
+            parameters: { type: "object", properties: {} },
+            get strict() {
+              throw new Error("xai tool strict getter exploded");
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "read_context",
+            parameters: { type: "object", properties: {} },
+            strict: true,
+          },
+        },
+      ],
+    };
+
+    runXaiToolPayloadWrapper({
+      payload,
+      api: "openai-completions",
+      modelId: "grok-4-fast-non-reasoning",
+    });
+
+    expect(payload.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "read_context",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ]);
+  });
+
   it("strips unsupported reasoning controls from non-reasoning xai payloads", () => {
     const payload: Record<string, unknown> = {
       reasoning: { effort: "high" },
