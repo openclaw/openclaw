@@ -1760,9 +1760,7 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
 
-                    const emitPersistedProgressSet = async (
-                      answerPayload: ReplyPayload,
-                    ): Promise<void> => {
+                    const emitPersistedProgressSet = async (): Promise<void> => {
                       // Stream-OFF persist: no draft stream exists, so emit the accumulated
                       // tool+commentary log as its OWN durable message(s) before the answer.
                       // Never prepended, never truncated -- the durable delivery path chunks it
@@ -1781,9 +1779,14 @@ export const dispatchTelegramMessage = async ({
                       if (!progressText.trim()) {
                         return;
                       }
-                      await sendPayload(applyTextToPayload(answerPayload, progressText), {
-                        durable: true,
-                      });
+                      // Send a TEXT-ONLY payload. The progress set must never inherit the final
+                      // answer's media (mediaUrl/mediaUrls), buttons (channelData.telegram /
+                      // interactive), reply target (replyToId), or other answer-content fields --
+                      // delivery derives those from the payload, so reusing the answer payload
+                      // would attach the answer's media/buttons/reply to the progress message and
+                      // deliver them ahead of the answer itself. Routing (chat/thread) comes from
+                      // the dispatch context, not the payload.
+                      await sendPayload({ text: progressText }, { durable: true });
                     };
                     const deliverFinalAnswerText = async (
                       answerPayload: ReplyPayload,
@@ -1805,7 +1808,7 @@ export const dispatchTelegramMessage = async ({
                         return deliverPostFinalFollowUpText();
                       }
                       // Stream-OFF persist: land the progress set before the answer (barrier).
-                      await emitPersistedProgressSet(answerPayload);
+                      await emitPersistedProgressSet();
                       if (streamMode === "progress") {
                         return deliverProgressModeFinalAnswer(answerPayload, finalText);
                       }
