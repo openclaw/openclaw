@@ -701,7 +701,6 @@ class ChatController internal constructor(
     }
   }
 
-
   private fun normalizeThinking(raw: String): String =
     when (raw.trim().lowercase()) {
       "low" -> "low"

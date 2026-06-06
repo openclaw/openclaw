@@ -1824,7 +1824,6 @@ class NodeRuntime(
     }
   }
 
-
   private fun parseTalkSessionId(response: String): String {
     val root = json.parseToJsonElement(response).asObjectOrNull()
     val sessionId =
