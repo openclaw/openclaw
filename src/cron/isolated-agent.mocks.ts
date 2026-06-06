@@ -1,12 +1,13 @@
+/** Shared Vitest module mocks for isolated-agent cron tests. */
 import { vi } from "vitest";
 import {
   makeIsolatedAgentJobFixture,
   makeIsolatedAgentParamsFixture,
 } from "./isolated-agent/job-fixtures.js";
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
+vi.mock("../agents/embedded-agent.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  runEmbeddedAgent: vi.fn(),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
@@ -28,7 +29,7 @@ vi.mock("../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
 
-vi.mock("./isolated-agent/run-runtime-plugins.runtime.js", () => ({
+vi.mock("../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: vi.fn(),
 }));
 

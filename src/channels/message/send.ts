@@ -1,9 +1,15 @@
+/**
+ * Durable channel message sender.
+ *
+ * Sends rendered reply payloads, records live preview state, and classifies delivery outcomes.
+ */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
 import {
   isOutboundDeliveryError,
   type OutboundPayloadDeliveryOutcome,
+  type OutboundPayloadDeliverySuppressionReason,
 } from "../../infra/outbound/deliver-types.js";
 import {
   deliverOutboundPayloadsInternal,
@@ -38,10 +44,7 @@ export type DurableMessageBatchSendParams = Omit<
 };
 
 export type DurableMessageSuppressionReason =
-  | "cancelled_by_message_sending_hook"
-  | "empty_after_message_sending_hook"
-  | "no_visible_payload"
-  | "adapter_returned_no_identity"
+  | OutboundPayloadDeliverySuppressionReason
   | "no_visible_result";
 
 export type DurableMessageFailureStage = "platform_send" | "queue" | "unknown";

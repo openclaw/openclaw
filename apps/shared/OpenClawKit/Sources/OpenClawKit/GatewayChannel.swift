@@ -14,6 +14,22 @@ public protocol WebSocketTasking: AnyObject {
 
 extension URLSessionWebSocketTask: WebSocketTasking {}
 
+private final class WebSocketPingContinuationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+
+    func resumeOnce(_ resume: () -> Void) {
+        self.lock.lock()
+        if self.didResume {
+            self.lock.unlock()
+            return
+        }
+        self.didResume = true
+        self.lock.unlock()
+        resume()
+    }
+}
+
 public struct WebSocketTaskBox: @unchecked Sendable {
     public let task: any WebSocketTasking
     public init(task: any WebSocketTasking) {
@@ -48,8 +64,13 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 
     public func sendPing() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let gate = WebSocketPingContinuationGate()
             self.task.sendPing { error in
-                ThrowingContinuationSupport.resumeVoid(continuation, error: error)
+                // URLSession can race ping callbacks with cancellation; only the first
+                // pong result owns this checked continuation or Swift traps the app.
+                gate.resumeOnce {
+                    ThrowingContinuationSupport.resumeVoid(continuation, error: error)
+                }
             }
         }
     }
@@ -214,7 +235,7 @@ public actor GatewayChannelActor {
     private let encoder = JSONEncoder()
     // Remote gateways (tailscale/wan) can take longer to deliver connect.challenge.
     // Connect now requires this nonce before we send device-auth.
-    private let connectTimeoutSeconds: Double = 12
+    private let connectTimeoutSeconds: Double = 30
     private let connectChallengeTimeoutSeconds: Double = 6.0
     // Some networks will silently drop idle TCP/TLS flows around ~30s. The gateway tick is server->client,
     // but NATs/proxies often require outbound traffic to keep the connection alive.
@@ -601,6 +622,7 @@ public actor GatewayChannelActor {
             let allowedOperatorScopes: Set = [
                 "operator.approvals",
                 "operator.read",
+                "operator.talk.secrets",
                 "operator.write",
             ]
             return Array(Set(scopes.filter { allowedOperatorScopes.contains($0) })).sorted()

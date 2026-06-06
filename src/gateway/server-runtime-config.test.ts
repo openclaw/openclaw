@@ -1,3 +1,5 @@
+// Runtime config tests cover gateway bind/auth resolution, trusted proxy rules,
+// container defaults, and invalid config rejection before server startup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetContainerCacheForTest } from "./net.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
@@ -298,6 +300,20 @@ describe("resolveGatewayRuntimeConfig", () => {
       ).rejects.toThrow(/refusing to bind gateway/);
     });
 
+    it("rejects tailscale serve with explicit no-auth", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              auth: { mode: "none" },
+              tailscale: { mode: "serve" },
+            },
+          },
+          port: 18789,
+        }),
+      ).rejects.toThrow("gateway.auth.mode=none cannot be used with gateway.tailscale.mode=serve");
+    });
+
     it("respects explicit loopback config even inside a container", async () => {
       const fs = require("node:fs");
       vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
@@ -314,7 +330,7 @@ describe("resolveGatewayRuntimeConfig", () => {
       const result = await resolveGatewayRuntimeConfig({
         cfg: {
           gateway: {
-            auth: { mode: "none" },
+            auth: TOKEN_AUTH,
             tailscale: { mode: "serve" },
           },
         },

@@ -1,3 +1,5 @@
+// Persistence helpers for plugin and hook-pack installs plus related config mutation.
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -18,7 +20,6 @@ import {
   type PluginUninstallDirectoryRemoval,
 } from "../plugins/uninstall.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { theme } from "../terminal/theme.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import {
   applySlotSelectionForPlugin,
@@ -83,6 +84,7 @@ function logShadowedNpmInstallWarning(params: {
   install: Omit<PluginInstallUpdate, "pluginId">;
   runtime: RuntimeEnv;
 }): void {
+  // Warn when a newly installed npm plugin is shadowed by an explicit config source.
   if (params.install.source !== "npm") {
     return;
   }
@@ -184,6 +186,7 @@ export async function persistPluginInstall(params: {
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
   enable?: boolean;
+  invalidateRuntimeCache?: boolean;
   successMessage?: string;
   warningMessage?: string;
   runtime?: RuntimeEnv;
@@ -260,6 +263,7 @@ export async function persistPluginInstall(params: {
     config: next,
     reason: "source-changed",
     installRecords: nextInstallRecords,
+    invalidateRuntimeCache: params.invalidateRuntimeCache,
     traceCommand: "install",
     logger: {
       warn: (message) => runtime.log(theme.warn(message)),

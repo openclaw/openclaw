@@ -1,3 +1,4 @@
+// Telegram API module exposes the plugin public contract.
 export { telegramPlugin } from "./src/channel.js";
 export { telegramSetupPlugin } from "./src/channel.setup.js";
 export {
@@ -42,7 +43,6 @@ export {
   buildTelegramThreadParams,
   buildTypingThreadParams,
   describeReplyTarget,
-  expandTextLinks,
   extractTelegramForumFlag,
   extractTelegramLocation,
   getTelegramTextParts,

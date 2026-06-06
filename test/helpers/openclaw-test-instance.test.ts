@@ -1,7 +1,8 @@
+// OpenClaw test instance tests cover spawned test instance lifecycle.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
+import { createOpenClawTestInstance, testing } from "./openclaw-test-instance.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
@@ -14,6 +15,35 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("openclaw test instance", () => {
+  it("keeps only bounded child output tails in helper logs", () => {
+    const stdout = testing.createBoundedStringLog();
+    const stderr = testing.createBoundedStringLog();
+
+    testing.appendLogChunk(stdout, `old stdout ${"x".repeat(64)}\n`, 32);
+    testing.appendLogChunk(stdout, "recent stdout\n", 32);
+    testing.appendLogChunk(stderr, `old stderr ${"y".repeat(64)}\n`, 32);
+    testing.appendLogChunk(stderr, "recent stderr\n", 32);
+
+    const logs = testing.formatLogs(stdout, stderr);
+    expect(logs).toContain("[output truncated to last");
+    expect(logs).toContain("recent stdout");
+    expect(logs).toContain("recent stderr");
+    expect(logs).not.toContain("old stdout");
+    expect(logs).not.toContain("old stderr");
+  });
+
+  it("treats signaled gateway children as exited", () => {
+    expect(testing.hasChildExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
+    expect(testing.hasChildExited({ exitCode: 0, signalCode: null })).toBe(true);
+    expect(testing.hasChildExited({ exitCode: null, signalCode: null })).toBe(false);
+  });
+
+  it("fails startup waits immediately after signaled gateway exits", async () => {
+    await expect(
+      testing.waitForPortOpen({ exitCode: null, signalCode: "SIGTERM" }, [], [], 1, 10_000),
+    ).rejects.toThrow("gateway exited before listening");
+  });
+
   it("creates isolated config and spawn env without mutating process env", async () => {
     const previousHome = process.env.HOME;
     const inst = await createOpenClawTestInstance({

@@ -1,3 +1,4 @@
+// ACP runtime tests cover plugin-facing ACP runtime setup and gateway dispatch behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
 
@@ -83,6 +84,26 @@ describe("tryDispatchAcpReplyHook", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it("skips ACP runtime lookup for non-command deny turns even when CommandBody is populated", async () => {
+    const result = await tryDispatchAcpReplyHook(
+      {
+        ...event,
+        sendPolicy: "deny",
+        ctx: buildTestCtx({
+          SessionKey: "agent:test:session",
+          CommandBody: "write a test",
+          BodyForCommands: "write a test",
+          BodyForAgent: "write a test",
+        }),
+      },
+      ctx,
+    );
+
+    expect(result).toBeUndefined();
+    expect(bypassMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it("skips ACP dispatch when send policy denies delivery and no bypass applies", async () => {
     bypassMock.mockResolvedValue(false);
 
@@ -90,6 +111,40 @@ describe("tryDispatchAcpReplyHook", () => {
 
     expect(result).toBeUndefined();
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("checks command bypass when BodyForCommands has the clean command and CommandBody has an envelope", async () => {
+    bypassMock.mockResolvedValue(true);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+
+    const wrappedEvent = {
+      ...event,
+      sendPolicy: "deny" as const,
+      ctx: buildTestCtx({
+        SessionKey: "agent:test:session",
+        CommandBody: "[WhatsApp +15551234567 +1m Fri 2026-05-08 16:12 UTC] /status",
+        BodyForCommands: "/status",
+        BodyForAgent: "/status",
+      }),
+    };
+
+    const result = await tryDispatchAcpReplyHook(wrappedEvent, ctx);
+
+    expect(bypassMock).toHaveBeenCalledWith(wrappedEvent.ctx, ctx.cfg);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: wrappedEvent.ctx,
+        bypassForCommand: true,
+      }),
+    );
+    expect(result).toEqual({
+      handled: true,
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
   });
 
   it("dispatches through ACP when command bypass applies", async () => {
@@ -112,6 +167,49 @@ describe("tryDispatchAcpReplyHook", () => {
       dispatcher: ctx.dispatcher,
       bypassForCommand: true,
     });
+  });
+
+  it("passes a live tool-summary predicate through to ACP runtime", async () => {
+    bypassMock.mockResolvedValue(false);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    let shouldSendToolSummaries = true;
+    const eventWithGetter = {
+      ...event,
+      get shouldSendToolSummaries() {
+        return shouldSendToolSummaries;
+      },
+    };
+
+    await tryDispatchAcpReplyHook(eventWithGetter, ctx);
+
+    expectDispatchPayloadFields({
+      shouldSendToolSummaries: true,
+    });
+    const [payload] = dispatchMock.mock.calls[0] ?? [];
+    const livePredicate = (payload as { shouldSendToolSummariesNow?: () => boolean })
+      .shouldSendToolSummariesNow;
+    expect(livePredicate).toBeTypeOf("function");
+    expect(livePredicate?.()).toBe(true);
+
+    shouldSendToolSummaries = false;
+    expect(livePredicate?.()).toBe(false);
+  });
+
+  it("passes runtime toolsAllow through to ACP dispatch", async () => {
+    bypassMock.mockResolvedValue(false);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    await tryDispatchAcpReplyHook({ ...event, toolsAllow: ["message"] }, ctx);
+
+    expect(dispatchMock).toHaveBeenCalledOnce();
+    const [payload] = dispatchMock.mock.calls[0] ?? [];
+    expect((payload as { toolsAllow?: string[] }).toolsAllow).toStrictEqual(["message"]);
   });
 
   it("returns unhandled when ACP dispatcher declines the turn", async () => {

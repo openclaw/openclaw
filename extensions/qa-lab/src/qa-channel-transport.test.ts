@@ -1,3 +1,4 @@
+// Qa Lab tests cover qa channel transport plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
@@ -152,5 +153,13 @@ describe("qa channel transport", () => {
     await expect(transport.capabilities.waitForCondition(async () => "ok", 50, 10)).resolves.toBe(
       "ok",
     );
+  });
+
+  it("keeps oversized wait helper intervals within the timeout", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+
+    await expect(
+      transport.capabilities.waitForCondition(async () => undefined, 5, Number.MAX_SAFE_INTEGER),
+    ).rejects.toThrow("timed out after 5ms");
   });
 });

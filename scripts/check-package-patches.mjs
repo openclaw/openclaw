@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Guards pnpm package patches against unapproved additions.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,10 +9,15 @@ import YAML from "yaml";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   [
-    "@agentclientprotocol/claude-agent-acp@0.33.1",
-    "patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch",
+    "@agentclientprotocol/claude-agent-acp@0.37.0",
+    "patches/@agentclientprotocol__claude-agent-acp@0.37.0.patch",
   ],
-  ["baileys@7.0.0-rc11", "patches/baileys@7.0.0-rc11.patch"],
+  [
+    "@agentclientprotocol/claude-agent-acp@0.39.0",
+    "patches/@agentclientprotocol__claude-agent-acp@0.39.0.patch",
+  ],
+  ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
+  ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
 ]);
 
 const ALLOWED_PATCH_FILES = new Set(["patches/.gitkeep", ...ALLOWED_PATCHED_DEPENDENCIES.values()]);
@@ -91,6 +97,9 @@ function collectPackageJsonPatchViolations(cwd, violations) {
 
 function collectPatchFileViolations(cwd, violations) {
   for (const relativePath of listTrackedFiles(cwd, ["*.patch"])) {
+    if (!fs.existsSync(path.join(cwd, relativePath))) {
+      continue;
+    }
     if (ALLOWED_PATCH_FILES.has(relativePath)) {
       continue;
     }
@@ -102,6 +111,9 @@ function collectPatchFileViolations(cwd, violations) {
   }
 }
 
+/**
+ * Collects disallowed package patch declarations and patch files.
+ */
 export function collectPackagePatchViolations(cwd = process.cwd()) {
   const violations = [];
   collectWorkspacePatchViolations(cwd, violations);
@@ -111,6 +123,9 @@ export function collectPackagePatchViolations(cwd = process.cwd()) {
   return violations;
 }
 
+/**
+ * Runs the package patch guard.
+ */
 export async function main() {
   const violations = collectPackagePatchViolations();
   if (violations.length === 0) {
@@ -130,8 +145,10 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
 }

@@ -1,6 +1,9 @@
+// Transitive Manifest Risk Report tests cover transitive manifest risk report script behavior.
 import { describe, expect, it } from "vitest";
 import {
   createTransitiveManifestRiskReport,
+  fetchNpmManifest,
+  readBoundedNpmRegistryText,
   renderTransitiveManifestRiskMarkdownReport,
 } from "../../scripts/transitive-manifest-risk-report.mjs";
 
@@ -118,7 +121,7 @@ describe("transitive-manifest-risk-report", () => {
   it("documents JSON completeness and renders grouped Markdown summaries", async () => {
     const report = await createTransitiveManifestRiskReport({
       packageVersions: [
-        { packageName: "@earendil-works/pi-ai", version: "0.74.0" },
+        { packageName: "openclaw/plugin-sdk/llm", version: "0.74.0" },
         { packageName: "aaa-package", version: "1.0.0" },
         { packageName: "recent-package", version: "1.0.0" },
       ],
@@ -129,7 +132,7 @@ describe("transitive-manifest-risk-report", () => {
         publishedAt:
           packageName === "recent-package" ? "2026-05-11T23:00:00Z" : "2026-04-01T00:00:00Z",
         manifest:
-          packageName === "@earendil-works/pi-ai"
+          packageName === "openclaw/plugin-sdk/llm"
             ? {
                 dependencies: {
                   "@mistralai/mistralai": "^2.2.0",
@@ -164,7 +167,7 @@ describe("transitive-manifest-risk-report", () => {
     expect(markdown).toContain("## Complete Evidence");
     expect(markdown).toContain("The complete reported signal list is available in the JSON report");
     expect(markdown).toContain("## Published Package Manifests With Risk Findings");
-    expect(markdown).toContain("`@earendil-works/pi-ai@0.74.0`: 1 manifest finding");
+    expect(markdown).toContain("`openclaw/plugin-sdk/llm@0.74.0`: 1 manifest finding");
     expect(markdown).toContain("`aaa-package@1.0.0`: 1 manifest finding");
     expect(markdown).toContain("## Floating Dependency Targets");
     expect(markdown).toContain("`@mistralai/mistralai`: 1 declarations");
@@ -173,5 +176,109 @@ describe("transitive-manifest-risk-report", () => {
     expect(markdown).not.toContain("## Finding Details");
     expect(markdown).not.toContain("## Notable Findings");
     expect(markdown).not.toContain("## Additional Sample Findings");
+  });
+
+  it("fetches full npm packuments for the requested manifest version", async () => {
+    const fetchCalls: Array<{ url: string; accept: string | null }> = [];
+    const manifest = await fetchNpmManifest({
+      packageName: "@scope/package",
+      version: "1.0.0",
+      registryBaseUrl: "https://registry.example.test",
+      fetchImpl: async (url, init) => {
+        fetchCalls.push({
+          url: String(url),
+          accept: new Headers(init?.headers).get("accept"),
+        });
+        return new Response(
+          JSON.stringify({
+            time: {
+              "1.0.0": "2026-05-12T00:00:00.000Z",
+            },
+            versions: {
+              "1.0.0": {
+                dependencies: {
+                  exact: "1.2.3",
+                },
+                scripts: {
+                  install: "node install.js",
+                },
+              },
+            },
+          }),
+          {
+            status: 200,
+          },
+        );
+      },
+    });
+
+    expect(fetchCalls).toEqual([
+      {
+        url: "https://registry.example.test/@scope%2fpackage",
+        accept: "application/json",
+      },
+    ]);
+    expect(manifest).toEqual({
+      publishedAt: "2026-05-12T00:00:00.000Z",
+      manifest: {
+        dependencies: {
+          exact: "1.2.3",
+        },
+        scripts: {
+          install: "node install.js",
+        },
+      },
+    });
+  });
+
+  it("rejects npm registry bodies that exceed the content-length cap", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream({
+        cancel() {
+          canceled = true;
+        },
+      }),
+      {
+        headers: {
+          "content-length": "12",
+        },
+      },
+    );
+
+    await expect(readBoundedNpmRegistryText(response, 8)).rejects.toThrow(
+      "npm registry response exceeded 8 bytes (content-length 12)",
+    );
+    expect(canceled).toBe(true);
+  });
+
+  it("rejects npm registry bodies that exceed the content-length cap without a body", async () => {
+    const response = new Response(null, {
+      headers: {
+        "content-length": "12",
+      },
+    });
+
+    await expect(readBoundedNpmRegistryText(response, 8)).rejects.toThrow(
+      "npm registry response exceeded 8 bytes (content-length 12)",
+    );
+  });
+
+  it("rejects npm registry bodies that grow past the stream cap", async () => {
+    const encoder = new TextEncoder();
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode("1234"));
+          controller.enqueue(encoder.encode("5678"));
+          controller.enqueue(encoder.encode("9"));
+          controller.close();
+        },
+      }),
+    );
+
+    await expect(readBoundedNpmRegistryText(response, 8)).rejects.toThrow(
+      "npm registry response exceeded 8 bytes while reading response body",
+    );
   });
 });

@@ -1,9 +1,11 @@
+// Doctor repair sequencing tests cover ordered repair execution and dependency handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
+  collectActiveToolSchemaProjectionWarnings: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
   getInstalledPluginRecord: vi.fn(),
@@ -12,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGroupAllowFromFallback: vi.fn(),
   maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
+  maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn(),
+  maybeRepairOpenAICodexAuthConfig: vi.fn(),
+  maybeRepairOpenAICodexAuthProfileStores: vi.fn(),
   maybeRepairOpenPolicyAllowFrom: vi.fn(),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
   maybeRepairStalePluginConfig: vi.fn(),
@@ -32,6 +37,13 @@ vi.mock("../doctor-plugin-registry.js", () => ({
 
 vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
   maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
+}));
+
+vi.mock("../doctor-auth-flat-profiles.js", () => ({
+  collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map()),
+  maybeMigrateAuthProfileJsonStoresToSqlite: mocks.maybeMigrateAuthProfileJsonStoresToSqlite,
+  maybeRepairOpenAICodexAuthConfig: mocks.maybeRepairOpenAICodexAuthConfig,
+  maybeRepairOpenAICodexAuthProfileStores: mocks.maybeRepairOpenAICodexAuthProfileStores,
 }));
 
 vi.mock("./shared/missing-configured-plugin-install.js", () => ({
@@ -110,6 +122,10 @@ vi.mock("./shared/allowlist-policy-repair.js", () => ({
 
 vi.mock("./shared/allowfrom-fallback-migration.js", () => ({
   maybeRepairGroupAllowFromFallback: mocks.maybeRepairGroupAllowFromFallback,
+}));
+
+vi.mock("./shared/active-tool-schema-warnings.js", () => ({
+  collectActiveToolSchemaProjectionWarnings: mocks.collectActiveToolSchemaProjectionWarnings,
 }));
 
 vi.mock("./shared/bundled-plugin-load-paths.js", () => ({
@@ -217,6 +233,21 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue({
+      detected: [],
+      changes: [],
+      warnings: [],
+    });
+    mocks.maybeRepairOpenAICodexAuthConfig.mockImplementation((cfg: OpenClawConfig) => ({
+      changes: [],
+      config: cfg,
+      warnings: [],
+    }));
+    mocks.maybeRepairOpenAICodexAuthProfileStores.mockResolvedValue({
+      detected: [],
+      changes: [],
+      warnings: [],
+    });
     mocks.maybeRepairOpenPolicyAllowFrom.mockImplementation((cfg: OpenClawConfig) => ({
       config: cfg,
       changes: [],
@@ -230,6 +261,7 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
+    mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValue([]);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
     mocks.maybeRepairStalePluginConfig.mockImplementation((cfg: OpenClawConfig) => ({
@@ -353,13 +385,13 @@ describe("doctor repair sequencing", () => {
     expect(peerLinkCall?.env).toBe(process.env);
   });
 
-  it("migrates legacy OAuth sidecars before stale OAuth shadow cleanup", async () => {
+  it("repairs stale OAuth shadows before importing and removing auth JSON", async () => {
     const events: string[] = [];
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockImplementationOnce(async () => {
       events.push("sidecar-oauth");
       return {
         detected: ["auth-profiles.json"],
-        changes: ["Migrated 1 sidecar-backed Codex OAuth profile."],
+        changes: ["Migrated 1 legacy Codex OAuth profile."],
         warnings: ["Sidecar warning"],
       };
     });
@@ -367,6 +399,15 @@ describe("doctor repair sequencing", () => {
       events.push("stale-oauth-shadows");
       return {
         changes: ["Removed stale OAuth auth profile shadow openai-codex."],
+        warnings: [],
+      };
+    });
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockImplementationOnce(async () => {
+      events.push("sqlite-migration");
+      return {
+        detected: ["auth-profiles.json"],
+        changes: ["Migrated auth profile JSON into SQLite."],
+        configChanged: true,
         warnings: [],
       };
     });
@@ -381,7 +422,7 @@ describe("doctor repair sequencing", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(events).toEqual(["sidecar-oauth", "stale-oauth-shadows"]);
+    expect(events).toEqual(["sidecar-oauth", "stale-oauth-shadows", "sqlite-migration"]);
     expect(mocks.maybeRepairLegacyOAuthSidecarProfiles).toHaveBeenCalledWith({
       cfg: {},
       prompter: { confirmAutoFix: expect.any(Function) },
@@ -389,10 +430,35 @@ describe("doctor repair sequencing", () => {
       env: process.env,
     });
     expect(result.changeNotes).toEqual([
-      "Migrated 1 sidecar-backed Codex OAuth profile.",
+      "Migrated 1 legacy Codex OAuth profile.",
       "Removed stale OAuth auth profile shadow openai-codex.",
+      "Migrated auth profile JSON into SQLite.",
     ]);
+    expect(result.state.pendingChanges).toBe(true);
     expect(result.warningNotes).toEqual(["Sidecar warning"]);
+    expect(result.authProfilesRepaired).toBe(true);
+  });
+
+  it("reports auth profiles repaired after OpenAI Codex auth-provider migration", async () => {
+    mocks.maybeRepairOpenAICodexAuthProfileStores.mockResolvedValueOnce({
+      changes: ["Migrated OpenAI Codex auth-provider profile openai-codex."],
+      warnings: [],
+    });
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {} as OpenClawConfig,
+        candidate: {} as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.changeNotes).toEqual([
+      "Migrated OpenAI Codex auth-provider profile openai-codex.",
+    ]);
+    expect(result.authProfilesRepaired).toBe(true);
   });
 
   it("emits Discord warnings when unsafe numeric ids block repair", async () => {
@@ -424,6 +490,37 @@ describe("doctor repair sequencing", () => {
     ]);
     expect(result.state.pendingChanges).toBe(false);
     expect(result.state.candidate.channels?.discord?.allowFrom).toEqual([106232522769186816]);
+  });
+
+  it("emits active tool schema projection warnings during doctor repair", async () => {
+    mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValueOnce([
+      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
+    ]);
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          tools: { allow: ["fuzzplugin_move_angles"] },
+        } as OpenClawConfig,
+        candidate: {
+          tools: { allow: ["fuzzplugin_move_angles"] },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.changeNotes).toStrictEqual([]);
+    expect(result.warningNotes).toContain(
+      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
+    );
+    expect(mocks.collectActiveToolSchemaProjectionWarnings).toHaveBeenCalledWith({
+      cfg: {
+        tools: { allow: ["fuzzplugin_move_angles"] },
+      },
+      env: process.env,
+    });
   });
 
   it("auto-enables newly installed configured plugins after doctor repair", async () => {

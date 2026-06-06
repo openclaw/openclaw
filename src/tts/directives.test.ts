@@ -1,3 +1,4 @@
+// TTS directive tests cover parsing and applying speech directives.
 import { describe, expect, it } from "vitest";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { createTtsDirectiveTextStreamCleaner, parseTtsDirectives } from "./directives.js";
@@ -219,6 +220,24 @@ describe("parseTtsDirectives provider-aware routing", () => {
 
     expect(result.overrides.providerOverrides?.selected).toEqual({ voice: "test" });
     expect(selectedProvider).toBe("selected");
+  });
+
+  it("routes generic speakerVoice directive tokens to the selected provider", () => {
+    const result = parseTtsDirectives(
+      "[[tts:provider=elevenlabs speakerVoice=Rachel speakerVoiceId=voice-123]]",
+      fullPolicy,
+      { providers: [elevenlabs, minimax] },
+    );
+
+    expect(result.overrides.provider).toBe("elevenlabs");
+    expect(result.overrides.providerOverrides?.elevenlabs).toEqual({
+      speakerVoice: "Rachel",
+      voice: "Rachel",
+      voiceName: "Rachel",
+      speakerVoiceId: "voice-123",
+      voiceId: "voice-123",
+    });
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("resolves explicit provider aliases without rewriting the requested provider value", () => {

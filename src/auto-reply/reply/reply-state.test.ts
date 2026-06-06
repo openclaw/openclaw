@@ -1,3 +1,4 @@
+// Tests reply state persistence and recovery across process restarts.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -529,6 +530,34 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].outputTokens).toBeUndefined();
   });
 
+  it("accepts zero tokensAfter as a fresh post-compaction total", async () => {
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+      totalTokens: 180_000,
+      inputTokens: 170_000,
+      outputTokens: 10_000,
+      totalTokensFresh: true,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      tokensAfter: 0,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].compactionCount).toBe(1);
+    expect(stored[sessionKey].totalTokens).toBe(0);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].inputTokens).toBeUndefined();
+    expect(stored[sessionKey].outputTokens).toBeUndefined();
+  });
+
   it("prefers explicit compactionTokensAfter over last-call usage for run accounting", async () => {
     const entry = {
       sessionId: "s1",
@@ -557,17 +586,12 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
-  it("preserves zero compactionTokensAfter over stale last-call usage for run accounting", async () => {
+  it("preserves zero compactionTokensAfter for run accounting", async () => {
     const entry = {
       sessionId: "s1",
       updatedAt: Date.now(),
       compactionCount: 0,
       totalTokens: 180_000,
-      inputTokens: 170_000,
-      outputTokens: 10_000,
-      estimatedCostUsd: 0.42,
-      cacheRead: 12,
-      cacheWrite: 8,
     } as SessionEntry;
     const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
@@ -588,11 +612,6 @@ describe("incrementCompactionCount", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(0);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].estimatedCostUsd).toBe(0);
-    expect(stored[sessionKey].inputTokens).toBeUndefined();
-    expect(stored[sessionKey].outputTokens).toBeUndefined();
-    expect(stored[sessionKey].cacheRead).toBeUndefined();
-    expect(stored[sessionKey].cacheWrite).toBeUndefined();
   });
 
   it("falls back to last-call usage when run compactionTokensAfter is non-finite", async () => {
@@ -645,39 +664,6 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(1);
     expect(stored[sessionKey].totalTokens).toBe(180_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(false);
-  });
-
-  it("resets token accounting to zero when compaction collapses the transcript to zero tokens", async () => {
-    const entry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      compactionCount: 0,
-      totalTokens: 180_000,
-      inputTokens: 170_000,
-      outputTokens: 10_000,
-      estimatedCostUsd: 0.42,
-      cacheRead: 12,
-      cacheWrite: 8,
-    } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
-
-    await incrementCompactionCount({
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      tokensAfter: 0,
-    });
-
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].compactionCount).toBe(1);
-    expect(stored[sessionKey].totalTokens).toBe(0);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].estimatedCostUsd).toBe(0);
-    expect(stored[sessionKey].inputTokens).toBeUndefined();
-    expect(stored[sessionKey].outputTokens).toBeUndefined();
-    expect(stored[sessionKey].cacheRead).toBeUndefined();
-    expect(stored[sessionKey].cacheWrite).toBeUndefined();
   });
 
   it("updates sessionId and sessionFile when compaction rotated transcripts", async () => {

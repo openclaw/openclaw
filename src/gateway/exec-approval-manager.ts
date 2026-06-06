@@ -1,9 +1,13 @@
+// Gateway exec approval manager.
+// Tracks pending operator decisions and short-lived resolved approval records.
 import { randomUUID } from "node:crypto";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 // Grace period to keep resolved entries for late awaitDecision calls
 const RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -16,8 +20,14 @@ function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
 }
 
 function scheduleResolvedEntryCleanup(cleanup: () => void): void {
+  // Resolved approvals stay visible briefly so node.invoke sanitizers can
+  // consume a just-approved id after the UI decision races the command retry.
   const timer = setTimeout(cleanup, RESOLVED_ENTRY_GRACE_MS);
   unrefTimer(timer);
+}
+
+function resolveApprovalTimeoutMs(timeoutMs: number): number {
+  return resolveTimerTimeoutMs(timeoutMs, 1);
 }
 
 type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
@@ -56,12 +66,17 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
 
   create(request: TPayload, timeoutMs: number, id?: string | null): ExecApprovalRecord<TPayload> {
     const now = Date.now();
+    const resolvedTimeoutMs = resolveApprovalTimeoutMs(timeoutMs);
+    const expiresAtMs = resolveExpiresAtMsFromDurationMs(resolvedTimeoutMs, { nowMs: now });
+    if (expiresAtMs === undefined) {
+      throw new Error("approval expiry is unavailable");
+    }
     const resolvedId = id && id.trim().length > 0 ? id.trim() : randomUUID();
     const record: ExecApprovalRecord<TPayload> = {
       id: resolvedId,
       request,
       createdAtMs: now,
-      expiresAtMs: now + timeoutMs,
+      expiresAtMs,
     };
     return record;
   }
@@ -98,9 +113,10 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       timer: null as unknown as ReturnType<typeof setTimeout>,
       promise,
     };
+    const timerDelayMs = resolveApprovalTimeoutMs(timeoutMs);
     entry.timer = setTimeout(() => {
       this.expire(record.id);
-    }, timeoutMs);
+    }, timerDelayMs);
     this.pending.set(record.id, entry);
     return promise;
   }

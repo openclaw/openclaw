@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+/**
+ * Copies bundled Canvas A2UI assets into the dist host asset directory.
+ */
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -17,6 +20,7 @@ function shouldSkipMissingA2uiAssets(env = process.env) {
   return env.OPENCLAW_A2UI_SKIP_MISSING === "1" || Boolean(env.OPENCLAW_SPARSE_PROFILE);
 }
 
+/** Copies A2UI assets, optionally tolerating missing bundles in sparse builds. */
 export async function copyA2uiAssets({ srcDir, outDir }) {
   const skipMissing = shouldSkipMissingA2uiAssets(process.env);
   try {
@@ -42,8 +46,10 @@ async function main() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch((err) => {
-    console.error(String(err));
-    process.exit(1);
-  });
+  main().catch(
+    /** @param {unknown} err */ (err) => {
+      console.error(String(err));
+      process.exit(1);
+    },
+  );
 }

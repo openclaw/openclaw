@@ -1,3 +1,4 @@
+// Conversation resolution tests cover channel conversation lookup and fallback rules.
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -159,6 +160,120 @@ describe("conversation resolution", () => {
       },
       threadId: "child-thread",
       source: "command-fallback",
+    });
+  });
+
+  it("strips provider prefixes from normalized fallback conversation targets", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+      messaging: {
+        normalizeTarget: () => "telegram:-1001234567890:topic:77",
+      },
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
+        channel: "telegram",
+        accountId: "default",
+        originatingTo: "-1001234567890:topic:77",
+      })?.canonical,
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890",
+    });
+  });
+
+  it("strips kind-prefixed normalized topic routes before fallback resolution", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+      messaging: {
+        normalizeTarget: () => "telegram:group:-1001234567890:topic:77",
+      },
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
+        channel: "telegram",
+        accountId: "default",
+        originatingTo: "group:-1001234567890:topic:77",
+      })?.canonical,
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890",
+    });
+  });
+
+  it("normalizes alias-prefixed topic routes before fallback resolution", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+      messaging: {
+        targetPrefixes: ["tg"],
+        normalizeTarget: () => "telegram:group:-1001234567890:topic:77",
+      },
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
+        channel: "telegram",
+        accountId: "default",
+        originatingTo: "tg:group:-1001234567890:topic:77",
+      })?.canonical,
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890",
+    });
+  });
+
+  it("strips Telegram numeric topic shorthand in fallback resolution", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+      messaging: {
+        normalizeTarget: () => "telegram:-1001234567890:77",
+      },
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
+        channel: "telegram",
+        accountId: "default",
+        originatingTo: "-1001234567890:77",
+      })?.canonical,
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890",
+    });
+  });
+
+  it("keeps parser-only fallback conversation targets during the migration window", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "legacychat", label: "Legacy chat" }),
+      messaging: {
+        parseExplicitTarget: ({ raw }) =>
+          raw === "room-a:topic:77"
+            ? { to: "room-a", threadId: 77, chatType: "group" as const }
+            : null,
+      },
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
+        channel: "legacychat",
+        accountId: "default",
+        originatingTo: "room-a:topic:77",
+      })?.canonical,
+    ).toEqual({
+      channel: "legacychat",
+      accountId: "default",
+      conversationId: "room-a",
     });
   });
 

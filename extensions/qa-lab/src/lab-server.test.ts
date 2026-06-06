@@ -1,3 +1,4 @@
+// Qa Lab tests cover lab server plugin behavior.
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -480,9 +481,9 @@ describe("qa-lab server", () => {
     });
     cleanups.push(
       async () =>
-        await new Promise<void>((resolve, reject) =>
-          upstream.close((error) => (error ? reject(error) : resolve())),
-        ),
+        await new Promise<void>((resolve, reject) => {
+          upstream.close((error) => (error ? reject(error) : resolve()));
+        }),
     );
 
     const address = upstream.address();

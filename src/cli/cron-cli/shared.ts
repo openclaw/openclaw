@@ -1,3 +1,13 @@
+// Shared cron CLI formatting, parsing, delivery preview, and warning helpers.
+import {
+  resolveExpiresAtMsFromDurationMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
@@ -9,11 +19,6 @@ import {
   parseOffsetlessIsoDateTimeInTimeZone,
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 
@@ -25,8 +30,31 @@ export const getCronChannelOptions = () => {
   return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
 };
 
+function addCronRunCauseFields(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  const entries = record.entries;
+  if (!Array.isArray(entries)) {
+    return value;
+  }
+  const nextEntries = entries.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return entry;
+    }
+    const item = entry as Record<string, unknown>;
+    if (item.action !== "finished" || typeof item.errorReason !== "string") {
+      return item;
+    }
+    const cause = item.errorReason.trim();
+    return cause ? Object.assign({}, item, { cause }) : item;
+  });
+  return { ...record, entries: nextEntries };
+}
+
 export function printCronJson(value: unknown) {
-  defaultRuntime.writeJson(value);
+  defaultRuntime.writeJson(addCronRunCauseFields(value));
 }
 
 /**
@@ -74,6 +102,7 @@ export function handleCronCliError(err: unknown) {
 }
 
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
+  // Old/offline gateways should not make successful cron mutations fail after the fact.
   try {
     const res = (await callGatewayFromCli("cron.status", opts, {})) as {
       enabled?: boolean;
@@ -175,11 +204,13 @@ export function parseAt(input: string, tz?: string): string | null {
 
   const absolute = parseAbsoluteTimeMs(raw);
   if (absolute !== null) {
-    return new Date(absolute).toISOString();
+    return timestampMsToIsoString(absolute) ?? null;
   }
-  const dur = parseDurationMs(raw);
+  const durationInput = raw.startsWith("+") ? raw.slice(1) : raw;
+  const dur = parseDurationMs(durationInput);
   if (dur !== null) {
-    return new Date(Date.now() + dur).toISOString();
+    const expiresAt = resolveExpiresAtMsFromDurationMs(dur);
+    return timestampMsToIsoString(expiresAt) ?? null;
   }
   return null;
 }

@@ -1,3 +1,4 @@
+// Release configured plugin install tests cover doctor checks for release-time plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -428,7 +429,7 @@ describe("configured plugin install release step", () => {
     });
   });
 
-  it("repairs package-manager plugins for writable legacy parents without explicit deferral", async () => {
+  it("defers package-manager plugin release completion for writable legacy parents", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: ['Installed missing configured plugin "discord".'],
       warnings: [],
@@ -459,8 +460,8 @@ describe("configured plugin install release step", () => {
     expect(result).toEqual({
       changes: ['Installed missing configured plugin "discord".'],
       warnings: [],
-      completed: true,
-      touchedConfig: true,
+      completed: false,
+      touchedConfig: false,
     });
   });
 

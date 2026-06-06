@@ -1,3 +1,4 @@
+// Browser tests cover browser cli manage plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserManageProgram,
@@ -125,6 +126,39 @@ describe("browser manage output", () => {
     expect(output).not.toContain("port: 0");
   });
 
+  it("redacts remote cdpUrl details in browser profiles output", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/profiles"
+        ? {
+            profiles: [
+              {
+                name: "remote",
+                driver: "openclaw",
+                transport: "cdp",
+                running: true,
+                tabCount: 1,
+                isDefault: false,
+                isRemote: true,
+                cdpPort: null,
+                cdpUrl:
+                  "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
+                color: "#00AA00",
+              },
+            ],
+          }
+        : {},
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "profiles"], { from: "user" });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("cdpUrl: https://example.com/chrome?token=supers…7890");
+    expect(output).not.toContain("alice");
+    expect(output).not.toContain("supersecretpasswordvalue1234");
+    expect(output).not.toContain("supersecrettokenvalue1234567890");
+  });
+
   it("shows chrome-mcp transport after creating an existing-session profile", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
       req.path === "/profiles/create"
@@ -151,6 +185,43 @@ describe("browser manage output", () => {
     expect(output).toContain('Created profile "chrome-live"');
     expect(output).toContain("transport: chrome-mcp");
     expect(output).not.toContain("port: 0");
+  });
+
+  it("redacts remote cdpUrl details after creating a remote profile", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/profiles/create"
+        ? {
+            ok: true,
+            profile: "remote",
+            transport: "cdp",
+            cdpPort: null,
+            cdpUrl:
+              "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
+            userDataDir: null,
+            color: "#00AA00",
+            isRemote: true,
+          }
+        : {},
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(
+      [
+        "browser",
+        "create-profile",
+        "--name",
+        "remote",
+        "--cdp-url",
+        "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
+      ],
+      { from: "user" },
+    );
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("cdpUrl: https://example.com/chrome?token=supers…7890");
+    expect(output).not.toContain("alice");
+    expect(output).not.toContain("supersecretpasswordvalue1234");
+    expect(output).not.toContain("supersecrettokenvalue1234567890");
   });
 
   it("redacts sensitive remote cdpUrl details in status output", async () => {
@@ -189,6 +260,74 @@ describe("browser manage output", () => {
     expect(output).not.toContain("alice");
     expect(output).not.toContain("supersecretpasswordvalue1234");
     expect(output).not.toContain("supersecrettokenvalue1234567890");
+  });
+
+  it("prints suggested tab references while keeping raw target ids visible", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/tabs"
+        ? {
+            running: true,
+            tabs: [
+              {
+                targetId: "RAW_TARGET_1",
+                suggestedTargetId: "docs",
+                tabId: "t1",
+                label: "docs",
+                title: "Docs",
+                url: "https://docs.example.com",
+              },
+            ],
+          }
+        : {},
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "tabs"], { from: "user" });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("use: docs");
+    expect(output).toContain("tab: t1");
+    expect(output).toContain("label:docs");
+    expect(output).toContain("id: RAW_TARGET_1");
+  });
+
+  it("rejects non-integer tab indexes without calling browser actions", async () => {
+    const program = createBrowserManageProgram();
+
+    await expect(
+      program.parseAsync(["browser", "tab", "select", "1.9"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
+      "index must be a positive integer",
+    );
+
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+    await expect(
+      program.parseAsync(["browser", "tab", "close", "abc"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
+      "index must be a positive integer",
+    );
+    expect(getBrowserManageCallBrowserRequestMock()).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ path: "/tabs/action" }),
+      expect.anything(),
+    );
+  });
+
+  it("accepts signed decimal tab indexes", async () => {
+    const program = createBrowserManageProgram();
+
+    await program.parseAsync(["browser", "tab", "select", "+2"], { from: "user" });
+
+    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        path: "/tabs/action",
+        body: { action: "select", index: 1 },
+      }),
+      expect.anything(),
+    );
   });
 
   it("prints a readable browser doctor report", async () => {
@@ -239,6 +378,6 @@ describe("browser manage output", () => {
 
     const output = lastRuntimeLog();
     expect(output).toContain("OK gateway: browser control endpoint reachable");
-    expect(output).toContain("OK tabs: 1 visible, use target t1");
+    expect(output).toContain("OK tabs: 1 visible, use tab reference t1");
   });
 });

@@ -1,4 +1,5 @@
-import { type ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
+// Slack plugin module implements doctor behavior.
+import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
   legacyConfigRules as SLACK_LEGACY_CONFIG_RULES,

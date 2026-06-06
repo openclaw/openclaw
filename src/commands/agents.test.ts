@@ -1,13 +1,9 @@
+// Agents command tests cover agent config mutation, binding updates, and summary generation.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  applyAgentBindings,
-  applyAgentConfig,
-  buildAgentSummaries,
-  pruneAgentConfig,
-  removeAgentBindings,
-} from "./agents.js";
+import { applyAgentBindings, removeAgentBindings } from "./agents.bindings.js";
+import { applyAgentConfig, buildAgentSummaries, pruneAgentConfig } from "./agents.config.js";
 
 function requireAgentSummary(
   summaries: ReturnType<typeof buildAgentSummaries>,

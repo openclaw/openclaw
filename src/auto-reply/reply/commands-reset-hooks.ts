@@ -1,3 +1,4 @@
+// Emits reset hooks and cleanup work around session reset commands.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { logVerbose } from "../../globals.js";
@@ -135,6 +136,7 @@ export async function emitResetCommandHooks(params: {
         requesterSenderE164: params.ctx.SenderE164,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
+        replyKind: "final",
       });
       routedReply = true;
     }

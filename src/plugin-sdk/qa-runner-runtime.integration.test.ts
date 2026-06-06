@@ -1,3 +1,6 @@
+/**
+ * Integration tests for QA runner runtime public surface loading.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -118,7 +121,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
     if (!contribution || contribution.status !== "available") {
       throw new Error("Expected linked QA runner contribution to be available");
     }
-    const register = contribution.registration.register;
+    const register = contribution.registration["register"];
     expect(typeof register).toBe("function");
     expect(contributions).toEqual([
       {

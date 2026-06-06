@@ -1,3 +1,4 @@
+// Telegram tests cover lane delivery plugin behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
@@ -31,12 +32,14 @@ function createHarness(params?: {
       lastPartialText: "",
       hasStreamedMessage: false,
       finalized: false,
+      activeChunkIndex: 0,
     },
     reasoning: {
       stream: reasoning,
       lastPartialText: "",
       hasStreamedMessage: false,
       finalized: false,
+      activeChunkIndex: 0,
     },
   };
   const sendPayload = vi.fn().mockResolvedValue(true);
@@ -235,9 +238,8 @@ describe("createLaneTextDeliverer", () => {
       "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man aus der Google Cloud Console. Danach pruefst du die Projekt- und API-Einstellungen.";
     const truncatedFinal =
       "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man...";
-    let answer: ReturnType<typeof createTestDraftStream>;
     let deliveredText = "";
-    answer = createTestDraftStream({
+    const answer: ReturnType<typeof createTestDraftStream> = createTestDraftStream({
       onStop: () => {
         answer.setMessageId(999);
         deliveredText = fullAnswer;
@@ -655,11 +657,224 @@ describe("createLaneTextDeliverer", () => {
 
     const delivery = expectPreviewFinalized(result);
     expect(delivery.content).toBe("Hello world again");
+    expect(delivery.promptContextContent).toBe("Hello");
     expect(delivery.messageId).toBe(999);
     expect(harness.answer?.update).toHaveBeenCalledWith("Hello");
     expect(harness.sendPayload).toHaveBeenCalledTimes(2);
     expect(harness.sendPayload).toHaveBeenNthCalledWith(1, { text: " world" });
     expect(harness.sendPayload).toHaveBeenNthCalledWith(2, { text: " again" });
+  });
+
+  it("does not resend a long final when streaming already delivered it", async () => {
+    const fullAnswer = "Hello world again";
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue(fullAnswer);
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 5,
+      splitFinalTextForStream: () => ["Hello", " world", " again"],
+    });
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await deliverFinalAnswer(harness, fullAnswer);
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe(fullAnswer);
+    expect(delivery.promptContextContent).toBe(fullAnswer);
+    expect(delivery.messageId).toBe(999);
+    expect(answer.update).not.toHaveBeenCalled();
+    expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.clearDraftLane).not.toHaveBeenCalled();
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends only the missing suffix when a long final extends the streamed prefix", async () => {
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue("Hello world");
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 5,
+      splitFinalTextForStream: (text) =>
+        text === " again" ? [" again"] : ["Hello", " world", " again"],
+    });
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await deliverFinalAnswer(harness, "Hello world again");
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe("Hello world again");
+    expect(delivery.promptContextContent).toBe("Hello world");
+    expect(answer.update).not.toHaveBeenCalled();
+    expect(harness.clearDraftLane).not.toHaveBeenCalled();
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: " again" });
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send a suffix already flushed while stopping a long streamed final", async () => {
+    let deliveredText = "Hello world";
+    const answer = createTestDraftStream({
+      messageId: 999,
+      onStop: () => {
+        deliveredText = "Hello world again";
+      },
+    });
+    answer.lastDeliveredText.mockImplementation(() => deliveredText);
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 5,
+      splitFinalTextForStream: (text) =>
+        text === " again" ? [" again"] : ["Hello", " world", " again"],
+    });
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await deliverFinalAnswer(harness, "Hello world again");
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.promptContextContent).toBe("Hello world again");
+    expect(answer.update).not.toHaveBeenCalled();
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a long final when stop advances the stream past the first chunk", async () => {
+    let deliveredText = "Hello";
+    const answer = createTestDraftStream({
+      messageId: 999,
+      onStop: () => {
+        deliveredText = "Hello world again";
+      },
+    });
+    answer.lastDeliveredText.mockImplementation(() => deliveredText);
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 5,
+      splitFinalTextForStream: (text) =>
+        text === "Hello world again" ? ["Hello", " world", " again"] : ["Hello"],
+    });
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await deliverFinalAnswer(harness, "Hello world again");
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.promptContextContent).toBe("Hello world again");
+    expect(answer.update).toHaveBeenCalledWith("Hello");
+    expect(harness.clearDraftLane).not.toHaveBeenCalled();
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not resend chunks retained while stopping a long streamed final", async () => {
+    const answer = createTestDraftStream({ messageId: 999 });
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 5,
+      splitFinalTextForStream: () => ["Hello", " world", " again"],
+    });
+    harness.lanes.answer.hasStreamedMessage = true;
+    answer.stop.mockImplementation(async () => {
+      harness.lanes.answer.activeChunkIndex = 1;
+    });
+
+    const result = await deliverFinalAnswer(harness, "Hello world again");
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe("Hello world again");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: " again" });
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("compares retained delivered prefixes against the full final text", async () => {
+    let deliveredText = "Hello";
+    const answer = createTestDraftStream({ messageId: 999 });
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 5,
+      splitFinalTextForStream: (text) =>
+        text === " again" ? [" again"] : ["Hello", " world", " again"],
+    });
+    answer.lastDeliveredText.mockImplementation(() => deliveredText);
+    answer.stop.mockImplementation(async () => {
+      harness.lanes.answer.activeChunkIndex = 1;
+      deliveredText = "Hello world";
+    });
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await deliverFinalAnswer(harness, "Hello world again");
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.promptContextContent).toBe("Hello world");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: " again" });
+  });
+
+  it("edits buttons onto the chunk active after stopping a retained long final", async () => {
+    const buttons = [[{ text: "OK", callback_data: "ok" }]];
+    const answer = createTestDraftStream({ messageId: 999 });
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 6,
+      splitFinalTextForStream: () => ["Hello", " world", " again"],
+    });
+    harness.lanes.answer.hasStreamedMessage = true;
+    answer.stop.mockImplementation(async () => {
+      harness.lanes.answer.activeChunkIndex = 1;
+    });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Hello world again",
+      payload: { text: "Hello world again", channelData: { telegram: { buttons } } },
+      infoKind: "final",
+      buttons,
+    });
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.buttonsAttached).toBe(true);
+    expect(harness.editStreamMessage).toHaveBeenCalledWith({
+      laneName: "answer",
+      messageId: 999,
+      text: " world",
+      buttons,
+    });
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith({
+      text: " again",
+      channelData: { telegram: { buttons } },
+    });
+  });
+
+  it("keeps inline buttons on the current chunk of an already-streamed long final", async () => {
+    const buttons = [[{ text: "OK", callback_data: "ok" }]];
+    const fullAnswer = "Hello world again";
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue(fullAnswer);
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 6,
+      splitFinalTextForStream: () => ["Hello", " world", " again"],
+    });
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: fullAnswer,
+      payload: { text: fullAnswer, channelData: { telegram: { buttons } } },
+      infoKind: "final",
+      buttons,
+    });
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.buttonsAttached).toBe(true);
+    expect(harness.editStreamMessage).toHaveBeenCalledWith({
+      laneName: "answer",
+      messageId: 999,
+      text: " again",
+      buttons,
+    });
+    expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
   it("retains the streamed message when stop may have landed without a message id", async () => {

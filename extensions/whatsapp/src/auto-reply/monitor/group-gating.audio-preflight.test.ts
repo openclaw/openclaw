@@ -1,3 +1,4 @@
+// Whatsapp tests cover group gating.audio preflight plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./group-activation.js", () => ({
@@ -49,7 +50,7 @@ function makeParams(msg: WebInboundMsg, groupHistories: Map<string, GroupHistory
     groupHistoryLimit: 20,
     groupMemberNames: new Map<string, Map<string, string>>(),
     logVerbose: vi.fn(),
-    replyLogger: { debug: vi.fn() },
+    replyLogger: { debug: vi.fn(), warn: vi.fn() },
   };
 }
 

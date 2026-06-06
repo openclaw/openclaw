@@ -1,5 +1,6 @@
-import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
-import { formatChannelProgressDraftLineForEntry } from "openclaw/plugin-sdk/channel-streaming";
+// Mattermost plugin module implements draft stream behavior.
+import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
+import { formatChannelProgressDraftLineForEntry } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createMattermostPost,
   deleteMattermostPost,

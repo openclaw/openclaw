@@ -1,3 +1,4 @@
+// Migrate Hermes helper module supports config behavior.
 import {
   applyMigrationConfigPatchItem,
   applyMigrationManualItem,
@@ -6,6 +7,7 @@ import {
   hasMigrationConfigPatchConflict,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { childRecord, isRecord, readString, readStringArray } from "./helpers.js";
 
 type HermesProviderConfig = {
@@ -81,7 +83,7 @@ function collectHermesProviders(
       ...Object.keys(childRecord(raw, "models")),
       readString(raw.model),
     ].filter((value): value is string => Boolean(value));
-    collected.push({ id, baseUrl, apiKeyEnv, models: [...new Set(models)] });
+    collected.push({ id, baseUrl, apiKeyEnv, models: uniqueStrings(models) });
   }
 
   const customProviders = config.custom_providers;
@@ -101,7 +103,7 @@ function collectHermesProviders(
         ...Object.keys(childRecord(raw, "models")),
         readString(raw.model),
       ].filter((value): value is string => Boolean(value));
-      collected.push({ id, baseUrl, apiKeyEnv, models: [...new Set(models)] });
+      collected.push({ id, baseUrl, apiKeyEnv, models: uniqueStrings(models) });
     }
   }
 

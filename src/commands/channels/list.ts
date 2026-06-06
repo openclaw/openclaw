@@ -1,3 +1,6 @@
+// Implements `openclaw channels list` across runtime accounts, local config, and catalog-only entries.
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
@@ -13,8 +16,6 @@ import {
 import { callGateway } from "../../gateway/call.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
@@ -141,6 +142,7 @@ function formatCatalogOnlyLine(params: {
   return `- ${channelText}: ${bits.join(", ")}`;
 }
 
+/** Print or serialize configured, available, and installable chat channel accounts. */
 export async function channelsListCommand(
   opts: ChannelsListOptions,
   runtime: RuntimeEnv = defaultRuntime,

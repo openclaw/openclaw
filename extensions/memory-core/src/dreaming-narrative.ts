@@ -1,3 +1,4 @@
+// Memory Core plugin module implements dreaming narrative behavior.
 import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
@@ -106,13 +107,24 @@ const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
 const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
+const NARRATIVE_SESSION_LOCKS_KEY = Symbol.for(
+  "openclaw.memoryCore.dreamingNarrative.sessionLocks",
+);
 
 type DreamsFileLockEntry = {
   withLock: ReturnType<typeof createAsyncLock>;
   refs: number;
 };
 
+type NarrativeSessionLockEntry = {
+  withLock: ReturnType<typeof createAsyncLock>;
+  refs: number;
+};
+
 const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
+const narrativeSessionLocks = resolveGlobalMap<string, NarrativeSessionLockEntry>(
+  NARRATIVE_SESSION_LOCKS_KEY,
+);
 
 function isRequestScopedSubagentRuntimeError(err: unknown): boolean {
   return (
@@ -138,12 +150,38 @@ function formatFallbackWriteFailure(err: unknown): string {
   return "unknown error";
 }
 
-function buildRequestScopedFallbackNarrative(data: NarrativePhaseData): string {
-  return (
-    data.snippets.map((value) => value.trim()).find((value) => value.length > 0) ??
-    (data.promotions ?? []).map((value) => value.trim()).find((value) => value.length > 0) ??
-    "A memory trace surfaced, but details were unavailable in this run."
-  );
+// Raw snippets and promotions are pre-processing memory staging fragments
+// (session metadata, conversation summaries, operational logs). They must never
+// be persisted to the human-readable dream diary. When narrative generation
+// fails, always fall back to a generic placeholder so no staging content leaks
+// into DREAMS.md.
+function buildRequestScopedFallbackNarrative(_data: NarrativePhaseData): string {
+  return "A memory trace surfaced, but details were unavailable in this run.";
+}
+
+async function appendFallbackNarrativeEntry(params: {
+  workspaceDir: string;
+  data: NarrativePhaseData;
+  nowMs: number;
+  timezone?: string;
+  logger: Logger;
+  reason: string;
+}): Promise<void> {
+  try {
+    await appendNarrativeEntry({
+      workspaceDir: params.workspaceDir,
+      narrative: buildRequestScopedFallbackNarrative(params.data),
+      nowMs: params.nowMs,
+      timezone: params.timezone,
+    });
+    params.logger.info(
+      `memory-core: narrative generation used fallback for ${params.data.phase} phase because ${params.reason}.`,
+    );
+  } catch (fallbackErr) {
+    params.logger.warn(
+      `memory-core: narrative fallback failed for ${params.data.phase} phase (${formatFallbackWriteFailure(fallbackErr)})`,
+    );
+  }
 }
 
 function buildNarrativeAttemptSessionKey(baseSessionKey: string, attempt: number): string {
@@ -209,7 +247,7 @@ async function startNarrativeRunOrFallback(params: {
 }): Promise<string | null> {
   try {
     const run = await params.subagent.run({
-      idempotencyKey: params.sessionKey,
+      idempotencyKey: `${params.sessionKey}-${params.nowMs}`,
       sessionKey: params.sessionKey,
       message: params.message,
       ...(params.model ? { model: params.model } : {}),
@@ -223,21 +261,14 @@ async function startNarrativeRunOrFallback(params: {
     if (!isRequestScopedSubagentRuntimeError(runErr)) {
       throw runErr;
     }
-    try {
-      await appendNarrativeEntry({
-        workspaceDir: params.workspaceDir,
-        narrative: buildRequestScopedFallbackNarrative(params.data),
-        nowMs: params.nowMs,
-        timezone: params.timezone,
-      });
-      params.logger.info(
-        `memory-core: narrative generation used fallback for ${params.data.phase} phase because subagent runtime is request-scoped.`,
-      );
-    } catch (fallbackErr) {
-      params.logger.warn(
-        `memory-core: narrative fallback failed for ${params.data.phase} phase (${formatFallbackWriteFailure(fallbackErr)})`,
-      );
-    }
+    await appendFallbackNarrativeEntry({
+      workspaceDir: params.workspaceDir,
+      data: params.data,
+      nowMs: params.nowMs,
+      timezone: params.timezone,
+      logger: params.logger,
+      reason: "subagent runtime is request-scoped",
+    });
     return null;
   }
 }
@@ -248,10 +279,9 @@ async function startNarrativeRunOrFallback(params: {
 function buildNarrativeSessionKey(params: {
   workspaceDir: string;
   phase: NarrativePhaseData["phase"];
-  nowMs: number;
 }): string {
   const workspaceHash = createHash("sha1").update(params.workspaceDir).digest("hex").slice(0, 12);
-  return `dreaming-narrative-${params.phase}-${workspaceHash}-${params.nowMs}`;
+  return `dreaming-narrative-${params.phase}-${workspaceHash}`;
 }
 
 // ── Prompt building ────────────────────────────────────────────────────
@@ -471,8 +501,8 @@ export function formatBackfillDiaryDate(isoDay: string, _timezone?: string): str
 }
 
 async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
-  const stat = await fs.lstat(dreamsPath).catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT") {
+  const stat = await fs.lstat(dreamsPath).catch((err: unknown) => {
+    if (extractErrorCode(err) === "ENOENT") {
       return null;
     }
     throw err;
@@ -534,6 +564,23 @@ async function updateDreamsFile<T>(params: {
     lockEntry.refs -= 1;
     if (lockEntry.refs <= 0 && dreamsFileLocks.get(dreamsPath) === lockEntry) {
       dreamsFileLocks.delete(dreamsPath);
+    }
+  }
+}
+
+async function withNarrativeSessionLock<T>(sessionKey: string, fn: () => Promise<T>): Promise<T> {
+  let lockEntry = narrativeSessionLocks.get(sessionKey);
+  if (!lockEntry) {
+    lockEntry = { withLock: createAsyncLock(), refs: 0 };
+    narrativeSessionLocks.set(sessionKey, lockEntry);
+  }
+  lockEntry.refs += 1;
+  try {
+    return await lockEntry.withLock(fn);
+  } finally {
+    lockEntry.refs -= 1;
+    if (lockEntry.refs <= 0 && narrativeSessionLocks.get(sessionKey) === lockEntry) {
+      narrativeSessionLocks.delete(sessionKey);
     }
   }
 }
@@ -727,6 +774,28 @@ function isDreamingSessionStoreKey(sessionKey: string): boolean {
   return sessionSegment.startsWith(DREAMING_SESSION_KEY_PREFIX);
 }
 
+// A dreaming store row is reclaimable once its narrative run is finished. The
+// happy path deletes the session in `finally`, but when `deleteSession` throws
+// (e.g. request-scoped subagent runtime) the row is left behind referencing a
+// still-present transcript, so the missing-transcript check alone never reaps
+// it and the session lingers in the sidebar forever (issue #88322). Reclaim a
+// dreaming row when its transcript is missing, or when the transcript has aged
+// past the orphan threshold (a live narrative refreshes its transcript well
+// within that window, so active runs are never reaped).
+async function isReclaimableDreamingStoreEntry(
+  normalizedSessionFile: string | null,
+): Promise<boolean> {
+  if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
+    return true;
+  }
+  try {
+    const stat = await fs.stat(normalizedSessionFile);
+    return Date.now() - stat.mtimeMs >= DREAMING_ORPHAN_MIN_AGE_MS;
+  } catch {
+    return true;
+  }
+}
+
 async function normalizeSessionEntryPathForComparison(params: {
   sessionsDir: string;
   entry: { sessionFile?: string; sessionId?: string } | undefined;
@@ -752,7 +821,7 @@ async function normalizeSessionEntryPathForComparison(params: {
 async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
   const cfg = getRuntimeConfig();
   const agentsDir = path.join(resolveStateDir(), "agents");
-  let agentEntries: Dirent[] = [];
+  let agentEntries: Dirent[];
   try {
     agentEntries = await fs.readdir(agentsDir, { withFileTypes: true });
   } catch {
@@ -792,7 +861,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       if (!isDreamingSessionStoreKey(key)) {
         continue;
       }
-      if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
+      if (await isReclaimableDreamingStoreEntry(normalizedSessionFile)) {
         needsStoreUpdate = true;
       }
     }
@@ -806,22 +875,28 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
             sessionsDir,
             entry,
           });
-          if (normalizedSessionFile) {
-            referencedSessionFiles.add(normalizedSessionFile);
-          }
           if (!isDreamingSessionStoreKey(key)) {
+            if (normalizedSessionFile) {
+              referencedSessionFiles.add(normalizedSessionFile);
+            }
             continue;
           }
-          if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
+          if (await isReclaimableDreamingStoreEntry(normalizedSessionFile)) {
+            // Drop the row and leave the transcript unreferenced so the orphan
+            // transcript pass below archives the aged-out (or missing) file.
             delete lockedStore[key];
             prunedForAgent += 1;
+            continue;
+          }
+          if (normalizedSessionFile) {
+            referencedSessionFiles.add(normalizedSessionFile);
           }
         }
         return prunedForAgent;
       });
     }
 
-    let sessionFiles: Dirent[] = [];
+    let sessionFiles: Dirent[];
     try {
       sessionFiles = await fs.readdir(sessionsDir, { withFileTypes: true });
     } catch {
@@ -850,7 +925,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       if (Date.now() - stat.mtimeMs < DREAMING_ORPHAN_MIN_AGE_MS) {
         continue;
       }
-      let content = "";
+      let content;
       try {
         content = await fs.readFile(transcriptPath, "utf-8");
       } catch {
@@ -894,134 +969,165 @@ export async function generateAndAppendDreamNarrative(params: {
   const sessionKey = buildNarrativeSessionKey({
     workspaceDir: params.workspaceDir,
     phase: params.data.phase,
-    nowMs,
   });
   const message = buildNarrativePrompt(params.data);
-  const attempts: Array<{ sessionKey: string; runId: string | null }> = [];
-  let successfulSessionKey: string | null = null;
-  try {
-    const attemptModels = params.model ? [params.model, undefined] : [undefined];
+  await withNarrativeSessionLock(sessionKey, async () => {
+    const attempts: Array<{ sessionKey: string; runId: string | null }> = [];
+    let successfulSessionKey: string | null = null;
+    try {
+      const attemptModels = params.model ? [params.model, undefined] : [undefined];
 
-    for (const [attemptIndex, attemptModel] of attemptModels.entries()) {
-      const attemptSessionKey = buildNarrativeAttemptSessionKey(sessionKey, attemptIndex);
-      const attempt = { sessionKey: attemptSessionKey, runId: null as string | null };
-      attempts.push(attempt);
+      for (const [attemptIndex, attemptModel] of attemptModels.entries()) {
+        const attemptSessionKey = buildNarrativeAttemptSessionKey(sessionKey, attemptIndex);
+        const attempt = { sessionKey: attemptSessionKey, runId: null as string | null };
+        attempts.push(attempt);
 
-      try {
-        const runId = await startNarrativeRunOrFallback({
-          subagent: params.subagent,
-          sessionKey: attemptSessionKey,
-          message,
-          data: params.data,
-          workspaceDir: params.workspaceDir,
-          nowMs,
-          timezone: params.timezone,
-          model: attemptModel,
-          logger: params.logger,
-        });
-        if (!runId) {
-          return;
-        }
-        attempt.runId = runId;
+        try {
+          // Clear stale context from a previous failed cleanup before reusing any stable attempt key.
+          try {
+            await params.subagent.deleteSession({ sessionKey: attemptSessionKey });
+          } catch (preCleanupErr) {
+            if (!isRequestScopedSubagentRuntimeError(preCleanupErr)) {
+              params.logger.warn(
+                `memory-core: narrative pre-cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(preCleanupErr)}`,
+              );
+            }
+          }
 
-        const result = await params.subagent.waitForRun({
-          runId,
-          timeoutMs: NARRATIVE_TIMEOUT_MS,
-        });
+          const runId = await startNarrativeRunOrFallback({
+            subagent: params.subagent,
+            sessionKey: attemptSessionKey,
+            message,
+            data: params.data,
+            workspaceDir: params.workspaceDir,
+            nowMs,
+            timezone: params.timezone,
+            model: attemptModel,
+            logger: params.logger,
+          });
+          if (!runId) {
+            return;
+          }
+          attempt.runId = runId;
 
-        if (result.status === "ok") {
-          successfulSessionKey = attemptSessionKey;
-          break;
-        }
+          const result = await params.subagent.waitForRun({
+            runId,
+            timeoutMs: NARRATIVE_TIMEOUT_MS,
+          });
 
-        if (
-          attemptModel &&
-          result.status === "error" &&
-          isConfiguredModelUnavailableNarrativeError(result.error ?? "")
-        ) {
+          if (result.status === "ok") {
+            successfulSessionKey = attemptSessionKey;
+            break;
+          }
+
+          if (
+            attemptModel &&
+            result.status === "error" &&
+            isConfiguredModelUnavailableNarrativeError(result.error ?? "")
+          ) {
+            params.logger.warn(
+              `memory-core: narrative generation ended with ${formatNarrativeTerminalStatus({
+                status: result.status,
+                error: result.error,
+              })} for ${params.data.phase} phase using configured model "${attemptModel}"; retrying with the session default.`,
+            );
+            continue;
+          }
+
           params.logger.warn(
             `memory-core: narrative generation ended with ${formatNarrativeTerminalStatus({
               status: result.status,
               error: result.error,
-            })} for ${params.data.phase} phase using configured model "${attemptModel}"; retrying with the session default.`,
+            })} for ${params.data.phase} phase; writing fallback diary entry.`,
           );
-          continue;
+          await appendFallbackNarrativeEntry({
+            workspaceDir: params.workspaceDir,
+            data: params.data,
+            nowMs,
+            timezone: params.timezone,
+            logger: params.logger,
+            reason: `the narrative run ended with ${formatNarrativeTerminalStatus({
+              status: result.status,
+              error: result.error,
+            })}`,
+          });
+          return;
+        } catch (err) {
+          if (attemptModel && isConfiguredModelUnavailableNarrativeError(formatErrorMessage(err))) {
+            params.logger.warn(
+              `memory-core: narrative generation could not start with configured model "${attemptModel}" for ${params.data.phase} phase; retrying with the session default (${formatErrorMessage(err)}).`,
+            );
+            continue;
+          }
+          throw err;
         }
+      }
 
-        params.logger.warn(
-          `memory-core: narrative generation ended with ${formatNarrativeTerminalStatus({
-            status: result.status,
-            error: result.error,
-          })} for ${params.data.phase} phase.`,
-        );
+      if (!successfulSessionKey) {
         return;
-      } catch (err) {
-        if (attemptModel && isConfiguredModelUnavailableNarrativeError(formatErrorMessage(err))) {
-          params.logger.warn(
-            `memory-core: narrative generation could not start with configured model "${attemptModel}" for ${params.data.phase} phase; retrying with the session default (${formatErrorMessage(err)}).`,
-          );
+      }
+
+      const { messages } = await params.subagent.getSessionMessages({
+        sessionKey: successfulSessionKey,
+        limit: 5,
+      });
+
+      const narrative = extractNarrativeText(messages);
+      if (!narrative) {
+        params.logger.warn(
+          `memory-core: narrative generation produced no text for ${params.data.phase} phase; writing fallback diary entry.`,
+        );
+        await appendFallbackNarrativeEntry({
+          workspaceDir: params.workspaceDir,
+          data: params.data,
+          nowMs,
+          timezone: params.timezone,
+          logger: params.logger,
+          reason: "the narrative run produced no text",
+        });
+        return;
+      }
+
+      await appendNarrativeEntry({
+        workspaceDir: params.workspaceDir,
+        narrative,
+        nowMs,
+        timezone: params.timezone,
+      });
+
+      params.logger.info(
+        `memory-core: dream diary entry written for ${params.data.phase} phase [workspace=${params.workspaceDir}].`,
+      );
+    } catch (err) {
+      // Narrative generation is best-effort — never fail the parent phase.
+      params.logger.warn(
+        `memory-core: narrative generation failed for ${params.data.phase} phase: ${formatErrorMessage(err)}`,
+      );
+    } finally {
+      // Only cleanup after a run was accepted. Request-scoped fallback writes a
+      // local diary entry without creating a subagent session.
+      const cleanedSessionKeys = new Set<string>();
+      for (const attempt of attempts) {
+        if (!attempt.runId || cleanedSessionKeys.has(attempt.sessionKey)) {
           continue;
         }
-        throw err;
+        cleanedSessionKeys.add(attempt.sessionKey);
+        try {
+          await params.subagent.deleteSession({ sessionKey: attempt.sessionKey });
+        } catch (cleanupErr) {
+          params.logger.warn(
+            `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
+          );
+        }
       }
-    }
 
-    if (!successfulSessionKey) {
-      return;
-    }
-
-    const { messages } = await params.subagent.getSessionMessages({
-      sessionKey: successfulSessionKey,
-      limit: 5,
-    });
-
-    const narrative = extractNarrativeText(messages);
-    if (!narrative) {
-      params.logger.warn(
-        `memory-core: narrative generation produced no text for ${params.data.phase} phase.`,
-      );
-      return;
-    }
-
-    await appendNarrativeEntry({
-      workspaceDir: params.workspaceDir,
-      narrative,
-      nowMs,
-      timezone: params.timezone,
-    });
-
-    params.logger.info(
-      `memory-core: dream diary entry written for ${params.data.phase} phase [workspace=${params.workspaceDir}].`,
-    );
-  } catch (err) {
-    // Narrative generation is best-effort — never fail the parent phase.
-    params.logger.warn(
-      `memory-core: narrative generation failed for ${params.data.phase} phase: ${formatErrorMessage(err)}`,
-    );
-  } finally {
-    // Only cleanup after a run was accepted. Request-scoped fallback writes a
-    // local diary entry without creating a subagent session.
-    const cleanedSessionKeys = new Set<string>();
-    for (const attempt of attempts) {
-      if (!attempt.runId || cleanedSessionKeys.has(attempt.sessionKey)) {
-        continue;
-      }
-      cleanedSessionKeys.add(attempt.sessionKey);
-      try {
-        await params.subagent.deleteSession({ sessionKey: attempt.sessionKey });
-      } catch (cleanupErr) {
+      await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {
         params.logger.warn(
-          `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
+          `memory-core: dreaming cleanup scrub failed for ${params.data.phase} phase: ${formatErrorMessage(scrubErr)}`,
         );
-      }
+      });
     }
-
-    await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {
-      params.logger.warn(
-        `memory-core: dreaming cleanup scrub failed for ${params.data.phase} phase: ${formatErrorMessage(scrubErr)}`,
-      );
-    });
-  }
+  });
 }
 
 // ── Detached narrative concurrency limit ───────────────────────────────

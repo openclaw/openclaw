@@ -1,3 +1,6 @@
+/**
+ * Browser tab listing, opening, labeling, and alias management for one profile.
+ */
 import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
@@ -170,6 +173,7 @@ function assignTabAliases(profileState: ProfileRuntimeState, tabs: BrowserTab[])
   return tabs.map((tab) => assignTabAlias({ profileState, tab }));
 }
 
+/** Builds list/open/label tab operations for one resolved browser profile. */
 export function createProfileTabOps({
   profile,
   state,
@@ -350,7 +354,9 @@ export function createProfileTabOps({
           triggerManagedTabLimit(found.targetId);
           return assignTabAlias({ profileState, tab: found, label: opts?.label });
         }
-        await new Promise((r) => setTimeout(r, OPEN_TAB_DISCOVERY_POLL_MS));
+        await new Promise((r) => {
+          setTimeout(r, OPEN_TAB_DISCOVERY_POLL_MS);
+        });
       }
       triggerManagedTabLimit(createdViaCdp);
       return assignTabAlias({
@@ -375,7 +381,7 @@ export function createProfileTabOps({
         method: "PUT",
       },
       getCdpControlPolicy(),
-    ).catch(async (err) => {
+    ).catch(async (err: unknown) => {
       if (String(err).includes("HTTP 405")) {
         return await fetchJson<CdpTarget>(
           endpoint,

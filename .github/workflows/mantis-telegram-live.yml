@@ -41,10 +41,11 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "11.0.8"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
   CRABBOX_REF: main
+  CRABBOX_AWS_REGION: us-east-1
+  CRABBOX_CAPACITY_REGIONS: us-east-1
 
 jobs:
   authorize_actor:
@@ -320,7 +321,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build Mantis harness
@@ -377,6 +377,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
           CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR }}
@@ -385,6 +386,8 @@ jobs:
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
           CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
           CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
+          CRABBOX_AWS_REGION: ${{ env.CRABBOX_AWS_REGION }}
+          CRABBOX_CAPACITY_REGIONS: ${{ env.CRABBOX_CAPACITY_REGIONS }}
           CRABBOX_LEASE_ID: ${{ needs.resolve_request.outputs.lease_id }}
           CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
           SCENARIO_INPUT: ${{ needs.resolve_request.outputs.scenario }}

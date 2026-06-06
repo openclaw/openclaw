@@ -1,30 +1,56 @@
+// Formats generated TypeScript/JavaScript modules through the repo formatter.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolvePnpmRunner } from "../pnpm-runner.mjs";
 
+/** Resolve the fastest available oxfmt command for a generated module path. */
+export function resolveGeneratedModuleFormatter(params) {
+  const platform = params.platform ?? process.platform;
+  const existsSync = params.existsSync ?? fs.existsSync;
+  const directFormatterPath = path.join(params.repoRoot, "node_modules", ".bin", "oxfmt");
+  const useDirectFormatter = platform !== "win32" && existsSync(directFormatterPath);
+  if (useDirectFormatter) {
+    return {
+      command: directFormatterPath,
+      args: ["--write", params.outputPath],
+      shell: false,
+    };
+  }
+
+  return resolvePnpmRunner({
+    comSpec: params.comSpec,
+    npmExecPath: params.npmExecPath,
+    nodeExecPath: params.nodeExecPath,
+    platform,
+    pnpmArgs: ["exec", "oxfmt", "--write", params.outputPath],
+  });
+}
+
+/** Format generated source in a temporary file and return the formatter output. */
 export function formatGeneratedModule(source, { repoRoot, outputPath, errorLabel }) {
   const resolvedRepoRoot = path.resolve(repoRoot);
   const resolvedOutputPath = path.resolve(
     resolvedRepoRoot,
     path.isAbsolute(outputPath) ? path.relative(resolvedRepoRoot, outputPath) : outputPath,
   );
-  const directFormatterPath = path.join(resolvedRepoRoot, "node_modules", ".bin", "oxfmt");
-  const useDirectFormatter = process.platform !== "win32" && fs.existsSync(directFormatterPath);
-  const command = useDirectFormatter ? directFormatterPath : "pnpm";
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-generated-format-"));
   const tempOutputPath = path.join(tempDir, path.basename(resolvedOutputPath));
 
   try {
     fs.writeFileSync(tempOutputPath, source, "utf8");
-    const args = useDirectFormatter
-      ? ["--write", tempOutputPath]
-      : ["exec", "oxfmt", "--write", tempOutputPath];
-    const formatter = spawnSync(command, args, {
+    const command = resolveGeneratedModuleFormatter({
+      existsSync: fs.existsSync,
+      outputPath: tempOutputPath,
+      repoRoot: resolvedRepoRoot,
+    });
+    const formatter = spawnSync(command.command, command.args, {
       cwd: resolvedRepoRoot,
       encoding: "utf8",
-      // Windows requires a shell to launch package-manager shim scripts reliably.
-      ...(process.platform === "win32" ? { shell: true } : {}),
+      env: command.env ?? process.env,
+      shell: command.shell,
+      windowsVerbatimArguments: command.windowsVerbatimArguments,
     });
     if (formatter.status !== 0) {
       const details =

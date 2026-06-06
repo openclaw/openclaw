@@ -1,10 +1,11 @@
+// Lazy lifecycle runtime export hub used by gateway run-loop restart paths.
 export {
-  abortEmbeddedPiRun,
+  abortEmbeddedAgentRun,
   getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
   waitForActiveEmbeddedRuns,
-} from "../../agents/pi-embedded-runner/runs.js";
+} from "../../agents/embedded-agent-runner/runs.js";
 export { markRestartAbortedMainSessions } from "../../agents/main-session-restart-recovery.js";
 export { getRuntimeConfig } from "../../config/config.js";
 export {
@@ -14,6 +15,7 @@ export {
 export {
   resolveGatewayRestartDeferralTimeoutMs,
   consumeGatewayRestartIntentPayloadSync,
+  consumeGatewaySigusr1RestartIntent,
   consumeGatewayRestartIntentSync,
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,

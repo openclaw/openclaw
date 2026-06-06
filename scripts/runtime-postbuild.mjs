@@ -1,3 +1,5 @@
+// Generates postbuild runtime artifacts: plugin metadata, SDK aliases, stable
+// runtime aliases, static assets, and compatibility chunks for live upgrades.
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -126,6 +128,7 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
   aliasFileName: PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName,
   sourceIncludes: LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS,
 }));
+/** Compatibility chunks kept for live gateways loading old CLI exit modules. */
 export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   {
     dest: "dist/memory-state-CcqRgDZU.js",
@@ -137,10 +140,16 @@ export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   },
 ];
 
+/**
+ * Lists generated plugin SDK root-alias outputs.
+ */
 export function listPluginSdkRootAliasOutputs() {
   return [PLUGIN_SDK_ROOT_ALIAS_OUTPUT];
 }
 
+/**
+ * Lists generated official channel catalog outputs.
+ */
 export function listOfficialChannelCatalogOutputs() {
   return [OFFICIAL_CHANNEL_CATALOG_OUTPUT];
 }
@@ -148,7 +157,7 @@ export function listOfficialChannelCatalogOutputs() {
 function collectStableRootRuntimeAliasCandidates(params) {
   const distDir = params.distDir;
   const fsImpl = params.fs;
-  let entries = [];
+  let entries;
   try {
     entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
   } catch {
@@ -174,8 +183,22 @@ function collectStableRootRuntimeAliasCandidates(params) {
 
 function resolveStableRootRuntimeAliasCandidate(params) {
   const { aliasFileName, candidates, distDir, fsImpl } = params;
-  if (candidates.length === 1) {
-    return candidates[0];
+  const candidatesWithSources = candidates.map((candidate) => {
+    const filePath = path.join(distDir, candidate);
+    let source = "";
+    try {
+      source = fsImpl.readFileSync(filePath, "utf8");
+    } catch {
+      // Keep unreadable candidates visible to the ambiguous-candidate logic.
+    }
+    return { candidate, source };
+  });
+  const implementationCandidates = candidatesWithSources.filter(
+    ({ source }) => source.trim() !== `export * from "./${aliasFileName}";`,
+  );
+  const candidateNames = implementationCandidates.map(({ candidate }) => candidate);
+  if (candidateNames.length === 1) {
+    return candidateNames[0];
   }
   if (aliasFileName === PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName) {
     return resolveRootRuntimeCandidateByMarkers({
@@ -185,26 +208,24 @@ function resolveStableRootRuntimeAliasCandidate(params) {
       sourceIncludes: PLUGIN_INSTALL_RUNTIME_ALIAS.sourceIncludes,
     });
   }
-  const candidateSet = new Set(candidates);
-  const wrappers = candidates.filter((candidate) => {
-    const filePath = path.join(distDir, candidate);
-    let source;
-    try {
-      source = fsImpl.readFileSync(filePath, "utf8");
-    } catch {
-      return false;
-    }
-    return candidates.some(
-      (target) =>
-        target !== candidate &&
-        candidateSet.has(target) &&
-        source.includes(`"./${target}"`) &&
-        !source.includes("\n//#region "),
-    );
-  });
-  return wrappers.length === 1 ? wrappers[0] : null;
+  const candidateSet = new Set(candidateNames);
+  const wrappers = implementationCandidates
+    .map(({ candidate, source }) => ({ candidate, source }))
+    .filter(({ candidate, source }) => {
+      return candidates.some(
+        (target) =>
+          target !== candidate &&
+          candidateSet.has(target) &&
+          source.includes(`"./${target}"`) &&
+          !source.includes("\n//#region "),
+      );
+    });
+  return wrappers.length === 1 ? wrappers[0].candidate : null;
 }
 
+/**
+ * Lists stable aliases for hashed root runtime/contract chunks.
+ */
 export function listStableRootRuntimeAliasOutputs(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
@@ -222,6 +243,9 @@ export function listStableRootRuntimeAliasOutputs(params = {}) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Lists compatibility chunk outputs required for old CLI exit paths.
+ */
 export function listLegacyCliExitCompatOutputs(params = {}) {
   const chunks = params.chunks ?? LEGACY_CLI_EXIT_COMPAT_CHUNKS;
   return chunks
@@ -229,6 +253,9 @@ export function listLegacyCliExitCompatOutputs(params = {}) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Lists legacy hashed runtime aliases that may be needed during live upgrades.
+ */
 export function listLegacyRootRuntimeCompatOutputs(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
@@ -253,6 +280,9 @@ export function listLegacyRootRuntimeCompatOutputs(params = {}) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Lists all core runtime postbuild outputs expected after a build.
+ */
 export function listCoreRuntimePostBuildOutputs(params = {}) {
   return [
     ...listPluginSdkRootAliasOutputs(),
@@ -263,6 +293,9 @@ export function listCoreRuntimePostBuildOutputs(params = {}) {
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Writes stable aliases for current hashed runtime chunks.
+ */
 export function writeStableRootRuntimeAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
@@ -285,11 +318,14 @@ export function writeStableRootRuntimeAliases(params = {}) {
   }
 }
 
+/**
+ * Rewrites hashed runtime imports to stable aliases so live updates survive swaps.
+ */
 export function rewriteRootRuntimeImportsToStableAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
-  let entries = [];
+  let entries;
   try {
     entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
   } catch {
@@ -311,20 +347,14 @@ export function rewriteRootRuntimeImportsToStableAliases(params = {}) {
   }
   const runtimeAliasFiles = new Map();
   for (const [aliasFileName, candidates] of candidatesByAlias) {
-    if (candidates.length === 1) {
-      runtimeAliasFiles.set(candidates[0], aliasFileName);
-      continue;
-    }
-    if (aliasFileName === PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName) {
-      const candidate = resolveRootRuntimeCandidateByMarkers({
-        distDir,
-        fsImpl,
-        aliasFileName,
-        sourceIncludes: PLUGIN_INSTALL_RUNTIME_ALIAS.sourceIncludes,
-      });
-      if (candidate) {
-        runtimeAliasFiles.set(candidate, aliasFileName);
-      }
+    const candidate = resolveStableRootRuntimeAliasCandidate({
+      distDir,
+      fsImpl,
+      aliasFileName,
+      candidates,
+    });
+    if (candidate) {
+      runtimeAliasFiles.set(candidate, aliasFileName);
     }
   }
   if (runtimeAliasFiles.size === 0) {
@@ -368,7 +398,7 @@ function resolveRootRuntimeCandidateByMarkers(params) {
   }
   const aliasBaseFileName = params.aliasFileName.replace(/\.js$/u, "");
   const hashedPattern = new RegExp(`^${escapeRegExp(aliasBaseFileName)}-[A-Za-z0-9_-]+\\.js$`, "u");
-  let entries = [];
+  let entries;
   try {
     entries = params.fsImpl.readdirSync(params.distDir, { withFileTypes: true });
   } catch {
@@ -412,6 +442,9 @@ function resolveLegacyRootRuntimeCompatTarget(params) {
   });
 }
 
+/**
+ * Writes compatibility aliases for shipped hashed runtime chunk names.
+ */
 export function writeLegacyRootRuntimeCompatAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
@@ -442,6 +475,9 @@ export function writeLegacyRootRuntimeCompatAliases(params = {}) {
   }
 }
 
+/**
+ * Writes small compatibility chunks for old CLI exit imports.
+ */
 export function writeLegacyCliExitCompatChunks(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const chunks = params.chunks ?? LEGACY_CLI_EXIT_COMPAT_CHUNKS;
@@ -450,6 +486,14 @@ export function writeLegacyCliExitCompatChunks(params = {}) {
   }
 }
 
+function shouldCopyStaticExtensionAssets(params) {
+  const env = params.env ?? process.env;
+  return env.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS !== "0";
+}
+
+/**
+ * Runs every runtime postbuild phase after the main dist build.
+ */
 export function runRuntimePostBuild(params = {}) {
   const timingsEnabled = params.timings ?? process.env.OPENCLAW_RUNTIME_POSTBUILD_TIMINGS !== "0";
   const runPhase = (label, action) => {
@@ -468,6 +512,9 @@ export function runRuntimePostBuild(params = {}) {
   runPhase("official channel catalog", () => writeOfficialChannelCatalog(params));
   runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
   runPhase("static extension assets", () => {
+    if (!shouldCopyStaticExtensionAssets(params)) {
+      return;
+    }
     const staticAssetParams = {
       rootDir: ROOT,
       ...params,

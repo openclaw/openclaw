@@ -3,7 +3,7 @@ summary: "Agent tools for cross-session status, recall, messaging, and sub-agent
 read_when:
   - You want to understand what session tools the agent has
   - You want to configure cross-session access or sub-agent spawning
-  - You want to inspect status or control spawned sub-agents
+  - You want to inspect spawned sub-agent status
 title: "Session tools"
 ---
 
@@ -19,7 +19,7 @@ orchestrate sub-agents.
 | `sessions_send`    | Send a message to another session and optionally wait                       |
 | `sessions_spawn`   | Spawn an isolated sub-agent session for background work                     |
 | `sessions_yield`   | End the current turn and wait for follow-up sub-agent results               |
-| `subagents`        | List, steer, or kill spawned sub-agents for this session                    |
+| `subagents`        | List spawned sub-agent status for this session                              |
 | `session_status`   | Show a `/status`-style card and optionally set a per-session model override |
 
 These tools are still subject to the active tool profile and allow/deny
@@ -49,10 +49,12 @@ effective tool list.
 token counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
 `node`), exact `label`, exact `agentId`, search text, or recency
 (`activeMinutes`). When you need mailbox-style triage, it can also ask for a
-visibility-scoped derived title, a last-message preview snippet, or bounded
-recent messages on each row. Derived titles and previews are produced only for
-sessions the caller can already see under the configured session tool
-visibility policy, so unrelated sessions stay hidden.
+visibility-scoped derived title, a last-message preview snippet, or bounded recent
+messages on each row. Derived titles and previews are produced only for sessions
+the caller can already see under the configured session tool visibility policy, so
+unrelated sessions stay hidden. When visibility is restricted, `sessions_list`
+returns optional `visibility` metadata showing the effective mode and a warning that
+results may be scope-limited.
 
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.
@@ -118,17 +120,26 @@ sparse token/cache counters from the latest transcript usage entry, and
 the caller's current session; visible client labels such as `openclaw-tui` are
 not session keys.
 
+When route metadata is available, `session_status` also includes a visible
+`Route context` JSON block and matching structured `details` fields. These
+fields disambiguate the session key from the route that is currently handling
+the live run:
+
+- `origin` is where the session was created, or the provider inferred from a
+  deliverable session-key prefix when older state lacks stored origin metadata.
+- `active` is the current live-run route. It is only reported for the live or
+  current session being handled now.
+- `deliveryContext` is the persisted delivery route stored on the session,
+  which OpenClaw can reuse for later delivery even when the active surface
+  differs.
+
 `sessions_yield` intentionally ends the current turn so the next message can be
 the follow-up event you are waiting for. Use it after spawning sub-agents when
 you want completion results to arrive as the next message instead of building
 poll loops.
 
-`subagents` is the control-plane helper for already spawned OpenClaw
-sub-agents. It supports:
-
-- `action: "list"` to inspect active/recent runs
-- `action: "steer"` to send follow-up guidance to a running child
-- `action: "kill"` to stop one child or `all`
+`subagents` is the visibility helper for already spawned OpenClaw
+sub-agents. It supports `action: "list"` to inspect active/recent runs.
 
 ## Spawning sub-agents
 

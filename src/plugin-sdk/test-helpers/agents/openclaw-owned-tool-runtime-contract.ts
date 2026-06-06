@@ -1,6 +1,7 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// OpenClaw-owned tool runtime contract helpers mock agent tool runtimes in SDK tests.
 import { vi } from "vitest";
-import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/pi-tools.before-tool-call.state.js";
+import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/agent-tools.before-tool-call.state.js";
+import type { AgentToolResult } from "../../../agents/runtime/index.js";
 import type {
   CodexAppServerExtensionFactory,
   CodexAppServerToolResultEvent,

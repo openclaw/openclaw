@@ -1,8 +1,7 @@
+// Qa Lab plugin module implements cli behavior.
+import { printLiveTransportQaArtifacts } from "../shared/live-artifacts.js";
 import type { LiveTransportQaCommandOptions } from "../shared/live-transport-cli.js";
-import {
-  printLiveTransportQaArtifacts,
-  resolveLiveTransportQaRunOptions,
-} from "../shared/live-transport-cli.runtime.js";
+import { resolveLiveTransportQaRunOptions } from "../shared/live-transport-cli.runtime.js";
 import { runDiscordQaLive } from "./discord-live.runtime.js";
 
 export async function runQaDiscordCommand(opts: LiveTransportQaCommandOptions) {

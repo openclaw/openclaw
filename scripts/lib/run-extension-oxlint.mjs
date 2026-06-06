@@ -1,3 +1,4 @@
+// Runs oxlint over extension source roots with repo-local boundary artifacts.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,7 +7,11 @@ import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
 } from "./local-heavy-check-runtime.mjs";
+import { createManagedCommandInvocation } from "./managed-child-process.mjs";
 
+/**
+ * Runs focused extension oxlint with a temp config and local heavy-check lock.
+ */
 export function runExtensionOxlint(params) {
   const repoRoot = process.cwd();
   const oxlintPath = path.resolve("node_modules", ".bin", "oxlint");
@@ -39,10 +44,16 @@ export function runExtensionOxlint(params) {
 
     const baseArgs = ["-c", tempConfigPath, ...process.argv.slice(2), ...extensionFiles];
     const { args: finalArgs, env } = applyLocalOxlintPolicy(baseArgs, process.env);
-    const result = spawnSync(oxlintPath, finalArgs, {
+    const oxlint = createManagedCommandInvocation({
+      args: finalArgs,
+      bin: oxlintPath,
+      env,
+    });
+    const result = spawnSync(oxlint.command, oxlint.args, {
       stdio: "inherit",
       env,
-      shell: process.platform === "win32",
+      shell: oxlint.shell,
+      windowsVerbatimArguments: oxlint.windowsVerbatimArguments,
     });
 
     if (result.error) {

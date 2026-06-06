@@ -1,3 +1,4 @@
+/** Commands for listing, adding, and removing model aliases. */
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -9,6 +10,7 @@ import {
   updateConfig,
 } from "./shared.js";
 
+/** Lists configured model aliases as JSON, plain pairs, or human-readable rows. */
 export async function modelsAliasesListCommand(
   opts: { json?: boolean; plain?: boolean },
   runtime: RuntimeEnv,
@@ -48,6 +50,7 @@ export async function modelsAliasesListCommand(
   }
 }
 
+/** Adds or replaces an alias for a resolved provider/model target. */
 export async function modelsAliasesAddCommand(
   aliasRaw: string,
   modelRaw: string,
@@ -56,9 +59,11 @@ export async function modelsAliasesAddCommand(
   const alias = normalizeAlias(aliasRaw);
   const cfg = await loadModelsConfig({ commandName: "models aliases add", runtime });
   const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-  await updateConfig((cfg) => {
+  await updateConfig((cfgLocal) => {
     const modelKey = `${resolved.provider}/${resolved.model}`;
-    const nextModels = { ...cfg.agents?.defaults?.models };
+    const nextModels = { ...cfgLocal.agents?.defaults?.models };
+    // Alias names are globally unique across model entries; otherwise command
+    // input could resolve to different targets depending on config order.
     for (const [key, entry] of Object.entries(nextModels)) {
       const existing = entry?.alias?.trim();
       if (existing && existing === alias && key !== modelKey) {
@@ -68,11 +73,11 @@ export async function modelsAliasesAddCommand(
     const existing = nextModels[modelKey] ?? {};
     nextModels[modelKey] = { ...existing, alias };
     return {
-      ...cfg,
+      ...cfgLocal,
       agents: {
-        ...cfg.agents,
+        ...cfgLocal.agents,
         defaults: {
-          ...cfg.agents?.defaults,
+          ...cfgLocal.agents?.defaults,
           models: nextModels,
         },
       },
@@ -83,6 +88,7 @@ export async function modelsAliasesAddCommand(
   runtime.log(`Alias ${alias} -> ${resolved.provider}/${resolved.model}`);
 }
 
+/** Removes a configured alias by name. */
 export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: RuntimeEnv) {
   const alias = normalizeAlias(aliasRaw);
   const updated = await updateConfig((cfg) => {

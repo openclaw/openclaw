@@ -1,6 +1,8 @@
+// Verifies sessions_spawn model selection, thinking patching, and timeout defaults.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { resolveConfiguredSubagentSpawnModelSelection } from "./model-selection.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
@@ -18,6 +20,7 @@ function createConfig(overrides?: Record<string, unknown>): OpenClawConfig {
 }
 
 function expectOkPlan(plan: SubagentModelPlan): OkSubagentModelPlan {
+  // Narrows the discriminated plan before checking the resolved patch details.
   expect(plan.status).toBe("ok");
   if (plan.status !== "ok") {
     throw new Error(`Expected ok plan, received ${plan.status}`);
@@ -96,6 +99,23 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.resolvedModel).toBe(defaultModelRef);
     expect(plan.initialSessionPatch.model).toBe(defaultModelRef);
     expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+  });
+
+  it("can resolve only explicit or configured subagent model selections", () => {
+    expect(
+      resolveConfiguredSubagentSpawnModelSelection({
+        cfg: createConfig(),
+        agentId: "research",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveConfiguredSubagentSpawnModelSelection({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.7" } } },
+        }),
+        agentId: "research",
+      }),
+    ).toBe("minimax/MiniMax-M2.7");
   });
 
   it("prefers per-agent subagent model over defaults", () => {

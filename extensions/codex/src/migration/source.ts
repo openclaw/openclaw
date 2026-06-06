@@ -1,3 +1,4 @@
+// Codex plugin module implements source behavior.
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -78,13 +79,15 @@ type CodexArchiveSource = {
   message?: string;
 };
 
-type CodexSource = {
+export type CodexSource = {
   root: string;
   confidence: "low" | "medium" | "high";
   codexHome: string;
   codexSkillsDir?: string;
   personalAgentsSkillsDir?: string;
   configPath?: string;
+  authPath?: string;
+  modelsCachePath?: string;
   hooksPath?: string;
   skills: CodexSkillSource[];
   plugins: CodexPluginSource[];
@@ -386,22 +389,24 @@ async function withPluginMigrationEligibility(params: {
     return evaluated;
   }
 
-  const snapshot = await refreshSourceAppInventory(params.requestOptions).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    for (const { plugin, apps } of pending) {
-      evaluated.push({
-        ...plugin,
-        migratable: false,
-        migrationBlock: {
-          code: "app_inventory_unavailable",
-          apps,
-          error: message,
-        },
-        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but source app inventory could not be read: ${message}`,
-      });
-    }
-    return undefined;
-  });
+  const snapshot = await refreshSourceAppInventory(params.requestOptions).catch(
+    (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      for (const { plugin, apps } of pending) {
+        evaluated.push({
+          ...plugin,
+          migratable: false,
+          migrationBlock: {
+            code: "app_inventory_unavailable",
+            apps,
+            error: message,
+          },
+          message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but source app inventory could not be read: ${message}`,
+        });
+      }
+      return undefined;
+    },
+  );
   if (!snapshot) {
     return evaluated;
   }
@@ -573,6 +578,8 @@ export async function discoverCodexSource(
   const codexSkillsDir = path.join(codexHome, "skills");
   const agentsSkillsDir = personalAgentsSkillsDir();
   const configPath = path.join(codexHome, "config.toml");
+  const authPath = path.join(codexHome, "auth.json");
+  const modelsCachePath = path.join(codexHome, "models_cache.json");
   const hooksPath = path.join(codexHome, "hooks", "hooks.json");
   const codexSkills = await discoverSkillDirs({
     root: codexSkillsDir,
@@ -617,7 +624,8 @@ export async function discoverCodexSource(
   const skills = [...codexSkills, ...personalAgentSkills].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
-  const high = Boolean(codexSkills.length || plugins.length || archivePaths.length);
+  const hasAuth = await exists(authPath);
+  const high = Boolean(codexSkills.length || plugins.length || archivePaths.length || hasAuth);
   const medium = personalAgentSkills.length > 0;
   return {
     root: codexHome,
@@ -626,6 +634,8 @@ export async function discoverCodexSource(
     ...((await isDirectory(codexSkillsDir)) ? { codexSkillsDir } : {}),
     ...((await isDirectory(agentsSkillsDir)) ? { personalAgentsSkillsDir: agentsSkillsDir } : {}),
     ...((await exists(configPath)) ? { configPath } : {}),
+    ...(hasAuth ? { authPath } : {}),
+    ...((await exists(modelsCachePath)) ? { modelsCachePath } : {}),
     ...((await exists(hooksPath)) ? { hooksPath } : {}),
     skills,
     plugins,

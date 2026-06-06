@@ -1,3 +1,5 @@
+// Runs oxlint with local heavy-check policy, sparse-checkout filtering, and
+// plugin package-boundary artifact preparation when needed.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,7 +9,7 @@ import {
   resolveLocalHeavyCheckEnv,
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mjs";
-import { runManagedCommand } from "./lib/managed-child-process.mjs";
+import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mjs";
 
 const oxlintPath = path.resolve("node_modules", ".bin", "oxlint");
 const PREPARE_EXTENSION_BOUNDARY_ARGS = [
@@ -38,10 +40,16 @@ const OXLINT_VALUE_FLAGS = new Set([
   "--warn",
 ]);
 
+/**
+ * Returns whether oxlint args need package-boundary declaration artifacts first.
+ */
 export function shouldPrepareExtensionPackageBoundaryArtifacts(args) {
   return !args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg));
 }
 
+/**
+ * Drops tracked-but-missing sparse-checkout targets so narrow sparse checks can pass.
+ */
 export function filterSparseMissingOxlintTargets(
   args,
   {
@@ -138,22 +146,32 @@ export function filterSparseMissingOxlintTargets(
 }
 
 function getSparseCheckoutEnabled({ cwd }) {
-  const result = spawnSync("git", ["config", "--get", "--bool", "core.sparseCheckout"], {
+  const git = createManagedCommandInvocation({
+    args: ["config", "--get", "--bool", "core.sparseCheckout"],
+    bin: "git",
+  });
+  const result = spawnSync(git.command, git.args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
+    shell: git.shell,
+    windowsVerbatimArguments: git.windowsVerbatimArguments,
   });
 
   return result.status === 0 && result.stdout.trim() === "true";
 }
 
 function hasTrackedPath({ cwd, target }) {
-  const result = spawnSync("git", ["ls-files", "--", target], {
+  const git = createManagedCommandInvocation({
+    args: ["ls-files", "--", target],
+    bin: "git",
+  });
+  const result = spawnSync(git.command, git.args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
+    shell: git.shell,
+    windowsVerbatimArguments: git.windowsVerbatimArguments,
   });
 
   return result.status === 0 && result.stdout.trim().length > 0;
@@ -184,6 +202,9 @@ async function prepareExtensionPackageBoundaryArtifacts(env) {
   }
 }
 
+/**
+ * Applies wrapper policy and runs oxlint with the final argument list.
+ */
 export async function main(argv = process.argv.slice(2), runtimeEnv = process.env) {
   const { args: policyArgs, env } = applyLocalOxlintPolicy(
     argv,

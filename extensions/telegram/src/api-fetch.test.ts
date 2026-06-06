@@ -1,3 +1,4 @@
+// Telegram tests cover api fetch plugin behavior.
 import { createRequire } from "node:module";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchTelegramChatId } from "./api-fetch.js";
@@ -52,11 +53,15 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-vi.mock("undici", () => ({
-  ProxyAgent: proxyMocks.ProxyAgent,
-  fetch: proxyMocks.undiciFetch,
-  setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    ProxyAgent: proxyMocks.ProxyAgent,
+    fetch: proxyMocks.undiciFetch,
+    setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
+  };
+});
 
 describe("fetchTelegramChatId", () => {
   const cases = [

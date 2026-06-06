@@ -1,3 +1,4 @@
+// Verifies shell environment key metadata used by config IO.
 import { describe, expect, it, vi } from "vitest";
 
 const listKnownChannelEnvVarNames = vi.hoisted(() => vi.fn(() => ["DISCORD_BOT_TOKEN"]));
@@ -9,6 +10,11 @@ vi.mock("../secrets/channel-env-vars.js", () => ({
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   listKnownProviderAuthEnvVarNames,
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
 }));
 
 describe("config io shell env expected keys", () => {

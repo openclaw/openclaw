@@ -1,4 +1,5 @@
-import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
+// Memory Core plugin module implements tools.shared behavior.
+import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
@@ -30,15 +31,15 @@ export async function loadMemoryToolRuntime(): Promise<MemoryToolRuntime> {
 
 export const MemorySearchSchema = Type.Object({
   query: Type.String(),
-  maxResults: Type.Optional(Type.Number()),
-  minScore: Type.Optional(Type.Number()),
+  maxResults: Type.Optional(Type.Integer({ minimum: 1 })),
+  minScore: optionalFiniteNumberSchema(),
   corpus: Type.Optional(stringEnum(["memory", "wiki", "all", "sessions"])),
 });
 
 export const MemoryGetSchema = Type.Object({
   path: Type.String(),
-  from: Type.Optional(Type.Number()),
-  lines: Type.Optional(Type.Number()),
+  from: Type.Optional(Type.Integer()),
+  lines: Type.Optional(Type.Integer()),
   corpus: Type.Optional(stringEnum(["memory", "wiki", "all"])),
 });
 
@@ -117,15 +118,25 @@ export function createMemoryTool(params: {
   };
 }
 
-export function buildMemorySearchUnavailableResult(error: string | undefined) {
+export function buildMemorySearchUnavailableResult(
+  error: string | undefined,
+  overrides?: {
+    warning?: string;
+    action?: string;
+  },
+) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const isQuotaError = /insufficient_quota|quota|429/.test(normalizeLowercaseStringOrEmpty(reason));
-  const warning = isQuotaError
-    ? "Memory search is unavailable because the embedding provider quota is exhausted."
-    : "Memory search is unavailable due to an embedding/provider error.";
-  const action = isQuotaError
-    ? "Top up or switch embedding provider, then retry memory_search."
-    : "Check embedding provider configuration and retry memory_search.";
+  const warning =
+    overrides?.warning ??
+    (isQuotaError
+      ? "Memory search is unavailable because the embedding provider quota is exhausted."
+      : "Memory search is unavailable due to an embedding/provider error.");
+  const action =
+    overrides?.action ??
+    (isQuotaError
+      ? "Top up or switch embedding provider, then retry memory_search."
+      : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,

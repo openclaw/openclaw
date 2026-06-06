@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime e2ee destructive behavior.
 import { randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -87,7 +88,7 @@ async function cleanupMatrixQaTempDevices(
 ): Promise<void> {
   await client.stop().catch(() => undefined);
   const uniqueDeviceIds = [
-    ...new Set(deviceIds.filter((deviceId): deviceId is string => !!deviceId)),
+    ...new Set(deviceIds.filter((deviceId): deviceId is string => Boolean(deviceId))),
   ];
   if (uniqueDeviceIds.length > 0) {
     await client.deleteOwnDevices(uniqueDeviceIds).catch(() => undefined);

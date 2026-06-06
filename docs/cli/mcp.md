@@ -11,14 +11,31 @@ sidebarTitle: "MCP"
 `openclaw mcp` has two jobs:
 
 - run OpenClaw as an MCP server with `openclaw mcp serve`
-- manage OpenClaw-owned outbound MCP server definitions with `list`, `show`, `set`, and `unset`
+- manage OpenClaw-owned outbound MCP server definitions with `list`, `show`, `status`, `doctor`, `probe`, `add`, `set`, `configure`, `tools`, `login`, `logout`, `reload`, and `unset`
 
 In other words:
 
 - `serve` is OpenClaw acting as an MCP server
-- `list` / `show` / `set` / `unset` is OpenClaw acting as an MCP client-side registry for other MCP servers its runtimes may consume later
+- the other subcommands are OpenClaw acting as an MCP client-side registry for MCP servers its runtimes may consume later
 
 Use [`openclaw acp`](/cli/acp) when OpenClaw should host a coding harness session itself and route that runtime through ACP.
+
+## Choose the right MCP path
+
+OpenClaw has several MCP surfaces. Pick the one that matches who owns the agent runtime and who owns the tools.
+
+| Goal                                                                | Use                                                                  | Why                                                                                                             |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Let an external MCP client read/send OpenClaw channel conversations | `openclaw mcp serve`                                                 | OpenClaw is the MCP server and exposes Gateway-backed conversations over stdio.                                 |
+| Save third-party MCP servers for OpenClaw-managed agent runs        | `openclaw mcp add`, `set`, `configure`, `tools`, `login`             | OpenClaw is the MCP client-side registry and later projects those servers into eligible runtimes.               |
+| Check a saved server without running an agent turn                  | `openclaw mcp status`, `doctor`, `probe`                             | `status` and `doctor` inspect config; `probe` opens a live MCP connection and lists capabilities.               |
+| Edit MCP config from a browser                                      | Control UI `/mcp`                                                    | The page shows inventory, enablement, OAuth/filter summaries, command hints, and a scoped `mcp` editor.         |
+| Give Codex app-server a scoped native MCP server                    | `mcp.servers.<name>.codex`                                           | The `codex` block only affects Codex app-server thread projection and is stripped before native config handoff. |
+| Run ACP-hosted harness sessions                                     | [`openclaw acp`](/cli/acp) and [ACP Agents](/tools/acp-agents-setup) | ACP bridge mode does not accept per-session MCP server injection; configure gateway/plugin bridges instead.     |
+
+<Tip>
+If you are not sure which path you need, start with `openclaw mcp status --verbose`. It shows what OpenClaw has saved without starting any MCP servers.
+</Tip>
 
 ## OpenClaw as an MCP server
 
@@ -348,25 +365,39 @@ For broader testing context, see [Testing](/help/testing).
 
 ## OpenClaw as an MCP client registry
 
-This is the `openclaw mcp list`, `show`, `set`, and `unset` path.
+This is the `openclaw mcp list`, `show`, `status`, `doctor`, `probe`, `add`, `set`,
+`configure`, `tools`, `login`, `logout`, `reload`, and `unset` path.
 
 These commands do not expose OpenClaw over MCP. They manage OpenClaw-owned MCP server definitions under `mcp.servers` in OpenClaw config.
 
-Those saved definitions are for runtimes that OpenClaw launches or configures later, such as embedded Pi and other runtime adapters. OpenClaw stores the definitions centrally so those runtimes do not need to keep their own duplicate MCP server lists.
+Those saved definitions are for runtimes that OpenClaw launches or configures later, such as embedded OpenClaw and other runtime adapters. OpenClaw stores the definitions centrally so those runtimes do not need to keep their own duplicate MCP server lists.
 
 <AccordionGroup>
   <Accordion title="Important behavior">
     - these commands only read or write OpenClaw config
-    - they do not connect to the target MCP server
-    - they do not validate whether the command, URL, or remote transport is reachable right now
+    - `status`, `list`, `show`, `doctor` without `--probe`, `set`, `configure`, `tools`, `logout`, `reload`, and `unset` do not connect to the target MCP server
+    - `login` performs the MCP OAuth network flow for the configured HTTP server and saves the resulting local credentials
+    - `status --verbose` prints resolved transport, auth, timeout, filter, and parallel-tool-call hints without connecting
+    - `doctor` checks saved definitions for local setup problems such as missing stdio commands, invalid working directories, missing TLS files, disabled servers, literal sensitive header/env values, and incomplete OAuth authorization
+    - `doctor --probe` adds the same live connection proof as `probe` after static checks pass
+    - `probe` connects to the selected server or all configured servers, lists tools, and reports capabilities/diagnostics
+    - `add` builds a definition from flags and probes before saving unless `--no-probe` is set or OAuth authorization is needed first
     - runtime adapters decide which transport shapes they actually support at execution time
-    - embedded Pi exposes configured MCP tools in normal `coding` and `messaging` tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]` disables them explicitly
+    - `enabled: false` keeps a server saved but excludes it from embedded runtime discovery
+    - `timeout` and `connectTimeout` set per-server request and connection timeouts in seconds
+    - `supportsParallelToolCalls: true` marks servers that adapters can call concurrently
+    - HTTP servers can use static headers, OAuth login, TLS verification control, and mTLS certificate/key paths
+    - embedded OpenClaw exposes configured MCP tools in normal `coding` and `messaging` tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]` disables them explicitly
+    - per-server `toolFilter.include` and `toolFilter.exclude` filter discovered MCP tools before they become OpenClaw tools
+    - servers that advertise resources or prompts also expose utility tools for listing/reading resources and listing/fetching prompts; those generated utility names (`resources_list`, `resources_read`, `prompts_list`, `prompts_get`) use the same include/exclude filter
+    - dynamic MCP tool-list changes invalidate the cached catalog for that session; the next discovery/use refreshes from the server
+    - repeated MCP tool request/protocol failures pause that server briefly so one broken server does not consume the whole turn
     - session-scoped bundled MCP runtimes are reaped after `mcp.sessionIdleTtlMs` milliseconds of idle time (default 10 minutes; set `0` to disable) and one-shot embedded runs clean them up at run end
 
   </Accordion>
 </AccordionGroup>
 
-Runtime adapters may normalize this shared registry into the shape their downstream client expects. For example, embedded Pi consumes OpenClaw `transport` values directly, while Claude Code and Gemini receive CLI-native `type` values such as `http`, `sse`, or `stdio`.
+Runtime adapters may normalize this shared registry into the shape their downstream client expects. For example, embedded OpenClaw consumes OpenClaw `transport` values directly, while Claude Code and Gemini receive CLI-native `type` values such as `http`, `sse`, or `stdio`.
 
 Codex app-server also honors an optional `codex` block on each server. This is
 OpenClaw projection metadata for Codex app-server threads only; it does not
@@ -387,14 +418,32 @@ Commands:
 
 - `openclaw mcp list`
 - `openclaw mcp show [name]`
+- `openclaw mcp status [--verbose]`
+- `openclaw mcp doctor [name] [--probe]`
+- `openclaw mcp probe [name]`
+- `openclaw mcp add <name> [flags]`
 - `openclaw mcp set <name> <json>`
+- `openclaw mcp configure <name> [flags]`
+- `openclaw mcp tools <name> [--include csv] [--exclude csv] [--clear]`
+- `openclaw mcp login <name> [--code code]`
+- `openclaw mcp logout <name>`
+- `openclaw mcp reload`
 - `openclaw mcp unset <name>`
 
 Notes:
 
 - `list` sorts server names.
 - `show` without a name prints the full configured MCP server object.
+- `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details.
+- `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
+- `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics.
+- `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags.
 - `set` expects one JSON object value on the command line.
+- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, and parallel-tool-call hints without replacing the whole server definition.
+- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
+- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. The first run prints an authorization URL; rerun with `--code` after approval.
+- `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
+- `reload` disposes cached in-process MCP runtimes. Gateway or agent processes in another process still need their own reload or restart path.
 - Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
 - `unset` fails if the named server does not exist.
 
@@ -403,10 +452,179 @@ Examples:
 ```bash
 openclaw mcp list
 openclaw mcp show context7 --json
+openclaw mcp status --verbose
+openclaw mcp doctor --probe
+openclaw mcp probe context7 --json
+openclaw mcp add memory --command npx --arg -y --arg @modelcontextprotocol/server-memory
 openclaw mcp set context7 '{"command":"uvx","args":["context7-mcp"]}'
+openclaw mcp tools context7 --include 'resolve-library-id,get-library-docs'
 openclaw mcp set docs '{"url":"https://mcp.example.com","transport":"streamable-http"}'
+openclaw mcp configure docs --timeout 20 --connect-timeout 5 --include 'search,read_*'
+openclaw mcp configure docs --auth oauth --oauth-scope 'docs.read'
+openclaw mcp login docs
+openclaw mcp logout docs
 openclaw mcp unset context7
 ```
+
+### Common server recipes
+
+These examples save server definitions only. Run `openclaw mcp doctor --probe` afterward to prove that the server starts and exposes tools.
+
+<Tabs>
+  <Tab title="Filesystem">
+    ```bash
+    openclaw mcp add files \
+      --command npx \
+      --arg -y \
+      --arg @modelcontextprotocol/server-filesystem \
+      --arg "$HOME/Documents" \
+      --include 'read_file,list_directory,search_files'
+    openclaw mcp doctor files --probe
+    ```
+
+    Scope filesystem servers to the smallest directory tree that the agent should read or edit.
+
+  </Tab>
+  <Tab title="Memory">
+    ```bash
+    openclaw mcp add memory \
+      --command npx \
+      --arg -y \
+      --arg @modelcontextprotocol/server-memory
+    openclaw mcp probe memory --json
+    ```
+
+    Use a tool filter if the server exposes write tools that should not be available to normal agents.
+
+  </Tab>
+  <Tab title="Local script">
+    ```bash
+    openclaw mcp add local-tools \
+      --command node \
+      --arg ./dist/mcp-server.js \
+      --cwd /srv/openclaw-tools \
+      --env API_BASE=https://internal.example
+    openclaw mcp status --verbose
+    ```
+
+    `doctor` checks that `cwd` exists and that the command resolves from the configured environment.
+
+  </Tab>
+  <Tab title="Remote HTTP">
+    ```bash
+    openclaw mcp add docs \
+      --url https://mcp.example.com/mcp \
+      --transport streamable-http \
+      --auth oauth \
+      --oauth-scope docs.read \
+      --timeout 20 \
+      --connect-timeout 5 \
+      --include 'search,read_*'
+    openclaw mcp doctor docs --probe
+    ```
+
+    Use OAuth when the remote server supports it. If the server requires static headers, avoid committing literal bearer tokens.
+
+  </Tab>
+  <Tab title="Desktop/CUA">
+    ```bash
+    openclaw mcp set cua-driver '{"command":"cua-driver","args":["mcp"]}'
+    openclaw mcp tools cua-driver --include 'list_apps,observe,click,type'
+    openclaw mcp doctor cua-driver --probe
+    ```
+
+    Direct desktop-control servers inherit the permissions of the process they launch. Use narrow tool filters and OS-level permission prompts.
+
+  </Tab>
+</Tabs>
+
+### JSON output shapes
+
+Use `--json` for scripts and dashboards. Field sets can grow over time, so consumers should ignore unknown keys.
+
+<AccordionGroup>
+  <Accordion title="status --json">
+    ```json
+    {
+      "path": "/home/user/.openclaw/openclaw.json",
+      "servers": [
+        {
+          "name": "docs",
+          "configured": true,
+          "enabled": true,
+          "ok": true,
+          "transport": "streamable-http",
+          "launch": "streamable-http https://mcp.example.com/mcp",
+          "auth": "oauth",
+          "authStatus": {
+            "hasTokens": true,
+            "hasClientInformation": true,
+            "hasCodeVerifier": false,
+            "hasDiscoveryState": true,
+            "hasLastAuthorizationUrl": false
+          },
+          "requestTimeoutMs": 20000,
+          "connectionTimeoutMs": 5000,
+          "toolFilter": {
+            "include": ["search", "read_*"],
+            "exclude": []
+          },
+          "supportsParallelToolCalls": true
+        }
+      ]
+    }
+    ```
+  </Accordion>
+  <Accordion title="doctor --json">
+    ```json
+    {
+      "ok": false,
+      "path": "/home/user/.openclaw/openclaw.json",
+      "servers": [
+        {
+          "name": "docs",
+          "ok": false,
+          "issues": [
+            {
+              "level": "error",
+              "message": "OAuth credentials are not authorized; run openclaw mcp login docs"
+            }
+          ]
+        }
+      ]
+    }
+    ```
+
+    `doctor --json` exits nonzero when any enabled checked server has an error. Warnings are reported but do not make the command fail by themselves.
+
+  </Accordion>
+  <Accordion title="probe --json">
+    ```json
+    {
+      "path": "/home/user/.openclaw/openclaw.json",
+      "generatedAt": "2026-05-31T09:00:00.000Z",
+      "servers": {
+        "docs": {
+          "launch": "streamable-http https://mcp.example.com/mcp",
+          "tools": 2,
+          "resources": true,
+          "prompts": false,
+          "listChanged": {
+            "tools": true,
+            "resources": false,
+            "prompts": false
+          }
+        }
+      },
+      "tools": ["docs__read_page", "docs__search"],
+      "diagnostics": []
+    }
+    ```
+
+    `probe` opens a live MCP client session. Use it for reachability and capability proof, not for static config audits.
+
+  </Accordion>
+</AccordionGroup>
 
 Example config shape:
 
@@ -420,7 +638,21 @@ Example config shape:
       },
       "docs": {
         "url": "https://mcp.example.com",
-        "transport": "streamable-http"
+        "transport": "streamable-http",
+        "timeout": 20,
+        "connectTimeout": 5,
+        "supportsParallelToolCalls": true,
+        "auth": "oauth",
+        "oauth": {
+          "scope": "docs.read"
+        },
+        "sslVerify": true,
+        "clientCert": "/path/to/client.crt",
+        "clientKey": "/path/to/client.key",
+        "toolFilter": {
+          "include": ["search_*"],
+          "exclude": ["admin_*"]
+        }
       }
     }
   }
@@ -441,7 +673,7 @@ Launches a local child process and communicates over stdin/stdout.
 <Warning>
 **Stdio env safety filter**
 
-OpenClaw rejects interpreter-startup env keys that can alter how a stdio MCP server starts up before the first RPC, even if they appear in a server's `env` block. Blocked keys include `NODE_OPTIONS`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`, `SHELLOPTS`, `PS4`, and similar runtime-control variables. Startup rejects these with a configuration error so they cannot inject an implicit prelude, swap the interpreter, or enable a debugger against the stdio process. Ordinary credential, proxy, and server-specific env vars (`GITHUB_TOKEN`, `HTTP_PROXY`, custom `*_API_KEY`, etc.) are unaffected.
+OpenClaw rejects interpreter-startup env keys that can alter how a stdio MCP server starts up before the first RPC, even if they appear in a server's `env` block. Blocked keys include `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`, `SHELLOPTS`, `PS4`, and similar runtime-control variables. Startup rejects these with a configuration error so they cannot inject an implicit prelude, swap the interpreter, enable a debugger, or redirect runtime output against the stdio process. Ordinary credential, proxy, and server-specific env vars (`GITHUB_TOKEN`, `HTTP_PROXY`, custom `*_API_KEY`, etc.) are unaffected.
 
 If your MCP server genuinely needs one of the blocked variables, set it on the gateway host process instead of under the stdio server's `env`.
 </Warning>
@@ -450,11 +682,17 @@ If your MCP server genuinely needs one of the blocked variables, set it on the g
 
 Connects to a remote MCP server over HTTP Server-Sent Events.
 
-| Field                 | Description                                                      |
-| --------------------- | ---------------------------------------------------------------- |
-| `url`                 | HTTP or HTTPS URL of the remote server (required)                |
-| `headers`             | Optional key-value map of HTTP headers (for example auth tokens) |
-| `connectionTimeoutMs` | Per-server connection timeout in ms (optional)                   |
+| Field                          | Description                                                      |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `url`                          | HTTP or HTTPS URL of the remote server (required)                |
+| `headers`                      | Optional key-value map of HTTP headers (for example auth tokens) |
+| `connectionTimeoutMs`          | Per-server connection timeout in ms (optional)                   |
+| `connectTimeout`               | Per-server connection timeout in seconds (optional)              |
+| `timeout` / `requestTimeoutMs` | Per-server MCP request timeout in seconds or ms                  |
+| `auth: "oauth"`                | Use MCP OAuth token storage and `openclaw mcp login`             |
+| `sslVerify`                    | Set false only for explicitly trusted private HTTPS endpoints    |
+| `clientCert` / `clientKey`     | mTLS client certificate and key paths                            |
+| `supportsParallelToolCalls`    | Hint that concurrent calls are safe for this server              |
 
 Example:
 
@@ -464,6 +702,8 @@ Example:
     "servers": {
       "remote-tools": {
         "url": "https://mcp.example.com",
+        "auth": "oauth",
+        "timeout": 20,
         "headers": {
           "Authorization": "Bearer <token>"
         }
@@ -473,20 +713,78 @@ Example:
 }
 ```
 
-Sensitive values in `url` (userinfo) and `headers` are redacted in logs and status output.
+Sensitive values in `url` (userinfo) and `headers` are redacted in logs and status output. `openclaw mcp doctor` warns when sensitive-looking `headers` or `env` entries contain literal values, so operators can move those values out of committed config.
+
+### OAuth workflow
+
+OAuth is for HTTP MCP servers that advertise the MCP OAuth flow. Static `Authorization` headers are ignored for a server while `auth: "oauth"` is enabled.
+
+<Steps>
+  <Step title="Save the server">
+    Add or update the server with `auth: "oauth"` and any optional OAuth metadata.
+
+    ```bash
+    openclaw mcp set docs '{"url":"https://mcp.example.com/mcp","transport":"streamable-http","auth":"oauth","oauth":{"scope":"docs.read"}}'
+    ```
+
+  </Step>
+  <Step title="Start login">
+    Run login to create the authorization request.
+
+    ```bash
+    openclaw mcp login docs
+    ```
+
+    OpenClaw prints the authorization URL and stores temporary OAuth verifier state under the OpenClaw state directory.
+
+  </Step>
+  <Step title="Finish with the code">
+    After approving in the browser, pass the returned code back to OpenClaw.
+
+    ```bash
+    openclaw mcp login docs --code abc123
+    ```
+
+  </Step>
+  <Step title="Check authorization">
+    Use status or doctor to confirm that tokens are present.
+
+    ```bash
+    openclaw mcp status --verbose
+    openclaw mcp doctor docs --probe
+    ```
+
+  </Step>
+  <Step title="Clear credentials">
+    Logout removes stored OAuth credentials but keeps the saved server definition.
+
+    ```bash
+    openclaw mcp logout docs
+    ```
+
+  </Step>
+</Steps>
+
+If the provider rotates tokens or the authorization state gets stuck, run `openclaw mcp logout <name>`, then repeat `login`. `logout` can clear credentials for a saved HTTP server even after `auth: "oauth"` has been removed from config, as long as the server name and URL still identify the credential store entry.
 
 ### Streamable HTTP transport
 
 `streamable-http` is an additional transport option alongside `sse` and `stdio`. It uses HTTP streaming for bidirectional communication with remote MCP servers.
 
-| Field                 | Description                                                                            |
-| --------------------- | -------------------------------------------------------------------------------------- |
-| `url`                 | HTTP or HTTPS URL of the remote server (required)                                      |
-| `transport`           | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse` |
-| `headers`             | Optional key-value map of HTTP headers (for example auth tokens)                       |
-| `connectionTimeoutMs` | Per-server connection timeout in ms (optional)                                         |
+| Field                          | Description                                                                            |
+| ------------------------------ | -------------------------------------------------------------------------------------- |
+| `url`                          | HTTP or HTTPS URL of the remote server (required)                                      |
+| `transport`                    | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse` |
+| `headers`                      | Optional key-value map of HTTP headers (for example auth tokens)                       |
+| `connectionTimeoutMs`          | Per-server connection timeout in ms (optional)                                         |
+| `connectTimeout`               | Per-server connection timeout in seconds (optional)                                    |
+| `timeout` / `requestTimeoutMs` | Per-server MCP request timeout in seconds or ms                                        |
+| `auth: "oauth"`                | Use MCP OAuth token storage and `openclaw mcp login`                                   |
+| `sslVerify`                    | Set false only for explicitly trusted private HTTPS endpoints                          |
+| `clientCert` / `clientKey`     | mTLS client certificate and key paths                                                  |
+| `supportsParallelToolCalls`    | Hint that concurrent calls are safe for this server                                    |
 
-OpenClaw config uses `transport: "streamable-http"` as the canonical spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded Pi consumes directly.
+OpenClaw config uses `transport: "streamable-http"` as the canonical spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded OpenClaw consumes directly.
 
 Example:
 
@@ -497,7 +795,8 @@ Example:
       "streaming-tools": {
         "url": "https://mcp.example.com/stream",
         "transport": "streamable-http",
-        "connectionTimeoutMs": 10000,
+        "connectTimeout": 10,
+        "timeout": 30,
         "headers": {
           "Authorization": "Bearer <token>"
         }
@@ -508,8 +807,31 @@ Example:
 ```
 
 <Note>
-These commands manage saved config only. They do not start the channel bridge, open a live MCP client session, or prove the target server is reachable.
+Registry commands do not start the channel bridge. Only `probe` and `doctor --probe` open a live MCP client session to prove the target server is reachable.
 </Note>
+
+## Control UI
+
+The browser Control UI includes a dedicated MCP settings page at `/mcp`. It shows configured server counts, enabled/OAuth/filter summaries, per-server transport rows, enable/disable controls, common CLI commands, and a scoped editor for the `mcp` config section.
+
+Use the page for operator edits and quick inventory. Use `openclaw mcp doctor --probe` or `openclaw mcp probe` when you need live server proof.
+
+Operator workflow:
+
+1. Open the Control UI and choose **MCP**.
+2. Review the summary cards for total, enabled, OAuth, and filtered servers.
+3. Use each server row for transport, auth, filter, timeout, and command hints.
+4. Toggle enablement when you want to keep a definition but exclude it from runtime discovery.
+5. Edit the scoped `mcp` config section for structural changes such as new servers, headers, TLS, OAuth metadata, or tool filters.
+6. Choose **Save** to persist config only, or **Save & Publish** to apply through the Gateway config path.
+7. Run `openclaw mcp doctor --probe` when you need live proof that the edited server starts and lists tools.
+
+Notes:
+
+- command snippets quote server names so unusual names remain copyable in a shell
+- displayed URL-like values are redacted before rendering when they contain embedded credentials
+- the page does not start MCP transports by itself
+- active runtimes may need `openclaw mcp reload`, Gateway config publish, or process restart depending on which process owns the MCP clients
 
 ## Current limits
 

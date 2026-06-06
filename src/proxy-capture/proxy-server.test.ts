@@ -1,3 +1,4 @@
+// Proxy capture server tests cover request recording and response handling.
 import { describe, expect, it } from "vitest";
 import { parseConnectTarget } from "./proxy-server.js";
 
@@ -18,5 +19,7 @@ describe("parseConnectTarget", () => {
 
   it("rejects invalid CONNECT ports", () => {
     expect(() => parseConnectTarget("[::1]:99999")).toThrow("Invalid CONNECT target port");
+    expect(() => parseConnectTarget("api.openai.com:1e3")).toThrow("Invalid CONNECT target port");
+    expect(() => parseConnectTarget("api.openai.com:0x50")).toThrow("Invalid CONNECT target port");
   });
 });

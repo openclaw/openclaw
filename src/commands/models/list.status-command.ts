@@ -1,4 +1,7 @@
+/** Implementation of `openclaw models status`. */
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentDir,
   resolveAgentExplicitModelPrimary,
@@ -11,15 +14,18 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
-import { resolveAuthProfileOrder } from "../../agents/auth-profiles/order.js";
+import { evaluateStoredCredentialEligibility } from "../../agents/auth-profiles/credential-state.js";
+import {
+  resolveAuthProfileEligibility,
+  resolveAuthProfileOrder,
+} from "../../agents/auth-profiles/order.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import {
   listProviderEnvAuthLookupKeys,
-  resolveProviderEnvApiKeyCandidates,
-  resolveProviderEnvAuthEvidence,
+  resolveProviderEnvAuthLookupMaps,
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
 import {
@@ -32,18 +38,20 @@ import {
 } from "../../agents/model-selection.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
   openAIProviderUsesCodexRuntimeByDefault,
-} from "../../agents/openai-codex-routing.js";
-import {
-  resolveProviderAuthAliasMap,
-  resolveProviderIdForAuth,
-} from "../../agents/provider-auth-aliases.js";
+} from "../../agents/openai-routing.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "../../infra/parse-finite-number.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import {
   captureCurrentPluginMetadataSnapshotState,
@@ -58,12 +66,10 @@ import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-r
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { colorize, theme } from "../../terminal/theme.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
-import { type AuthProbeSummary } from "./list.probe.js";
+import type { AuthProbeSummary } from "./list.probe.js";
 import type { ProviderAuthOverview } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
@@ -80,7 +86,7 @@ function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): strin
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   return override ? resolveUserPath(override, env) : undefined;
 }
-type TerminalTableRuntime = typeof import("../../terminal/table.js");
+type TerminalTableRuntime = typeof import("../../../packages/terminal-core/src/table.js");
 type ListProbeRuntime = typeof import("./list.probe.js");
 
 const providerUsageRuntimeLoader = createLazyImportLoader<ProviderUsageRuntime>(
@@ -90,7 +96,7 @@ const progressRuntimeLoader = createLazyImportLoader<ProgressRuntime>(
   () => import("../../cli/progress.js"),
 );
 const terminalTableRuntimeLoader = createLazyImportLoader<TerminalTableRuntime>(
-  () => import("../../terminal/table.js"),
+  () => import("../../../packages/terminal-core/src/table.js"),
 );
 const listProbeRuntimeLoader = createLazyImportLoader<ListProbeRuntime>(
   () => import("./list.probe.js"),
@@ -120,6 +126,28 @@ function loadTerminalTableRuntime(): Promise<TerminalTableRuntime> {
 
 function loadListProbeRuntime(): Promise<ListProbeRuntime> {
   return listProbeRuntimeLoader.load();
+}
+
+function parseOptionalPositiveFiniteOption(raw: unknown, label: string, fallback: number): number {
+  if (raw === undefined || raw === null || raw === "") {
+    return fallback;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined || parsed <= 0) {
+    throw new Error(`${label} must be a positive number.`);
+  }
+  return parsed;
+}
+
+function parseOptionalPositiveIntegerOption(raw: unknown, label: string, fallback: number): number {
+  if (raw === undefined || raw === null || raw === "") {
+    return fallback;
+  }
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return parsed;
 }
 
 function isCompletePluginMetadataSnapshot(value: unknown): value is PluginMetadataSnapshot {
@@ -212,6 +240,7 @@ function syntheticAuthCredential(
   };
 }
 
+/** Prints model default, auth, provider, and optional probe status. */
 export async function modelsStatusCommand(
   opts: {
     json?: boolean;
@@ -364,9 +393,8 @@ export async function modelsStatusCommand(
       env: process.env,
       metadataSnapshot,
     };
-    const aliasMap = resolveProviderAuthAliasMap(envLookupParams);
-    const envCandidateMap = resolveProviderEnvApiKeyCandidates(envLookupParams);
-    const authEvidenceMap = resolveProviderEnvAuthEvidence(envLookupParams);
+    const { aliasMap, envCandidateMap, authEvidenceMap } =
+      resolveProviderEnvAuthLookupMaps(envLookupParams);
     for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
       if (
         resolveEnvApiKey(provider, process.env, {
@@ -403,7 +431,7 @@ export async function modelsStatusCommand(
     const syntheticProvidersToProbe = new Set(
       providers.map((provider) => normalizeProviderId(provider)),
     );
-    const codexProvider = normalizeProviderId(OPENAI_CODEX_PROVIDER_ID);
+    const codexProvider = normalizeProviderId(OPENAI_PROVIDER_ID);
     const codexProviderAlias = aliasMap[codexProvider] ?? codexProvider;
     const codexRuntimeAuthUsages = providerUses.filter(
       (usage) =>
@@ -420,7 +448,7 @@ export async function modelsStatusCommand(
       if (!syntheticAuthProviderRefs.has(normalized)) {
         continue;
       }
-      const resolved = resolveProviderSyntheticAuthWithPlugin({
+      const resolvedLocal = resolveProviderSyntheticAuthWithPlugin({
         provider: normalized,
         config: cfg,
         context: {
@@ -429,15 +457,15 @@ export async function modelsStatusCommand(
           providerConfig: resolveProviderConfigForStatus(cfg, normalized),
         },
       });
-      if (!resolved) {
+      if (!resolvedLocal) {
         continue;
       }
       const syntheticAuth: StatusSyntheticAuth = {
         value: "plugin-owned",
-        source: resolved.source,
-        credential: resolved.apiKey,
-        mode: resolved.mode,
-        expiresAt: resolved.expiresAt,
+        source: resolvedLocal.source,
+        credential: resolvedLocal.apiKey,
+        mode: resolvedLocal.mode,
+        expiresAt: resolvedLocal.expiresAt,
       };
       syntheticAuthByProvider.set(normalized, syntheticAuth);
       if (normalized === "codex" || normalized === codexProviderAlias) {
@@ -490,37 +518,172 @@ export async function modelsStatusCommand(
       kind: "missing",
       detail: "missing",
     };
+    const authHealth = buildAuthHealthSummary({
+      store,
+      cfg,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      runtimeCredentialsByProvider,
+      allowKeychainPrompt: false,
+    });
+    const authProfileHealthById = new Map(
+      authHealth.profiles.map((profile) => [profile.profileId, profile]),
+    );
+    const hasUsableAuthProfile = (
+      profileId: string,
+      credential: AuthProfileCredential,
+    ): boolean => {
+      if (credential.type === "api_key") {
+        return evaluateStoredCredentialEligibility({ credential }).eligible;
+      }
+      const health = authProfileHealthById.get(profileId);
+      if (health) {
+        return health.status === "ok" || health.status === "expiring" || health.status === "static";
+      }
+      return evaluateStoredCredentialEligibility({ credential }).eligible;
+    };
     const resolveProviderAuthHealthId = (provider: string): string =>
       resolveProviderIdForAuth(provider, envLookupParams);
-    const resolveRuntimeAuthRouteEffective = (
+    const resolveStatusAuthOrder = (
+      order: Record<string, string[]> | undefined,
       provider: string,
-    ): ProviderAuthOverview["effective"] => {
-      const direct = providerAuthMap.get(provider)?.effective;
-      if (direct && direct.kind !== "missing") {
-        return direct;
+    ): string[] | undefined => {
+      if (!order) {
+        return undefined;
       }
+      const providerKey = normalizeProviderId(provider);
+      for (const [key, value] of Object.entries(order)) {
+        if (normalizeProviderId(key) === providerKey) {
+          return value;
+        }
+      }
+      return undefined;
+    };
+    const listRuntimeAuthProviderCandidates = (
+      provider: string,
+      options?: { includeLegacyOpenAICodex?: boolean },
+    ): string[] => {
+      const normalizedProvider = normalizeProviderId(provider);
+      const candidates = [normalizedProvider, resolveProviderAuthHealthId(normalizedProvider)];
+      if (
+        options?.includeLegacyOpenAICodex === true &&
+        openAIProviderUsesCodexRuntimeByDefault({
+          provider: normalizedProvider,
+          config: cfg,
+        })
+      ) {
+        candidates.push(OPENAI_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID);
+      }
+      return Array.from(new Set(candidates));
+    };
+    const listProviderProfileCandidates = (provider: string): string[] => {
       const orderedProfiles = resolveAuthProfileOrder({
         cfg,
         store,
         provider,
       });
-      const profileId = orderedProfiles[0];
-      const credential = profileId ? store.profiles[profileId] : undefined;
-      if (profileId && credential) {
-        const sourceProvider = resolveProviderAuthHealthId(credential.provider);
-        const source = providerAuthMap.get(sourceProvider)?.effective;
-        return source && source.kind !== "missing"
-          ? source
-          : {
-              kind: "profiles",
-              detail: `${profileId} (${credential.provider})`,
-            };
+      const providerKey = normalizeProviderId(provider);
+      const providerAuthKey = resolveProviderAuthHealthId(providerKey);
+      const explicitOrder =
+        resolveStatusAuthOrder(store.order, providerAuthKey) ??
+        resolveStatusAuthOrder(store.order, providerKey) ??
+        resolveStatusAuthOrder(cfg.auth?.order, providerAuthKey) ??
+        resolveStatusAuthOrder(cfg.auth?.order, providerKey);
+      const isEligibleOrHealthRescued = (profileId: string): boolean => {
+        const credential = store.profiles[profileId];
+        if (!credential) {
+          return false;
+        }
+        const eligibility = resolveAuthProfileEligibility({
+          cfg,
+          store,
+          provider,
+          profileId,
+        });
+        if (eligibility.eligible) {
+          return true;
+        }
+        return (
+          eligibility.reasonCode === "missing_credential" &&
+          credential.type !== "api_key" &&
+          hasUsableAuthProfile(profileId, credential)
+        );
+      };
+      if (explicitOrder !== undefined) {
+        return Array.from(
+          new Set([...orderedProfiles, ...explicitOrder.filter(isEligibleOrHealthRescued)]),
+        );
       }
-      return direct ?? missingProviderAuthEffective;
+      const configuredProfiles = Object.entries(cfg.auth?.profiles ?? {})
+        .filter(([, profile]) => {
+          const profileProvider = normalizeProviderId(profile.provider);
+          return (
+            profileProvider === providerKey ||
+            resolveProviderAuthHealthId(profileProvider) === providerAuthKey
+          );
+        })
+        .map(([profileId]) => profileId);
+      if (configuredProfiles.length > 0) {
+        return Array.from(
+          new Set([...orderedProfiles, ...configuredProfiles.filter(isEligibleOrHealthRescued)]),
+        );
+      }
+      const sameProviderProfiles = Object.entries(store.profiles)
+        .filter(([, credential]) => {
+          const credentialProvider = normalizeProviderId(credential.provider);
+          return (
+            credentialProvider === providerKey ||
+            resolveProviderAuthHealthId(credentialProvider) === providerAuthKey
+          );
+        })
+        .map(([profileId]) => profileId)
+        .filter(isEligibleOrHealthRescued);
+      return Array.from(new Set([...orderedProfiles, ...sameProviderProfiles]));
     };
-    const hasUsableNonProfileAuth = (provider: string): boolean => {
-      const authProvider = resolveProviderAuthHealthId(provider);
-      for (const candidate of new Set([provider, authProvider])) {
+    const resolveRuntimeAuthRouteEffective = (
+      provider: string,
+    ): ProviderAuthOverview["effective"] => {
+      const candidates = listRuntimeAuthProviderCandidates(provider, {
+        includeLegacyOpenAICodex: true,
+      });
+      for (const candidate of candidates) {
+        const direct = providerAuthMap.get(candidate)?.effective;
+        if (
+          direct &&
+          direct.kind !== "missing" &&
+          (direct.kind !== "profiles" || hasUsableProviderAuth(candidate))
+        ) {
+          return direct;
+        }
+      }
+      for (const candidate of candidates) {
+        const profileId = listProviderProfileCandidates(candidate).find((candidateProfileId) => {
+          const candidateCredential = store.profiles[candidateProfileId];
+          return candidateCredential
+            ? hasUsableAuthProfile(candidateProfileId, candidateCredential)
+            : false;
+        });
+        const credential = profileId ? store.profiles[profileId] : undefined;
+        if (profileId && credential) {
+          const sourceProvider = resolveProviderAuthHealthId(credential.provider);
+          const source = providerAuthMap.get(sourceProvider)?.effective;
+          return source && source.kind !== "missing"
+            ? source
+            : {
+                kind: "profiles",
+                detail: `${profileId} (${credential.provider})`,
+              };
+        }
+      }
+      const direct = providerAuthMap.get(provider)?.effective;
+      return direct?.kind === "profiles"
+        ? missingProviderAuthEffective
+        : (direct ?? missingProviderAuthEffective);
+    };
+    const hasUsableNonProfileAuth = (
+      provider: string,
+      options?: { includeLegacyOpenAICodex?: boolean },
+    ): boolean => {
+      for (const candidate of listRuntimeAuthProviderCandidates(provider, options)) {
         const auth = providerAuthMap.get(candidate);
         if (
           auth?.env ||
@@ -533,15 +696,16 @@ export async function modelsStatusCommand(
       }
       return false;
     };
-    const hasUsableProviderAuth = (provider: string): boolean => {
-      const authProvider = resolveProviderAuthHealthId(provider);
-      for (const candidate of new Set([provider, authProvider])) {
-        const orderedProfiles = resolveAuthProfileOrder({
-          cfg,
-          store,
-          provider: candidate,
+    const hasUsableProviderAuth = (
+      provider: string,
+      options?: { includeLegacyOpenAICodex?: boolean },
+    ): boolean => {
+      for (const candidate of listRuntimeAuthProviderCandidates(provider, options)) {
+        const hasUsableProfile = listProviderProfileCandidates(candidate).some((profileId) => {
+          const credential = store.profiles[profileId];
+          return credential ? hasUsableAuthProfile(profileId, credential) : false;
         });
-        if (orderedProfiles.length > 0 || hasUsableNonProfileAuth(candidate)) {
+        if (hasUsableProfile || hasUsableNonProfileAuth(candidate)) {
           return true;
         }
       }
@@ -559,7 +723,7 @@ export async function modelsStatusCommand(
       }
       return (
         openAIProviderUsesCodexRuntimeByDefault({ provider, config: cfg }) &&
-        hasUsableProviderAuth(OPENAI_CODEX_PROVIDER_ID)
+        hasUsableProviderAuth(OPENAI_PROVIDER_ID, { includeLegacyOpenAICodex: true })
       );
     };
     const runtimeAuthRoutes = Array.from(
@@ -572,7 +736,11 @@ export async function modelsStatusCommand(
               provider: usage.provider,
               runtime: "codex",
               authProvider: codexProvider,
-              status: hasUsableProviderAuth(codexProvider) ? "usable" : "missing",
+              status: hasUsableProviderAuth(codexProvider, {
+                includeLegacyOpenAICodex: true,
+              })
+                ? "usable"
+                : "missing",
               effective,
             },
           ] as const;
@@ -604,18 +772,21 @@ export async function modelsStatusCommand(
         .map((value) => value.trim())
         .filter(Boolean);
     })();
-    const probeTimeoutMs = opts.probeTimeout ? Number(opts.probeTimeout) : 8000;
-    if (!Number.isFinite(probeTimeoutMs) || probeTimeoutMs <= 0) {
-      throw new Error("--probe-timeout must be a positive number (ms).");
-    }
-    const probeConcurrency = opts.probeConcurrency ? Number(opts.probeConcurrency) : 2;
-    if (!Number.isFinite(probeConcurrency) || probeConcurrency <= 0) {
-      throw new Error("--probe-concurrency must be > 0.");
-    }
-    const probeMaxTokens = opts.probeMaxTokens ? Number(opts.probeMaxTokens) : 8;
-    if (!Number.isFinite(probeMaxTokens) || probeMaxTokens <= 0) {
-      throw new Error("--probe-max-tokens must be > 0.");
-    }
+    const probeTimeoutMs = parseOptionalPositiveFiniteOption(
+      opts.probeTimeout,
+      "--probe-timeout",
+      8000,
+    );
+    const probeConcurrency = parseOptionalPositiveIntegerOption(
+      opts.probeConcurrency,
+      "--probe-concurrency",
+      2,
+    );
+    const probeMaxTokens = parseOptionalPositiveIntegerOption(
+      opts.probeMaxTokens,
+      "--probe-max-tokens",
+      8,
+    );
 
     const rawCandidates = [
       rawModel || resolvedLabel,
@@ -681,12 +852,6 @@ export async function modelsStatusCommand(
         return `${entry.provider} (${count})`;
       });
 
-    const authHealth = buildAuthHealthSummary({
-      store,
-      cfg,
-      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
-      runtimeCredentialsByProvider,
-    });
     const oauthProfiles = authHealth.profiles.filter(
       (profile) => profile.type === "oauth" || profile.type === "token",
     );
@@ -731,9 +896,13 @@ export async function modelsStatusCommand(
         if (
           usage.allowCodexRuntimeFallback &&
           openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }) &&
-          hasUsableProviderAuth(OPENAI_CODEX_PROVIDER_ID)
+          hasUsableProviderAuth(OPENAI_PROVIDER_ID, { includeLegacyOpenAICodex: true })
         ) {
-          providersInUse.add(OPENAI_CODEX_PROVIDER_ID);
+          for (const candidate of listRuntimeAuthProviderCandidates(OPENAI_PROVIDER_ID, {
+            includeLegacyOpenAICodex: true,
+          })) {
+            providersInUse.add(candidate);
+          }
         }
       }
       const hasExpiredOrMissing =
@@ -994,7 +1163,8 @@ export async function modelsStatusCommand(
     }
 
     if (missingProvidersInUse.length > 0) {
-      const { buildProviderAuthRecoveryHint } = await import("../provider-auth-guidance.js");
+      const { buildProviderAuthRecoveryHint } =
+        await import("../../agents/provider-auth-recovery-hint.js");
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Missing auth"));
       for (const provider of missingProvidersInUse) {
@@ -1018,7 +1188,9 @@ export async function modelsStatusCommand(
       const usageProviders = Array.from(
         new Set(
           oauthProfiles
-            .map((profile) => resolveUsageProviderId(profile.provider))
+            .map((profile) =>
+              resolveUsageProviderId(profile.provider, { credentialType: profile.type }),
+            )
             .filter((provider): provider is NonNullable<typeof provider> => Boolean(provider)),
         ),
       );
@@ -1071,13 +1243,18 @@ export async function modelsStatusCommand(
       }
 
       for (const [provider, profiles] of profilesByProvider) {
-        const usageKey = resolveUsageProviderId(provider);
+        const usageProfile = profiles.find(
+          (profile) => profile.type === "oauth" || profile.type === "token",
+        );
+        const usageKey = resolveUsageProviderId(provider, {
+          credentialType: usageProfile?.type,
+        });
         const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
         const usageSuffix = usage ? colorize(rich, theme.muted, ` usage: ${usage}`) : "";
         runtime.log(`- ${colorize(rich, theme.heading, provider)}${usageSuffix}`);
         for (const profile of profiles) {
           const labelText = profile.label || profile.profileId;
-          const label = colorize(rich, theme.accent, labelText);
+          const labelLocal = colorize(rich, theme.accent, labelText);
           const status = formatStatus(profile.status);
           const expiry =
             profile.status === "static"
@@ -1085,7 +1262,7 @@ export async function modelsStatusCommand(
               : profile.expiresAt
                 ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
                 : " expires unknown";
-          runtime.log(`  - ${label} ${status}${expiry}`);
+          runtime.log(`  - ${labelLocal} ${status}${expiry}`);
         }
       }
     }

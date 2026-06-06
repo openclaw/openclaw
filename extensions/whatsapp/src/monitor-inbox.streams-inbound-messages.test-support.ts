@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox.streams inbound messages support behavior.
 import fsSync from "node:fs";
 import path from "node:path";
 import "./monitor-inbox.test-harness.js";
@@ -6,18 +7,36 @@ import { WhatsAppRetryableInboundError } from "./inbound/dedupe.js";
 import { WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES } from "./inbound/monitor.js";
 import {
   type InboxMonitorOptions,
-  InboxOnMessage,
   buildNotifyMessageUpsert,
+  failNextWhatsAppPluginStateRegisterIfAbsent,
   getAuthDir,
   getSock,
   installWebMonitorInboxUnitTestHooks,
+  resetWebInboundDedupeForTests,
+  settleInboundWork,
   startInboxMonitor,
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
+import type { InboxOnMessage } from "./monitor-inbox.test-harness.js";
 
-const { sleepWithAbortMock } = vi.hoisted(() => ({
+const { imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
+  imageOps: {
+    getImageMetadata: vi.fn(),
+    resizeToJpeg: vi.fn(),
+  },
   sleepWithAbortMock: vi.fn(async (_ms: number, _signal?: AbortSignal) => undefined),
 }));
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    getImageMetadata: imageOps.getImageMetadata,
+    resizeToJpeg: imageOps.resizeToJpeg,
+  };
+});
 
 vi.mock("./reconnect.js", async () => {
   const actual = await vi.importActual<typeof import("./reconnect.js")>("./reconnect.js");
@@ -80,6 +99,10 @@ describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
   beforeEach(() => {
+    imageOps.getImageMetadata.mockReset();
+    imageOps.getImageMetadata.mockResolvedValue(null);
+    imageOps.resizeToJpeg.mockReset();
+    imageOps.resizeToJpeg.mockRejectedValue(new Error("unexpected thumbnail generation"));
     sleepWithAbortMock.mockReset();
     sleepWithAbortMock.mockImplementation(async (_ms: number, _signal?: AbortSignal) => undefined);
   });
@@ -186,6 +209,111 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("delays read receipts until inbound handlers complete", async () => {
+    let finishMessage: (() => void) | undefined;
+    const handlerGate = new Promise<void>((resolve) => {
+      finishMessage = resolve;
+    });
+    const onMessage = vi.fn(async () => {
+      await handlerGate;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("delayed-read");
+
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: messageId,
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(sock.readMessages).not.toHaveBeenCalled();
+    finishMessage?.();
+    await vi.waitFor(() => {
+      expect(sock.readMessages).toHaveBeenCalledWith([
+        {
+          remoteJid: "999@s.whatsapp.net",
+          id: messageId,
+          participant: undefined,
+          fromMe: false,
+        },
+      ]);
+    });
+
+    await listener.close();
+  });
+
+  it("continues live delivery when durable persistence rejects a message", async () => {
+    failNextWhatsAppPluginStateRegisterIfAbsent(new Error("PLUGIN_STATE_LIMIT_EXCEEDED"));
+    const onMessage = vi.fn(async () => undefined);
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("durable-fallback");
+
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: messageId,
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(inboundMessage(onMessage).body).toBe("ping");
+    await vi.waitFor(() => {
+      expect(sock.readMessages).toHaveBeenCalledWith([
+        {
+          remoteJid: "999@s.whatsapp.net",
+          id: messageId,
+          participant: undefined,
+          fromMe: false,
+        },
+      ]);
+    });
+
+    await listener.close();
+  });
+
+  it("does not dispatch live duplicates that already have pending durable delivery", async () => {
+    let finishMessage: (() => void) | undefined;
+    const handlerGate = new Promise<void>((resolve) => {
+      finishMessage = resolve;
+    });
+    const onMessage = vi.fn(async () => {
+      await handlerGate;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("durable-pending");
+    const upsert = buildNotifyMessageUpsert({
+      id: messageId,
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    resetWebInboundDedupeForTests();
+    sock.ev.emit("messages.upsert", upsert);
+    await settleInboundWork();
+    expect(onMessage).toHaveBeenCalledTimes(1);
+
+    finishMessage?.();
+    await listener.close();
+  });
+
   it("stays unavailable on connect in self-chat mode", async () => {
     const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
       selfChatMode: true,
@@ -218,9 +346,7 @@ describe("web monitor inbox", () => {
 
   it("keeps group inbound alive with cached metadata after reconnect-time metadata fetch failures", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
-    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {
-      return;
-    });
+    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {});
 
     const firstSock = getSock();
     firstSock.groupFetchAllParticipating.mockResolvedValueOnce({
@@ -300,6 +426,35 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("does not keep reconnect group metadata when the expiry would exceed a valid Date", async () => {
+    const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    try {
+      const sock = getSock();
+      sock.groupFetchAllParticipating.mockResolvedValueOnce({
+        "123@g.us": {
+          id: "123@g.us",
+          subject: "Boundary Group",
+          owner: undefined,
+          participants: [],
+        },
+      });
+
+      const { listener } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
+        groupMetadataCache,
+      });
+
+      await vi.waitFor(() => {
+        expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
+      });
+      expect(groupMetadataCache.has("123@g.us")).toBe(false);
+
+      await listener.close();
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("does not block inbound listeners while group hydration is pending", async () => {
     let resolveHydration!: () => void;
     const sock = getSock();
@@ -307,9 +462,7 @@ describe("web monitor inbox", () => {
       resolveHydration = () => resolve({});
     });
     sock.groupFetchAllParticipating.mockImplementationOnce(() => pendingHydration);
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
 
     const { listener } = await startInboxMonitor(onMessage as InboxOnMessage);
     sock.ev.emit(
@@ -374,6 +527,49 @@ describe("web monitor inbox", () => {
       "999@s.whatsapp.net",
     );
     expect(sock.sendMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("prepopulates image previews for inbound sendMedia replies", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("image-preview"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    const inbound = inboundMessage(onMessage) as {
+      sendMedia: (payload: Record<string, unknown>) => Promise<void>;
+    };
+    const image = Buffer.from("img");
+    const thumbnail = Buffer.from("thumb");
+    imageOps.getImageMetadata.mockResolvedValueOnce({ width: 640, height: 480 });
+    imageOps.resizeToJpeg.mockResolvedValueOnce(thumbnail);
+
+    await inbound.sendMedia({ image, caption: "cap", mimetype: "image/png" });
+
+    expect(imageOps.resizeToJpeg).toHaveBeenCalledWith({
+      buffer: image,
+      maxSide: 32,
+      quality: 50,
+      withoutEnlargement: true,
+    });
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      image,
+      caption: "cap",
+      mimetype: "image/png",
+      width: 640,
+      height: 480,
+      jpegThumbnail: thumbnail.toString("base64"),
+    });
 
     await listener.close();
   });
@@ -504,59 +700,52 @@ describe("web monitor inbox", () => {
   });
 
   it("waits for in-flight inbound handlers before draining on close", async () => {
-    vi.useFakeTimers();
-    try {
-      const onMessage = vi.fn(async (msg) => {
-        await msg.reply("pong");
-      });
-      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-        debounceMs: 50,
-      });
-      let releaseRead: (() => void) | undefined;
-      const readGate = new Promise<void>((resolve) => {
-        releaseRead = resolve;
-      });
-      const readStarted = new Promise<void>((resolve) => {
-        sock.readMessages.mockImplementationOnce(async () => {
-          resolve();
-          await readGate;
-        });
-      });
+    let releaseHandler: (() => void) | undefined;
+    const handlerGate = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    let markHandlerStarted: (() => void) | undefined;
+    const handlerStarted = new Promise<void>((resolve) => {
+      markHandlerStarted = resolve;
+    });
+    const onMessage = vi.fn(async (msg) => {
+      await msg.reply("pong");
+      markHandlerStarted?.();
+      await handlerGate;
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
 
-      sock.ev.emit(
-        "messages.upsert",
-        buildNotifyMessageUpsert({
-          id: nextMessageId("debounce-close-inflight"),
-          remoteJid: "999@s.whatsapp.net",
-          text: "first",
-          timestamp: 1_700_000_000,
-          pushName: "Tester",
-        }),
-      );
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("close-inflight"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "first",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
 
-      await readStarted;
-      const closePromise = listener.close();
-      await Promise.resolve();
+    await handlerStarted;
+    const closePromise = listener.close();
+    await Promise.resolve();
 
-      expect(sock.end).not.toHaveBeenCalled();
+    expect(sock.end).not.toHaveBeenCalled();
 
-      if (!releaseRead) {
-        throw new Error("Expected read receipt release callback to be initialized");
-      }
-      releaseRead();
-      await closePromise;
-
-      expect(onMessage).toHaveBeenCalledTimes(1);
-      expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-        text: "pong",
-      });
-      expect(sock.end).toHaveBeenCalledTimes(1);
-      expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
-        sock.end.mock.invocationCallOrder.at(0),
-      );
-    } finally {
-      vi.useRealTimers();
+    if (!releaseHandler) {
+      throw new Error("Expected handler release callback to be initialized");
     }
+    releaseHandler();
+    await closePromise;
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: "pong",
+    });
+    expect(sock.end).toHaveBeenCalledTimes(1);
+    expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
+      sock.end.mock.invocationCallOrder.at(0),
+    );
   });
 
   it("retries timed-out sends on the same socket without clearing the socket ref", async () => {
@@ -621,9 +810,7 @@ describe("web monitor inbox", () => {
   });
 
   it("deduplicates redelivered messages by id", async () => {
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const upsert = buildNotifyMessageUpsert({
@@ -663,17 +850,19 @@ describe("web monitor inbox", () => {
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
+    expect(sock.readMessages).not.toHaveBeenCalled();
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 2);
+    await vi.waitFor(() => {
+      expect(sock.readMessages).toHaveBeenCalledTimes(1);
+    });
 
     await listener.close();
   });
 
   it("resolves LID JIDs using Baileys LID mapping store", async () => {
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
@@ -699,9 +888,7 @@ describe("web monitor inbox", () => {
   });
 
   it("resolves LID JIDs via authDir mapping files", async () => {
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
     fsSync.writeFileSync(
       path.join(getAuthDir(), "lid-mapping-555_reverse.json"),
       JSON.stringify("1555"),
@@ -730,9 +917,7 @@ describe("web monitor inbox", () => {
   });
 
   it("resolves group participant LID JIDs via Baileys mapping", async () => {
-    const onMessage = vi.fn(async () => {
-      return;
-    });
+    const onMessage = vi.fn(async () => {});
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");

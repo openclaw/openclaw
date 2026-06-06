@@ -1,4 +1,10 @@
+/**
+ * Session-store maintenance protection for subagent runs.
+ * Preserves child session keys while runs are active, pending delivery, or
+ * awaiting completion announces so pruning cannot delete needed transcripts.
+ */
 import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
+import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -12,11 +18,11 @@ function isActiveForMaintenance(entry: SubagentRunRecord): boolean {
 }
 
 function isPendingFinalDeliveryForMaintenance(entry: SubagentRunRecord): boolean {
-  return entry.pendingFinalDelivery === true;
+  return entry.delivery?.status === "pending" || isDeliverySuspended(entry);
 }
 
 function isAwaitingCompletionAnnounceForMaintenance(entry: SubagentRunRecord): boolean {
-  return entry.expectsCompletionMessage === true && typeof entry.completionAnnouncedAt !== "number";
+  return entry.expectsCompletionMessage === true && entry.delivery?.status !== "delivered";
 }
 
 function shouldPreserveForMaintenance(entry: SubagentRunRecord): boolean {
@@ -31,6 +37,7 @@ function shouldPreserveForMaintenance(entry: SubagentRunRecord): boolean {
   );
 }
 
+/** Lists child session keys protected from session-store maintenance pruning. */
 export function listSessionMaintenanceProtectedSubagentSessionKeys(): string[] {
   const keys = new Set<string>();
   for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {

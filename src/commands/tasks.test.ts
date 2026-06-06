@@ -1,19 +1,24 @@
+// Tasks command tests cover task listing, status rendering, cron-store integration, and cancellations.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveCronStore } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
-  createManagedTaskFlow,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
   resetTaskFlowRegistryForTests,
 } from "../tasks/task-flow-registry.js";
+import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
-  createTaskRecord,
+  createTaskRecord as createTaskRecordOrNull,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
+import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { tasksAuditCommand, tasksMaintenanceCommand } from "./tasks.js";
+import { tasksAuditCommand, tasksMaintenanceCommand, tasksShowCommand } from "./tasks.js";
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -23,10 +28,33 @@ function createRuntime(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
+function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
+  const task = createTaskRecordOrNull(params);
+  if (!task) {
+    throw new Error("expected task creation to succeed");
+  }
+  return task;
+}
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
 function readFirstJsonLog(runtime: RuntimeEnv): unknown {
   const calls = vi.mocked(runtime.log).mock.calls;
   const [message] = calls[0] ?? [];
   return JSON.parse(String(message));
+}
+
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
 }
 
 const zeroTaskAuditCounts = {
@@ -135,9 +163,201 @@ describe("tasks commands", () => {
           ageMs: 45 * 60_000,
           status: "running",
           token: runningFlow.flowId,
-          flow: JSON.parse(JSON.stringify(runningFlow)),
+          flow: jsonRoundTrip(runningFlow),
         },
       ]);
+    });
+  });
+
+  it("explains stale running tasks retained by backing sessions in maintenance JSON", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now - 45 * 60_000);
+      const childSessionKey = "agent:main:subagent:child-retained";
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-retained-child",
+        status: "running",
+        task: "Review retained child session",
+      });
+      vi.setSystemTime(now);
+
+      const sessionsDir = state.sessionsDir("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "sessions.json"),
+        JSON.stringify(
+          {
+            [childSessionKey]: {
+              sessionId: "child-retained",
+              updatedAt: now,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
+
+      const payload = readFirstJsonLog(runtime) as {
+        diagnostics: {
+          staleRunningTasks: Array<{
+            taskId: string;
+            decision: string;
+            reason: string;
+            childSessionKey?: string;
+          }>;
+        };
+      };
+
+      expect(payload.diagnostics.staleRunningTasks).toContainEqual(
+        expect.objectContaining({
+          taskId: task.taskId,
+          decision: "retained",
+          reason: "backing_session_present",
+          childSessionKey,
+        }),
+      );
+    });
+  });
+
+  it("explains task maintenance decisions before applying session registry pruning", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now - 45 * 60_000);
+      const childSessionKey = "agent:main:cron:done-job:run:old-run";
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-backed-before-session-sweep",
+        status: "running",
+        task: "Review old cron child session",
+      });
+      vi.setSystemTime(now);
+
+      const sessionsDir = state.sessionsDir("main");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [childSessionKey]: {
+              sessionId: "old-run",
+              updatedAt: now - 8 * 24 * 60 * 60_000,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
+
+      const payload = readFirstJsonLog(runtime) as {
+        maintenance: {
+          tasks: { reconciled: number };
+          sessions: { pruned: number };
+        };
+        diagnostics: {
+          staleRunningTasks: Array<{
+            taskId: string;
+            decision: string;
+            reason: string;
+            childSessionKey?: string;
+          }>;
+        };
+      };
+
+      expect(payload.maintenance.tasks.reconciled).toBe(0);
+      expect(payload.maintenance.sessions.pruned).toBe(1);
+      expect(payload.diagnostics.staleRunningTasks).toContainEqual(
+        expect.objectContaining({
+          taskId: task.taskId,
+          decision: "retained",
+          reason: "backing_session_present",
+          childSessionKey,
+        }),
+      );
+
+      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+      expect(updated[childSessionKey]).toBeUndefined();
+    });
+  });
+
+  it("does not build JSON-only diagnostics for text maintenance output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const diagnosticsSpy = vi.spyOn(
+        taskRegistryMaintenance,
+        "getTaskRegistryMaintenanceDiagnostics",
+      );
+      const runtime = createRuntime();
+
+      await tasksMaintenanceCommand({ json: false, apply: false }, runtime);
+
+      expect(diagnosticsSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows tasks with Date-invalid optional timestamps without crashing", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-invalid-started-at",
+        status: "running",
+        task: "Inspect malformed task timestamp",
+        startedAt: 8_700_000_000_000_000,
+      });
+
+      const runtime = createRuntime();
+      await tasksShowCommand({ json: false, lookup: task.taskId }, runtime);
+
+      const joined = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(joined).toContain(`taskId: ${task.taskId}`);
+      expect(joined).toContain("startedAt: n/a");
+    });
+  });
+
+  it("explains retained lost task cleanup timing in maintenance text output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const cleanupAfter = Date.now() + 60_000;
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-retained-lost",
+        status: "lost",
+        task: "Retained lost task",
+        cleanupAfter,
+      });
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: false, apply: true }, runtime);
+
+      const joined = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(joined).toContain(
+        `Retained lost tasks: 1 retained until ${new Date(cleanupAfter).toISOString()}; maintenance will prune after cleanupAfter.`,
+      );
     });
   });
 
@@ -214,7 +434,7 @@ describe("tasks commands", () => {
         ),
         "utf-8",
       );
-      await state.writeJson("cron/jobs.json", {
+      await saveCronStore(state.statePath("cron", "jobs.json"), {
         version: 1,
         jobs: [
           {
@@ -229,7 +449,7 @@ describe("tasks commands", () => {
             delivery: { mode: "none" },
             createdAtMs: now,
             updatedAtMs: now,
-            state: {},
+            state: { runningAtMs: now - 5_000 },
           },
           {
             id: "done-job",
@@ -247,20 +467,6 @@ describe("tasks commands", () => {
           },
         ],
       });
-      await state.writeJson("cron/jobs-state.json", {
-        version: 1,
-        jobs: {
-          "running-job": {
-            updatedAtMs: now,
-            state: { runningAtMs: now - 5_000 },
-          },
-          "done-job": {
-            updatedAtMs: now,
-            state: {},
-          },
-        },
-      });
-
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
 

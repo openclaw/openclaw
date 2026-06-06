@@ -1,8 +1,9 @@
+// Tests Gemini provider usage fetch normalization.
 import { describe, expect, it } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchGeminiUsage } from "./provider-usage.fetch.gemini.js";
 
-const usageProvider = "openai-codex" as const;
+const usageProvider = "openai" as const;
 
 describe("fetchGeminiUsage", () => {
   it("returns HTTP errors for failed requests", async () => {
@@ -58,7 +59,7 @@ describe("fetchGeminiUsage", () => {
 
     expect(result).toEqual({
       provider: usageProvider,
-      displayName: "Codex",
+      displayName: "OpenAI",
       windows: [],
     });
   });

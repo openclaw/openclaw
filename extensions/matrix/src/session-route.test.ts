@@ -1,3 +1,4 @@
+// Matrix tests cover session route plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -278,7 +279,7 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     const route = resolveMatrixOutboundSessionRoute({
       cfg: {},
       agentId: "main",
-      target: "room:!Ops:Example.Org",
+      target: "room:!ops:example.org",
       currentSessionKey: "agent:main:matrix:channel:!ops:example.org:thread:$RootEvent:Example.Org",
     });
 

@@ -1,3 +1,4 @@
+// Status JSON tests cover command output and runtime JSON writes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { statusJsonCommand } from "./status-json.js";
@@ -30,6 +31,20 @@ vi.mock("../infra/provider-usage.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+}));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  resolveReadOnlyChannelPluginsForConfig: vi.fn(() => ({
+    plugins: [
+      { id: "discord" },
+      { id: "imessage" },
+      { id: "signal" },
+      { id: "slack" },
+      { id: "telegram" },
+      { id: "whatsapp" },
+    ],
+    missingConfiguredChannelIds: [],
+  })),
 }));
 
 vi.mock("./status.daemon.js", () => ({

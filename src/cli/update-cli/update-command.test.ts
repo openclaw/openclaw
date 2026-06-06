@@ -1,3 +1,4 @@
+// Update command tests cover update command orchestration and filesystem effects.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,7 @@ import {
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
   resolvePostCoreUpdateChildStdio,
+  resolvePostUpdateServiceStateReadEnv,
   resolvePostInstallDoctorEnv,
   shouldPrepareUpdatedInstallRestart,
   resolveUpdatedGatewayRestartPort,
@@ -114,6 +116,40 @@ describe("resolveUpdatedGatewayRestartPort", () => {
         serviceEnv: {},
       }),
     ).toBe(19000);
+  });
+});
+
+describe("resolvePostUpdateServiceStateReadEnv", () => {
+  it("keeps package restart preparation anchored to the pre-update service env", () => {
+    const processEnv = {
+      OPENCLAW_STATE_DIR: "/source/state",
+      OPENCLAW_CONFIG_PATH: "/source/openclaw.json",
+    } as NodeJS.ProcessEnv;
+    const prePackageServiceEnv = {
+      OPENCLAW_STATE_DIR: "/managed/state",
+      OPENCLAW_CONFIG_PATH: "/managed/openclaw.json",
+    } as NodeJS.ProcessEnv;
+
+    expect(
+      resolvePostUpdateServiceStateReadEnv({
+        updateMode: "npm",
+        processEnv,
+        prePackageServiceEnv,
+      }),
+    ).toBe(prePackageServiceEnv);
+  });
+
+  it("keeps git updates tied to the caller environment", () => {
+    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" } as NodeJS.ProcessEnv;
+    const prePackageServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" } as NodeJS.ProcessEnv;
+
+    expect(
+      resolvePostUpdateServiceStateReadEnv({
+        updateMode: "git",
+        processEnv,
+        prePackageServiceEnv,
+      }),
+    ).toBe(processEnv);
   });
 });
 

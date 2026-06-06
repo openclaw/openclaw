@@ -1,3 +1,4 @@
+// Imessage tests cover monitor.gating plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { resetIMessageShortIdState } from "./monitor-reply-cache.js";
@@ -7,8 +8,10 @@ import {
 } from "./monitor/inbound-processing.js";
 import { parseIMessageNotification } from "./monitor/parse-notification.js";
 import type { IMessagePayload } from "./monitor/types.js";
+import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 beforeEach(() => {
+  installIMessageStateRuntimeForTest();
   resetIMessageShortIdState();
 });
 
@@ -94,7 +97,7 @@ async function buildDispatchContextPayload(params: {
   const { cfg, message } = params;
   const { decision, groupHistories } = await resolveDispatchDecision({ cfg, message });
 
-  const { ctxPayload } = buildIMessageInboundContext({
+  const { ctxPayload } = await buildIMessageInboundContext({
     cfg,
     decision,
     message,
@@ -106,7 +109,7 @@ async function buildDispatchContextPayload(params: {
 }
 
 describe("imessage monitor gating + envelope builders", () => {
-  it("parseIMessageNotification rejects malformed payloads", () => {
+  it("parseIMessageNotification rejects malformed payloads", async () => {
     expect(
       parseIMessageNotification({
         message: { chat_id: 1, sender: { nested: "nope" } },
@@ -114,7 +117,7 @@ describe("imessage monitor gating + envelope builders", () => {
     ).toBeNull();
   });
 
-  it("parseIMessageNotification preserves destination_caller_id metadata", () => {
+  it("parseIMessageNotification preserves destination_caller_id metadata", async () => {
     expect(
       parseIMessageNotification({
         message: {
@@ -241,7 +244,7 @@ describe("imessage monitor gating + envelope builders", () => {
       groupAllowFrom: ["+15550001111"],
       groupPolicy: "allowlist",
     });
-    const { ctxPayload } = buildIMessageInboundContext({
+    const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,
@@ -280,7 +283,7 @@ describe("imessage monitor gating + envelope builders", () => {
       groupAllowFrom: ["chat_id:55"],
       groupPolicy: "allowlist",
     });
-    const { ctxPayload } = buildIMessageInboundContext({
+    const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,
@@ -325,7 +328,7 @@ describe("imessage monitor gating + envelope builders", () => {
       groupAllowFrom: ["accessGroup:oncall"],
       groupPolicy: "allowlist",
     });
-    const { ctxPayload } = buildIMessageInboundContext({
+    const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,
@@ -364,7 +367,7 @@ describe("imessage monitor gating + envelope builders", () => {
       groupAllowFrom: ["+15550001111"],
       groupPolicy: "allowlist",
     });
-    const { ctxPayload } = buildIMessageInboundContext({
+    const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,
