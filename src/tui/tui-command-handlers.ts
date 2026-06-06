@@ -164,6 +164,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openModelSelector = async () => {
+    const loadingStatus = "loading models";
+    const previousActivityStatus = state.activityStatus;
+    state.activityStatus = loadingStatus;
+    setActivityStatus(loadingStatus);
+    tui.requestRender();
     try {
       const models = await client.listModels();
       if (models.length === 0) {
@@ -196,6 +201,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     } catch (err) {
       chatLog.addSystem(`model list failed: ${String(err)}`);
       tui.requestRender();
+    } finally {
+      if (state.activityStatus === loadingStatus) {
+        const restoredStatus = previousActivityStatus || "idle";
+        state.activityStatus = restoredStatus;
+        setActivityStatus(restoredStatus);
+      }
     }
   };
 

@@ -280,6 +280,39 @@ describe("tui command handlers", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("waiting");
   });
 
+  it("shows immediate feedback before /models finishes listing", async () => {
+    let resolveModels: (value: Array<{ provider: string; id: string; name?: string }>) => void =
+      () => {
+        throw new Error("listModels promise resolver was not initialized");
+      };
+    const listModels = vi.fn(
+      () =>
+        new Promise<Array<{ provider: string; id: string; name?: string }>>((resolve) => {
+          resolveModels = resolve;
+        }),
+    );
+    const setActivityStatus = vi.fn();
+
+    const { handleCommand, requestRender, openOverlay } = createHarness({
+      listModels,
+      setActivityStatus,
+    });
+
+    const pending = handleCommand("/models");
+    await Promise.resolve();
+
+    expect(setActivityStatus).toHaveBeenCalledWith("loading models");
+    const loadingOrder = setActivityStatus.mock.invocationCallOrder[0] ?? 0;
+    expect(requestRender.mock.invocationCallOrder.some((order) => order > loadingOrder)).toBe(true);
+    expect(openOverlay).not.toHaveBeenCalled();
+
+    resolveModels([{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4" }]);
+    await pending;
+
+    expect(openOverlay).toHaveBeenCalledTimes(1);
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+  });
+
   it("forwards unknown slash commands to the gateway", async () => {
     const { handleCommand, sendChat, addPendingUser, addSystem, requestRender } = createHarness();
 
