@@ -1937,7 +1937,7 @@ describe("sendChatMessage", () => {
     });
   });
 
-  it("clears the local run when the send acks a terminal timeout", async () => {
+  it("clears the local run and rejects acceptance when the send acks a terminal timeout", async () => {
     const request = vi.fn((_method: string, params: { idempotencyKey: string }) =>
       Promise.resolve({ runId: params.idempotencyKey, status: "timeout" }),
     );
@@ -1948,7 +1948,9 @@ describe("sendChatMessage", () => {
 
     const result = await sendChatMessage(state, "aborted before dispatch");
 
-    expect(result).toMatch(UUID_V4_RE);
+    expect(result).toBeNull();
+    expect(state.chatMessages).toStrictEqual([]);
+    expect(state.lastError).toBe("The run ended before the message was accepted.");
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
@@ -1958,12 +1960,12 @@ describe("sendChatMessage", () => {
     };
     expect(runState.chatRunStatus).toMatchObject({
       phase: "interrupted",
-      runId: result,
+      runId: expect.stringMatching(UUID_V4_RE),
       sessionKey: "main",
     });
     expect(runState.lastLocalTerminalReconcile).toMatchObject({
       phase: "interrupted",
-      runId: result,
+      runId: expect.stringMatching(UUID_V4_RE),
       sessionKey: "main",
       sessionStatus: "killed",
     });
