@@ -949,6 +949,22 @@ export async function prepareSlackMessage(params: {
     }
   }
 
+  if (
+    isRoom &&
+    channelConfig?.ignoreOtherMentions &&
+    (mentionedUserIds.length > 0 || mentionedSubteamIds.length > 0) &&
+    !effectiveWasMentioned &&
+    !shouldBypassMention
+  ) {
+    logInboundDrop({
+      log: logVerbose,
+      channel: "slack",
+      reason: "other-mention (ignoreOtherMentions=true)",
+      target: message.channel,
+    });
+    return null;
+  }
+
   const threadContextAllowFromLower = isRoom
     ? channelUsersAllowlistConfigured
       ? normalizeAllowListLower(channelConfig?.users)

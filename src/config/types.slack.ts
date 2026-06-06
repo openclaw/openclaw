@@ -43,6 +43,11 @@ export type SlackChannelConfig = {
   enabled?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /**
+   * When true, drop inbound room messages that mention another user or user-group
+   * but do not mention this bot. Mirrors the Discord `ignoreOtherMentions` option.
+   */
+  ignoreOtherMentions?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
