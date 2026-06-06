@@ -478,6 +478,34 @@ describe("exec approval forwarder", () => {
     expect(deliver).toHaveBeenCalledTimes(4);
   });
 
+  it("keeps approval pending when partial_failed includes visible delivery results", async () => {
+    vi.useFakeTimers();
+    const deliver = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: "partial_failed",
+        results: [{ ok: true }],
+        error: new Error("later payload failed"),
+        sentBeforeError: true,
+      })
+      .mockResolvedValue([]);
+    const { forwarder } = createForwarder({
+      cfg: TARGETS_CFG,
+      deliver,
+    });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    expect(deliver).toHaveBeenCalledTimes(1);
+
+    await forwarder.handleResolved({
+      id: baseRequest.id,
+      decision: "allow-once",
+      resolvedBy: "slack:U123",
+      ts: 2000,
+    });
+    expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
   it("deduplicates session and explicit approval targets through normalized route identity", async () => {
     vi.useFakeTimers();
     const cfg = {
