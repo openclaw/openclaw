@@ -19,6 +19,6 @@ describe("google setup entry", () => {
     } as never);
 
     expect(providerIds).toEqual(["google-vertex"]);
-    expect(cliBackendIds).toEqual(["google-gemini-cli"]);
+    expect(cliBackendIds).toEqual(["google-gemini-cli", "google-antigravity-cli"]);
   });
 });
