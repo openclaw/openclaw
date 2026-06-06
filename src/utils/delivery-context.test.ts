@@ -1,15 +1,17 @@
 // Delivery context tests cover context normalization for channel delivery.
 import { beforeEach, describe, expect, it } from "vitest";
+import {
+  formatConversationTarget,
+  resolveConversationDeliveryTarget,
+} from "../channels/conversation-delivery-target.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  formatConversationTarget,
   deliveryContextKey,
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
-  resolveConversationDeliveryTarget,
 } from "./delivery-context.js";
 
 describe("delivery context helpers", () => {

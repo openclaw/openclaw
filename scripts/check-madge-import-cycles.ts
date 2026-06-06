@@ -31,10 +31,15 @@ function loadCompilerOptions(): ts.CompilerOptions {
 function collectStaticModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
   const specifiers: string[] = [];
   const visit = (node: ts.Node) => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+    if (
+      ts.isImportDeclaration(node) &&
+      !node.importClause?.isTypeOnly &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
       specifiers.push(node.moduleSpecifier.text);
     } else if (
       ts.isExportDeclaration(node) &&
+      !node.isTypeOnly &&
       node.moduleSpecifier &&
       ts.isStringLiteral(node.moduleSpecifier)
     ) {

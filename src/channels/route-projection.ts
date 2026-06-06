@@ -17,9 +17,9 @@ import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
-  resolveConversationDeliveryTarget,
   type DeliveryContext,
 } from "../utils/delivery-context.js";
+import { resolveConversationDeliveryTarget } from "./conversation-delivery-target.js";
 
 /** Channel route normalized enough to address an outbound delivery target. */
 export type RoutableChannelRouteRef = ChannelRouteRef & {

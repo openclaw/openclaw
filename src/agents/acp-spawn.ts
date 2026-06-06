@@ -20,6 +20,7 @@ import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../acp/policy.
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
+import { formatConversationTarget } from "../channels/conversation-delivery-target.js";
 import {
   resolveChannelDefaultBindingPlacement,
   resolveInboundConversationResolution,
@@ -65,11 +66,7 @@ import {
 } from "../routing/session-key.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
-import {
-  deliveryContextFromSession,
-  formatConversationTarget,
-  normalizeDeliveryContext,
-} from "../utils/delivery-context.js";
+import { deliveryContextFromSession, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   type AcpSpawnParentRelayHandle,
   resolveAcpSpawnStreamLogPath,

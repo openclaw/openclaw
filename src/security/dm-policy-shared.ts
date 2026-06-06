@@ -9,7 +9,6 @@ import {
 } from "../channels/message-access/runtime.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { GroupPolicy } from "../config/types.base.js";
-import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 
 /**
  * Derive a stable main-DM owner from a single-entry allowlist.
@@ -74,6 +73,41 @@ type DmGroupAccessResult = {
   reasonCode: DmGroupAccessReasonCode;
   reason: string;
 };
+
+type MatchedGroupAccessReason =
+  | "allowed"
+  | "disabled"
+  | "missing_match_input"
+  | "empty_allowlist"
+  | "not_allowlisted";
+
+function evaluateMatchedGroupAccessForPolicy(params: {
+  groupPolicy: GroupPolicy;
+  allowlistConfigured: boolean;
+  allowlistMatched: boolean;
+  requireMatchInput?: boolean;
+  hasMatchInput?: boolean;
+}): {
+  allowed: boolean;
+  groupPolicy: GroupPolicy;
+  reason: MatchedGroupAccessReason;
+} {
+  if (params.groupPolicy === "disabled") {
+    return { allowed: false, groupPolicy: params.groupPolicy, reason: "disabled" };
+  }
+  if (params.groupPolicy === "allowlist") {
+    if (params.requireMatchInput && !params.hasMatchInput) {
+      return { allowed: false, groupPolicy: params.groupPolicy, reason: "missing_match_input" };
+    }
+    if (!params.allowlistConfigured) {
+      return { allowed: false, groupPolicy: params.groupPolicy, reason: "empty_allowlist" };
+    }
+    if (!params.allowlistMatched) {
+      return { allowed: false, groupPolicy: params.groupPolicy, reason: "not_allowlisted" };
+    }
+  }
+  return { allowed: true, groupPolicy: params.groupPolicy, reason: "allowed" };
+}
 
 const dmGroupAccess = (
   decision: DmGroupAccessDecision,
