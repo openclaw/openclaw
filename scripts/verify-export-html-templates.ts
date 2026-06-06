@@ -16,8 +16,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(__dirname, "..");
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(scriptDir, "..");
 
 const exportHtmlDistDir = path.join(projectRoot, "dist", "export-html");
 const exportHtmlOldDir = path.join(projectRoot, "dist", "auto-reply", "reply", "export-html");
