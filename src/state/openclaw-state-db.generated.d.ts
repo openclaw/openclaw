@@ -697,6 +697,13 @@ export interface NodePairingPending {
   version: string | null;
 }
 
+export interface OutboundMediaProvenance {
+  created_at_ms: number;
+  kind: string;
+  realpath: string;
+  version: number;
+}
+
 export interface PluginBindingApprovals {
   account_id: string;
   approved_at: number;
@@ -987,6 +994,7 @@ export interface DB {
   node_host_config: NodeHostConfig;
   node_pairing_paired: NodePairingPaired;
   node_pairing_pending: NodePairingPending;
+  outbound_media_provenance: OutboundMediaProvenance;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;

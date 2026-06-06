@@ -683,8 +683,9 @@ describe("loadWebMedia", () => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
         const { saveMediaBuffer } = await import("./store.js");
         const { markTrustedGeneratedHtmlPath } = await import("./web-media.js");
+        const html = "<!doctype html><title>Report</title><h1>Report</h1>\n";
         const saved = await saveMediaBuffer(
-          Buffer.from("<!doctype html><title>Report</title><h1>Report</h1>\n", "utf8"),
+          Buffer.from(html, "utf8"),
           "text/html",
           "outbound",
           1024 * 1024,
@@ -695,8 +696,6 @@ describe("loadWebMedia", () => {
         expect(path.resolve(saved.path)).not.toContain(
           path.resolve(resolvePreferredOpenClawTmpDir()),
         );
-        const sidecarStat = await fs.stat(`${saved.path}.trust.json`);
-        expect(sidecarStat.isFile()).toBe(true);
         const result = await loadWebMedia(saved.path, {
           maxBytes: 1024 * 1024,
           localRoots: "any",
@@ -705,6 +704,7 @@ describe("loadWebMedia", () => {
         });
         expect(result.kind).toBe("document");
         expect(result.contentType).toBe("text/html");
+        expect(result.buffer.toString("utf8")).toBe(html);
       });
     } finally {
       await fs.rm(stateRoot, { recursive: true, force: true });
@@ -723,7 +723,6 @@ describe("loadWebMedia", () => {
           1024 * 1024,
           "untrusted.html",
         );
-        await expect(fs.stat(`${saved.path}.trust.json`)).rejects.toMatchObject({ code: "ENOENT" });
         await expectLoadWebMediaErrorCode(
           loadWebMedia(saved.path, {
             maxBytes: 1024 * 1024,
@@ -733,6 +732,61 @@ describe("loadWebMedia", () => {
           }),
           "path-not-allowed",
         );
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a trusted-generated-html provenance row keyed by the staged file's realpath", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer } = await import("./store.js");
+        const { markTrustedGeneratedHtmlPath } = await import("./web-media.js");
+        const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+        const { getNodeSqliteKysely, executeSqliteQueryTakeFirstSync } =
+          await import("../infra/kysely-sync.js");
+        const saved = await saveMediaBuffer(
+          Buffer.from("<!doctype html><title>Provenance</title>\n", "utf8"),
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "report.html",
+        );
+        await markTrustedGeneratedHtmlPath(saved.path);
+
+        const resolved = await fs.realpath(saved.path);
+        const { db } = openOpenClawStateDatabase();
+        type ProvenanceDb = {
+          outbound_media_provenance: {
+            realpath: string;
+            kind: string;
+            version: number;
+            created_at_ms: number;
+          };
+        };
+        const row = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ProvenanceDb>(db)
+            .selectFrom("outbound_media_provenance")
+            .selectAll()
+            .where("realpath", "=", resolved),
+        );
+        expect(row?.kind).toBe("trusted-generated-html");
+        expect(row?.version).toBe(1);
+        expect(typeof row?.created_at_ms).toBe("number");
+        expect(row?.created_at_ms).toBeGreaterThan(0);
+
+        // A different realpath has no row.
+        const otherRow = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ProvenanceDb>(db)
+            .selectFrom("outbound_media_provenance")
+            .selectAll()
+            .where("realpath", "=", `${resolved}.unrelated`),
+        );
+        expect(otherRow).toBeUndefined();
       });
     } finally {
       await fs.rm(stateRoot, { recursive: true, force: true });

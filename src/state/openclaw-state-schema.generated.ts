@@ -1212,4 +1212,11 @@ CREATE TABLE IF NOT EXISTS backup_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_backup_runs_created
-  ON backup_runs(created_at DESC, id);\n`;
+  ON backup_runs(created_at DESC, id);
+
+CREATE TABLE IF NOT EXISTS outbound_media_provenance (
+  realpath TEXT NOT NULL PRIMARY KEY,
+  kind TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL
+);\n`;
