@@ -105,6 +105,24 @@ const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
 const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
 
+type ChatSendAck = {
+  runId?: unknown;
+  status?: unknown;
+};
+
+function normalizedChatSendAckStatus(status: unknown): string {
+  return typeof status === "string" ? status.trim().toLowerCase() : "";
+}
+
+function isTerminalChatSendAckFailure(status: unknown): boolean {
+  const normalized = normalizedChatSendAckStatus(status);
+  return normalized === "timeout" || normalized === "error";
+}
+
+function isTerminalChatSendAckSuccess(status: unknown): boolean {
+  return normalizedChatSendAckStatus(status) === "ok";
+}
+
 let acpCommandsModulePromise: Promise<typeof import("./commands.js")> | undefined;
 let acpSdkModulePromise: Promise<typeof import("@agentclientprotocol/sdk")> | undefined;
 
@@ -702,16 +720,54 @@ export class AcpGatewayAgent implements Agent {
             pending.sendAccepted = true;
           }
         };
+        const applyTerminalAck = async (ack: ChatSendAck | undefined): Promise<boolean> => {
+          const status = normalizedChatSendAckStatus(ack?.status);
+          const pending = () => this.getPendingPrompt(params.sessionId, runId);
+          if (status === "timeout") {
+            const current = pending();
+            if (current) {
+              await this.finishPrompt(params.sessionId, current, "cancelled");
+            }
+            return true;
+          }
+          if (status === "error") {
+            const current = pending();
+            if (current) {
+              this.rejectPendingPrompt(
+                current,
+                new Error("Chat failed before the run started; try again."),
+              );
+            }
+            return true;
+          }
+          if (status === "ok") {
+            markSendAccepted();
+            await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
+            const current = pending();
+            if (current) {
+              await this.finishPrompt(params.sessionId, current, "end_turn");
+            }
+            return true;
+          }
+          return isTerminalChatSendAckFailure(status) || isTerminalChatSendAckSuccess(status);
+        };
+
+        const sendChat = async (payload: Record<string, unknown>): Promise<boolean> => {
+          const ack = await this.gateway.request<ChatSendAck>("chat.send", payload, {
+            timeoutMs: null,
+          });
+          return await applyTerminalAck(ack);
+        };
+
         try {
-          await this.gateway.request(
-            "chat.send",
-            {
-              ...requestParams,
-              systemInputProvenance,
-              systemProvenanceReceipt,
-            },
-            { timeoutMs: null },
-          );
+          const terminal = await sendChat({
+            ...requestParams,
+            systemInputProvenance,
+            systemProvenanceReceipt,
+          });
+          if (terminal) {
+            return;
+          }
           markSendAccepted();
           await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
         } catch (err) {
@@ -719,7 +775,10 @@ export class AcpGatewayAgent implements Agent {
             (systemInputProvenance || systemProvenanceReceipt) &&
             isAdminScopeProvenanceRejection(err)
           ) {
-            await this.gateway.request("chat.send", requestParams, { timeoutMs: null });
+            const terminal = await sendChat(requestParams);
+            if (terminal) {
+              return;
+            }
             markSendAccepted();
             await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
             return;
