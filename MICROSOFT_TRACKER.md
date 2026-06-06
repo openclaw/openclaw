@@ -9,20 +9,20 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-06-05 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-06-06 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
 ## Summary
 
-| Category                  | Issues | PRs    | Total   | Closed | Remaining |
-| ------------------------- | ------ | ------ | ------- | ------ | --------- |
-| MS Teams (channel plugin) | 8      | 42     | 50      | 0      | 50        |
-| Windows platform          | 73     | 44     | 117     | 0      | 117       |
-| WSL                       | 10     | 3      | 13      | 0      | 13        |
-| Azure                     | 8      | 4      | 12      | 0      | 12        |
-| SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
-| **Total**                 | **99** | **93** | **192** | **0**  | **192**   |
+| Category                  | Issues  | PRs    | Total   | Closed | Remaining |
+| ------------------------- | ------- | ------ | ------- | ------ | --------- |
+| MS Teams (channel plugin) | 8       | 42     | 50      | 0      | 50        |
+| Windows platform          | 73      | 44     | 117     | 0      | 117       |
+| WSL                       | 10      | 3      | 13      | 0      | 13        |
+| Azure                     | 9       | 4      | 13      | 0      | 13        |
+| SharePoint / M365         | 0       | 0      | 0       | 0      | 0         |
+| **Total**                 | **100** | **93** | **193** | **0**  | **193**   |
 
 ---
 
@@ -66,10 +66,10 @@
 | [ ]       | P0       | #60643 | feat(agents): cognitive processing scaffolding and structured memory prompt                                      | S    |             |
 | [ ]       | P0       | #55828 | feat(msteams): add native plugin interactivity parity                                                            | XL   |             |
 | [ ]       | P0       | #55485 | Config: plumb opt-in SSRF policy for web fetch, citation redirects, and remote media                             | L    |             |
+| [ ]       | P1       | #90738 | fix(msteams): read file attachments on Teams channel messages (team GUID + channel fallback + thread-reply URL)  | S    |             |
 | [ ]       | P1       | #89944 | Idr msteams adaptive card tables                                                                                 | M    |             |
 | [ ]       | P1       | #88845 | Require signed beta desktop distribution                                                                         | XL   |             |
 | [ ]       | P1       | #87169 | Support separate Teams Graph tenant                                                                              | S    |             |
-| [ ]       | P1       | #82253 | feat(slack): support per-channel replyToMode                                                                     | XL   |             |
 | [ ]       | P1       | #79185 | fix(tts/xiaomi): support Token Plan TTS endpoint                                                                 | S    |             |
 | [ ]       | P2       | #89094 | fix(msteams): route file attachment sends through thread-aware delivery path                                     | S    |             |
 | [ ]       | P2       | #88850 | fix(msteams): thread proactive file sends                                                                        | S    |             |
@@ -283,10 +283,11 @@ _No currently open items found._
 
 ### Feature Requests
 
-| Resolved? | Priority | #      | Title                                                                         | Labels                                                                                                                                                  | Assignee |
-| --------- | -------- | ------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| [ ]       | P2       | #87325 | Support Azure Foundry GPT Realtime Talk via gateway relay                     |                                                                                                                                                         |          |
-| [ ]       | P2       | #71058 | [Feature]: Support for multiple Azure/Teams bots on a single Openclaw Gateway | `enhancement` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` +1 |          |
+| Resolved? | Priority | #      | Title                                                                                           | Labels                                                                                                                                                                  | Assignee |
+| --------- | -------- | ------ | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| [ ]       | P2       | #90842 | [Feature]: Document and/or centralize the per-event cfg re-resolve contract for channel plugins | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:fix-shape-clear` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` +2 |          |
+| [ ]       | P2       | #87325 | Support Azure Foundry GPT Realtime Talk via gateway relay                                       |                                                                                                                                                                         |          |
+| [ ]       | P2       | #71058 | [Feature]: Support for multiple Azure/Teams bots on a single Openclaw Gateway                   | `enhancement` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` +1                 |          |
 
 ---
 
@@ -354,10 +355,10 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P1       | #67177 | [msteams] Inbound file attachments silently fail in DMs — file.download.info downloadUrl not rewritten to Graph shares endpoint                        |
 | MS Teams (channel plugin) | issue | P1       | #65329 | bug(msteams): DM inline images and file attachments silently dropped                                                                                   |
 | MS Teams (channel plugin) | issue | P1       | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply                                                     |
+| MS Teams (channel plugin) | pr    | P1       | #90738 | fix(msteams): read file attachments on Teams channel messages (team GUID + channel fallback + thread-reply URL)                                        |
 | MS Teams (channel plugin) | pr    | P1       | #89944 | Idr msteams adaptive card tables                                                                                                                       |
 | MS Teams (channel plugin) | pr    | P1       | #88845 | Require signed beta desktop distribution                                                                                                               |
 | MS Teams (channel plugin) | pr    | P1       | #87169 | Support separate Teams Graph tenant                                                                                                                    |
-| MS Teams (channel plugin) | pr    | P1       | #82253 | feat(slack): support per-channel replyToMode                                                                                                           |
 | MS Teams (channel plugin) | pr    | P1       | #79185 | fix(tts/xiaomi): support Token Plan TTS endpoint                                                                                                       |
 | Windows platform          | issue | P1       | #90548 | macOS: per-port lsof port-health polling can saturate launchservicesd and trigger a WindowServer watchdog reboot                                       |
 | Windows platform          | issue | P1       | #90494 | doctor/status: false positive 'Other gateway-like services detected' for active Windows Scheduled Task                                                 |
@@ -426,7 +427,10 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P1       | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply                                                     |
 | MS Teams (channel plugin) | issue | P2       | #81084 | [Feature]: MSTeams channel-bound agents need opt-out from per-thread sessions                                                                          |
 | MS Teams (channel plugin) | pr    | P0       | #76560 | feat(plugins): allow community plugins to use openKeyedStore with man…                                                                                 |
-| MS Teams (channel plugin) | pr    | P2       | #64503 | fix(msteams): forward messageBack card actions (Action.Submit) to agent (#60952)                                                                       |
+| MS Teams (channel plugin) | pr    | P0       | #67460 | feat(mention-gating): suppress always-on agent when another agent is explicitly mentioned                                                              |
+| MS Teams (channel plugin) | pr    | P0       | #67174 | Teams: support separate graphTenantId for cross-tenant Graph API access                                                                                |
+| MS Teams (channel plugin) | pr    | P2       | #67761 | fix: remove truncated preview from inbound system events                                                                                               |
+| MS Teams (channel plugin) | pr    | P2       | #66327 | feat(msteams): implement sendPayload for interactive approval cards                                                                                    |
 | Windows platform          | issue | P1       | #80416 | [Bug] core-plugin-tools ~3.5s overhead on every embedded run persists after #75520 fix — Windows + Node 24 + isolated cron jobs                        |
 | Windows platform          | issue | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                         |
 | Windows platform          | issue | P1       | #74378 | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                                             |
@@ -445,7 +449,8 @@ _No currently open items found._
 | Windows platform          | issue | P2       | #72922 | [Bug]: Sluggish response time and unstable Web GUI and CLI on Windows Server 2022                                                                      |
 | Windows platform          | issue | P2       | #64443 | OpenClaw chat interface causes very high WindowServer CPU on Intel Retina iMac                                                                         |
 | Windows platform          | pr    | P0       | #68819 | fix: resolve Windows .cmd shims to underlying .exe before spawn                                                                                        |
-| Windows platform          | pr    | P2       | #64110 | feat: Deleting scheduled tasks also clears tasks in the queue.                                                                                         |
+| Windows platform          | pr    | P1       | #69059 | fix: retry sqlite-vec load without .dll suffix on Windows                                                                                              |
+| Windows platform          | pr    | P2       | #67655 | fix(exec): fail closed on Windows shell wrappers in allowlist mode                                                                                     |
 | Windows platform          | pr    | P2       | #63651 | fix: remove duplicate restart message on Windows (schtasks)                                                                                            |
 | Windows platform          | pr    | P2       | #51486 | fix(daemon): query Windows task runtime directly                                                                                                       |
 | WSL                       | issue | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                            |
