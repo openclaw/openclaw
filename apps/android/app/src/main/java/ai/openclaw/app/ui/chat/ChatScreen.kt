@@ -215,10 +215,17 @@ fun ChatScreen(
               base64 = attachment.base64,
             )
           }
-        input = ""
-        attachments.clear()
         scope.launch {
-          viewModel.sendChat(message = message, thinking = thinkingLevel, attachments = outgoing)
+          val accepted =
+            viewModel.sendChatAwaitAcceptance(
+              message = message,
+              thinking = thinkingLevel,
+              attachments = outgoing,
+            )
+          if (accepted) {
+            input = ""
+            attachments.clear()
+          }
         }
       },
     )

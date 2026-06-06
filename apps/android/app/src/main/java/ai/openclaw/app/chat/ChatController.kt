@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySession
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -24,6 +25,7 @@ class ChatController(
   private val session: GatewaySession,
   private val json: Json,
 ) {
+  private val logTag = "OpenClawChat"
   private var appliedMainSessionKey = "main"
   private val _sessionKey = MutableStateFlow("main")
   val sessionKey: StateFlow<String> = _sessionKey.asStateFlow()
@@ -202,6 +204,7 @@ class ChatController(
     val runId = UUID.randomUUID().toString()
     val text = if (trimmed.isEmpty() && attachments.isNotEmpty()) "See attached." else trimmed
     val sessionKey = _sessionKey.value
+    val sessionId = _sessionId.value?.trim()?.takeIf { it.isNotEmpty() }
     val thinking = normalizeThinking(thinkingLevel)
 
     // Optimistic user message keeps the composer responsive while chat.send and history refresh complete.
@@ -244,6 +247,9 @@ class ChatController(
       val params =
         buildJsonObject {
           put("sessionKey", JsonPrimitive(sessionKey))
+          if (sessionId != null) {
+            put("sessionId", JsonPrimitive(sessionId))
+          }
           put("message", JsonPrimitive(text))
           put("thinking", JsonPrimitive(thinking))
           put("timeoutMs", JsonPrimitive(30_000))
@@ -266,6 +272,7 @@ class ChatController(
         }
       val res = session.request("chat.send", params.toString())
       val actualRunId = parseRunId(res) ?: runId
+      Log.d(logTag, "chat.send accepted sessionKey=$sessionKey sessionId=${sessionId ?: "none"} runId=$actualRunId response=$res")
       if (actualRunId != runId) {
         // Gateway may return a canonical run id; move all pending bookkeeping to that id.
         optimisticMessagesByRunId[actualRunId] = optimisticMessagesByRunId.remove(runId) ?: optimisticMessage
@@ -278,6 +285,7 @@ class ChatController(
       }
       true
     } catch (err: Throwable) {
+      Log.w(logTag, "chat.send failed sessionKey=$sessionKey sessionId=${sessionId ?: "none"}: ${err.message ?: err::class.simpleName}")
       clearPendingRun(runId)
       removeOptimisticMessage(runId)
       _errorText.value = err.message
@@ -417,15 +425,14 @@ class ChatController(
         }
       }
       "final", "aborted", "error" -> {
+        Log.d(logTag, "chat event terminal state=$state runId=${runId ?: "none"} pending=$isPending")
         if (state == "error") {
           _errorText.value = payload["errorMessage"].asStringOrNull() ?: "Chat failed"
         }
         if (runId != null) {
           clearPendingRun(runId)
-          optimisticMessagesByRunId.remove(runId)
         } else {
           clearPendingRuns()
-          optimisticMessagesByRunId.clear()
         }
         pendingToolCallsById.clear()
         publishPendingToolCalls()
@@ -456,6 +463,7 @@ class ChatController(
                 previousMessages = _messages.value,
               )
             _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
+            removeOptimisticMessagesConsumedBy(history.messages)
             _sessionId.value = history.sessionId
             history.thinkingLevel
               ?.trim()
@@ -547,8 +555,8 @@ class ChatController(
             pendingRuns.contains(runId)
           }
         if (!stillPending) return@launch
+        Log.w(logTag, "chat run timed out runId=$runId; keeping optimistic user message visible")
         clearPendingRun(runId)
-        removeOptimisticMessage(runId)
         _errorText.value = "Timed out waiting for a reply; try again or refresh."
       }
   }
@@ -576,6 +584,20 @@ class ChatController(
   private fun removeOptimisticMessage(runId: String) {
     val message = optimisticMessagesByRunId.remove(runId) ?: return
     _messages.value = _messages.value.filterNot { it.id == message.id }
+  }
+
+  private fun removeOptimisticMessagesConsumedBy(historyMessages: List<ChatMessage>) {
+    if (historyMessages.isEmpty() || optimisticMessagesByRunId.isEmpty()) return
+    val consumedRunIds =
+      optimisticMessagesByRunId
+        .filterValues { optimistic ->
+          historyMessages.any { incoming -> incomingMessageConsumesOptimistic(incoming, optimistic) }
+        }
+        .keys
+        .toList()
+    for (runId in consumedRunIds) {
+      optimisticMessagesByRunId.remove(runId)
+    }
   }
 
   private fun parseHistory(
