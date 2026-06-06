@@ -1662,18 +1662,9 @@ class TalkModeManager internal constructor(
   }
 
   private fun buildPrompt(transcript: String): String {
-    val lines =
-      mutableListOf(
-        "Talk Mode active. Reply in a concise, spoken tone.",
-        "You may optionally prefix the response with JSON (first line) to set ElevenLabs voice (id or alias), e.g. {\"voice\":\"<id>\",\"once\":true}.",
-      )
-    lastInterruptedAtSeconds?.let {
-      lines.add("Assistant speech interrupted at ${"%.1f".format(it)}s.")
-      lastInterruptedAtSeconds = null
-    }
-    lines.add("")
-    lines.add(transcript)
-    return lines.joinToString("\n")
+    val interruptedAtSeconds = lastInterruptedAtSeconds
+    lastInterruptedAtSeconds = null
+    return TalkPromptBuilder.build(transcript, interruptedAtSeconds)
   }
 
   private suspend fun sendChat(

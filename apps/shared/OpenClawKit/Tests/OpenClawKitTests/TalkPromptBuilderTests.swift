@@ -4,26 +4,25 @@ import XCTest
 final class TalkPromptBuilderTests: XCTestCase {
     func testBuildIncludesTranscript() {
         let prompt = TalkPromptBuilder.build(transcript: "Hello", interruptedAtSeconds: nil)
-        XCTAssertTrue(prompt.contains("Talk Mode active."))
-        XCTAssertTrue(prompt.hasSuffix("\n\nHello"))
+        XCTAssertEqual(prompt, "Hello")
     }
 
     func testBuildIncludesInterruptionLineWhenProvided() {
         let prompt = TalkPromptBuilder.build(transcript: "Hi", interruptedAtSeconds: 1.234)
-        XCTAssertTrue(prompt.contains("Assistant speech interrupted at 1.2s."))
+        XCTAssertEqual(prompt, "Assistant speech interrupted at 1.2s.\n\nHi")
     }
 
-    func testBuildIncludesVoiceDirectiveHintByDefault() {
+    func testBuildDoesNotInjectTalkModeInstructions() {
         let prompt = TalkPromptBuilder.build(transcript: "Hello", interruptedAtSeconds: nil)
-        XCTAssertTrue(prompt.contains("ElevenLabs voice"))
+        XCTAssertFalse(prompt.contains("Talk Mode active."))
+        XCTAssertFalse(prompt.contains("ElevenLabs voice"))
     }
 
-    func testBuildExcludesVoiceDirectiveHintWhenDisabled() {
+    func testVoiceDirectiveHintFlagDoesNotChangeUserMessage() {
         let prompt = TalkPromptBuilder.build(
             transcript: "Hello",
             interruptedAtSeconds: nil,
             includeVoiceDirectiveHint: false)
-        XCTAssertFalse(prompt.contains("ElevenLabs voice"))
-        XCTAssertTrue(prompt.contains("Talk Mode active."))
+        XCTAssertEqual(prompt, "Hello")
     }
 }

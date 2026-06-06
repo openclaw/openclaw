@@ -4,22 +4,12 @@ public enum TalkPromptBuilder: Sendable {
         interruptedAtSeconds: Double?,
         includeVoiceDirectiveHint: Bool = true) -> String
     {
-        var lines: [String] = [
-            "Talk Mode active. Reply in a concise, spoken tone.",
-        ]
-
-        if includeVoiceDirectiveHint {
-            lines.append(
-                "You may optionally prefix the response with JSON (first line) to set ElevenLabs voice (id or alias), e.g. {\"voice\":\"<id>\",\"once\":true}.")
+        _ = includeVoiceDirectiveHint
+        guard let interruptedAtSeconds else {
+            return transcript
         }
 
-        if let interruptedAtSeconds {
-            let formatted = String(format: "%.1f", interruptedAtSeconds)
-            lines.append("Assistant speech interrupted at \(formatted)s.")
-        }
-
-        lines.append("")
-        lines.append(transcript)
-        return lines.joined(separator: "\n")
+        let formatted = String(format: "%.1f", interruptedAtSeconds)
+        return "Assistant speech interrupted at \(formatted)s.\n\n\(transcript)"
     }
 }
