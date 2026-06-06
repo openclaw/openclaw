@@ -70,6 +70,22 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
   ).slice(0, -1);
 }
 
+export function normalizeCurrentPromptTextForLlmBoundary(params: {
+  prompt: string;
+  timezone?: string;
+  currentUserTimestamp?: number;
+}): string {
+  const promptMessage = {
+    role: "user" as const,
+    content: [{ type: "text" as const, text: params.prompt }],
+    timestamp: params.currentUserTimestamp ?? Date.now(),
+  };
+  const boundaryOptions = params.timezone ? { timezone: params.timezone } : undefined;
+  const [normalized] = normalizeMessagesForLlmBoundary([promptMessage], boundaryOptions);
+  const content = (normalized as { content?: unknown } | undefined)?.content;
+  return typeof content === "string" ? content : params.prompt;
+}
+
 /**
  * Temporarily injects a runtime-context message for prompt conversion and retry.
  * Cleanup restores the original continuation hook and removes only the injected

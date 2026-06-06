@@ -4,6 +4,7 @@ import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-time
 import {
   installModelPromptTransform,
   insertRuntimeContextMessageForPrompt,
+  normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForLlmBoundary,
 } from "./attempt.llm-boundary.js";
 
@@ -140,6 +141,19 @@ describe("normalizeMessagesForLlmBoundary", () => {
       timezone: "UTC",
     });
     expect(output[0]?.content).toBe(`${expectedPrefix}Current ask`);
+  });
+
+  it("normalizes current prompt text for pre-prompt token pressure", () => {
+    const preparedTimestamp = 1717570800000;
+    const output = normalizeCurrentPromptTextForLlmBoundary({
+      prompt: "Current ask",
+      timezone: "UTC",
+      currentUserTimestamp: preparedTimestamp,
+    });
+    const expectedPrefix = buildTimestampPrefix(new Date(preparedTimestamp), {
+      timezone: "UTC",
+    });
+    expect(output).toBe(`${expectedPrefix}Current ask`);
   });
 
   it("does not apply the prepared timestamp override to later queued turns", () => {

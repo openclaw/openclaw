@@ -347,6 +347,7 @@ import {
 import {
   installModelPromptTransform,
   installRuntimeContextMessageForPrompt,
+  normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForCurrentPromptBoundary,
   normalizeMessagesForLlmBoundary,
 } from "./attempt.llm-boundary.js";
@@ -451,6 +452,7 @@ import {
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
+  estimateLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -4186,18 +4188,46 @@ export async function runEmbeddedAttempt(
               });
           }
 
+          const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
+            prompt: promptForModel,
+            ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+            ...(typeof preparedUserTurnMessage?.timestamp === "number"
+              ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
+              : {}),
+          });
+          const llmBoundaryOptionsForPrecheck = boundaryTimezone
+            ? { timezone: boundaryTimezone }
+            : undefined;
+          const unwindowedLlmBoundaryMessagesForPrecheck =
+            contextEnginePromptAuthority === "preassembly_may_overflow" &&
+            unwindowedContextEngineMessagesForPrecheck
+              ? normalizeMessagesForLlmBoundary(
+                  unwindowedContextEngineMessagesForPrecheck,
+                  llmBoundaryOptionsForPrecheck,
+                )
+              : undefined;
+          const llmBoundaryTokenPressure = estimateLlmBoundaryTokenPressure({
+            messages: hookMessagesForCurrentPrompt,
+            systemPrompt: systemPromptForHook,
+            prompt: llmBoundaryPromptForPrecheck,
+          });
           const preemptiveCompaction = skipPromptSubmission
             ? null
             : shouldPreemptivelyCompactBeforePrompt({
-                messages: messagesForCurrentPrompt,
-                ...(contextEnginePromptAuthority === "preassembly_may_overflow"
-                  ? { unwindowedMessages: unwindowedContextEngineMessagesForPrecheck }
+                messages: hookMessagesForCurrentPrompt,
+                ...(unwindowedLlmBoundaryMessagesForPrecheck
+                  ? { unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck }
                   : {}),
                 systemPrompt: systemPromptForHook,
-                prompt: promptForModel,
+                prompt: llmBoundaryPromptForPrecheck,
                 contextTokenBudget,
                 reserveTokens,
                 toolResultMaxChars: promptToolResultMaxChars,
+                llmBoundaryTokenPressure: {
+                  estimatedPromptTokens: llmBoundaryTokenPressure,
+                  source: "llm_boundary_normalized_prompt",
+                  renderedChars: llmBoundaryPromptForPrecheck.length,
+                },
               });
           if (preemptiveCompaction) {
             contextBudgetStatus = buildPrePromptContextBudgetStatus({
