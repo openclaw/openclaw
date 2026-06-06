@@ -14,6 +14,7 @@ import {
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingProgressCommentary,
+  resolveChannelStreamingProgressPersist,
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   type StreamingCompatEntry,
@@ -46,6 +47,8 @@ export function createChannelProgressDraftCompositor(params: {
     params.active && resolveChannelStreamingPreviewToolProgress(params.entry);
   const commentaryProgressEnabled =
     params.active && resolveChannelStreamingProgressCommentary(params.entry);
+  const persistProgressEnabled =
+    params.active && resolveChannelStreamingProgressPersist(params.entry);
   const suppressDefaultToolProgressMessages =
     params.active &&
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.entry, {
@@ -135,9 +138,14 @@ export function createChannelProgressDraftCompositor(params: {
     }
     const progressLine = typeof line === "object" && line !== undefined ? line : normalized;
     const shouldStoreLine = previewToolProgressEnabled;
+    // Persisted progress must never drop the oldest line: keep every line and let
+    // the draft stream spill into a new message once it outgrows the char limit
+    // (lossless). Transient progress keeps the rolling maxLines cap.
     const nextLines = shouldStoreLine
       ? mergeChannelProgressDraftLine(lines, progressLine, {
-          maxLines: resolveChannelProgressDraftMaxLines(params.entry),
+          maxLines: persistProgressEnabled
+            ? Number.POSITIVE_INFINITY
+            : resolveChannelProgressDraftMaxLines(params.entry),
         })
       : lines;
     if (shouldStoreLine && nextLines === lines) {
@@ -184,6 +192,9 @@ export function createChannelProgressDraftCompositor(params: {
     },
     get commentaryProgressEnabled() {
       return commentaryProgressEnabled;
+    },
+    get persistProgressEnabled() {
+      return persistProgressEnabled;
     },
     get suppressDefaultToolProgressMessages() {
       return suppressDefaultToolProgressMessages;
@@ -284,7 +295,9 @@ export function createChannelProgressDraftCompositor(params: {
         noCompact: true,
       };
       lines = mergeChannelProgressDraftLine(lines, line, {
-        maxLines: resolveChannelProgressDraftMaxLines(params.entry),
+        maxLines: persistProgressEnabled
+          ? Number.POSITIVE_INFINITY
+          : resolveChannelProgressDraftMaxLines(params.entry),
       });
       await gate.startNow();
       return await render();

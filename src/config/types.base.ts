@@ -70,6 +70,18 @@ export type ChannelStreamingProgressConfig = {
   commandText?: ChannelStreamingCommandTextMode;
   /** Include assistant commentary/preamble text in the progress draft. Default: false. */
   commentary?: boolean;
+  /**
+   * Persist the tool/commentary progress instead of clearing it when the answer arrives.
+   * Default false. This is a **shared, channel-agnostic** streaming.progress option (part
+   * of the common progress-draft contract, like `toolProgress`/`commentary`), not a
+   * Telegram-only key: any channel that uses OpenClaw's progress-draft compositor may
+   * honor it. Telegram is the first implementer — in `progress` mode it keeps the live
+   * draft in place above the final answer and accumulates every line losslessly (spilling
+   * to a new message at the channel limit rather than dropping the oldest); in `off` mode
+   * it delivers the accumulated lane as its own message set before the answer. Channels
+   * that do not implement persistence simply ignore the flag.
+   */
+  persistProgress?: boolean;
 };
 
 export type ChannelStreamingPreviewConfig = {

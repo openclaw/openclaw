@@ -103,6 +103,7 @@ const ChannelStreamingProgressSchema = z
     toolProgress: z.boolean().optional(),
     commandText: z.enum(["raw", "status"]).optional(),
     commentary: z.boolean().optional(),
+    persistProgress: z.boolean().optional(),
   })
   .strict();
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({

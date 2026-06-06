@@ -729,6 +729,19 @@ export function resolveChannelStreamingProgressCommentary(
   return asBoolean(progress?.commentary) ?? defaultValue;
 }
 
+export function resolveChannelStreamingProgressPersist(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = false,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  // No stream-mode guard: persistProgress is a user intent that applies in BOTH
+  // stream-on (persist the live draft in place) and stream-off (#89890 emits the
+  // accumulated set). Call sites that only make sense while streaming are already
+  // gated by the presence of an active draft/compositor.
+  const progress = asObjectRecord(config?.progress);
+  return asBoolean(progress?.persistProgress) ?? defaultValue;
+}
+
 export function resolveChannelStreamingPreviewCommandText(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue: ChannelStreamingCommandTextMode = "raw",
@@ -1057,6 +1070,9 @@ export function formatChannelProgressDraftText(params: {
   const resolvedLabel = rawLabel;
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
+  // Persisted progress keeps EVERY line (no rolling maxLines drop); it spills to a new
+  // message at the channel char limit rather than dropping the oldest lines.
+  const persist = resolveChannelStreamingProgressPersist(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
   const bullet = params.bullet ?? "•";
   const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = resolvedLabel
@@ -1080,7 +1096,7 @@ export function formatChannelProgressDraftText(params: {
     .filter((line): line is { text: string; isLabelLine: boolean; prefix: boolean } =>
       Boolean(line),
     )
-    .slice(-maxLines)
+    .slice(persist ? 0 : -maxLines)
     .map(({ text, isLabelLine, prefix }) => {
       const formatted = isLabelLine ? text : formatLine(text);
       return {

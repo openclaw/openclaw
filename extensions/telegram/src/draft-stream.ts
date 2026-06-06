@@ -82,6 +82,13 @@ export function createTelegramDraftStream(params: {
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
+  /**
+   * Lossless overflow handling for a still-streaming draft. When the live draft
+   * grows past `maxChars`, retain the filled message and roll the overflow into a
+   * fresh message (the same supersede-and-continue the final path uses) instead of
+   * truncating/freezing the preview. Used by persistent progress so no progress is dropped.
+   */
+  losslessSpill?: boolean;
   /** Optional preview renderer (e.g. markdown -> HTML + parse mode). */
   renderText?: (text: string) => TelegramDraftPreview;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
@@ -95,6 +102,7 @@ export function createTelegramDraftStream(params: {
   );
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
+  const losslessSpill = params.losslessSpill === true;
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
@@ -215,6 +223,28 @@ export function createTelegramDraftStream(params: {
     if (renderedText.length > maxChars) {
       const chunkLength = findTelegramDraftChunkLength(currentText, maxChars, params.renderText);
       if (!streamState.final) {
+        if (losslessSpill && lastDeliveredText.length > deliveredTextOffset) {
+          // Lossless spill: the live draft outgrew maxChars. Retain the filled
+          // message and roll the overflow into a fresh message (the same
+          // supersede-and-continue the final path uses below) so accumulated
+          // progress is never truncated or dropped.
+          const supersededMessageId = streamMessageId;
+          const supersededTextSnapshot = lastSentText;
+          const supersededParseMode = lastSentParseMode;
+          const supersededVisibleSinceMs = streamVisibleSinceMs;
+          deliveredTextOffset = lastDeliveredText.length;
+          resetStreamToNewMessage({ keepFinal: false, keepPending: true, resetOffset: false });
+          if (typeof supersededMessageId === "number") {
+            params.onSupersededPreview?.({
+              messageId: supersededMessageId,
+              textSnapshot: supersededTextSnapshot,
+              parseMode: supersededParseMode,
+              visibleSinceMs: supersededVisibleSinceMs,
+              retain: true,
+            });
+          }
+          return await sendOrEditStreamMessage(trimmed);
+        }
         if (chunkLength > 0) {
           return await sendOrEditStreamMessage(
             trimmed.slice(0, deliveredTextOffset) + currentText.slice(0, chunkLength),

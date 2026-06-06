@@ -320,6 +320,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
     - `streaming.preview.commandText` controls command/exec detail inside those tool-progress lines: `raw` (default, preserves released behavior) or `status` (tool label only)
     - `streaming.progress.commentary` (default: `false`) opts into assistant commentary/preamble text in the temporary progress draft
+    - `streaming.progress.persistProgress` (default: `false`) **persists** the progress draft in place above the final answer instead of clearing it, and accumulates every tool/commentary line losslessly (spilling to a new message at the 4096-char limit rather than dropping the oldest line). Progress mode only
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are detected; run `openclaw doctor --fix` to migrate them to `channels.telegram.streaming.mode`
 
     Tool-progress preview updates are the short status lines shown while tools run, for example command execution, file reads, planning updates, patch summaries, or Codex preamble/commentary text in Codex app-server mode. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later.
@@ -405,7 +406,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - short DM/group/topic previews: OpenClaw keeps the same preview message and performs the final edit in place
     - long text finals that split into multiple Telegram messages reuse the existing preview as the first final chunk when possible, then send only the remaining chunks
-    - progress-mode finals clear the status draft and use normal final delivery instead of editing the draft into the answer
+    - progress-mode finals clear the status draft and use normal final delivery instead of editing the draft into the answer (unless `streaming.progress.persistProgress` is set, in which case the draft is finalized in place above the answer rather than cleared)
     - if the final edit fails before the completed text is confirmed, OpenClaw uses normal final delivery and cleans up the stale preview
 
     For complex replies (for example media payloads), OpenClaw falls back to normal final delivery and then cleans up the preview message.

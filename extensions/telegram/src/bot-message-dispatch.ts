@@ -34,6 +34,7 @@ import {
   resolveChannelStreamingPreviewNativeToolProgress,
   resolveChannelStreamingPreviewNativeToolProgressAllowFrom,
   resolveChannelStreamingPreviewToolProgress,
+  resolveChannelStreamingProgressPersist,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type {
@@ -905,12 +906,22 @@ export const dispatchTelegramMessage = async ({
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+  const persistProgressEnabled = resolveChannelStreamingProgressPersist(telegramCfg);
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const stream = enabled
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
           api: bot.api,
           chatId,
           maxChars: draftMaxChars,
+          // Persisted progress must never drop accumulated lines: when the answer
+          // lane's live draft outgrows a message, spill into a new one losslessly.
+          // Progress mode only — in partial/block the compositor can still render
+          // tool progress into this lane, so an unguarded flag would change live
+          // preview overflow/retention for those modes. The persistProgressEnabled
+          // const stays guard-free (the stream-off accumulator needs it); only this
+          // live-draft usage is gated.
+          losslessSpill:
+            laneName === "answer" && streamMode === "progress" && persistProgressEnabled,
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
@@ -1114,7 +1125,18 @@ export const dispatchTelegramMessage = async ({
     if (!activeAnswerDraftIsToolProgressOnly) {
       return false;
     }
-    await answerLane.stream?.clear();
+    if (streamMode === "progress" && progressDraft.persistProgressEnabled) {
+      // Persist-in-place (progress mode only): finalize the standing progress
+      // message rather than deleting it, then route the final answer into a fresh
+      // message so the tool/commentary log remains visible above the answer. The
+      // streamMode guard keeps persistProgress inert in partial/block modes —
+      // matching the skip-rotate gate below — so the flag only ever changes the
+      // live progress-draft path (stream-off persistence is handled separately by
+      // the #89890 accumulator, which has no answer-lane stream to reach here).
+      await answerLane.stream?.stop();
+    } else {
+      await answerLane.stream?.clear();
+    }
     answerLane.stream?.forceNewMessage();
     resetDraftLaneState(answerLane);
     suppressProgressDraftState();
@@ -1161,7 +1183,16 @@ export const dispatchTelegramMessage = async ({
   ) => {
     const split = splitTextIntoLaneSegments(update, isReasoning);
     for (const segment of split.segments) {
-      if (segment.lane === "answer") {
+      if (
+        segment.lane === "answer" &&
+        !(streamMode === "progress" && progressDraft.persistProgressEnabled)
+      ) {
+        // Persisted progress accumulates the live draft in ONE message: an inter-tool
+        // assistant segment must not rotate the answer lane. In progress mode the answer
+        // partial isn't streamed here anyway (updateDraftFromPartial returns early) — the
+        // text renders as commentary in the draft. Without this skip, each inter-tool
+        // commentary finalizes the draft into a separate PERSISTED message. The final
+        // answer rotates the draft separately at delivery (deliverFinalAnswerText).
         await prepareAnswerLaneForText();
       }
       if (segment.lane === "reasoning") {

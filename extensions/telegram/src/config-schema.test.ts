@@ -123,6 +123,22 @@ describe("telegram custom commands schema", () => {
     });
   });
 
+  it("accepts Telegram progress persistProgress config", () => {
+    expectTelegramConfigValid({
+      streaming: {
+        mode: "progress",
+        progress: { persistProgress: true },
+      },
+      accounts: {
+        ops: {
+          streaming: {
+            progress: { persistProgress: true },
+          },
+        },
+      },
+    });
+  });
+
   it("rejects removed DM thread reply policy keys", () => {
     expectTelegramConfigIssue({ dm: { threadReplies: "off" } }, "");
     expectTelegramConfigIssue(

@@ -597,6 +597,48 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps persistProgress inert in partial mode (no lossless answer-lane spill)", async () => {
+    createTelegramDraftStream.mockReturnValue(createDraftStream());
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hi" });
+        await dispatcherOptions.deliver({ text: "Hi" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial", progress: { persistProgress: true } } },
+    });
+
+    // Live persistProgress is progress-mode only: the answer-lane draft must not
+    // enable lossless spill in partial mode even when the flag is set.
+    expectDraftStreamParams({ losslessSpill: false });
+  });
+
+  it("enables lossless answer-lane spill only in progress mode with persistProgress", async () => {
+    createTelegramDraftStream.mockReturnValue(createDraftStream());
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hi" });
+        await dispatcherOptions.deliver({ text: "Hi" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { persistProgress: true } } },
+    });
+
+    expectDraftStreamParams({ losslessSpill: true });
+  });
+
   it("recovers forum thread context from a topic-scoped session key", async () => {
     const recordInboundSession = vi.fn(async () => undefined);
     const oldHistoryKey = "-1003774691294:topic:1";

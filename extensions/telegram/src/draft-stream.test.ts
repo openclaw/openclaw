@@ -446,6 +446,34 @@ describe("createTelegramDraftStream", () => {
     expect(onSupersededPreview).not.toHaveBeenCalled();
   });
 
+  it("spills non-final overflow into a new retained message when losslessSpill is set", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const onSupersededPreview = vi.fn();
+    const stream = createDraftStream(api, {
+      maxChars: 20,
+      losslessSpill: true,
+      onSupersededPreview,
+    });
+
+    stream.update("Hello world");
+    await stream.flush();
+    stream.update("Hello world foo bar baz qux");
+    await stream.flush();
+
+    // The filled message is kept and the overflow rolls into a fresh message
+    // while still streaming — nothing is truncated (contrast the lossy default above).
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Hello world", undefined);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "foo bar baz qux", undefined);
+    expect(onSupersededPreview).toHaveBeenCalledTimes(1);
+    const [superseded] = onSupersededPreview.mock.calls.at(0) ?? [];
+    expect(superseded.retain).toBe(true);
+    expect(superseded.messageId).toBe(17);
+  });
+
   it("continues in a new message when a final rendered preview crosses maxChars", async () => {
     const api = createMockDraftApi();
     api.sendMessage

@@ -305,6 +305,12 @@ describe("config schema", () => {
     expect(progressPropsFor("discord")).toHaveProperty("commentary");
     expect(progressPropsFor("slack")).toHaveProperty("commentary");
     expect(progressPropsFor("telegram")).toHaveProperty("commentary");
+    // persistProgress is a shared, channel-agnostic streaming.progress contract (like
+    // commentary/toolProgress): present in every channel's progress schema, not scoped to
+    // Telegram, even though Telegram is currently the only implementer.
+    expect(progressPropsFor("discord")).toHaveProperty("persistProgress");
+    expect(progressPropsFor("slack")).toHaveProperty("persistProgress");
+    expect(progressPropsFor("telegram")).toHaveProperty("persistProgress");
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.matrix.streaming.progress.label"]?.label).toBe(
