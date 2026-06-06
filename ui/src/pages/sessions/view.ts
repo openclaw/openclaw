@@ -1,5 +1,6 @@
 // Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
+import { ifDefined } from "lit/directives/if-defined.js";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -846,13 +847,15 @@ function renderOverrideSelect(params: {
   options: readonly { value: string; label: string }[];
   current: string;
   onChange: (value: string) => void;
+  tooltip?: string;
 }) {
   return html`
-    <label class="session-override-field">
+    <label class="session-override-field" title=${ifDefined(params.tooltip)}>
       <span class="session-override-field__label">${params.label}</span>
       <select
         class="session-override-field__control"
         ?disabled=${params.disabled}
+        aria-label=${ifDefined(params.tooltip)}
         @change=${(e: Event) => params.onChange((e.target as HTMLSelectElement).value)}
       >
         ${params.options.map(
@@ -1513,6 +1516,7 @@ function renderSessionDetailsRow(params: {
             </label>
             ${renderOverrideSelect({
               label: t("sessionsView.thinking"),
+              tooltip: t("sessionsView.thinkingTooltip"),
               disabled: props.loading,
               options: thinkLevels,
               current: thinking,
@@ -1538,6 +1542,7 @@ function renderSessionDetailsRow(params: {
             })}
             ${renderOverrideSelect({
               label: t("sessionsView.reasoning"),
+              tooltip: t("sessionsView.reasoningTooltip"),
               disabled: props.loading,
               options: reasoningLevels.map((level) => ({
                 value: level,

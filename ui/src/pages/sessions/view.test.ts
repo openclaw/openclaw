@@ -982,6 +982,47 @@ describe("sessions view", () => {
     ).toBe("123,456 to 38,920 tokens");
   });
 
+  it("renders explanatory tooltips on the Thinking and Reasoning override selects", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:tooltip-check:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            thinkingLevel: "high",
+            reasoningLevel: "stream",
+          }),
+        ),
+        expandedSessionKey: "agent:tooltip-check:main",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const fields = Array.from(
+      container.querySelectorAll<HTMLLabelElement>(".session-override-field"),
+    );
+    const fieldByLabel = (label: string) =>
+      fields.find(
+        (field) =>
+          field.querySelector(".session-override-field__label")?.textContent?.trim() === label,
+      );
+    const thinkingField = fieldByLabel("Thinking");
+    const reasoningField = fieldByLabel("Reasoning");
+    expect(thinkingField?.getAttribute("title")).toContain("thinking level override");
+    expect(thinkingField?.querySelector("select")?.getAttribute("aria-label")).toContain(
+      "provider profile",
+    );
+    expect(reasoningField?.getAttribute("title")).toContain("display");
+    expect(reasoningField?.querySelector("select")?.getAttribute("aria-label")).toContain(
+      "display",
+    );
+    // Fields without a tooltip stay untitled.
+    expect(fieldByLabel("Fast")?.hasAttribute("title")).toBe(false);
+  });
+
   it("opens details for sessions without checkpoints but ignores nested control clicks", async () => {
     const container = document.createElement("div");
     const onToggleDetails = vi.fn();
