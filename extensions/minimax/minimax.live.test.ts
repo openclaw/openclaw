@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import { hasTrustedFfmpegForLiveVoiceNote } from "../../test/helpers/live-voice-note.js";
 import plugin from "./index.js";
 import { buildMinimaxSpeechProvider } from "./speech-provider.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
@@ -70,6 +71,10 @@ describeTtsLive("minimax tts live", () => {
   }, 120_000);
 
   it("synthesizes MiniMax TTS as an Opus voice note", async () => {
+    if (!hasTrustedFfmpegForLiveVoiceNote("minimax")) {
+      return;
+    }
+
     const provider = buildMinimaxSpeechProvider();
 
     const voiceNote = await provider.synthesize({

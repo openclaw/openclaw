@@ -6,6 +6,7 @@ import {
 import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-contracts";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import { hasTrustedFfmpegForLiveVoiceNote } from "../../test/helpers/live-voice-note.js";
 import plugin from "./index.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
@@ -75,6 +76,10 @@ describeLive("google plugin live", () => {
   }, 120_000);
 
   it("transcodes speech to Opus for voice-note targets", async () => {
+    if (!hasTrustedFfmpegForLiveVoiceNote("google")) {
+      return;
+    }
+
     const { speechProviders } = await registerGooglePlugin();
     const provider = requireRegisteredProvider(speechProviders, "google");
 

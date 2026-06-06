@@ -111,6 +111,9 @@ const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "google/gemini-3.1-flash-lite",
 ]);
 const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
+  // Hosted DeepSeek V4 Flash can surface its internal tool-call sentinel
+  // instead of the readback nonce after the tool-read probe succeeds.
+  "deepinfra/deepseek-ai/DeepSeek-V4-Flash",
   "google/gemini-3-flash-preview",
   "google/gemini-3.1-pro-preview",
 ]);
@@ -1408,6 +1411,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "openrouter/ai21/jamba-large-1.7", expected: true },
     { modelKey: "xai/grok-4.1-fast", expected: true },
     { modelKey: "zai/glm-5.1", expected: true },
+    { modelKey: "deepinfra/deepseek-ai/DeepSeek-V4-Flash", expected: true },
     { modelKey: "google/gemini-3-flash-preview", expected: true },
     { modelKey: "google/gemini-3.1-pro-preview", expected: true },
     { modelKey: "openai/gpt-5.4", expected: false },

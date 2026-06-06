@@ -473,6 +473,7 @@ extension SettingsProTab {
     func title(for route: SettingsRoute) -> String {
         switch route {
         case .gateway: "Gateway"
+        case .approvals: "Approvals"
         case .permissions: "Permissions"
         case .voice: "Voice & Talk"
         case .diagnostics: "Diagnostics"
@@ -619,6 +620,34 @@ extension SettingsProTab {
         if self.locationModeRaw != OpenClawLocationMode.off.rawValue { enabled += 1 }
         if self.preventSleep { enabled += 1 }
         return "\(enabled) enabled"
+    }
+
+    var pendingApproval: NodeAppModel.ExecApprovalPrompt? {
+        self.appModel.pendingExecApprovalPrompt
+    }
+
+    var approvalsDetail: String {
+        self.pendingApproval == nil ? "No approvals waiting" : "1 request waiting"
+    }
+
+    var approvalItems: [SettingsApprovalItem] {
+        guard let pendingApproval else { return [] }
+        return [
+            SettingsApprovalItem(
+                id: "pending-real",
+                icon: "terminal.fill",
+                title: pendingApproval.commandPreview ?? "Review gateway action",
+                detail: "Agent: \(self.appModel.activeAgentName)",
+                priority: self.appModel.pendingExecApprovalPromptResolving ? "Resolving" : "High",
+                color: OpenClawBrand.danger),
+            SettingsApprovalItem(
+                id: "pending-context",
+                icon: "doc.text.fill",
+                title: pendingApproval.allowsAllowAlways ? "Permission can be saved" : "One-time approval",
+                detail: "Gateway request",
+                priority: pendingApproval.allowsAllowAlways ? "Medium" : "Review",
+                color: OpenClawBrand.warn),
+        ]
     }
 
     var voiceDetail: String {
