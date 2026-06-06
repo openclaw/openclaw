@@ -211,6 +211,9 @@ export function resolveCliSessionReuse(params: {
     return { invalidatedReason: "cwd" };
   }
   const storedMcpResumeHash = normalizeOptionalString(binding?.mcpResumeHash);
+  if (storedMcpResumeHash && !currentMcpResumeHash) {
+    return { invalidatedReason: "mcp" };
+  }
   if (storedMcpResumeHash && currentMcpResumeHash) {
     // Resume hashes are stricter than raw MCP config hashes: a match proves the
     // exact resumed CLI tool topology still belongs to this session.
