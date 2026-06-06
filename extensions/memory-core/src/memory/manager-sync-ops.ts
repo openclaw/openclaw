@@ -1846,7 +1846,7 @@ export abstract class MemoryManagerSyncOps {
     const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
     const needsExplicitIdentityReindex =
       params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetSessionFiles;
-    const needsFullReindex =
+    let needsFullReindex =
       (params?.force && !hasTargetSessionFiles) ||
       needsInitialIndex ||
       needsExplicitIdentityReindex;
@@ -1859,7 +1859,28 @@ export abstract class MemoryManagerSyncOps {
       if (sessionsDirty) {
         this.sessionsDirty = true;
       }
-      return;
+      // If meta is missing but indexed chunks exist, force a verified full
+      // reindex instead of returning with a dirty/paused index. The reindex
+      // prunes stale chunks from deleted paths, old providers, or old scopes
+      // before writing meta (PR #90395, issue #90338).
+      // Guard: when a specific embedding provider is configured but currently
+      // unavailable, the existing chunks may be semantic (vector-backed).
+      // Forcing a reindex without the provider would silently downgrade the
+      // index to FTS-only and wipe vector embeddings. In that case keep the
+      // index dirty/paused so the provider can recover on a later sync.
+      if (!meta && hasIndexedChunks) {
+        const isSpecificProviderConfigured =
+          this.settings.provider &&
+          this.settings.provider !== "none" &&
+          this.settings.provider !== "auto";
+        if (isSpecificProviderConfigured && !this.provider) {
+          return;
+        }
+        needsFullReindex = true;
+        // Fall through to runSafeReindex / runUnsafeReindex below.
+      } else {
+        return;
+      }
     }
     if (!needsFullReindex) {
       const targetedSessionSync = await runMemoryTargetedSessionSync({

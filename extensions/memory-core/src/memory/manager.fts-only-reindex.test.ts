@@ -205,4 +205,99 @@ describe("memory manager FTS-only reindex", () => {
     );
     expect(memoryManager.status().provider).toBe("openai");
   });
+
+  it("triggers verified reindex when identity is missing but indexed chunks exist", async () => {
+    // Explicit "none" provider: FTS-only, no semantic downgrade risk.
+    const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+    await memoryManager.sync({ force: true });
+
+    // Sanity: after initial sync, meta is present and chunks exist.
+    expect(memoryManager.status().chunks).toBeGreaterThan(0);
+    expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+    // Delete meta via the manager's own DB to simulate the dead-loop condition.
+    const internals = memoryManager as unknown as {
+      db: DatabaseSync;
+      readMeta(): MemoryIndexMeta | null;
+    };
+    internals.db.exec("DELETE FROM meta WHERE key = 'memory_index_meta_v1'");
+
+    // Verify meta was actually deleted.
+    expect(internals.readMeta()).toBeNull();
+
+    // Without force, the recovery path triggers a verified full reindex
+    // (runSafeReindex) instead of writing unverified meta. The reindex
+    // prunes stale rows and writes meta only after verification.
+    await memoryManager.sync();
+
+    // After the fix: meta is recreated via verified reindex, dead loop broken.
+    const metaAfter = internals.readMeta();
+    expect(metaAfter).not.toBeNull();
+    expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+  });
+
+  it("prunes stale chunks during missing-meta recovery when memory files are deleted", async () => {
+    // Explicit "none" provider: FTS-only, no semantic downgrade risk.
+    const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+    await memoryManager.sync({ force: true });
+
+    // Sanity: chunks exist from current MEMORY.md.
+    const initialChunks = memoryManager.status().chunks;
+    expect(initialChunks).toBeGreaterThan(0);
+
+    // Delete the memory file from disk — its chunks are now stale.
+    await fs.rm(path.join(workspaceDir, "MEMORY.md"));
+
+    // Delete meta to trigger the recovery path.
+    const internals = memoryManager as unknown as {
+      db: DatabaseSync;
+      readMeta(): MemoryIndexMeta | null;
+    };
+    internals.db.exec("DELETE FROM meta WHERE key = 'memory_index_meta_v1'");
+    expect(internals.readMeta()).toBeNull();
+
+    // Sync without force — recovery path triggers verified reindex.
+    // The reindex scans current sources, finds no memory files,
+    // and prunes stale chunks from the deleted path.
+    await memoryManager.sync();
+
+    // Stale chunks from deleted paths are pruned.
+    const chunksAfter = (
+      internals.db.prepare("SELECT count(*) as c FROM chunks").get() as { c: number }
+    ).c;
+    expect(chunksAfter).toBe(0);
+
+    // Meta is recreated, identity valid — dead loop broken.
+    expect(internals.readMeta()).not.toBeNull();
+    expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+  });
+
+  it("preserves index when specific provider is configured but unavailable during missing-meta recovery", async () => {
+    // Configure a specific embedding provider that is unavailable.
+    const memoryManager = await createManager({ provider: "openai" });
+    await memoryManager.sync({ force: true });
+
+    expect(memoryManager.status().chunks).toBeGreaterThan(0);
+
+    // Delete meta to simulate the dead-loop condition.
+    const internals = memoryManager as unknown as {
+      db: DatabaseSync;
+      readMeta(): MemoryIndexMeta | null;
+    };
+    internals.db.exec("DELETE FROM meta WHERE key = 'memory_index_meta_v1'");
+    expect(internals.readMeta()).toBeNull();
+
+    // Sync without force — recovery path detects that a specific provider
+    // ("openai") is configured but unavailable. Existing chunks may be
+    // semantic, so the index stays dirty/paused instead of forcing an
+    // FTS-only reindex that would wipe vector embeddings.
+    await memoryManager.sync();
+
+    // Meta stays missing, index stays dirty — provider outage preserved.
+    expect(internals.readMeta()).toBeNull();
+    expect(memoryManager.status().dirty).toBe(true);
+    expect(memoryManager.status().custom?.indexIdentity).toMatchObject({
+      status: "missing",
+    });
+  });
 });
