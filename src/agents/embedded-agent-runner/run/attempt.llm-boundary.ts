@@ -58,9 +58,11 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
     content: [{ type: "text" as const, text: params.prompt }],
     timestamp: params.currentUserTimestamp ?? Date.now(),
   };
-  return normalizeMessagesForLlmBoundary([...params.messages, promptMessage], {
-    ...(params.timezone ? { timezone: params.timezone } : {}),
-  }).slice(0, -1);
+  const boundaryOptions = params.timezone ? { timezone: params.timezone } : undefined;
+  return normalizeMessagesForLlmBoundary(
+    [...params.messages, promptMessage],
+    boundaryOptions,
+  ).slice(0, -1);
 }
 
 /**
@@ -306,7 +308,7 @@ export function installModelPromptTransform(params: {
  *
  * @see https://github.com/openclaw/openclaw/issues/3658
  */
-function canonicalizeTextOnlyUserContent(content: unknown): string | unknown {
+function canonicalizeTextOnlyUserContent(content: unknown): unknown {
   if (!Array.isArray(content)) {
     return content;
   }
