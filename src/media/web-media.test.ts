@@ -707,6 +707,7 @@ describe("loadWebMedia", () => {
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
         const { saveMediaBuffer } = await import("./store.js");
+        const { markTrustedGeneratedHtmlPath } = await import("./web-media.js");
         const saved = await saveMediaBuffer(
           Buffer.from("<!doctype html><title>Report</title><h1>Report</h1>\n", "utf8"),
           "text/html",
@@ -714,9 +715,13 @@ describe("loadWebMedia", () => {
           1024 * 1024,
           "report.html",
         );
+        // Provenance is the trust signal — staging alone is not enough.
+        await markTrustedGeneratedHtmlPath(saved.path);
         expect(path.resolve(saved.path)).not.toContain(
           path.resolve(resolvePreferredOpenClawTmpDir()),
         );
+        const sidecarStat = await fs.stat(`${saved.path}.trust.json`);
+        expect(sidecarStat.isFile()).toBe(true);
         const result = await loadWebMedia(saved.path, {
           maxBytes: 1024 * 1024,
           localRoots: "any",
@@ -725,6 +730,34 @@ describe("loadWebMedia", () => {
         });
         expect(result.kind).toBe("document");
         expect(result.contentType).toBe("text/html");
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects outbound-staged HTML without a trusted-generated provenance marker", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer } = await import("./store.js");
+        const saved = await saveMediaBuffer(
+          Buffer.from("<!doctype html><title>Untrusted</title><body>x</body>\n", "utf8"),
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "untrusted.html",
+        );
+        await expect(fs.stat(`${saved.path}.trust.json`)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectLoadWebMediaErrorCode(
+          loadWebMedia(saved.path, {
+            maxBytes: 1024 * 1024,
+            localRoots: "any",
+            readFile: async (filePath) => await fs.readFile(filePath),
+            hostReadCapability: true,
+          }),
+          "path-not-allowed",
+        );
       });
     } finally {
       await fs.rm(stateRoot, { recursive: true, force: true });

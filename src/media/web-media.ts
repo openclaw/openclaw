@@ -1,5 +1,10 @@
 // Web media helpers load local and remote media for web-facing surfaces.
-import { lstat, realpath } from "node:fs/promises";
+import {
+  lstat,
+  readFile as fsReadFile,
+  realpath,
+  writeFile as fsWriteFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
@@ -44,6 +49,12 @@ export type WebMediaResult = {
   contentType?: string;
   kind: MediaKind | undefined;
   fileName?: string;
+  /**
+   * True only when the source was a local trusted-generated HTML path (under the
+   * OpenClaw temp root). Outbound staging uses this to persist a provenance
+   * marker so the staged copy remains a trusted host-read source.
+   */
+  trustedGeneratedHtmlSource?: boolean;
 };
 
 type WebMediaOptions = {
@@ -305,15 +316,68 @@ async function isTrustedGeneratedHostReadHtmlPath(filePath: string | undefined):
   if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
     return false;
   }
-  const [resolvedFilePath, ...trustedRoots] = await Promise.all([
+  const [resolvedFilePath, tmpRoot, outboundRoot] = await Promise.all([
     realpath(filePath).catch(() => undefined),
     realpath(resolvePreferredOpenClawTmpDir()).catch(() => undefined),
     realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined),
   ]);
-  return Boolean(
-    resolvedFilePath &&
-    trustedRoots.some((root) => root && isPathInsideRoot(resolvedFilePath, root)),
-  );
+  if (!resolvedFilePath) {
+    return false;
+  }
+  if (tmpRoot && isPathInsideRoot(resolvedFilePath, tmpRoot)) {
+    return true;
+  }
+  if (outboundRoot && isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+    return await hasTrustedGeneratedHtmlMarker(resolvedFilePath);
+  }
+  return false;
+}
+
+const TRUSTED_GENERATED_HTML_MARKER_VERSION = 1;
+const TRUSTED_GENERATED_HTML_MARKER_KIND = "trusted-generated-html";
+
+function trustedGeneratedHtmlSidecarPath(filePath: string): string {
+  return `${filePath}.trust.json`;
+}
+
+async function hasTrustedGeneratedHtmlMarker(resolvedFilePath: string): Promise<boolean> {
+  const sidecarPath = trustedGeneratedHtmlSidecarPath(resolvedFilePath);
+  const sidecarStat = await lstat(sidecarPath).catch(() => undefined);
+  if (!sidecarStat?.isFile() || sidecarStat.isSymbolicLink() || sidecarStat.nlink !== 1) {
+    return false;
+  }
+  const raw = await fsReadFile(sidecarPath, "utf8").catch(() => undefined);
+  if (!raw) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { kind?: unknown; version?: unknown };
+    return (
+      parsed.kind === TRUSTED_GENERATED_HTML_MARKER_KIND &&
+      parsed.version === TRUSTED_GENERATED_HTML_MARKER_VERSION
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Writes the provenance sidecar that marks an outbound-staged HTML file as
+ * originating from a trusted host-read source (under the OpenClaw temp root).
+ *
+ * This is the only authorized way to widen the trusted-html host-read check to
+ * a file under media/outbound. Callers must have already verified the source
+ * was trusted before staging.
+ */
+export async function markTrustedGeneratedHtmlPath(filePath: string): Promise<void> {
+  const payload = JSON.stringify({
+    kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
+    version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
+  });
+  await fsWriteFile(trustedGeneratedHtmlSidecarPath(filePath), payload, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
 }
 
 function isTrustedGeneratedHostReadHtml(params: {
@@ -919,6 +983,7 @@ async function loadWebMediaInternal(
     contentType?: string;
     kind: MediaKind | undefined;
     fileName?: string;
+    trustedGeneratedHtmlSource?: boolean;
   }): Promise<WebMediaResult> => {
     // If caller explicitly provides maxBytes, trust it (for channels that handle large files).
     // Otherwise fall back to per-kind defaults.
@@ -968,6 +1033,7 @@ async function loadWebMediaInternal(
       contentType: params.contentType ?? undefined,
       kind: params.kind,
       fileName: params.fileName,
+      ...(params.trustedGeneratedHtmlSource ? { trustedGeneratedHtmlSource: true } : {}),
     };
   };
 
@@ -1096,6 +1162,7 @@ async function loadWebMediaInternal(
     contentType: mime,
     kind,
     fileName,
+    trustedGeneratedHtmlSource: trustedGeneratedHtmlPath && hostReadDeclaredMime === "text/html",
   });
 }
 
