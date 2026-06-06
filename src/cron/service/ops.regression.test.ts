@@ -333,6 +333,104 @@ describe("cron service ops regressions", () => {
     expect(options?.agentId).toBeUndefined();
   });
 
+  it("force manual run is allowed even when the job is not due (nextRunAtMs in the future)", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const notDueNextRunAtMs = now + 60_000;
+
+    const job = createIsolatedRegressionJob({
+      id: "manual-not-due-force",
+      name: "manual not-due force",
+      scheduledAt: now,
+      schedule: { kind: "at", at: new Date(notDueNextRunAtMs).toISOString() },
+      payload: { kind: "agentTurn", message: "work" },
+      state: { nextRunAtMs: notDueNextRunAtMs },
+    });
+    await writeCronJobs(store.storePath, [job]);
+
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "ok" });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const result = await run(state, job.id, "force");
+    expect(result).toEqual({ ok: true, ran: true });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("force manual run is rejected while already-running (runningAtMs still fresh)", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+
+    const job = createIsolatedRegressionJob({
+      id: "manual-already-running",
+      name: "manual already-running",
+      scheduledAt: now,
+      schedule: { kind: "at", at: new Date(now + 60_000).toISOString() },
+      payload: { kind: "agentTurn", message: "work" },
+      state: { nextRunAtMs: now + 60_000, runningAtMs: now - 60_000 },
+    });
+    await writeCronJobs(store.storePath, [job]);
+
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "ok" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const result = await run(state, job.id, "force");
+    expect(result).toEqual({ ok: true, ran: false, reason: "already-running" });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(0);
+  });
+
+  it("invalid persisted manual run spec is skipped (invalid-spec)", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+
+    const job = createIsolatedRegressionJob({
+      id: "manual-invalid-spec",
+      name: "manual invalid spec",
+      scheduledAt: now,
+      schedule: { kind: "at", at: new Date(now - 60_000).toISOString() },
+      // Invalid for sessionTarget="isolated": isolated/current requires payload.kind="agentTurn".
+      payload: { kind: "systemEvent", text: "bad" },
+      state: { nextRunAtMs: now - 60_000 },
+    });
+    await writeCronJobs(store.storePath, [job]);
+
+    const runIsolatedAgentJob = vi.fn();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const result = await run(state, job.id, "force");
+    expect(result).toEqual({ ok: true, ran: false, reason: "invalid-spec" });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(0);
+
+    const updated = state.store?.jobs.find((entry) => entry.id === job.id);
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.state.lastRunStatus).toBe("skipped");
+    expect(updated?.state.nextRunAtMs).toBeUndefined();
+  });
+
   it("queues manual cron.run requests behind the cron execution lane", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);
