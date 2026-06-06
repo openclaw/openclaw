@@ -1,5 +1,5 @@
 ---
-summary: "Parallel web search -- free hosted Search MCP (zero-config default) plus the paid v1 REST API"
+summary: "Parallel Search -- LLM-optimized dense excerpts from web sources"
 read_when:
   - You want free web search with no API key
   - You want the Parallel v1 REST Search API
