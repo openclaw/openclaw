@@ -420,6 +420,7 @@ export function registerBrowserAgentStorageRoutes(
               targetId: tab.targetId,
               targetUrl: tab.url,
               headers: parsed,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
             });
             res.json({ ok: true, targetId: tab.targetId });
             return;

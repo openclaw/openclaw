@@ -236,10 +236,10 @@ function getDialogHookPostHandler() {
   return handler;
 }
 
-function getStoragePostHandler(path: string) {
+function getStoragePostHandler(path: string, ssrfPolicy?: unknown) {
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentStorageRoutes(app, {
-    state: () => ({ resolved: {} }),
+    state: () => ({ resolved: { ssrfPolicy } }),
   } as never);
   const handler = postHandlers.get(path);
   expect(handler).toBeTypeOf("function");
@@ -942,7 +942,8 @@ describe("existing-session browser routes", () => {
   });
 
   it("routes existing-session headers through CDP because Chrome MCP emulate does not support headers", async () => {
-    const handler = getStoragePostHandler("/set/headers");
+    const ssrfPolicy = { allowPrivateNetwork: false, hostnameAllowlist: ["127.0.0.1"] };
+    const handler = getStoragePostHandler("/set/headers", ssrfPolicy);
     const response = createBrowserRouteResponse();
 
     await handler?.(
@@ -960,6 +961,7 @@ describe("existing-session browser routes", () => {
       targetId: "7",
       targetUrl: "https://example.com",
       headers: { "x-openclaw-test": "yes" },
+      ssrfPolicy,
     });
   });
 
