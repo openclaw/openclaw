@@ -154,14 +154,33 @@ const current = readJsonFile(resolveCurrentReportPath());
 const baselineCases = indexCases(baseline);
 const currentCases = indexCases(current);
 const shouldRequireEveryBaselineCase = opts.preset === "all";
+const matchedBaselineCaseIds = [...baselineCases.keys()].filter((id) => currentCases.has(id));
 
 let failed = false;
+
+if (currentCases.size === 0) {
+  console.error(
+    `[test-cli-startup-bench-budget] current report has no cases for preset ${opts.preset}`,
+  );
+  failed = true;
+}
 
 for (const [id] of baselineCases) {
   if (shouldRequireEveryBaselineCase && !currentCases.has(id)) {
     console.error(`[test-cli-startup-bench-budget] missing current case ${String(id)}`);
     failed = true;
   }
+}
+if (
+  !opts.skipBaseline &&
+  !shouldRequireEveryBaselineCase &&
+  baselineCases.size > 0 &&
+  matchedBaselineCaseIds.length === 0
+) {
+  console.error(
+    `[test-cli-startup-bench-budget] no current cases matched the baseline for preset ${opts.preset}`,
+  );
+  failed = true;
 }
 
 for (const currentCase of currentCases.values()) {

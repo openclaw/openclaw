@@ -104,6 +104,157 @@ describe("CLI startup benchmark script spawners", () => {
     }
   });
 
+  it("rejects narrowed preset reports with no matching current cases", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-budget-empty-test-"));
+    try {
+      const baselinePath = path.join(tmpDir, "baseline.json");
+      const reportPath = path.join(tmpDir, "current.json");
+      fs.writeFileSync(
+        baselinePath,
+        JSON.stringify({
+          primary: {
+            cases: [
+              {
+                id: "gatewayStatusJson",
+                name: "gateway status --json",
+                samples: [{ ms: 10, firstOutputMs: 5, maxRssMb: 10, exitCode: 0, signal: null }],
+                summary: {
+                  durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+                  firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
+                  maxRssMb: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+                },
+              },
+            ],
+          },
+        }),
+      );
+      fs.writeFileSync(reportPath, JSON.stringify({ primary: { cases: [] } }));
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/test-cli-startup-bench-budget.mjs",
+          "--baseline",
+          baselinePath,
+          "--report",
+          reportPath,
+          "--preset",
+          "real",
+        ],
+        { cwd: process.cwd(), encoding: "utf8" },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "[test-cli-startup-bench-budget] current report has no cases for preset real",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects narrowed preset reports with unrelated current cases when baseline checks run", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-budget-overlap-test-"));
+    try {
+      const baselinePath = path.join(tmpDir, "baseline.json");
+      const reportPath = path.join(tmpDir, "current.json");
+      const makeCase = (id: string, name: string) => ({
+        id,
+        name,
+        samples: [{ ms: 10, firstOutputMs: 5, maxRssMb: 10, exitCode: 0, signal: null }],
+        summary: {
+          durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+          firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
+          maxRssMb: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+        },
+      });
+
+      fs.writeFileSync(
+        baselinePath,
+        JSON.stringify({ primary: { cases: [makeCase("fixtureOnly", "fixture only")] } }),
+      );
+      fs.writeFileSync(
+        reportPath,
+        JSON.stringify({ primary: { cases: [makeCase("targetOnly", "target only")] } }),
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/test-cli-startup-bench-budget.mjs",
+          "--baseline",
+          baselinePath,
+          "--report",
+          reportPath,
+          "--preset",
+          "real",
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH: "1",
+          },
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "[test-cli-startup-bench-budget] no current cases matched the baseline for preset real",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows skip-baseline reports without fixture case overlap", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-budget-skip-test-"));
+    try {
+      const baselinePath = path.join(tmpDir, "baseline.json");
+      const reportPath = path.join(tmpDir, "current.json");
+      const makeCase = (id: string, name: string) => ({
+        id,
+        name,
+        samples: [{ ms: 10, firstOutputMs: 5, maxRssMb: 10, exitCode: 0, signal: null }],
+        summary: {
+          durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+          firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
+          maxRssMb: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+        },
+      });
+
+      fs.writeFileSync(
+        baselinePath,
+        JSON.stringify({ primary: { cases: [makeCase("fixtureOnly", "fixture only")] } }),
+      );
+      fs.writeFileSync(
+        reportPath,
+        JSON.stringify({ primary: { cases: [makeCase("targetOnly", "target only")] } }),
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/test-cli-startup-bench-budget.mjs",
+          "--baseline",
+          baselinePath,
+          "--report",
+          reportPath,
+          "--preset",
+          "real",
+          "--skip-baseline",
+        ],
+        { cwd: process.cwd(), encoding: "utf8" },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toContain("no current cases matched the baseline");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("skips x64 startup budgets on noncanonical architectures", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-budget-arch-test-"));
     try {
