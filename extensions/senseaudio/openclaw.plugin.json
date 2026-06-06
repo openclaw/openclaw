@@ -13,7 +13,8 @@
     ]
   },
   "contracts": {
-    "mediaUnderstandingProviders": ["senseaudio"]
+    "mediaUnderstandingProviders": ["senseaudio"],
+    "speechProviders": ["senseaudio"]
   },
   "configSchema": {
     "type": "object",
