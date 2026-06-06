@@ -892,7 +892,11 @@ async function writeLaunchAgentPlist({
   workingDirectory,
   environment,
   description,
-}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ plistPath: string; stdoutPath: string }> {
+}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{
+  plistPath: string;
+  stdoutPath: string;
+  bootVolumePlistPath?: string;
+}> {
   const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
   await ensureSecureDirectory(logDir);
 
