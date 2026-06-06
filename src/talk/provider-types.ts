@@ -87,6 +87,7 @@ export type RealtimeVoiceProviderCapabilities = {
   outputAudioFormats: RealtimeVoiceAudioFormat[];
   supportsBrowserSession?: boolean;
   supportsBargeIn?: boolean;
+  emitsSpeechStartedEvent?: boolean;
   supportsToolCalls?: boolean;
   supportsVideoFrames?: boolean;
   supportsSessionResumption?: boolean;
