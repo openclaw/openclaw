@@ -514,6 +514,10 @@ function readMemorySearchEnabled(
   return typeof enabled === "boolean" ? enabled : undefined;
 }
 
+function isMemorySlotExplicitlyDisabled(config: OpenClawConfig): boolean {
+  return normalizeOptionalLowercaseString(config.plugins?.slots?.memory) === "none";
+}
+
 export type MemoryEmbeddingStartupProviderSource = "provider" | "fallback";
 
 export type ConfiguredMemoryEmbeddingStartupProviderOwner = {
@@ -603,6 +607,9 @@ function resolveEffectiveMemoryEmbeddingProviderEntries(
 export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
   config: OpenClawConfig,
 ): ConfiguredMemoryEmbeddingStartupProviderOwner[] {
+  if (isMemorySlotExplicitlyDisabled(config)) {
+    return [];
+  }
   const byConfiguredIdAndSource = new Map<string, ConfiguredMemoryEmbeddingStartupProviderOwner>();
   const defaultsBlock = config.agents?.defaults?.memorySearch;
   const defaults = isRecord(defaultsBlock) ? defaultsBlock : undefined;

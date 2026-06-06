@@ -1074,6 +1074,21 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "memory-core"],
     ],
     [
+      "does not load memory embedding provider owners when the memory slot is disabled",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "openai", fallback: "ollama" },
+          },
+        },
+        plugins: {
+          slots: { memory: "none" },
+        },
+      } as OpenClawConfig,
+      ["browser"],
+    ],
+    [
       "ignores memory embedding fallbacks when primary provider is fts-only",
       {
         channels: {},
@@ -1820,16 +1835,16 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
           channels: {},
           plugins: {
-            allow: ["browser"],
+            allow: ["browser", "memory-core"],
             slots: {
-              memory: "none",
+              memory: "memory-core",
             },
           },
         } as OpenClawConfig,
         env: createPluginPlanningTestEnv(),
         index,
       }),
-    ).toEqual(["browser", "ollama", "openai"]);
+    ).toEqual(["browser", "memory-core", "ollama", "openai"]);
   });
 
   it("uses installed-index model support for restrictive startup shorthand model scopes", () => {
