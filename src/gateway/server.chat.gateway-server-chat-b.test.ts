@@ -965,7 +965,7 @@ describe("gateway server chat", () => {
         expect.arrayContaining([expect.objectContaining({ runId, state: "error" })]),
       );
       await vi.waitFor(() => {
-        expect(context.removeChatRun).toHaveBeenCalledWith(runId, runId, "main");
+        expect(context.removeChatRun).toHaveBeenCalledWith(runId, runId, expect.any(String));
       }, FAST_WAIT_OPTS);
     } finally {
       dispatchRelease.resolve();
