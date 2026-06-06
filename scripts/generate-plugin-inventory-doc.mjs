@@ -77,7 +77,13 @@ function pluginReferencePath(id) {
 }
 
 function hasGeneratedReferencePage(record) {
-  return !SKIPPED_REFERENCE_PAGE_IDS.has(record.id);
+  if (!SKIPPED_REFERENCE_PAGE_IDS.has(record.id)) {
+    return true;
+  }
+  if (PLUGIN_DOC_ALIASES.has(record.id)) {
+    return false;
+  }
+  throw new Error(`skipped plugin reference page ${record.id} needs a plugin doc alias`);
 }
 
 function pluginInventoryHref(record) {
