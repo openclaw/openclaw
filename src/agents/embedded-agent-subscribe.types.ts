@@ -92,8 +92,6 @@ export type SubscribeEmbeddedAgentSessionParams = {
   agentId?: string;
   /** Channel/provider identity forwarded into subscribe-time hook contexts. */
   messageProvider?: string;
-  /** Channel identity fallback forwarded into subscribe-time hook contexts. */
-  messageChannel?: string;
   /**
    * Exact raw names of OpenClaw tools registered for this run.
    */

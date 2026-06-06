@@ -3251,7 +3251,6 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           messageProvider: params.messageChannel ?? params.messageProvider,
-          messageChannel: params.messageChannel,
           builtinToolNames,
           internalEvents: params.internalEvents,
         }),

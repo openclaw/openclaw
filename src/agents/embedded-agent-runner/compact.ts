@@ -34,6 +34,7 @@ import {
 } from "../../routing/session-key.js";
 import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
+import { resolveHookMessageProvider } from "../../utils/hook-message-provider.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
