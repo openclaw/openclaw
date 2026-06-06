@@ -61,20 +61,41 @@ export function validateCronJobTaskRecordPreflight(
   const notes: string[] = [];
 
   // 1) Required-field completeness
+  const missingRequiredSet = new Set<string>();
   for (const field of snapshot.requiredFields) {
     const value = record[field];
+
     if (value === undefined) {
       missingFields.push(field);
+      missingRequiredSet.add(field);
       continue;
     }
 
-    if (typeof value === "string") {
-      if (value.trim().length === 0) missingFields.push(field);
+    const expectedTypeUnion = snapshot.fieldTypes[field];
+    const allowed = expectedTypeUnion ? parseExpectedType(expectedTypeUnion) : [];
+
+    // Enforce required fields as BOTH: (a) present and (b) matching expected runtime type.
+    if (allowed.includes("string")) {
+      if (typeof value !== "string" || value.trim().length === 0) {
+        missingFields.push(field);
+        missingRequiredSet.add(field);
+      }
       continue;
     }
 
-    // for non-string fields, treat null as missing when they are listed as required
-    if (value === null) missingFields.push(field);
+    if (allowed.includes("number")) {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        missingFields.push(field);
+        missingRequiredSet.add(field);
+      }
+      continue;
+    }
+
+    // Fallback for fields without an expected type definition.
+    if (value === null) {
+      missingFields.push(field);
+      missingRequiredSet.add(field);
+    }
   }
 
   // 2) JSON drift detection vs last-known-good snapshot
@@ -82,6 +103,7 @@ export function validateCronJobTaskRecordPreflight(
     // Only validate drift types when the field is present.
     // Missing required fields are already tracked above.
     if (!(field in record)) continue;
+    if (missingRequiredSet.has(field)) continue;
 
     const value = record[field];
     const actual = typeCategory(value);
