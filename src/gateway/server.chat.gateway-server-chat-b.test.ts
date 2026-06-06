@@ -1115,6 +1115,27 @@ describe("gateway server chat", () => {
       expect(chatBroadcasts).toEqual(
         expect.arrayContaining([expect.objectContaining({ runId, state: "error" })]),
       );
+      expect(context.chatAbortedRuns.has(runId)).toBe(false);
+
+      context.dedupe.delete(`chat:${runId}`);
+      dispatchInboundMessageMock.mockResolvedValueOnce({});
+      await chatHandlers["chat.send"]({
+        req: { type: "req", id: "retry", method: "chat.send", params },
+        params,
+        client,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          responses.push({ id: "retry", ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(responses.at(-1)).toEqual({
+        id: "retry",
+        ok: true,
+        payload: { runId, status: "started" },
+        error: undefined,
+      });
     } finally {
       runtimePersistenceRelease.resolve();
       dispatchInboundMessageMock.mockReset();

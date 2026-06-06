@@ -4358,6 +4358,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             });
             return;
           }
+          // If abort raced in after dispatch had already rejected, the error wins.
+          // Clear the late tombstone so retry after error-dedupe expiry cannot replay abort.
+          context.chatAbortedRuns.delete(clientRunId);
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
