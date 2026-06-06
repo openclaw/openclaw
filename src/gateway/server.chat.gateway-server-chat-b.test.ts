@@ -296,7 +296,7 @@ describe("gateway server chat", () => {
       clearConfigCache();
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -630,7 +630,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -820,7 +820,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -1071,7 +1071,14 @@ describe("gateway server chat", () => {
           },
         ]);
         expect(runtimePersistenceStarted).toBe(true);
-        expect(context.chatAbortControllers.has(runId)).toBe(true);
+        expect(context.chatAbortControllers.has(runId)).toBe(false);
+        expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+          expect.objectContaining({
+            runId,
+            status: "error",
+            summary: "Error: dispatch failed before late abort",
+          }),
+        );
       }, FAST_WAIT_OPTS);
 
       await chatHandlers["chat.abort"]({
@@ -1093,28 +1100,57 @@ describe("gateway server chat", () => {
       expect(abortResponses).toEqual([
         {
           ok: true,
-          payload: { ok: true, aborted: true, runIds: [runId] },
+          payload: { ok: true, aborted: false, runIds: [] },
           error: undefined,
         },
       ]);
 
-      runtimePersistenceRelease.resolve();
-      await send;
-      await vi.waitFor(() => {
-        expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
-          expect.objectContaining({
-            runId,
-            status: "error",
-            summary: "Error: dispatch failed before late abort",
-          }),
-        );
-      }, FAST_WAIT_OPTS);
-
-      const chatBroadcasts = broadcast.mock.calls
+      await chatHandlers["chat.send"]({
+        req: { type: "req", id: "retry-pending", method: "chat.send", params },
+        params,
+        client,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          responses.push({ id: "retry-pending", ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+      expect(responses.at(-1)).toEqual({
+        id: "retry-pending",
+        ok: false,
+        payload: expect.objectContaining({
+          runId,
+          status: "error",
+          summary: "Error: dispatch failed before late abort",
+        }),
+        error: expect.any(Object),
+      });
+      let chatBroadcasts = broadcast.mock.calls
         .filter(([event]) => event === "chat")
         .map(([, payload]) => payload as { runId?: string; state?: string });
-      expect(chatBroadcasts).toEqual(
-        expect.arrayContaining([expect.objectContaining({ runId, state: "error" })]),
+      expect(chatBroadcasts).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ runId, state: "aborted" })]),
+      );
+
+      runtimePersistenceRelease.resolve();
+      await send;
+      expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+        expect.objectContaining({
+          runId,
+          status: "error",
+          summary: "Error: dispatch failed before late abort",
+        }),
+      );
+      await vi.waitFor(() => {
+        chatBroadcasts = broadcast.mock.calls
+          .filter(([event]) => event === "chat")
+          .map(([, payload]) => payload as { runId?: string; state?: string });
+        expect(chatBroadcasts).toEqual(
+          expect.arrayContaining([expect.objectContaining({ runId, state: "error" })]),
+        );
+      }, FAST_WAIT_OPTS);
+      expect(chatBroadcasts).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ runId, state: "aborted" })]),
       );
       expect(context.chatAbortedRuns.has(runId)).toBe(false);
 
@@ -1294,7 +1330,7 @@ describe("gateway server chat", () => {
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
         clearConfigCache();
-        await fs.rm(sessionDir, { recursive: true, force: true });
+        await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       }
     },
   );
@@ -1481,7 +1517,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -1596,7 +1632,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -1730,7 +1766,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -1881,7 +1917,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
