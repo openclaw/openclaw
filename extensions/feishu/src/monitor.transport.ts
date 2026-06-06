@@ -12,6 +12,7 @@ import {
   safeEqualSecret,
   type RuntimeEnv,
 } from "./monitor-transport-runtime-api.js";
+import type { FeishuStatusSink } from "./monitor.js";
 import {
   botNames,
   botOpenIds,
@@ -30,6 +31,13 @@ type MonitorTransportParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   eventDispatcher: Lark.EventDispatcher;
+  /**
+   * Optional status sink for transport activity tracking. When provided, the
+   * monitor publishes `connected: true|false` and `lastEventAt` on WS /
+   * Webhook lifecycle events so the gateway health monitor can detect a
+   * silent channel. See PROPOSAL.md for the incident background.
+   */
+  statusSink?: FeishuStatusSink;
 };
 
 const FEISHU_WS_RECONNECT_INITIAL_DELAY_MS = 1_000;
@@ -217,6 +225,7 @@ export async function monitorWebSocket({
   runtime,
   abortSignal,
   eventDispatcher,
+  statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -255,6 +264,17 @@ export async function monitorWebSocket({
       await wsClient.start({ eventDispatcher });
       attempt = 0;
       log(`feishu[${accountId}]: WebSocket client started`);
+      // Publish connected + lastEventAt as soon as the WS handshake completes.
+      // This is the primary health signal: without it, a silent WS death would
+      // not be observable to the gateway health monitor. See PROPOSAL.md.
+      const connectedAt = Date.now();
+      statusSink?.({
+        connected: true,
+        lastConnectedAt: connectedAt,
+        lastEventAt: connectedAt,
+        lastTransportActivityAt: connectedAt,
+        lastError: null,
+      });
       const cycleEnd = await waitForFeishuWsCycleEnd({ abortSignal, terminalError });
       if (cycleEnd === "abort") {
         log(`feishu[${accountId}]: abort signal received, stopping`);
@@ -266,6 +286,15 @@ export async function monitorWebSocket({
       if (abortSignal?.aborted) {
         break;
       }
+
+      // WS cycle ended via terminal error (not abort) — publish disconnected
+      // so the health monitor can flag the channel before the next reconnect.
+      const disconnectedAt = Date.now();
+      statusSink?.({
+        connected: false,
+        lastEventAt: disconnectedAt,
+        lastTransportActivityAt: disconnectedAt,
+      });
 
       attempt += 1;
       const delayMs = getFeishuWsReconnectDelayMs(attempt);
@@ -281,6 +310,14 @@ export async function monitorWebSocket({
       if (abortSignal?.aborted) {
         break;
       }
+
+      // WS start failed (e.g. handshake / auth) — publish disconnected.
+      const failedAt = Date.now();
+      statusSink?.({
+        connected: false,
+        lastEventAt: failedAt,
+        lastTransportActivityAt: failedAt,
+      });
 
       attempt += 1;
       const delayMs = getFeishuWsReconnectDelayMs(attempt);
@@ -302,6 +339,7 @@ export async function monitorWebhook({
   runtime,
   abortSignal,
   eventDispatcher,
+  statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -318,9 +356,22 @@ export async function monitorWebhook({
 
   const server = http.createServer();
 
+  httpServers.set(accountId, server);
+
   server.on("request", (req, res) => {
     res.on("finish", () => {
       recordWebhookStatus(runtime, accountId, path, res.statusCode);
+      // Refresh lastEventAt / lastTransportActivityAt on every successful 2xx
+      // response so the gateway health monitor sees inbound activity. Non-2xx
+      // (e.g. 401 invalid signature, 400 invalid JSON, 429 rate-limited) is
+      // intentionally NOT counted as transport activity.
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        const inboundAt = Date.now();
+        statusSink?.({
+          lastEventAt: inboundAt,
+          lastTransportActivityAt: inboundAt,
+        });
+      }
     });
 
     const rateLimitKey = buildFeishuWebhookRateLimitKey({
@@ -440,6 +491,17 @@ export async function monitorWebhook({
 
     server.listen(port, host, () => {
       log(`feishu[${accountId}]: Webhook server listening on ${host}:${port}`);
+      // Publish connected + lastEventAt once the server is listening. Without
+      // this, the gateway health monitor has no transport signal for webhook
+      // mode and will not detect a server crash. See PROPOSAL.md.
+      const webhookConnectedAt = Date.now();
+      statusSink?.({
+        connected: true,
+        lastConnectedAt: webhookConnectedAt,
+        lastEventAt: webhookConnectedAt,
+        lastTransportActivityAt: webhookConnectedAt,
+        lastError: null,
+      });
     });
 
     server.on("error", (err) => {

@@ -52,6 +52,13 @@ type FeishuMessageReceiveHandlerContext = {
     botOpenId?: string;
     botName?: string;
   }) => string;
+  /**
+   * Optional status sink. When provided, the handler will publish `lastEventAt`
+   * on every inbound message so the gateway health monitor sees transport
+   * activity and can detect a silent channel. See PROPOSAL.md for the
+   * incident background.
+   */
+  statusSink?: import("./monitor.js").FeishuStatusSink;
 };
 
 function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
@@ -169,6 +176,7 @@ export function createFeishuMessageReceiveHandler({
   getBotName = () => undefined,
   resolveSequentialKey = ({ accountId: accountIdLocal, event }) =>
     `feishu:${accountIdLocal}:${event.message.chat_id?.trim() || "unknown"}`,
+  statusSink,
 }: FeishuMessageReceiveHandlerContext): (data: unknown) => Promise<void> {
   const inboundDebounceMs = channelRuntime.debounce.resolveInboundDebounceMs({
     cfg,
@@ -315,6 +323,17 @@ export function createFeishuMessageReceiveHandler({
   });
 
   return async (data) => {
+    // Publish lastEventAt as soon as the inbound message arrives, before any
+    // dedup or debounce processing. This is the primary health signal for the
+    // gateway health monitor: without it, a silent channel (e.g. a long-lived
+    // workspace that simply receives no messages) is incorrectly flagged as
+    // stale. See PROPOSAL.md for the incident background.
+    const inboundAt = Date.now();
+    statusSink?.({
+      lastEventAt: inboundAt,
+      lastTransportActivityAt: inboundAt,
+    });
+
     const event = parseFeishuMessageEventPayload(data);
     if (!event) {
       error(`feishu[${accountId}]: ignoring malformed message event payload`);

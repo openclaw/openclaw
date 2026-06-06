@@ -20,6 +20,7 @@ import {
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
+import type { FeishuStatusSink } from "./monitor.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
@@ -169,6 +170,12 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  /**
+   * Optional status sink. When provided, the message handler will publish
+   * `lastEventAt` on every inbound message so the gateway health monitor can
+   * detect a silent channel. See PROPOSAL.md for the incident background.
+   */
+  statusSink?: FeishuStatusSink;
 };
 
 function parseFeishuBotAddedEventPayload(value: unknown): FeishuBotAddedEvent | null {
@@ -301,6 +308,7 @@ function registerEventHandlers(
       getBotOpenId: (id) => botOpenIds.get(id),
       getBotName: (id) => botNames.get(id),
       resolveSequentialKey: getFeishuSequentialKey,
+      ...(context.statusSink ? { statusSink: context.statusSink } : {}),
     }),
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
@@ -443,6 +451,13 @@ export type MonitorSingleAccountParams = {
   abortSignal?: AbortSignal;
   botOpenIdSource?: BotOpenIdSource;
   fireAndForget?: boolean;
+  /**
+   * Optional status sink for transport activity tracking. When provided, it
+   * is propagated to the event dispatcher (for `lastEventAt` on inbound
+   * messages) and the transport layer (for `connected: true|false` on WS
+   * / Webhook lifecycle events). See PROPOSAL.md for the incident background.
+   */
+  statusSink?: FeishuStatusSink;
 };
 
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
@@ -489,12 +504,27 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       runtime,
       chatHistories,
       fireAndForget: params.fireAndForget ?? true,
+      ...(params.statusSink ? { statusSink: params.statusSink } : {}),
     });
 
     if (connectionMode === "webhook") {
-      return await monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
+      return await monitorWebhook({
+        account,
+        accountId,
+        runtime,
+        abortSignal,
+        eventDispatcher,
+        ...(params.statusSink ? { statusSink: params.statusSink } : {}),
+      });
     }
-    return await monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
+    return await monitorWebSocket({
+      account,
+      accountId,
+      runtime,
+      abortSignal,
+      eventDispatcher,
+      ...(params.statusSink ? { statusSink: params.statusSink } : {}),
+    });
   } finally {
     threadBindingManager?.stop();
   }

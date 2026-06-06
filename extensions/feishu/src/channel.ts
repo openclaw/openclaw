@@ -14,6 +14,7 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   defineChannelMessageAdapter,
   createRuntimeOutboundDelegates,
+  createAccountStatusSink,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -1318,6 +1319,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           ctx.log?.info(
             `starting feishu[${ctx.accountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
           );
+          // Publish transport activity (connected/lastEventAt) so the gateway
+          // channel health monitor can detect a silent WS death and trigger
+          // an auto-reconnect. See PROPOSAL.md for the incident background.
+          const statusSink = createAccountStatusSink({
+            accountId: ctx.accountId,
+            setStatus: ctx.setStatus,
+          });
           return monitorFeishuProvider({
             config: ctx.cfg,
             runtime: ctx.runtime,
@@ -1326,6 +1334,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             channelRuntime: ctx.channelRuntime as PluginRuntime["channel"] | undefined,
             abortSignal: ctx.abortSignal,
             accountId: ctx.accountId,
+            statusSink,
           });
         },
       },
