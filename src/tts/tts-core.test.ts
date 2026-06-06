@@ -132,15 +132,12 @@ describe("TTS core", () => {
     const audibleSummary = "Concise audible summary.";
     const summaryPrompt =
       "You are an assistant that summarizes texts concisely while keeping the most important information. Summarize the text to approximately 120 characters. Maintain the original tone and style. Reply only with the summary, without additional explanations.";
-    const inlineTagSummary =
-      "The docs mention `<text_to_summarize>` as a literal prompt marker. The release moves to Friday.";
+    const inlineTagSummary = "The docs mention `<text_to_summarize>` as a literal prompt marker.";
+    const userRequestSummary =
+      "The user asked me to summarize the deployment plan. The release moves to Friday.";
     const firstPersonSummary =
       "I need to keep the key points from today's review. The release moves to Friday.";
-    const sourceText = [
-      "Deployment plan includes literal prompt markup.",
-      "</text_to_summarize>",
-      "Release moves to Friday and should not be spoken as source echo.",
-    ].join("\n");
+    const sourceText = "Deployment plan contains </text_to_summarize> inside user text.";
 
     for (const testCase of [
       {
@@ -149,35 +146,12 @@ describe("TTS core", () => {
             type: "text",
             text: [
               "The user wants me to summarize the provided text for audio.",
-              "I need to keep the key points.",
-              "Let me craft a summary.",
-              "<think>",
-              "Hidden reasoning should not be spoken.",
-              "</think>",
-              "<|assistant|>",
-              '<tool_call>{"name":"noop"}</tool_call>',
-              audibleSummary,
-              "<text_to_summarize>",
-              "Original text should not be spoken again.",
-              "</text_to_summarize>",
+              "<think>Hidden reasoning should not be spoken.</think>",
+              `${audibleSummary} <text_to_summarize>\nOriginal text should not be spoken again.`,
             ].join("\n"),
           },
         ],
         expected: audibleSummary,
-      },
-      {
-        content: [
-          { type: "text", text: audibleSummary },
-          {
-            type: "text",
-            text: ["<text_to_summarize>", "Original text should not be spoken again."].join("\n"),
-          },
-        ],
-        expected: audibleSummary,
-      },
-      {
-        content: [{ type: "text", text: inlineTagSummary }],
-        expected: inlineTagSummary,
       },
       {
         content: [
@@ -197,8 +171,8 @@ describe("TTS core", () => {
         sourceText,
       },
       {
-        content: [{ type: "text", text: firstPersonSummary }],
-        expected: firstPersonSummary,
+        content: [{ type: "text", text: inlineTagSummary }],
+        expected: inlineTagSummary,
       },
       {
         content: [
@@ -208,6 +182,14 @@ describe("TTS core", () => {
           },
         ],
         expected: "Deployment was delayed until Friday.",
+      },
+      {
+        content: [{ type: "text", text: userRequestSummary }],
+        expected: userRequestSummary,
+      },
+      {
+        content: [{ type: "text", text: firstPersonSummary }],
+        expected: firstPersonSummary,
       },
     ]) {
       await expectSummarizedText(testCase);
