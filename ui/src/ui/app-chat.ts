@@ -1,5 +1,6 @@
-// Control UI module implements app chat behavior.
 import type { CommandsListResult } from "../../../packages/gateway-protocol/src/index.js";
+// Control UI module implements app chat behavior.
+import { isNonTerminalAgentRunStatus } from "../../../src/shared/agent-run-status.js";
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
@@ -1084,7 +1085,7 @@ async function sendQueuedChatMessage(
           },
         );
         void loadChatHistory(host as unknown as ChatState);
-      } else {
+      } else if (isNonTerminalAgentRunStatus(ack.status)) {
         const hasAlreadyAdoptedRunStream =
           host.chatRunId === ack.runId && typeof host.chatStream === "string";
         host.chatRunId = ack.runId;
@@ -1096,6 +1097,22 @@ async function sendQueuedChatMessage(
           (host as ChatHost & { chatStreamStartedAt?: number | null }).chatStreamStartedAt =
             startedAt;
         }
+      } else {
+        reconcileChatRunLifecycle(
+          host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+          {
+            outcome: "interrupted",
+            sessionStatus: ack.status === "error" ? "failed" : "killed",
+            runId: ack.runId,
+            sessionKey,
+            clearLocalRun: true,
+            clearChatStream: true,
+            clearToolStream: true,
+            clearSideResultTerminalRuns: true,
+            publishRunStatus: false,
+            armLocalTerminalReconcile: ack.runId === runId,
+          },
+        );
       }
     }
     if (prepared.refreshSessions) {
@@ -1108,7 +1125,7 @@ async function sendQueuedChatMessage(
           ...createChatSessionsLoadOverrides(host),
           ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
         });
-      } else {
+      } else if (isNonTerminalAgentRunStatus(ack.status)) {
         host.refreshSessionsAfterChat.set(ack.runId, refreshTarget);
       }
     }

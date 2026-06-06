@@ -1,4 +1,5 @@
 // Control UI controller manages chat gateway state.
+import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
@@ -864,7 +865,7 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
     : undefined;
 }
 
-export type ChatSendAckStatus = "started" | "in_flight" | "ok";
+export type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
 
 export type ChatSendAckServerTiming = {
   receivedToAckMs?: number;
@@ -909,7 +910,10 @@ function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSend
   const serverTiming = normalizeChatSendAckServerTiming(record.serverTiming);
   return {
     runId,
-    status: status === "in_flight" || status === "ok" ? status : "started",
+    status:
+      status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
+        ? status
+        : "started",
     ...(serverTiming ? { serverTiming } : {}),
   };
 }
@@ -1087,6 +1091,7 @@ export async function sendChatMessage(
   setChatError(state, null);
   reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
     clearRunStatus: true,
+    clearLocalTerminalReconcile: true,
   });
   const runId = generateUUID();
   state.chatRunId = runId;
@@ -1108,8 +1113,21 @@ export async function sendChatMessage(
           armLocalTerminalReconcile: true,
         },
       );
-    } else {
+    } else if (isNonTerminalAgentRunStatus(ack.status)) {
       state.chatRunId = ack.runId;
+    } else {
+      reconcileChatRunLifecycle(
+        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          outcome: "interrupted",
+          sessionStatus: ack.status === "error" ? "failed" : "killed",
+          runId: ack.runId,
+          sessionKey: state.sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          armLocalTerminalReconcile: ack.runId === runId,
+        },
+      );
     }
     return ack.status === "ok" ? ack.runId : runId;
   } catch (err) {

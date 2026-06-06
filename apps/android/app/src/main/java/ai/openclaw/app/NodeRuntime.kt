@@ -14,6 +14,7 @@ import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
+import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.A2UIHandler
 import ai.openclaw.app.node.CalendarHandler
@@ -615,7 +616,8 @@ class NodeRuntime(
             put("idempotencyKey", JsonPrimitive(idempotencyKey))
           }
         val response = operatorSession.request("chat.send", params.toString())
-        parseChatSendRunId(response) ?: idempotencyKey
+        val ack = parseChatSendAck(json, response)
+        if (ack.isTerminal) null else (ack.runId ?: idempotencyKey)
       },
       speakAssistantReply = { text ->
         // Voice-tab replies should speak through the dedicated reply speaker.
@@ -1822,14 +1824,6 @@ class NodeRuntime(
     }
   }
 
-  private fun parseChatSendRunId(response: String): String? {
-    return try {
-      val root = json.parseToJsonElement(response).asObjectOrNull() ?: return null
-      root["runId"].asStringOrNull()
-    } catch (_: Throwable) {
-      null
-    }
-  }
 
   private fun parseTalkSessionId(response: String): String {
     val root = json.parseToJsonElement(response).asObjectOrNull()
