@@ -312,9 +312,9 @@ async function processMessageWithPipeline(params: {
     reply: {
       to: `googlechat:${spaceId}`,
       originatingTo: `googlechat:${spaceId}`,
-      replyToId: message.thread?.name,
-      replyToIdFull: message.thread?.name,
-      messageThreadId: message.thread?.name,
+      replyToId: replyThreadName,
+      replyToIdFull: replyThreadName,
+      messageThreadId: replyThreadName,
     },
     message: {
       body,
