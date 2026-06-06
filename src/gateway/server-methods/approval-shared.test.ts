@@ -360,7 +360,7 @@ describe("handlePendingApprovalRequest", () => {
     });
 
     await Promise.resolve();
-    let assertionError: unknown;
+    let assertionError: Error | undefined;
     try {
       expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
       expect(manager.getSnapshot(record.id)?.resolvedBy).toBe("no-approval-route");
@@ -370,7 +370,7 @@ describe("handlePendingApprovalRequest", () => {
         undefined,
       );
     } catch (err) {
-      assertionError = err;
+      assertionError = err instanceof Error ? err : new Error(String(err));
     } finally {
       if (manager.getSnapshot(record.id)?.resolvedAtMs === undefined) {
         manager.resolve(record.id, "deny");

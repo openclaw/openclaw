@@ -396,7 +396,7 @@ async function deliverToTargets(params: {
         payloads: [payload],
       });
       if (send.status === "failed" || send.status === "partial_failed") {
-        throw send.error;
+        throw send.error instanceof Error ? send.error : new Error(String(send.error));
       }
       return { attempted: true, delivered: true, failed: false };
     } catch (err) {
