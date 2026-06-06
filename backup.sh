@@ -152,16 +152,14 @@ if [ -f "$OC_DIR/memory/main.sqlite" ]; then
     echo "    ✓ memory/main.sqlite"
 fi
 
-# QMD state (index/cache/models/sessions) for MCP-driven memory setups
-if [ -d "$OC_DIR/agents" ]; then
-    while IFS= read -r -d '' QMD_DIR; do
-        REL_QMD_DIR="${QMD_DIR#"$OC_DIR"/}"
-        DEST_PARENT="$BACKUP_DIR/$(dirname "$REL_QMD_DIR")"
-        mkdir -p "$DEST_PARENT"
-        cp -r "$QMD_DIR" "$DEST_PARENT/"
-        echo "    ✓ ${REL_QMD_DIR}/"
-    done < <(find "$OC_DIR/agents" -mindepth 2 -maxdepth 2 -type d -name qmd -print0)
-fi
+# NOTE: QMD state under agents/*/qmd/ is INTENTIONALLY NOT backed up.
+# It holds ~2.2GB of GGUF models (re-downloadable) plus SQLite indexes
+# (rebuilt from the workspace/MEMORY.md content, which IS backed up via git).
+# A previous `find ... -name qmd | cp -r` block here copied all of that on
+# every run; combined with the image save it pushed ~6.7GB of disk I/O in a
+# few minutes and saturated the VPS disk controller, stalling every container
+# (incident 2026-06-04). Do not re-add a QMD copy here. If a QMD index backup
+# is ever wanted, copy only the small index.sqlite, never the models/ dir.
 
 # Exec approvals
 if [ -f "$OC_DIR/exec-approvals.json" ]; then
