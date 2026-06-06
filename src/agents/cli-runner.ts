@@ -681,7 +681,7 @@ export async function runPreparedCliAgent(
     const agentSessionId = unflushedCliSessionId
       ? ""
       : (resultParams.effectiveCliSessionId ?? params.sessionId ?? "");
-    const yielded = loopbackYieldContext.yielded === true;
+    const yielded = loopbackYieldContext.yielded;
     const stopReason = yielded ? "end_turn" : "completed";
     const finishReason = yielded ? "end_turn" : "stop";
 

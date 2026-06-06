@@ -1702,7 +1702,7 @@ describe("runCliAgent reliability", () => {
       ...createManagedRun(exit),
       wait: vi.fn(async () => {
         const runtime = await import("../gateway/mcp-http.loopback-runtime.js");
-        await runtime.resolveMcpLoopbackYieldHandler("s1")?.("waiting on subagents");
+        runtime.resolveMcpLoopbackYieldHandler("s1")?.("waiting on subagents");
         return exit;
       }),
     });
