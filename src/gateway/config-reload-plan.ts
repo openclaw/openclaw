@@ -122,6 +122,12 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "identity", kind: "none" },
   { prefix: "wizard", kind: "none" },
   { prefix: "logging", kind: "none" },
+  // Routing-only paths (`agents`, `bindings`, `routing`) are `kind: "none"` by
+  // design: the channel plugin contract is to re-resolve routing per inbound
+  // against a fresh runtime cfg (see docs/plugins/sdk-channel-inbound.md
+  // "Routing and live bindings"), so no global reload action is needed when
+  // these paths change. CLI binding edits take effect on the next inbound
+  // without a gateway restart.
   { prefix: "agents", kind: "none" },
   { prefix: "tools", kind: "none" },
   { prefix: "bindings", kind: "none" },

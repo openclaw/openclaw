@@ -202,6 +202,13 @@ type EvaluatedBindingsCache = {
   byChannelAccountIndex: Map<string, EvaluatedBindingsIndex>;
 };
 
+// Both caches are keyed on cfg object identity (WeakMap). A stale cfg
+// reference returns a stale routing result by construction — there is no
+// time-based invalidation. Channel plugins must pass the current runtime cfg
+// (via `getRuntimeConfig()` from `openclaw/plugin-sdk/runtime-config-snapshot`,
+// per inbound) so cache lookups miss on the new ref and bindings get
+// re-evaluated. See docs/plugins/sdk-channel-inbound.md "Routing and live
+// bindings" for the full channel plugin contract.
 const evaluatedBindingsCacheByCfg = new WeakMap<OpenClawConfig, EvaluatedBindingsCache>();
 const MAX_EVALUATED_BINDINGS_CACHE_KEYS = 2000;
 const resolvedRouteCacheByCfg = new WeakMap<
