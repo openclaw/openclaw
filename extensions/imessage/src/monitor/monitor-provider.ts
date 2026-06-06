@@ -1127,7 +1127,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const dm = classifyDmCoalesce(repairedMessage) ?? undefined;
     if (dm?.mode === "lead-in") {
       // Remember this lead-in so the payload row that follows merges into it
-      // instead of dispatching on its own.
+      // instead of dispatching on its own. Ordering invariant: for an active
+      // chat (chat_id/chat_guid/chat_identifier already set), repair takes the
+      // synchronous early-return in `repairIMessageConversationAnchor`, so two
+      // notifications arriving in order resolve their awaits in the same order
+      // and the lead-in registers before the payload classifies. The narrow
+      // race — asymmetric RPC latency on an anchorless lead-in followed by an
+      // anchored payload — degrades to two separate turns (the same outcome
+      // as `coalesceSameSenderDms: false`), so it is not a contract regression.
       pendingLeadInKeys.add(dm.key);
     }
     await inboundDebouncer.enqueue({ message: repairedMessage, dm });
