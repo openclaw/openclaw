@@ -976,6 +976,154 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send post-dispatch rejection stays error when abort arrives during error persistence", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const runtimePersistenceRelease = createDeferred<void>();
+    let runtimePersistenceStarted = false;
+    const runId = "idem-post-dispatch-error-then-abort";
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const abortResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        getRuntimeConfig: () => ({}),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        const recorder = (args as { replyOptions?: GetReplyOptions }).replyOptions
+          ?.userTurnTranscriptRecorder;
+        recorder?.markRuntimePersistencePending({
+          then: (resolve: () => void, reject: (reason?: unknown) => void) => {
+            runtimePersistenceStarted = true;
+            return runtimePersistenceRelease.promise.then(resolve, reject);
+          },
+        } as unknown as Promise<void>);
+        throw new Error("dispatch failed before late abort");
+      });
+
+      const params = {
+        sessionKey: "main",
+        message: "error before abort",
+        idempotencyKey: runId,
+      };
+      const client = {
+        connId: "conn-owner",
+        connect: {
+          device: { id: "dev-owner" },
+          scopes: ["operator.write"],
+        },
+      } as never;
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      const send = Promise.resolve(
+        chatHandlers["chat.send"]({
+          req: { type: "req", id: "send", method: "chat.send", params },
+          params,
+          client,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            responses.push({ id: "send", ok, payload, error });
+          }) as RespondFn,
+          context,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(responses).toEqual([
+          {
+            id: "send",
+            ok: true,
+            payload: { runId, status: "started" },
+            error: undefined,
+          },
+        ]);
+        expect(runtimePersistenceStarted).toBe(true);
+        expect(context.chatAbortControllers.has(runId)).toBe(true);
+      }, FAST_WAIT_OPTS);
+
+      await chatHandlers["chat.abort"]({
+        req: {
+          type: "req",
+          id: "abort",
+          method: "chat.abort",
+          params: { sessionKey: "main", runId },
+        },
+        params: { sessionKey: "main", runId },
+        client,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          abortResponses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(abortResponses).toEqual([
+        {
+          ok: true,
+          payload: { ok: true, aborted: true, runIds: [runId] },
+          error: undefined,
+        },
+      ]);
+
+      runtimePersistenceRelease.resolve();
+      await send;
+      await vi.waitFor(() => {
+        expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+          expect.objectContaining({
+            runId,
+            status: "error",
+            summary: "Error: dispatch failed before late abort",
+          }),
+        );
+      }, FAST_WAIT_OPTS);
+
+      const chatBroadcasts = context.broadcast.mock.calls
+        .filter(([event]) => event === "chat")
+        .map(([, payload]) => payload as { runId?: string; state?: string });
+      expect(chatBroadcasts).toEqual(
+        expect.arrayContaining([expect.objectContaining({ runId, state: "error" })]),
+      );
+    } finally {
+      runtimePersistenceRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
   test.each(configuredImageModelCases)(
     "chat.send preserves text-only image uploads as MediaPaths even with configured imageModel: $id",
     async ({ id, imageModel }) => {

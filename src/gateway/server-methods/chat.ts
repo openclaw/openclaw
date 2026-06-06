@@ -4323,6 +4323,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           );
         })
         .catch(async (err: unknown) => {
+          const abortedAtDispatchReject = activeRunAbort.controller.signal.aborted;
+          const abortStopReasonAtDispatchReject = activeRunAbort.entry?.abortStopReason ?? "rpc";
           const emitAfterError =
             userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
               ? Promise.resolve()
@@ -4332,10 +4334,10 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
-          if (activeRunAbort.controller.signal.aborted) {
-            // Dispatch can reject after chat.abort already broadcast the terminal
+          if (abortedAtDispatchReject) {
+            // Dispatch rejected after chat.abort already broadcast the terminal
             // abort. Preserve that outcome instead of resurrecting the run as an error.
-            const stopReason = activeRunAbort.entry?.abortStopReason ?? "rpc";
+            const stopReason = abortStopReasonAtDispatchReject;
             const endedAt = Date.now();
             const payload = buildAbortedChatSendPayload({
               runId: clientRunId,
