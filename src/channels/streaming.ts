@@ -742,6 +742,25 @@ export function resolveChannelStreamingProgressCommentaryEnabled(
   return asBoolean(progress?.commentary) ?? defaultValue;
 }
 
+/**
+ * Reads the `toolProgress` opt-in for the stream-off (#89890) accumulator WITHOUT a
+ * progress-mode guard, mirroring {@link resolveChannelStreamingProgressCommentaryEnabled}.
+ * The accumulator runs while the effective stream mode is "off", so it cannot use
+ * {@link resolveChannelStreamingPreviewToolProgress} (which only reads `progress.toolProgress`
+ * in progress mode and otherwise falls back to `preview.toolProgress`). Honors
+ * `progress.toolProgress` first, then legacy `preview.toolProgress`; defaults to true so
+ * tool progress accumulates unless explicitly disabled.
+ */
+export function resolveChannelStreamingProgressToolProgressEnabled(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = true,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  const progress = asObjectRecord(config?.progress);
+  const preview = asObjectRecord(config?.preview);
+  return asBoolean(progress?.toolProgress) ?? asBoolean(preview?.toolProgress) ?? defaultValue;
+}
+
 export function resolveChannelStreamingProgressPersist(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = false,

@@ -35,6 +35,7 @@ import {
   resolveChannelStreamingPreviewNativeToolProgressAllowFrom,
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingProgressCommentaryEnabled,
+  resolveChannelStreamingProgressToolProgressEnabled,
   resolveChannelStreamingProgressPersist,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -2103,7 +2104,11 @@ export const dispatchTelegramMessage = async ({
                       ),
                       { toolName, startImmediately: true },
                     );
-                    if (persistProgressEnabled && toolName) {
+                    if (
+                      persistProgressEnabled &&
+                      toolName &&
+                      resolveChannelStreamingProgressToolProgressEnabled(telegramCfg)
+                    ) {
                       const toolLine = formatChannelProgressDraftLineForEntry(telegramCfg, {
                         event: "tool",
                         name: toolName,

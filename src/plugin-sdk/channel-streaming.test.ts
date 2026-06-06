@@ -23,6 +23,7 @@ import {
   resolveChannelStreamingChunkMode,
   resolveChannelStreamingNativeTransport,
   resolveChannelStreamingProgressCommentary,
+  resolveChannelStreamingProgressToolProgressEnabled,
   resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewChunk,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
@@ -116,6 +117,32 @@ describe("channel-streaming", () => {
     expect(
       resolveChannelStreamingProgressCommentary({
         streaming: { mode: "progress" },
+      }),
+    ).toBe(false);
+  });
+
+  it("gates stream-off tool-progress accumulation on the tool-progress opt-in", () => {
+    // Defaults to true so the stream-off accumulator keeps tool progress unless disabled.
+    expect(resolveChannelStreamingProgressToolProgressEnabled({ streaming: { mode: "off" } })).toBe(
+      true,
+    );
+    // toolProgress:false suppresses accumulation even with the stream off (regression:
+    // the accumulator previously ignored the setting and always collected tool lines).
+    expect(
+      resolveChannelStreamingProgressToolProgressEnabled({
+        streaming: { mode: "off", progress: { toolProgress: false, persistProgress: true } },
+      }),
+    ).toBe(false);
+    // Guard-free: honored regardless of stream mode (unlike resolveChannelStreamingPreviewToolProgress).
+    expect(
+      resolveChannelStreamingProgressToolProgressEnabled({
+        streaming: { mode: "off", progress: { toolProgress: true } },
+      }),
+    ).toBe(true);
+    // Falls back to legacy preview.toolProgress when progress.toolProgress is absent.
+    expect(
+      resolveChannelStreamingProgressToolProgressEnabled({
+        streaming: { mode: "off", preview: { toolProgress: false } },
       }),
     ).toBe(false);
   });
