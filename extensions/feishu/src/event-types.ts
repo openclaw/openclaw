@@ -6,7 +6,13 @@ export type FeishuMessageEvent = {
       user_id?: string;
       union_id?: string;
     };
-    sender_type?: string;
+    /**
+     * sender_type from `im.message.receive_v1` webhook events.
+     * NOTE: Distinct from the `im.v1.message.get` API response which returns
+     * `"app"` instead of `"bot"`. Do not conflate the two — downstream logic
+     * (e.g. the self-filter and bot sender-name resolution) depends on this literal.
+     */
+    sender_type?: "user" | "bot";
     tenant_key?: string;
   };
   message: {
@@ -30,6 +36,11 @@ export type FeishuMessageEvent = {
       };
       name: string;
       tenant_key?: string;
+      /**
+       * Only emitted by webhook events that include bot @-mentions, gated by
+       * the Feishu scope `im:message.group_at_msg.include_bot:readonly`.
+       */
+      mentioned_type?: "user" | "bot";
     }>;
   };
 };

@@ -131,6 +131,72 @@ export function resolveFeishuGroupSession(params: {
   };
 }
 
+export type FeishuReplyRouting = {
+  /** Message id to reply to; undefined means a top-level send. */
+  replyTargetMessageId?: string;
+  /** root_id handed to the dispatcher for streaming-card thread routing. */
+  dispatchRootId?: string;
+  /** reply_in_thread flag handed to the dispatcher. */
+  dispatchReplyInThread: boolean;
+  /** threadReply flag handed to the dispatcher. */
+  threadReply: boolean;
+};
+
+/**
+ * Decide where a reply lands. Bot-to-bot replies in a normal group stay as
+ * inline quote replies but never thread: otherwise auto-detected threadReply (a
+ * root_id on an inbound bot reply) snowballs a bot conversation into a Feishu
+ * topic hidden from the main chat view (#32980). The quote/reply target is kept
+ * so the reply still shows which message it answers and the typing reaction
+ * still attaches — only the thread flags are forced off. Explicit topic-session
+ * scope or replyInThread=enabled config still wins and keeps the reply threaded.
+ *
+ * ctx.rootId is intentionally left untouched by callers for thread-history
+ * fetching; this only strips what the dispatcher uses to route the outgoing
+ * message into a thread.
+ */
+export function resolveFeishuReplyRouting(params: {
+  isGroup: boolean;
+  senderType: "user" | "bot";
+  isTopicSession: boolean;
+  configReplyInThread: boolean;
+  messageId: string;
+  rootId?: string;
+  replyTargetMessageId?: string;
+  suppressReplyTarget?: boolean;
+  /** groupSession.threadReply (auto-detected from root_id/thread_id). */
+  groupThreadReply: boolean;
+  /** groupSession.replyInThread (config-enabled OR auto threadReply). */
+  groupReplyInThread: boolean;
+}): FeishuReplyRouting {
+  const { isGroup, isTopicSession, configReplyInThread } = params;
+  const fallbackTarget = params.suppressReplyTarget ? undefined : params.messageId;
+  const suppressForBotPeer =
+    isGroup && params.senderType === "bot" && !isTopicSession && !configReplyInThread;
+
+  if (suppressForBotPeer) {
+    // Keep the quote/reply target (inline quote + typing reaction); only force
+    // the thread flags off so the exchange stays in the main timeline.
+    return {
+      replyTargetMessageId: params.replyTargetMessageId ?? fallbackTarget,
+      dispatchRootId: undefined,
+      dispatchReplyInThread: false,
+      threadReply: false,
+    };
+  }
+
+  const replyTargetMessageId =
+    isTopicSession || configReplyInThread
+      ? (params.rootId ?? params.replyTargetMessageId ?? fallbackTarget)
+      : (params.replyTargetMessageId ?? fallbackTarget);
+  return {
+    replyTargetMessageId,
+    dispatchRootId: params.rootId,
+    dispatchReplyInThread: isGroup ? params.groupReplyInThread : false,
+    threadReply: isGroup ? params.groupThreadReply : false,
+  };
+}
+
 export function parseMessageContent(content: string, messageType: string): string {
   if (messageType === "post") {
     return parsePostContent(content).textContent;
@@ -275,18 +341,29 @@ export function normalizeMentions(
   if (!mentions || mentions.length === 0) {
     return text;
   }
-  const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const esc = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  // Only strip the leading self-mention (the "addressing" mention at text start).
+  // Non-leading self-mentions carry semantic meaning and are preserved as <at> tags.
+  const leadingSelfKey = botStripId
+    ? mentions.find((m) => m.id.open_id === botStripId && text.trimStart().startsWith(m.key))?.key
+    : undefined;
+
   let result = text;
   for (const mention of mentions) {
     const mentionId = mention.id.open_id;
-    const replacement =
-      botStripId && mentionId === botStripId
-        ? ""
-        : mentionId
-          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
-          : `@${mention.name}`;
-    result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
+    const atTag = mentionId
+      ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
+      : `@${mention.name}`;
+    if (mention.key === leadingSelfKey) {
+      // Strip only the first (leading) occurrence; convert any remaining same-key
+      // occurrences to <at> tags so non-leading self-mentions are preserved.
+      result = result.replace(mention.key, "").trim();
+      result = result.replace(new RegExp(esc(mention.key), "g"), () => atTag).trim();
+    } else {
+      result = result.replace(new RegExp(esc(mention.key), "g"), () => atTag).trim();
+    }
   }
   return result;
 }

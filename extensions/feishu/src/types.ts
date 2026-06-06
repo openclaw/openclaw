@@ -1,11 +1,17 @@
 // Feishu type declarations define plugin contracts.
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
-import type { FeishuConfigSchema, FeishuAccountConfigSchema, z } from "./config-schema.js";
+import type {
+  FeishuAccountConfigSchema,
+  FeishuConfigSchema,
+  FeishuGroupSchema,
+  z,
+} from "./config-schema.js";
 import type { MentionTarget } from "./mention-target.types.js";
 
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
 export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
+export type FeishuGroupConfig = z.infer<typeof FeishuGroupSchema>;
 
 export type FeishuDomain = "feishu" | "lark" | (string & {});
 
@@ -40,6 +46,13 @@ export type FeishuMessageContext = {
   senderId: string;
   senderOpenId: string;
   senderName?: string;
+  /**
+   * Sender type from `im.message.receive_v1` webhook events.
+   * Defaults to `"user"` for legacy/synthesized payloads that don't carry the field.
+   * NOTE: do not confuse with `FeishuMessageInfo.senderType` which carries the
+   * GET-API enum (`"app"` for bots).
+   */
+  senderType: "user" | "bot";
   chatType: FeishuChatType;
   mentionedBot: boolean;
   hasAnyMention?: boolean;

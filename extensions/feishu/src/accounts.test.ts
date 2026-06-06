@@ -382,6 +382,31 @@ describe("resolveFeishuAccount", () => {
     expect(account.appId).toBe("cli_default");
   });
 
+  it("deep-merges a partial per-account botLoopProtection over inherited top-level subfields", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          botLoopProtection: { maxEventsPerWindow: 20, windowSeconds: 60, cooldownSeconds: 60 },
+          accounts: {
+            "router-d": {
+              appId: "cli_router",
+              appSecret: "secret_router", // pragma: allowlist secret
+              botLoopProtection: { maxEventsPerWindow: 1 },
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveFeishuAccount({ cfg: cfg as never, accountId: "router-d" });
+    // Only maxEventsPerWindow is overridden; window/cooldown are inherited, not dropped.
+    expect(account.config.botLoopProtection).toEqual({
+      maxEventsPerWindow: 1,
+      windowSeconds: 60,
+      cooldownSeconds: 60,
+    });
+  });
+
   it("treats unresolved SecretRef as not configured in account resolution", () => {
     const account = resolveFeishuAccount({
       cfg: {

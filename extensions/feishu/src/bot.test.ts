@@ -6,8 +6,10 @@ import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtim
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseMergeForwardContent } from "./bot-content.js";
+import { resetBotNameStateForTests } from "./bot-name.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage } from "./bot.js";
+import { lookupMention } from "./mention-registry.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
 
@@ -413,7 +415,13 @@ afterAll(() => {
   vi.resetModules();
 });
 
-async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
+async function dispatchMessage(params: {
+  cfg: ClawdbotConfig;
+  event: FeishuMessageEvent;
+  botOpenId?: string;
+  botName?: string;
+  accountId?: string;
+}) {
   const runtime = createRuntimeEnv();
   const feishuConfig = params.cfg.channels?.feishu;
   const cfg =
@@ -432,6 +440,9 @@ async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessa
   await handleFeishuMessage({
     cfg,
     event: params.event,
+    botOpenId: params.botOpenId,
+    botName: params.botName,
+    accountId: params.accountId,
     runtime,
   });
   return runtime;
@@ -440,6 +451,7 @@ async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessa
 describe("handleFeishuMessage ACP routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetBotNameStateForTests();
     mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
       ({
         route,
@@ -956,6 +968,7 @@ describe("handleFeishuMessage command authorization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetBotNameStateForTests();
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockGetMessageFeishu.mockReset().mockResolvedValue(null);
     mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
@@ -3813,5 +3826,535 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
     }>(handleMessage, 1, 0);
     expect(secondCall.event).toEqual(secondEvent);
     expect(secondCall.processingClaimHeld).toBe(true);
+  });
+});
+
+describe("handleFeishuMessage bot-authored message handling", () => {
+  const BOT_OPEN_ID = "ou_self_bot";
+  const PEER_BOT_OPEN_ID = "ou_peer_bot";
+  const HUMAN_USER_OPEN_ID = "ou_human";
+
+  const mockFinalizeInboundContext = vi.fn((ctx: Record<string, unknown>) => ({
+    ...ctx,
+    CommandAuthorized: typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : false,
+  }));
+  const mockDispatchReplyFromConfig = vi
+    .fn()
+    .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
+  const mockWithReplyDispatcher = vi.fn(
+    async ({
+      dispatcher,
+      run,
+      onSettled,
+    }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => {
+      try {
+        return await run();
+      } finally {
+        dispatcher.markComplete();
+        try {
+          await dispatcher.waitForIdle();
+        } finally {
+          await onSettled?.();
+        }
+      }
+    },
+  );
+  const mockShouldComputeCommandAuthorized = vi.fn(() => false);
+  const mockResolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
+  const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
+  const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false });
+  const mockBuildPairingReply = vi.fn(() => "Pairing response");
+
+  function makeBotMessageEvent(overrides: {
+    senderOpenId: string;
+    senderType?: "user" | "bot";
+    mentionsBot?: boolean;
+    chatId?: string;
+    messageId?: string;
+  }): FeishuMessageEvent {
+    return {
+      sender: {
+        sender_id: { open_id: overrides.senderOpenId },
+        sender_type: overrides.senderType,
+      },
+      message: {
+        message_id: overrides.messageId ?? "msg-bot-bot",
+        chat_id: overrides.chatId ?? "oc_group_chat",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({
+          text: overrides.mentionsBot ? "@_user_1 hello" : "hello",
+        }),
+        mentions: overrides.mentionsBot
+          ? [{ key: "@_user_1", name: "Self Bot", id: { open_id: BOT_OPEN_ID } }]
+          : [],
+      },
+    };
+  }
+
+  function makeChannelCfg(extra: Record<string, unknown>): ClawdbotConfig {
+    return {
+      session: { mainKey: "main", scope: "per-sender" },
+      channels: {
+        feishu: {
+          enabled: true,
+          groupPolicy: "open",
+          requireMention: false,
+          ...extra,
+        },
+      },
+    } as ClawdbotConfig;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetBotNameStateForTests();
+    mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(false);
+    mockGetMessageFeishu.mockReset().mockResolvedValue(null);
+    mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
+    mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
+      ({
+        route,
+      }: {
+        route: NonNullable<ConfiguredBindingRoute>["route"];
+      }): ConfiguredBindingRoute => ({
+        bindingResolution: null,
+        route,
+      }),
+    );
+    mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
+    mockResolveBoundConversation.mockReset().mockReturnValue(null);
+    mockTouchBinding.mockReset();
+    mockResolveAgentRoute.mockReset().mockReturnValue(buildDefaultResolveRoute());
+    mockSendMessageFeishu
+      .mockReset()
+      .mockResolvedValue({ messageId: "reply-msg", chatId: "oc_group_chat" });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+        },
+      },
+    });
+    mockResolveFeishuReasoningPreviewEnabled.mockReset().mockReturnValue(false);
+    mockCreateFeishuReplyDispatcher.mockReset().mockReturnValue({
+      dispatcher: createReplyDispatcher(),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback: vi.fn(),
+    });
+    setFeishuRuntime(
+      createFeishuBotRuntime({
+        channel: {
+          reply: {
+            resolveEnvelopeFormatOptions:
+              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext: mockFinalizeInboundContext as never,
+            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+            withReplyDispatcher: mockWithReplyDispatcher as never,
+          },
+          commands: {
+            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+            resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+          },
+          pairing: {
+            readAllowFromStore: mockReadAllowFromStore,
+            upsertPairingRequest: mockUpsertPairingRequest,
+            buildPairingReply: mockBuildPairingReply,
+          },
+        },
+      }),
+    );
+  });
+
+  it("admits bot-authored group messages (treated like a user message)", async () => {
+    await dispatchMessage({
+      cfg: makeChannelCfg({}),
+      botOpenId: BOT_OPEN_ID,
+      event: makeBotMessageEvent({
+        senderOpenId: PEER_BOT_OPEN_ID,
+        senderType: "bot",
+        mentionsBot: true,
+        messageId: "msg-bot-admit",
+      }),
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits bot-authored messages when the sender is in the allowlist", async () => {
+    await dispatchMessage({
+      cfg: makeChannelCfg({
+        groupSenderAllowFrom: [PEER_BOT_OPEN_ID],
+      }),
+      botOpenId: BOT_OPEN_ID,
+      event: makeBotMessageEvent({
+        senderOpenId: PEER_BOT_OPEN_ID,
+        senderType: "bot",
+        mentionsBot: true,
+        messageId: "msg-admit-allowlist",
+      }),
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops bot-authored messages when the sender is not in the allowlist", async () => {
+    await dispatchMessage({
+      cfg: makeChannelCfg({
+        groupSenderAllowFrom: ["ou_some_other_user"],
+      }),
+      botOpenId: BOT_OPEN_ID,
+      event: makeBotMessageEvent({
+        senderOpenId: PEER_BOT_OPEN_ID,
+        senderType: "bot",
+        mentionsBot: true,
+        messageId: "msg-allowlist-block",
+      }),
+    });
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+  });
+
+  it("drops self-authored messages (L1 self-filter)", async () => {
+    await dispatchMessage({
+      cfg: makeChannelCfg({
+        groupSenderAllowFrom: [BOT_OPEN_ID],
+      }),
+      botOpenId: BOT_OPEN_ID,
+      event: makeBotMessageEvent({
+        senderOpenId: BOT_OPEN_ID,
+        senderType: "bot",
+        mentionsBot: false,
+        messageId: "msg-self-filter",
+      }),
+    });
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+  });
+
+  it("admits a human sender in the allowlist", async () => {
+    await dispatchMessage({
+      cfg: makeChannelCfg({
+        groupSenderAllowFrom: [HUMAN_USER_OPEN_ID],
+      }),
+      botOpenId: BOT_OPEN_ID,
+      event: makeBotMessageEvent({
+        senderOpenId: HUMAN_USER_OPEN_ID,
+        senderType: "user",
+        mentionsBot: true,
+        messageId: "msg-human-passthrough",
+      }),
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops bot-authored messages when allowBots is false (opt-out)", async () => {
+    await dispatchMessage({
+      cfg: makeChannelCfg({ allowBots: false }),
+      botOpenId: BOT_OPEN_ID,
+      event: makeBotMessageEvent({
+        senderOpenId: PEER_BOT_OPEN_ID,
+        senderType: "bot",
+        mentionsBot: true,
+        messageId: "msg-allowbots-off",
+      }),
+    });
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+  });
+
+  it('drops bot-authored messages with allowBots="mentions" when the bot is not mentioned', async () => {
+    await dispatchMessage({
+      cfg: makeChannelCfg({ allowBots: "mentions" }),
+      botOpenId: BOT_OPEN_ID,
+      event: makeBotMessageEvent({
+        senderOpenId: PEER_BOT_OPEN_ID,
+        senderType: "bot",
+        mentionsBot: false,
+        messageId: "msg-allowbots-mentions-miss",
+      }),
+    });
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+  });
+
+  it('admits bot-authored messages with allowBots="mentions" when the bot is mentioned', async () => {
+    await dispatchMessage({
+      cfg: makeChannelCfg({ allowBots: "mentions" }),
+      botOpenId: BOT_OPEN_ID,
+      event: makeBotMessageEvent({
+        senderOpenId: PEER_BOT_OPEN_ID,
+        senderType: "bot",
+        mentionsBot: true,
+        messageId: "msg-allowbots-mentions-hit",
+      }),
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses a runaway bot-pair loop via the shared loop guard", async () => {
+    // Tight window: the first message is admitted, the second from the same pair
+    // trips the guard. Unique chatId isolates this from the shared guard state.
+    const cfg = makeChannelCfg({ botLoopProtection: { maxEventsPerWindow: 1 } });
+    const makeEvent = (messageId: string) =>
+      makeBotMessageEvent({
+        senderOpenId: PEER_BOT_OPEN_ID,
+        senderType: "bot",
+        mentionsBot: true,
+        chatId: "oc_loop_guard_test",
+        messageId,
+      });
+    await dispatchMessage({ cfg, botOpenId: BOT_OPEN_ID, event: makeEvent("loop-1") });
+    await dispatchMessage({ cfg, botOpenId: BOT_OPEN_ID, event: makeEvent("loop-2") });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let dropped (non-admitted) bot messages suppress a later admitted turn", async () => {
+    // requireMention drops the un-mentioned bot messages before admission; those
+    // must NOT be recorded in the loop window, or the later mentioned (admitted)
+    // turn would be wrongly suppressed. Tight window + unique chat isolates it.
+    const cfg = makeChannelCfg({
+      requireMention: true,
+      botLoopProtection: { maxEventsPerWindow: 1 },
+    });
+    const chatId = "oc_loop_admission_test";
+    for (const messageId of ["drop-1", "drop-2", "drop-3"]) {
+      await dispatchMessage({
+        cfg,
+        botOpenId: BOT_OPEN_ID,
+        event: makeBotMessageEvent({
+          senderOpenId: PEER_BOT_OPEN_ID,
+          senderType: "bot",
+          mentionsBot: false,
+          chatId,
+          messageId,
+        }),
+      });
+    }
+    // All three were dropped pre-admission (no bot mention under requireMention).
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+
+    // An admitted (mentioned) turn must still get through — not suppressed by the
+    // dropped noise above.
+    await dispatchMessage({
+      cfg,
+      botOpenId: BOT_OPEN_ID,
+      event: makeBotMessageEvent({
+        senderOpenId: PEER_BOT_OPEN_ID,
+        senderType: "bot",
+        mentionsBot: true,
+        chatId,
+        messageId: "admit-1",
+      }),
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("handleFeishuMessage bot mention name enrichment", () => {
+  const BOT_OPEN_ID = "ou_self_bot";
+  const HUMAN_OPEN_ID = "ou_human";
+  const PEER_BOT_OPEN_ID = "ou_peer_bot";
+
+  const mockFinalizeInboundContext = vi.fn((ctx: Record<string, unknown>) => ({
+    ...ctx,
+    CommandAuthorized: typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : false,
+  }));
+  const mockDispatchReplyFromConfig = vi
+    .fn()
+    .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
+  const mockWithReplyDispatcher = vi.fn(
+    async ({
+      dispatcher,
+      run,
+      onSettled,
+    }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => {
+      try {
+        return await run();
+      } finally {
+        dispatcher.markComplete();
+        try {
+          await dispatcher.waitForIdle();
+        } finally {
+          await onSettled?.();
+        }
+      }
+    },
+  );
+  const mockShouldComputeCommandAuthorized = vi.fn(() => false);
+  const mockResolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
+  const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
+  const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false });
+  const mockBuildPairingReply = vi.fn(() => "Pairing response");
+
+  // Captures the most recent client.request() invocation made by bot-name.ts.
+  let lastBotBatchRequest: { method?: string; url?: string } | undefined;
+
+  function makeBotMentionEvent(params: {
+    peerName?: string;
+    messageId: string;
+  }): FeishuMessageEvent {
+    return {
+      sender: {
+        sender_id: { open_id: HUMAN_OPEN_ID },
+        sender_type: "user",
+      },
+      message: {
+        message_id: params.messageId,
+        chat_id: "oc_group_chat",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "@_user_1 @_user_2 please ping" }),
+        mentions: [
+          { key: "@_user_1", name: "Self Bot", id: { open_id: BOT_OPEN_ID } },
+          {
+            key: "@_user_2",
+            name: params.peerName ?? "",
+            id: { open_id: PEER_BOT_OPEN_ID },
+            mentioned_type: "bot",
+          },
+        ],
+      },
+    };
+  }
+
+  function makeChannelCfg(extra: Record<string, unknown>): ClawdbotConfig {
+    return {
+      session: { mainKey: "main", scope: "per-sender" },
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "cli_test_app",
+          appSecret: "test_secret", // pragma: allowlist secret
+          groupPolicy: "open",
+          requireMention: false,
+          allowFrom: [HUMAN_OPEN_ID],
+          ...extra,
+        },
+      },
+    } as ClawdbotConfig;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetBotNameStateForTests();
+    lastBotBatchRequest = undefined;
+    mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(false);
+    mockGetMessageFeishu.mockReset().mockResolvedValue(null);
+    mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
+    mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
+      ({
+        route,
+      }: {
+        route: NonNullable<ConfiguredBindingRoute>["route"];
+      }): ConfiguredBindingRoute => ({
+        bindingResolution: null,
+        route,
+      }),
+    );
+    mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
+    mockResolveBoundConversation.mockReset().mockReturnValue(null);
+    mockTouchBinding.mockReset();
+    mockResolveAgentRoute.mockReset().mockReturnValue(buildDefaultResolveRoute());
+    mockSendMessageFeishu
+      .mockReset()
+      .mockResolvedValue({ messageId: "reply-msg", chatId: "oc_group_chat" });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+        },
+      },
+      request: vi.fn(async (req: { method?: string; url?: string }) => {
+        lastBotBatchRequest = req;
+        return {
+          code: 0,
+          data: {
+            bots: { [PEER_BOT_OPEN_ID]: { name: "Peer Bot" } },
+            failed_bots: {},
+          },
+        };
+      }),
+    });
+    mockResolveFeishuReasoningPreviewEnabled.mockReset().mockReturnValue(false);
+    mockCreateFeishuReplyDispatcher.mockReset().mockReturnValue({
+      dispatcher: createReplyDispatcher(),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback: vi.fn(),
+    });
+    setFeishuRuntime(
+      createFeishuBotRuntime({
+        channel: {
+          reply: {
+            resolveEnvelopeFormatOptions:
+              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext: mockFinalizeInboundContext as never,
+            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+            withReplyDispatcher: mockWithReplyDispatcher as never,
+          },
+          commands: {
+            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+            resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+          },
+          pairing: {
+            readAllowFromStore: mockReadAllowFromStore,
+            upsertPairingRequest: mockUpsertPairingRequest,
+            buildPairingReply: mockBuildPairingReply,
+          },
+        },
+      }),
+    );
+  });
+
+  it("fills missing bot mention names via the bot batch API", async () => {
+    await dispatchMessage({
+      cfg: makeChannelCfg({}),
+      botOpenId: BOT_OPEN_ID,
+      event: makeBotMentionEvent({ peerName: "", messageId: "msg-enrich-fill" }),
+    });
+
+    expect(lastBotBatchRequest?.method).toBe("GET");
+    expect(lastBotBatchRequest?.url).toContain("/open-apis/bot/v3/bots/basic_batch");
+    expect(lastBotBatchRequest?.url).toContain(`bot_ids=${PEER_BOT_OPEN_ID}`);
+  });
+
+  it("does not call the bot batch API when bot mention already has a name", async () => {
+    await dispatchMessage({
+      cfg: makeChannelCfg({}),
+      botOpenId: BOT_OPEN_ID,
+      event: makeBotMentionEvent({ peerName: "Already Named Bot", messageId: "msg-enrich-skip" }),
+    });
+
+    expect(lastBotBatchRequest).toBeUndefined();
+  });
+
+  it("records a resolved bot sender's display name into the mention registry", async () => {
+    const chatId = "oc_botsender_registry_test";
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: PEER_BOT_OPEN_ID }, sender_type: "bot" },
+      message: {
+        message_id: "msg-botsender-registry",
+        chat_id: chatId,
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hi" }),
+        mentions: [],
+      },
+    };
+    await dispatchMessage({ cfg: makeChannelCfg({}), botOpenId: BOT_OPEN_ID, event });
+
+    // The sender's name resolved to "Peer Bot" via the bot batch API; it must be
+    // recorded so a later outbound `@Peer Bot` resolves back to this bot.
+    expect(lookupMention({ accountId: "default", chatId, name: "Peer Bot" })?.openId).toBe(
+      PEER_BOT_OPEN_ID,
+    );
+  });
+
+  it("does not call the bot batch API when resolveSenderNames=false", async () => {
+    await dispatchMessage({
+      cfg: makeChannelCfg({ resolveSenderNames: false }),
+      botOpenId: BOT_OPEN_ID,
+      event: makeBotMentionEvent({ peerName: "", messageId: "msg-enrich-disabled" }),
+    });
+
+    expect(lastBotBatchRequest).toBeUndefined();
   });
 });

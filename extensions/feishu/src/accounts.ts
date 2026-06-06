@@ -210,7 +210,11 @@ function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): Feish
     accounts,
     accountId,
     omitKeys: ["defaultAccount"],
-    nestedObjectKeys: ["tools"],
+    // Deep-merge these so a partial per-account override inherits the unset
+    // top-level subfields instead of replacing the whole object (e.g. an account
+    // that only sets botLoopProtection.maxEventsPerWindow keeps the inherited
+    // window/cooldown).
+    nestedObjectKeys: ["tools", "botLoopProtection"],
   });
   const topTools = feishuCfg?.tools;
   if (merged.tools === undefined && topTools !== undefined) {
