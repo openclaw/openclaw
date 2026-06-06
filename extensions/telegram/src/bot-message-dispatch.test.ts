@@ -1551,6 +1551,50 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(progress.mediaUrls).toBeUndefined();
   });
 
+  it("does not emit the stream-off progress set in a no-draft non-off turn", async () => {
+    // The accumulator is a streaming.mode === "off" mechanism. In partial/progress turns
+    // that merely lack a live draft (e.g. selected-quote replies), it must stay inert and
+    // not deliver a surprise durable progress message.
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      delivery: { messageId: 9100 },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "c1",
+          progressText: "Looking into it.",
+        });
+        await replyOptions?.onToolStart?.({
+          name: "Read",
+          phase: "start",
+          args: { file_path: "/x.md" },
+        });
+        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    // partial mode with NO draft stream set up (createTelegramDraftStream returns undefined)
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: {
+        streaming: {
+          mode: "partial",
+          progress: { persistProgress: true, commentary: true, toolProgress: true },
+        },
+      },
+    });
+
+    const progressSets = deliverInboundReplyWithMessageSendContext.mock.calls.filter((call) => {
+      const text = (call[0] as { payload?: { text?: string } })?.payload?.text;
+      return typeof text === "string" && text.includes("💭");
+    });
+    expect(progressSets.length).toBe(0);
+  });
+
   it("suppresses text-only tool payloads delivered after the final answer", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {

@@ -909,6 +909,13 @@ export const dispatchTelegramMessage = async ({
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const persistProgressEnabled = resolveChannelStreamingProgressPersist(telegramCfg);
+  // The stream-off accumulator (#89890) is strictly a streaming.mode === "off" mechanism:
+  // it buffers tool/commentary progress and emits it as a durable message before the
+  // answer. It must NOT engage in partial/progress turns that merely lack a live draft
+  // (e.g. selected-quote replies), or those turns would get a surprise durable progress
+  // message. Gate accumulation, callback-forwarding, and emission on this — not on the
+  // bare absence of a draft stream.
+  const streamOffPersistEnabled = persistProgressEnabled && streamMode === "off";
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const stream = enabled
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
@@ -1768,7 +1775,7 @@ export const dispatchTelegramMessage = async ({
                       // stream-ON path (which persists the live progress message in place) does
                       // not double-emit. Awaited here so the set lands before the answer (barrier).
                       if (
-                        !persistProgressEnabled ||
+                        !streamOffPersistEnabled ||
                         answerLane.stream ||
                         persistedProgressLog.length === 0
                       ) {
@@ -2099,7 +2106,7 @@ export const dispatchTelegramMessage = async ({
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
                   allowProgressCallbacksWhenSourceDeliverySuppressed:
-                    !isRoomEvent && (Boolean(answerLane.stream) || persistProgressEnabled),
+                    !isRoomEvent && (Boolean(answerLane.stream) || streamOffPersistEnabled),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
                     const progressPromise = pushStreamToolProgress(
@@ -2116,7 +2123,7 @@ export const dispatchTelegramMessage = async ({
                       { toolName, startImmediately: true },
                     );
                     if (
-                      persistProgressEnabled &&
+                      streamOffPersistEnabled &&
                       toolName &&
                       resolveChannelStreamingProgressToolProgressEnabled(telegramCfg)
                     ) {
@@ -2136,7 +2143,7 @@ export const dispatchTelegramMessage = async ({
                   onItemEvent: async (payload) => {
                     if (payload.kind === "preamble") {
                       if (
-                        persistProgressEnabled &&
+                        streamOffPersistEnabled &&
                         resolveChannelStreamingProgressCommentaryEnabled(telegramCfg) &&
                         payload.progressText
                       ) {
