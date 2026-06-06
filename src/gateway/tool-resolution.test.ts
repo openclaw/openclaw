@@ -70,4 +70,26 @@ describe("resolveGatewayScopedTools", () => {
 
     expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
   });
+
+  it("passes loopback yield context into sessions_yield", async () => {
+    const yieldedMessages: string[] = [];
+    const result = resolveGatewayScopedTools({
+      cfg: { tools: { profile: "minimal", alsoAllow: ["sessions_yield"] } } as OpenClawConfig,
+      sessionKey: "agent:main:telegram:group:-100123",
+      sessionId: "run-session-123",
+      onYield: (message: string) => {
+        yieldedMessages.push(message);
+      },
+      surface: "loopback",
+    });
+    const yieldTool = result.tools.find((tool) => tool.name === "sessions_yield");
+    if (!yieldTool) {
+      throw new Error("expected sessions_yield tool");
+    }
+
+    const toolResult = await yieldTool.execute("tool-call-1", { message: "wait for subagents" });
+
+    expect(yieldedMessages).toEqual(["wait for subagents"]);
+    expect(toolResult.details).toEqual({ status: "yielded", message: "wait for subagents" });
+  });
 });

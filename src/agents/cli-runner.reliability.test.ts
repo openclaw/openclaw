@@ -1687,6 +1687,37 @@ describe("runCliAgent reliability", () => {
     expect(completion.refusal).toBe(false);
   });
 
+  it("marks CLI runs as yielded when bundle MCP records sessions_yield", async () => {
+    const exit = {
+      reason: "exit" as const,
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 50,
+      stdout: "yield acknowledged",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    };
+    supervisorSpawnMock.mockResolvedValueOnce({
+      ...createManagedRun(exit),
+      wait: vi.fn(async () => {
+        const runtime = await import("../gateway/mcp-http.loopback-runtime.js");
+        await runtime.resolveMcpLoopbackYieldHandler("s1")?.("waiting on subagents");
+        return exit;
+      }),
+    });
+
+    const result = await runPreparedCliAgent(buildPreparedContext());
+
+    expect(result.meta.yielded).toBe(true);
+    expect(result.meta.livenessState).toBe("paused");
+    expect(result.meta.stopReason).toBe("end_turn");
+    const completion = requireRecord(result.meta.completion, "completion");
+    expect(completion.finishReason).toBe("end_turn");
+    expect(completion.stopReason).toBe("end_turn");
+    expect(completion.refusal).toBe(false);
+  });
+
   it("seeds fresh CLI sessions from the OpenClaw transcript", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({

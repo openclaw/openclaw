@@ -392,6 +392,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
+          OPENCLAW_MCP_SESSION_ID: params.sessionId,
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
           OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
           OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
@@ -483,6 +484,7 @@ export async function prepareCliRunContext(
       ? prepareDeps.resolveMcpLoopbackScopedTools({
           cfg: params.config ?? getRuntimeConfig(),
           sessionKey: params.sessionKey ?? "",
+          sessionId: params.sessionId,
           messageProvider: params.messageChannel ?? params.messageProvider,
           currentChannelId: params.currentChannelId,
           currentThreadTs: params.currentThreadTs,
