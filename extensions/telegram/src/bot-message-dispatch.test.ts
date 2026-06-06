@@ -1447,6 +1447,57 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("delivers the stream-off persisted progress set as a text-only message, not the answer's media", async () => {
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      delivery: { messageId: 9001 },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "c1",
+          progressText: "Let me read the file.",
+        });
+        await replyOptions?.onToolStart?.({
+          name: "Read",
+          phase: "start",
+          args: { file_path: "/x.md" },
+        });
+        await dispatcherOptions.deliver(
+          { text: "Here is the summary.", mediaUrls: ["https://example.com/chart.png"] },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      telegramCfg: {
+        streaming: {
+          mode: "off",
+          progress: { persistProgress: true, commentary: true, toolProgress: true },
+        },
+      },
+    });
+
+    const calls = deliverInboundReplyWithMessageSendContext.mock.calls as Array<
+      [{ payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] } }]
+    >;
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    // The accumulated progress set is delivered first, as a text-only message.
+    const progress = calls[0][0].payload;
+    expect(progress.text).toContain("💭");
+    expect(progress.text).toContain("Read");
+    expect(progress.mediaUrl).toBeUndefined();
+    expect(progress.mediaUrls).toBeUndefined();
+    // The final answer (delivered after) keeps its media.
+    const answer = calls[calls.length - 1][0].payload;
+    expect(answer.mediaUrls).toEqual(["https://example.com/chart.png"]);
+  });
+
   it("suppresses text-only tool payloads delivered after the final answer", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
