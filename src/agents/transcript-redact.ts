@@ -98,6 +98,18 @@ function redactTranscriptStructuredValue(
   const source = value;
   let next: Record<string, unknown> | null = null;
   for (const [key, item] of Object.entries(source)) {
+    // ImageContent.data is opaque base64; redacting it corrupts the bytes and
+    // breaks provider replay. Require an image/* mimeType so arbitrary tool
+    // payloads shaped { type:"image", data:"credential" } are still redacted.
+    if (
+      key === "data" &&
+      source["type"] === "image" &&
+      typeof item === "string" &&
+      typeof source["mimeType"] === "string" &&
+      source["mimeType"].toLowerCase().startsWith("image/")
+    ) {
+      continue;
+    }
     const redacted = redactTranscriptStructuredValue(item, cfg, key, seen);
     if (redacted === item) {
       continue;

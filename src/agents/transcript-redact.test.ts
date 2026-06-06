@@ -406,4 +406,57 @@ describe("redactTranscriptMessage", () => {
     } as unknown as AgentMessage;
     expect(() => redactTranscriptMessage(msg, cfg("tools"))).not.toThrow();
   });
+
+  it("preserves image content data field containing token-like sequences", () => {
+    // Base64 image payloads can contain sequences matching credential patterns
+    // (e.g. AKID<10+> for Alibaba Cloud keys). Redacting corrupts the bytes and
+    // permanently breaks provider replay for every subsequent session turn.
+    const imageData = "iVBORw0KGgoAAAANSUhEUgAKIDxyz123456789abcdefghijkl";
+    const msg = {
+      role: "user",
+      content: [{ type: "image", data: imageData, mimeType: "image/png" }],
+    } as unknown as AgentMessage;
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const block = (
+      msgContent(result) as Array<{ type: string; data: string; mimeType: string }>
+    )[0];
+    expect(block.data).toBe(imageData);
+    expect(block.mimeType).toBe("image/png");
+  });
+
+  it("still redacts non-image data string fields containing token patterns", () => {
+    const msg = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "check",
+      content: [{ type: "text", text: "ok" }],
+      details: { data: "AKIDxyz123456789abcdefghijkl" },
+      isError: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      details: { data: string };
+    };
+    expect(result.details.data).not.toBe("AKIDxyz123456789abcdefghijkl");
+    expect(result.details.data).toContain("…");
+  });
+
+  it("still redacts data on image-typed objects without a valid mimeType", () => {
+    // An arbitrary tool payload shaped { type:"image", data:"credential" }
+    // without a confirming image/* mimeType must not escape redaction.
+    const msg = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "check",
+      content: [{ type: "text", text: "ok" }],
+      details: { type: "image", data: "AKIDxyz123456789abcdefghijkl" },
+      isError: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      details: { data: string };
+    };
+    expect(result.details.data).not.toBe("AKIDxyz123456789abcdefghijkl");
+    expect(result.details.data).toContain("…");
+  });
 });
