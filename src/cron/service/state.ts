@@ -163,6 +163,7 @@ export type CronServiceDeps = {
     text: string;
     channel: CronMessageChannel;
     to?: string;
+    threadId?: string | number;
     mode?: "announce" | "webhook";
     accountId?: string;
   }) => Promise<void>;

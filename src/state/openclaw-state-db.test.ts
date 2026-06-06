@@ -90,7 +90,7 @@ describe("openclaw state database", () => {
         bestEffort: true,
         failureDestination: { to: "https://example.invalid/hook" },
       },
-      failureAlert: { mode: "announce", channel: "discord", to: "ops", after: 2 },
+      failureAlert: { mode: "announce", channel: "discord", to: "ops", threadId: 79, after: 2 },
     });
     db.exec(`
       CREATE TABLE cron_jobs (
@@ -121,7 +121,7 @@ describe("openclaw state database", () => {
                   payload_model, agent_id, session_key, session_target, wake_mode, delivery_mode, delivery_channel,
                   delivery_to, delivery_account_id, delivery_best_effort, failure_delivery_mode,
                   failure_delivery_channel, failure_delivery_to, failure_delivery_account_id,
-                  failure_alert_mode, failure_alert_channel, failure_alert_to,
+                  failure_alert_mode, failure_alert_channel, failure_alert_to, failure_alert_thread_id,
                   failure_alert_after
              FROM cron_jobs
             WHERE job_id = ?`,
@@ -148,6 +148,7 @@ describe("openclaw state database", () => {
       failure_alert_after: 2,
       failure_alert_channel: "discord",
       failure_alert_mode: "announce",
+      failure_alert_thread_id: "79",
       failure_alert_to: "ops",
       failure_delivery_account_id: null,
       failure_delivery_channel: null,

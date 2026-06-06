@@ -49,7 +49,7 @@ type DeliveryRequest = {
   identity?: unknown;
   payloads?: unknown;
   session?: unknown;
-  threadId?: number;
+  threadId?: string | number;
   to?: string;
 };
 
@@ -91,13 +91,14 @@ describe("sendFailureNotificationAnnounce", () => {
       cfg,
       "main",
       "job-1",
-      { channel: "telegram", to: "123", accountId: "bot-a" },
+      { channel: "telegram", to: "123", threadId: 79, accountId: "bot-a" },
       "Cron failed",
     );
 
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(cfg, "main", {
       channel: "telegram",
       to: "123",
+      threadId: 79,
       accountId: "bot-a",
     });
     expect(mocks.buildOutboundSessionContext).toHaveBeenCalledWith({
@@ -136,6 +137,7 @@ describe("sendFailureNotificationAnnounce", () => {
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith({} as never, "main", {
       channel: "telegram",
       to: undefined,
+      threadId: undefined,
       accountId: undefined,
       sessionKey: "agent:main:telegram:direct:123:thread:99",
     });

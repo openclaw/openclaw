@@ -83,6 +83,16 @@ type CronUpdatePatch = {
       accountId?: string;
       bestEffort?: boolean;
     };
+    failureAlert?: {
+      after?: number;
+      cooldownMs?: number;
+      channel?: string;
+      to?: string;
+      threadId?: number;
+      mode?: "announce" | "webhook";
+      accountId?: string;
+      includeSkipped?: boolean;
+    };
   };
 };
 
@@ -1670,6 +1680,8 @@ describe("cron cli", () => {
         "telegram",
         "--failure-alert-to",
         "19098680",
+        "--failure-alert-thread-id",
+        "79",
       ],
       { from: "user" },
     );
@@ -1677,7 +1689,13 @@ describe("cron cli", () => {
     const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as {
       patch?: {
-        failureAlert?: { after?: number; cooldownMs?: number; channel?: string; to?: string };
+        failureAlert?: {
+          after?: number;
+          cooldownMs?: number;
+          channel?: string;
+          to?: string;
+          threadId?: number;
+        };
       };
     };
 
@@ -1685,11 +1703,22 @@ describe("cron cli", () => {
     expect(patch?.patch?.failureAlert?.cooldownMs).toBe(3_600_000);
     expect(patch?.patch?.failureAlert?.channel).toBe("telegram");
     expect(patch?.patch?.failureAlert?.to).toBe("19098680");
+    expect(patch?.patch?.failureAlert?.threadId).toBe(79);
   });
 
   it("rejects partial failure alert threshold on cron edit", async () => {
     await expectCronCommandExit(["cron", "edit", "job-1", "--failure-alert-after", "3x"]);
     expectRuntimeErrorContaining("Invalid --failure-alert-after");
+    expect(callGatewayFromCli).not.toHaveBeenCalledWith(
+      "cron.update",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("rejects invalid --failure-alert-thread-id on cron edit", async () => {
+    await expectCronCommandExit(["cron", "edit", "job-1", "--failure-alert-thread-id", "topic-79"]);
+    expectRuntimeErrorContaining("--failure-alert-thread-id must be a positive integer");
     expect(callGatewayFromCli).not.toHaveBeenCalledWith(
       "cron.update",
       expect.anything(),

@@ -225,6 +225,7 @@ Failure notifications follow a separate destination path:
 - `job.delivery.failureDestination` overrides that per job.
 - If neither is set and the job already delivers via `announce`, failure notifications now fall back to that primary announce target.
 - `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.
+- Per-job `failureAlert.threadId` routes announce alerts to a chat thread or topic. When it is omitted, announce alerts inherit `delivery.threadId` only if the alert uses the same channel and target as the job's primary announce delivery. Webhook alerts ignore thread ids. From the CLI, use `openclaw cron edit <jobId> --failure-alert-thread-id 79`.
 - `failureAlert.includeSkipped: true` opts a job or global cron alert policy into repeated skipped-run alerts. Skipped runs keep a separate consecutive skip counter, so they do not affect execution-error backoff.
 
 ## CLI examples

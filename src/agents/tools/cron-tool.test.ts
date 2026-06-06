@@ -599,16 +599,31 @@ describe("cron tool", () => {
     );
   });
 
-  it("advertises delivery threadId in the tool schema", () => {
+  it("advertises delivery and failure-alert threadId in the tool schema", () => {
     const tool = createTestCronTool();
     const parameters = tool.parameters as SchemaLike;
     const jobThreadId = parameters.properties?.job?.properties?.delivery?.properties?.threadId;
     const patchThreadId = parameters.properties?.patch?.properties?.delivery?.properties?.threadId;
+    const jobFailureAlertThreadId =
+      parameters.properties?.job?.properties?.failureAlert?.properties?.threadId;
+    const patchFailureAlertThreadId =
+      parameters.properties?.patch?.properties?.failureAlert?.properties?.threadId;
 
     expect(jobThreadId?.description).toContain("Thread/topic id");
     expect(jobThreadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number"]);
     expect(patchThreadId?.description).toContain("Thread/topic id");
     expect(patchThreadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number", "null"]);
+    expect(jobFailureAlertThreadId?.description).toContain("Thread/topic id");
+    expect(jobFailureAlertThreadId?.anyOf?.map((entry) => entry.type)).toEqual([
+      "string",
+      "number",
+    ]);
+    expect(patchFailureAlertThreadId?.description).toContain("Thread/topic id");
+    expect(patchFailureAlertThreadId?.anyOf?.map((entry) => entry.type)).toEqual([
+      "string",
+      "number",
+      "null",
+    ]);
   });
 
   it("advertises nullable cron update clears in the tool schema", () => {
@@ -834,7 +849,7 @@ describe("cron tool", () => {
       lightContext: true,
       fallbacks: [" openrouter/gpt-4.1-mini ", "anthropic/claude-haiku-3-5"],
       toolsAllow: [" exec ", " read "],
-      failureAlert: { after: 3, cooldownMs: 60_000 },
+      failureAlert: { after: 3, cooldownMs: 60_000, threadId: 79 },
     });
 
     const params = expectSingleGatewayCallMethod("cron.add") as
@@ -846,7 +861,7 @@ describe("cron tool", () => {
             fallbacks?: string[];
             toolsAllow?: string[];
           };
-          failureAlert?: { after?: number; cooldownMs?: number };
+          failureAlert?: { after?: number; cooldownMs?: number; threadId?: number };
         }
       | undefined;
     expect(params?.payload).toEqual({
@@ -856,7 +871,7 @@ describe("cron tool", () => {
       fallbacks: ["openrouter/gpt-4.1-mini", "anthropic/claude-haiku-3-5"],
       toolsAllow: ["exec", "read"],
     });
-    expect(params?.failureAlert).toEqual({ after: 3, cooldownMs: 60_000 });
+    expect(params?.failureAlert).toEqual({ after: 3, cooldownMs: 60_000, threadId: 79 });
   });
 
   it("recovers concatenated cron add keys from local tool-call parsers", async () => {
@@ -1584,7 +1599,7 @@ describe("cron tool", () => {
       action: "update",
       id: "job-2",
       sessionTarget: "main",
-      failureAlert: { after: 3, cooldownMs: 60_000 },
+      failureAlert: { after: 3, cooldownMs: 60_000, threadId: 79 },
     });
 
     const params = expectSingleGatewayCallMethod("cron.update") as
@@ -1592,13 +1607,13 @@ describe("cron tool", () => {
           id?: string;
           patch?: {
             sessionTarget?: string;
-            failureAlert?: { after?: number; cooldownMs?: number };
+            failureAlert?: { after?: number; cooldownMs?: number; threadId?: number };
           };
         }
       | undefined;
     expect(params?.id).toBe("job-2");
     expect(params?.patch?.sessionTarget).toBe("main");
-    expect(params?.patch?.failureAlert).toEqual({ after: 3, cooldownMs: 60_000 });
+    expect(params?.patch?.failureAlert).toEqual({ after: 3, cooldownMs: 60_000, threadId: 79 });
   });
   it("passes through failureAlert=false for update", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });

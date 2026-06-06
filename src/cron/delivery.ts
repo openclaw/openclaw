@@ -36,6 +36,7 @@ const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
 export type CronAnnounceTarget = {
   channel?: string;
   to?: string;
+  threadId?: string | number;
   accountId?: string;
   sessionKey?: string;
 };
@@ -61,6 +62,7 @@ async function resolveCronAnnounceDelivery(params: {
   const resolvedTarget = await resolveDeliveryTarget(params.cfg, params.agentId, {
     channel: params.target.channel as CronMessageChannel | undefined,
     to: params.target.to,
+    threadId: params.target.threadId,
     accountId: params.target.accountId,
     sessionKey: params.target.sessionKey,
   });

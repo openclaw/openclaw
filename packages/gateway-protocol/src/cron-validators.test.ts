@@ -162,6 +162,40 @@ describe("cron protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts failure alert threadId on add and update params", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        failureAlert: {
+          after: 1,
+          channel: "telegram",
+          to: "-100123",
+          threadId: 79,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          failureAlert: {
+            threadId: "topic-79",
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          failureAlert: {
+            threadId: null,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("accepts nullable delivery clears on update params", () => {
     expect(
       validateCronUpdateParams({

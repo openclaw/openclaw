@@ -21,6 +21,7 @@ import type {
   CronDelivery,
   CronDeliveryPatch,
   CronFailureAlert,
+  CronFailureAlertPatch,
   CronJob,
   CronJobCreate,
   CronJobPatch,
@@ -1121,12 +1122,20 @@ function mergeCronDelivery(
 
 function mergeCronFailureAlert(
   existing: CronFailureAlert | false | undefined,
-  patch: CronFailureAlert | false | undefined,
+  patch: CronFailureAlertPatch | false | undefined,
 ): CronFailureAlert | false | undefined {
   if (patch === false) {
     return false;
   }
   if (patch === undefined) {
+    return existing;
+  }
+  if (
+    (existing === undefined || existing === false) &&
+    Object.keys(patch).length === 1 &&
+    Object.hasOwn(patch, "threadId") &&
+    normalizeOptionalThreadValue(patch.threadId) === undefined
+  ) {
     return existing;
   }
   const base = existing === false || existing === undefined ? {} : existing;
@@ -1141,6 +1150,9 @@ function mergeCronFailureAlert(
   }
   if ("to" in patch) {
     next.to = normalizeOptionalString(patch.to);
+  }
+  if ("threadId" in patch) {
+    next.threadId = normalizeOptionalThreadValue(patch.threadId);
   }
   if ("cooldownMs" in patch) {
     const cooldownMs =

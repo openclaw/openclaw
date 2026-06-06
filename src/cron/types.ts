@@ -212,6 +212,8 @@ export type CronFailureAlert = {
   after?: number;
   channel?: CronMessageChannel;
   to?: string;
+  /** Explicit thread/topic id for announce alerts that support threaded delivery. */
+  threadId?: string | number;
   cooldownMs?: number;
   /** When true, consecutive skipped runs count toward the alert threshold. */
   includeSkipped?: boolean;
@@ -219,6 +221,11 @@ export type CronFailureAlert = {
   mode?: "announce" | "webhook";
   /** Account ID for multi-account channel configurations. */
   accountId?: string;
+};
+
+/** Partial failure-alert update shape; null clears the explicit thread override. */
+export type CronFailureAlertPatch = Omit<CronFailureAlert, "threadId"> & {
+  threadId?: string | number | null;
 };
 
 /** Payload variants cron can execute in main-session or detached modes. */
@@ -341,9 +348,10 @@ export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" |
 
 /** Patch input accepted by cron APIs without allowing immutable identity fields. */
 export type CronJobPatch = Partial<
-  Omit<CronJob, "id" | "createdAtMs" | "state" | "payload" | "delivery">
+  Omit<CronJob, "id" | "createdAtMs" | "state" | "payload" | "delivery" | "failureAlert">
 > & {
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
+  failureAlert?: CronFailureAlertPatch | false;
   state?: Partial<CronJobState>;
 };
