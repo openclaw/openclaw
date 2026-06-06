@@ -37,6 +37,7 @@ import {
   type GraphThreadMessage,
 } from "../graph-thread.js";
 import { resolveGraphChatId } from "../graph-upload.js";
+import { fetchAadUserProfile } from "../graph-users.js";
 import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
@@ -46,6 +47,7 @@ import {
   translateMSTeamsDmConversationIdForGraph,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
+import { buildSenderIdentityContext, buildSenderIdentityPayload } from "../sender-identity.js";
 import {
   fetchParentMessageCached,
   formatParentContextEvent,
@@ -761,6 +763,40 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${rawBody}`
       : rawBody;
 
+    // AAD sender identity enrichment: fetch the sender's Azure AD profile
+    // and pass it as untrusted structured context so the agent receives
+    // identity metadata without treating it as trusted prompt authority.
+    let senderIdentityName: string | undefined;
+    let senderIdentityContext: ReturnType<typeof buildSenderIdentityContext> | undefined;
+    const aadObjectId = from.aadObjectId;
+    if (msteamsCfg?.senderIdentity?.enabled && aadObjectId) {
+      try {
+        const graphToken = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+        if (graphToken) {
+          const profile = await fetchAadUserProfile({
+            token: graphToken,
+            aadObjectId,
+            tenantId: activity.channelData?.tenant?.id,
+            cacheTtlMs: msteamsCfg.senderIdentity.cacheTtlMs,
+          });
+          if (profile) {
+            const identity = buildSenderIdentityPayload(profile);
+            if (identity) {
+              senderIdentityContext = buildSenderIdentityContext(identity);
+              senderIdentityName = profile.displayName ?? undefined;
+              log.debug?.("aad sender identity enriched", {
+                sender: senderId,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        log.debug?.("aad sender identity enrichment failed", {
+          error: formatUnknownError(err),
+        });
+      }
+    }
+
     // For Teams *channel* messages (not group chats / DMs), preserve the
     // `teamId/channelId` pair on NativeChannelId so downstream action handlers
     // can route through `/teams/{teamId}/channels/{channelId}` via Graph API.
@@ -787,7 +823,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       from: teamsFrom,
       sender: {
         id: senderId,
-        name: senderName,
+        name: senderIdentityName ?? senderName,
       },
       conversation: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
@@ -826,6 +862,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         GroupSubject: !isDirectMessage ? conversationType : undefined,
         ReplyToIsQuote: quoteInfo ? true : undefined,
         ...mediaPayload,
+        ...(senderIdentityContext ? { UntrustedStructuredContext: [senderIdentityContext] } : {}),
       },
     });
 

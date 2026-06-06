@@ -1632,6 +1632,13 @@ export const MSTeamsConfigSchema = z
       })
       .strict()
       .optional(),
+    senderIdentity: z
+      .object({
+        enabled: z.boolean().optional(),
+        cacheTtlMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

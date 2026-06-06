@@ -204,4 +204,20 @@ export type MSTeamsConfig = {
   };
   /** Bot Framework OAuth SSO (signin/tokenExchange + signin/verifyState) settings. */
   sso?: MSTeamsSsoConfig;
+  /**
+   * Enrich inbound messages with the sender's Azure AD profile (displayName,
+   * email, department, jobTitle) fetched from Microsoft Graph. The profile is
+   * passed as untrusted structured metadata (UntrustedStructuredContext) so
+   * the agent can use persona-aware routing and responses without treating
+   * directory fields as trusted prompt authority.
+   *
+   * Requires the bot's Azure AD app to have `User.Read.All` (application)
+   * permission granted in the Azure portal. Not supported for cloud=China.
+   */
+  senderIdentity?: {
+    /** Enable AAD sender identity enrichment. Default: false. */
+    enabled?: boolean;
+    /** Profile cache TTL in milliseconds. Default: 3600000 (1 hour). */
+    cacheTtlMs?: number;
+  };
 };

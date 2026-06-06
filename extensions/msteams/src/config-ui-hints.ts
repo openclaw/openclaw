@@ -46,4 +46,16 @@ export const msTeamsChannelConfigUiHints = {
     label: "MS Teams Progress Command Text",
     help: 'Command/exec detail in progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
+  senderIdentity: {
+    label: "MS Teams Sender Identity",
+    help: "Enrich inbound messages with the sender's Azure AD profile (displayName, email, department, jobTitle) from Microsoft Graph. Data is passed as untrusted metadata. Requires User.Read.All application permission. Not supported for cloud=China.",
+  },
+  "senderIdentity.enabled": {
+    label: "MS Teams Sender Identity Enabled",
+    help: "Enable AAD sender identity enrichment (default: false).",
+  },
+  "senderIdentity.cacheTtlMs": {
+    label: "MS Teams Sender Identity Cache TTL",
+    help: "Profile cache TTL in milliseconds (default: 3600000 / 1 hour). Profiles are cached in-process per tenant to minimize Graph API calls.",
+  },
 } satisfies Record<string, ChannelConfigUiHint>;
