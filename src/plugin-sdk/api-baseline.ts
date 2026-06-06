@@ -32,8 +32,33 @@ export type PluginSdkApiSourceLink = {
   path: string;
 };
 
+/** Parsed @deprecated metadata for a public SDK surface. */
+export type PluginSdkApiDeprecation = {
+  /** Human-readable migration guidance from the @deprecated JSDoc tag. */
+  message: string | null;
+};
+
+/** Kind of nested public declaration member marked deprecated. */
+export type PluginSdkApiDeprecatedMemberKind = "method" | "parameter" | "property";
+
+/** One deprecated nested member from an exported SDK declaration. */
+export type PluginSdkApiDeprecatedMember = {
+  /** Parsed @deprecated JSDoc metadata for the member. */
+  deprecated: PluginSdkApiDeprecation;
+  /** Member kind used by downstream inspection tools. */
+  kind: PluginSdkApiDeprecatedMemberKind;
+  /** Dot-delimited member path relative to the exported declaration. */
+  name: string;
+  /** Repo source for the deprecated member. */
+  source: PluginSdkApiSourceLink;
+};
+
 /** One named export captured from a public SDK entrypoint. */
 export type PluginSdkApiExport = {
+  /** Parsed @deprecated metadata for the exported symbol, when present. */
+  deprecated: PluginSdkApiDeprecation | null;
+  /** Deprecated nested members from the exported declaration. */
+  deprecatedMembers: PluginSdkApiDeprecatedMember[];
   /** Normalized TypeScript declaration text, or null when TypeScript cannot print it. */
   declaration: string | null;
   /** Exported symbol name as plugin authors import it. */
@@ -48,6 +73,8 @@ export type PluginSdkApiExport = {
 export type PluginSdkApiModule = {
   /** Documentation category used to group SDK entrypoints. */
   category: PluginSdkDocCategory;
+  /** Parsed @deprecated metadata for the SDK module/subpath, when present. */
+  deprecated: PluginSdkApiDeprecation | null;
   /** Entry point metadata from the SDK docs registry. */
   entrypoint: PluginSdkDocEntrypoint;
   /** Public exports discovered from the TypeScript program. */
@@ -198,6 +225,415 @@ function buildSourceLink(
     line,
     path: relativePath(repoRoot, filePath),
   };
+}
+
+/** Build repo-relative source evidence for a nested declaration. */
+function buildDeclarationSourceLink(
+  repoRoot: string,
+  declaration: ts.Declaration,
+): PluginSdkApiSourceLink {
+  const sourceFile = declaration.getSourceFile();
+  const line = sourceFile.getLineAndCharacterOfPosition(declaration.getStart(sourceFile)).line + 1;
+  return {
+    line,
+    path: relativePath(repoRoot, sourceFile.fileName),
+  };
+}
+
+/** Normalize JSDoc text for stable machine-readable baseline output. */
+function normalizeJSDocText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+/** Convert TypeScript symbol-display JSDoc text into baseline text. */
+function normalizeJSDocTagInfoText(text: ts.SymbolDisplayPart[] | undefined): string | null {
+  const message = normalizeJSDocText((text ?? []).map((part) => part.text).join(""));
+  return message.length > 0 ? message : null;
+}
+
+/** Convert AST JSDoc tag comments into baseline text. */
+function normalizeJSDocTagComment(
+  comment: string | ts.NodeArray<ts.JSDocComment> | undefined,
+): string | null {
+  if (typeof comment === "string") {
+    const message = normalizeJSDocText(comment);
+    return message.length > 0 ? message : null;
+  }
+  if (!comment) {
+    return null;
+  }
+  const message = normalizeJSDocText(
+    [...comment]
+      .map((part) => part.getText())
+      .join(" ")
+      .replaceAll(/^\s*\/\*\*?/g, "")
+      .replaceAll(/\*\/\s*$/g, ""),
+  );
+  return message.length > 0 ? message : null;
+}
+
+/** Convert a leading JSDoc block into baseline deprecation metadata. */
+function deprecationFromJSDocCommentText(commentText: string): PluginSdkApiDeprecation | null {
+  const lines = commentText
+    .replace(/^\/\*\*?/, "")
+    .replace(/\*\/$/, "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*\*\s?/, "").trim());
+  const deprecatedLineIndex = lines.findIndex((line) => line.startsWith("@deprecated"));
+  if (deprecatedLineIndex < 0) {
+    return null;
+  }
+  const messageParts = [lines[deprecatedLineIndex]?.replace(/^@deprecated\b\s*/, "") ?? ""];
+  for (const line of lines.slice(deprecatedLineIndex + 1)) {
+    if (line.startsWith("@")) {
+      break;
+    }
+    messageParts.push(line);
+  }
+  const message = normalizeJSDocText(messageParts.join(" "));
+  return { message: message.length > 0 ? message : null };
+}
+
+/** Convert one TypeScript @deprecated symbol tag into baseline metadata. */
+function deprecationFromJSDocTagInfo(
+  tag: ts.JSDocTagInfo | undefined,
+): PluginSdkApiDeprecation | null {
+  if (!tag || tag.name !== "deprecated") {
+    return null;
+  }
+  return { message: normalizeJSDocTagInfoText(tag.text) };
+}
+
+/** Read a file-leading @deprecated JSDoc block used for SDK subpath modules. */
+function readPluginSdkApiLeadingCommentDeprecation(
+  sourceFile: ts.SourceFile,
+): PluginSdkApiDeprecation | null {
+  const ranges = ts.getLeadingCommentRanges(sourceFile.text, 0) ?? [];
+  for (const range of ranges) {
+    if (range.kind !== ts.SyntaxKind.MultiLineCommentTrivia) {
+      continue;
+    }
+    const deprecation = deprecationFromJSDocCommentText(
+      sourceFile.text.slice(range.pos, range.end),
+    );
+    if (deprecation) {
+      return deprecation;
+    }
+  }
+  return null;
+}
+
+/** Read parsed @deprecated metadata from a TypeScript AST node. */
+export function readPluginSdkApiDeprecationFromNode(node: ts.Node): PluginSdkApiDeprecation | null {
+  const tag = ts.getJSDocTags(node).find((candidate) => candidate.tagName.text === "deprecated");
+  if (!tag) {
+    return null;
+  }
+  return { message: normalizeJSDocTagComment(tag.comment) };
+}
+
+/** Read module/subpath-level @deprecated metadata from a public SDK source file. */
+export function readPluginSdkApiModuleDeprecationFromSourceFile(
+  sourceFile: ts.SourceFile,
+): PluginSdkApiDeprecation | null {
+  const fileLeadingDeprecation = readPluginSdkApiLeadingCommentDeprecation(sourceFile);
+  if (fileLeadingDeprecation) {
+    return fileLeadingDeprecation;
+  }
+  const firstStatement = sourceFile.statements[0];
+  if (!firstStatement || !ts.isExportDeclaration(firstStatement) || firstStatement.exportClause) {
+    return null;
+  }
+  return readPluginSdkApiDeprecationFromNode(firstStatement);
+}
+
+/** Read parsed @deprecated metadata from a TypeScript symbol. */
+function readPluginSdkApiDeprecationFromSymbol(symbol: ts.Symbol): PluginSdkApiDeprecation | null {
+  return (
+    symbol
+      .getJsDocTags()
+      .map(deprecationFromJSDocTagInfo)
+      .find((deprecation): deprecation is PluginSdkApiDeprecation => deprecation !== null) ?? null
+  );
+}
+
+/** Read @deprecated metadata from export-specifier declarations and their parent export. */
+function readPluginSdkApiDeprecationFromExportDeclarations(
+  symbol: ts.Symbol,
+): PluginSdkApiDeprecation | null {
+  for (const declaration of symbol.declarations ?? []) {
+    const deprecated = readPluginSdkApiDeprecationFromNode(declaration);
+    if (deprecated) {
+      return deprecated;
+    }
+    if (ts.isExportSpecifier(declaration)) {
+      const exportDeclaration = declaration.parent.parent;
+      const exportDeprecated = readPluginSdkApiDeprecationFromNode(exportDeclaration);
+      if (exportDeprecated) {
+        return exportDeprecated;
+      }
+    }
+  }
+  return null;
+}
+
+/** Read export-level @deprecated metadata without losing alias re-export comments. */
+export function readPluginSdkApiExportDeprecation(params: {
+  declaration: ts.Declaration | undefined;
+  resolvedSymbol: ts.Symbol;
+  symbol: ts.Symbol;
+}): PluginSdkApiDeprecation | null {
+  const { declaration, resolvedSymbol, symbol } = params;
+  return (
+    readPluginSdkApiDeprecationFromSymbol(symbol) ??
+    readPluginSdkApiDeprecationFromExportDeclarations(symbol) ??
+    readPluginSdkApiDeprecationFromSymbol(resolvedSymbol) ??
+    (declaration ? readPluginSdkApiDeprecationFromNode(declaration) : null)
+  );
+}
+
+/** Read a simple identifier declaration name from a member-like AST node. */
+function declarationName(node: ts.Node): string | null {
+  const named = node as { name?: ts.Node };
+  if (!named.name || !ts.isIdentifier(named.name)) {
+    return null;
+  }
+  return named.name.text;
+}
+
+/** Classify the deprecated member kind for downstream inspectors. */
+function deprecatedMemberKind(node: ts.Node): PluginSdkApiDeprecatedMemberKind | null {
+  if (ts.isMethodSignature(node) || ts.isMethodDeclaration(node)) {
+    return "method";
+  }
+  if (ts.isParameter(node)) {
+    return "parameter";
+  }
+  if (ts.isPropertySignature(node) || ts.isPropertyDeclaration(node)) {
+    return "property";
+  }
+  return null;
+}
+
+/** Recurse into type-literal declarations to find deprecated nested members. */
+function collectTypeDeprecatedMembers(params: {
+  activeTypes: Set<string>;
+  checker?: ts.TypeChecker;
+  members: PluginSdkApiDeprecatedMember[];
+  node: ts.TypeNode | undefined;
+  pathPrefix: string[];
+  repoRoot: string;
+}): void {
+  const { activeTypes, checker, members, node, pathPrefix, repoRoot } = params;
+  if (!node) {
+    return;
+  }
+  if (ts.isTypeLiteralNode(node)) {
+    collectNodeMembers({
+      activeTypes,
+      checker,
+      members,
+      nodes: node.members,
+      pathPrefix,
+      repoRoot,
+    });
+    return;
+  }
+  if (ts.isIntersectionTypeNode(node)) {
+    for (const intersectionType of node.types) {
+      collectTypeDeprecatedMembers({
+        checker,
+        members,
+        node: intersectionType,
+        pathPrefix,
+        repoRoot,
+        activeTypes,
+      });
+    }
+    return;
+  }
+  if (checker && ts.isTypeReferenceNode(node)) {
+    collectReferencedTypeDeprecatedMembers({
+      activeTypes,
+      checker,
+      members,
+      node,
+      pathPrefix,
+      repoRoot,
+    });
+  }
+}
+
+/** Return true when a declaration belongs to this repository rather than dependencies. */
+function isRepoOwnedDeclaration(repoRoot: string, declaration: ts.Declaration): boolean {
+  const sourcePath = relativePath(repoRoot, declaration.getSourceFile().fileName);
+  return !sourcePath.startsWith("..") && !sourcePath.startsWith("node_modules/");
+}
+
+/** Resolve referenced type aliases/interfaces before collecting deprecated members. */
+function collectReferencedTypeDeprecatedMembers(params: {
+  activeTypes: Set<string>;
+  checker: ts.TypeChecker;
+  members: PluginSdkApiDeprecatedMember[];
+  node: ts.TypeReferenceNode;
+  pathPrefix: string[];
+  repoRoot: string;
+}): void {
+  const { activeTypes, checker, members, node, pathPrefix, repoRoot } = params;
+  const type = checker.getTypeAtLocation(node);
+  const symbol = type.aliasSymbol ?? type.getSymbol() ?? checker.getSymbolAtLocation(node.typeName);
+  const declarations = [...(symbol?.declarations ?? [])].sort((left, right) =>
+    compareDeclarations(repoRoot, left, right),
+  );
+
+  for (const declaration of declarations) {
+    if (!isRepoOwnedDeclaration(repoRoot, declaration)) {
+      continue;
+    }
+    const visitKey = [declaration.getSourceFile().fileName, declaration.pos, declaration.end].join(
+      ":",
+    );
+    if (activeTypes.has(visitKey)) {
+      continue;
+    }
+    activeTypes.add(visitKey);
+
+    if (ts.isTypeAliasDeclaration(declaration)) {
+      collectTypeDeprecatedMembers({
+        activeTypes,
+        checker,
+        members,
+        node: declaration.type,
+        pathPrefix,
+        repoRoot,
+      });
+    }
+    if (ts.isInterfaceDeclaration(declaration) || ts.isClassDeclaration(declaration)) {
+      collectNodeMembers({
+        activeTypes,
+        checker,
+        members,
+        nodes: declaration.members,
+        pathPrefix,
+        repoRoot,
+      });
+    }
+    activeTypes.delete(visitKey);
+  }
+}
+
+/** Walk member-like AST nodes and collect deprecated declarations. */
+function collectNodeMembers(params: {
+  activeTypes: Set<string>;
+  checker?: ts.TypeChecker;
+  members: PluginSdkApiDeprecatedMember[];
+  nodes: readonly ts.Node[];
+  pathPrefix: string[];
+  repoRoot: string;
+}): void {
+  const { activeTypes, checker, members, nodes, pathPrefix, repoRoot } = params;
+  for (const node of nodes) {
+    const name = declarationName(node);
+    const memberPath = name ? [...pathPrefix, name] : pathPrefix;
+    const deprecated = readPluginSdkApiDeprecationFromNode(node);
+    const kind = deprecatedMemberKind(node);
+
+    // Record direct member deprecations before recursing so output follows source order.
+    if (name && deprecated && kind) {
+      members.push({
+        deprecated,
+        kind,
+        name: memberPath.join("."),
+        source: buildDeclarationSourceLink(repoRoot, node as ts.Declaration),
+      });
+    }
+
+    // Object-shaped properties can contain nested deprecated payload fields.
+    if (ts.isPropertySignature(node) || ts.isPropertyDeclaration(node)) {
+      collectTypeDeprecatedMembers({
+        activeTypes,
+        checker,
+        members,
+        node: node.type,
+        pathPrefix: memberPath,
+        repoRoot,
+      });
+    }
+
+    // Function-like members can deprecate individual parameters.
+    if (
+      ts.isMethodSignature(node) ||
+      ts.isMethodDeclaration(node) ||
+      ts.isFunctionDeclaration(node)
+    ) {
+      collectNodeMembers({
+        activeTypes,
+        checker,
+        members,
+        nodes: node.parameters,
+        pathPrefix: memberPath,
+        repoRoot,
+      });
+    }
+
+    // Object-literal parameters can contain nested deprecated option keys.
+    if (ts.isParameter(node)) {
+      collectTypeDeprecatedMembers({
+        activeTypes,
+        checker,
+        members,
+        node: node.type,
+        pathPrefix: memberPath,
+        repoRoot,
+      });
+    }
+  }
+}
+
+/** Collect deprecated nested public members from one exported SDK declaration. */
+export function collectPluginSdkApiDeprecatedMembers(
+  repoRoot: string,
+  declaration: ts.Declaration,
+  checker?: ts.TypeChecker,
+): PluginSdkApiDeprecatedMember[] {
+  const members: PluginSdkApiDeprecatedMember[] = [];
+  const activeTypes = new Set<string>();
+  if (ts.isInterfaceDeclaration(declaration) || ts.isClassDeclaration(declaration)) {
+    collectNodeMembers({
+      activeTypes,
+      checker,
+      members,
+      nodes: declaration.members,
+      pathPrefix: [],
+      repoRoot,
+    });
+  }
+  if (ts.isTypeAliasDeclaration(declaration)) {
+    collectTypeDeprecatedMembers({
+      activeTypes,
+      checker,
+      members,
+      node: declaration.type,
+      pathPrefix: [],
+      repoRoot,
+    });
+  }
+  if (ts.isFunctionDeclaration(declaration)) {
+    collectNodeMembers({
+      activeTypes,
+      checker,
+      members,
+      nodes: declaration.parameters,
+      pathPrefix: [],
+      repoRoot,
+    });
+  }
+  return members.sort(
+    (left, right) =>
+      compareText(left.source.path, right.source.path) ||
+      left.source.line - right.source.line ||
+      compareText(left.name, right.name),
+  );
 }
 
 function inferExportKind(
@@ -396,7 +832,12 @@ function buildExportSurface(params: {
 }): PluginSdkApiExport {
   const { checker, printer, program, repoRoot, symbol } = params;
   const { declaration, resolvedSymbol } = resolveSymbolAndDeclaration(checker, repoRoot, symbol);
+  const deprecated = readPluginSdkApiExportDeprecation({ declaration, resolvedSymbol, symbol });
   return {
+    deprecated,
+    deprecatedMembers: declaration
+      ? collectPluginSdkApiDeprecatedMembers(repoRoot, declaration, checker)
+      : [],
     declaration: declaration ? printNode(repoRoot, checker, printer, declaration) : null,
     exportName: symbol.getName(),
     kind: inferExportKind(resolvedSymbol, declaration),
@@ -464,6 +905,7 @@ function buildModuleSurface(params: {
 
   return {
     category: metadata.category,
+    deprecated: readPluginSdkApiModuleDeprecationFromSourceFile(sourceFile),
     entrypoint,
     exports,
     importSpecifier,
@@ -478,6 +920,7 @@ function buildJsonlLines(baseline: PluginSdkApiBaseline): string[] {
     lines.push(
       JSON.stringify({
         category: moduleSurface.category,
+        deprecated: moduleSurface.deprecated,
         entrypoint: moduleSurface.entrypoint,
         importSpecifier: moduleSurface.importSpecifier,
         recordType: "module",
@@ -489,6 +932,8 @@ function buildJsonlLines(baseline: PluginSdkApiBaseline): string[] {
     for (const exportSurface of moduleSurface.exports) {
       lines.push(
         JSON.stringify({
+          deprecated: exportSurface.deprecated,
+          deprecatedMembers: exportSurface.deprecatedMembers,
           declaration: exportSurface.declaration,
           entrypoint: moduleSurface.entrypoint,
           exportName: exportSurface.exportName,
