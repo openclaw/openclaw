@@ -373,7 +373,16 @@ describe("sessions tools", () => {
       callGatewayMock.mockImplementation(async (opts: unknown) => {
         const request = opts as GatewayCall;
         if (request.method === "sessions.resolve") {
-          throw new Error("Session not found");
+          if (typeof request.params?.label === "string") {
+            throw new Error(`No session found with label: ${request.params.label}`);
+          }
+          const target =
+            typeof request.params?.key === "string"
+              ? request.params.key
+              : typeof request.params?.sessionId === "string"
+                ? request.params.sessionId
+                : "unknown";
+          throw new Error(`No session found: ${target}`);
         }
         if (request.method === "sessions.create") {
           return { key: "agent:orion:main", sessionId: "sess-orion-created" };
@@ -412,6 +421,97 @@ describe("sessions tools", () => {
       expect(agentParams(agentCall ?? {}).sessionKey).toBe("agent:orion:main");
     },
   );
+
+  it("sessions_send preserves label ambiguity errors before configured-agent fallback", async () => {
+    const config = {
+      ...TEST_CONFIG,
+      agents: { list: [{ id: "main" }, { id: "orion" }] },
+    } as OpenClawConfig;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as GatewayCall;
+      if (request.method === "sessions.resolve") {
+        throw new Error(
+          "Multiple sessions found with label: orion (agent:main:one, agent:main:two)",
+        );
+      }
+      if (request.method === "sessions.create") {
+        return { key: "agent:orion:main", sessionId: "sess-orion-created" };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-orion", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({ config }).find(
+      (candidate) => candidate.name === "sessions_send",
+    );
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-orion", {
+      label: "orion",
+      message: "hello orion",
+      timeoutSeconds: 0,
+    });
+
+    expect(sessionsSendDetails(result.details)).toMatchObject({
+      status: "error",
+      error: "Multiple sessions found with label: orion (agent:main:one, agent:main:two)",
+    });
+    expect(
+      callGatewayMock.mock.calls.some((call) => (call[0] as GatewayCall).method === "agent"),
+    ).toBe(false);
+    expect(
+      callGatewayMock.mock.calls.some(
+        (call) => (call[0] as GatewayCall).method === "sessions.create",
+      ),
+    ).toBe(false);
+  });
+
+  it("sessions_send preserves an existing sessionKey before configured-agent fallback", async () => {
+    const config = {
+      ...TEST_CONFIG,
+      agents: { list: [{ id: "main" }, { id: "orion" }] },
+    } as OpenClawConfig;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as GatewayCall;
+      if (request.method === "sessions.resolve" && request.params?.key === "orion") {
+        return { key: "orion" };
+      }
+      if (request.method === "sessions.create") {
+        throw new Error("sessions.create should not run for an existing sessionKey");
+      }
+      if (request.method === "agent") {
+        return { runId: "run-orion-existing", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({ config }).find(
+      (candidate) => candidate.name === "sessions_send",
+    );
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-orion-existing", {
+      sessionKey: "orion",
+      message: "hello existing orion",
+      timeoutSeconds: 0,
+    });
+
+    expect(sessionsSendDetails(result.details)).toMatchObject({
+      status: "accepted",
+      runId: "run-orion-existing",
+      sessionKey: "orion",
+    });
+    const agentCall = callGatewayMock.mock.calls
+      .map((call) => call[0] as GatewayCall)
+      .find((call) => call.method === "agent");
+    expect(agentParams(agentCall ?? {}).sessionKey).toBe("orion");
+  });
 
   it("sessions_send sanitizes formatted reasoning from aliases", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {

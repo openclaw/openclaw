@@ -135,6 +135,36 @@ function resolveBareConfiguredAgentMainSessionKey(params: {
   });
 }
 
+function isNoSessionFoundMessage(params: { message?: string; prefix: string; target?: string }) {
+  const message = normalizeOptionalString(params.message);
+  const target = normalizeOptionalString(params.target);
+  if (!message || !target) {
+    return false;
+  }
+  const expected = `${params.prefix}${target}`;
+  return (
+    message === expected ||
+    message.startsWith(`${expected} `) ||
+    message.startsWith(`${expected} (`)
+  );
+}
+
+function isNoSessionFoundForSessionKey(params: { message?: string; target?: string }) {
+  return isNoSessionFoundMessage({
+    message: params.message,
+    prefix: "No session found: ",
+    target: params.target,
+  });
+}
+
+function isNoSessionFoundForLabel(params: { message?: string; label?: string }) {
+  return isNoSessionFoundMessage({
+    message: params.message,
+    prefix: "No session found with label: ",
+    target: params.label,
+  });
+}
+
 function isConfiguredAgentMainSessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -370,12 +400,12 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
-      let sessionKey =
-        resolveBareConfiguredAgentMainSessionKey({
-          cfg,
-          target: sessionKeyParam,
-          mainKey,
-        }) ?? sessionKeyParam;
+      const configuredAgentSessionKey = resolveBareConfiguredAgentMainSessionKey({
+        cfg,
+        target: sessionKeyParam,
+        mainKey,
+      });
+      let sessionKey = sessionKeyParam;
       if (!sessionKey && !labelParam && labelAgentIdParam) {
         const agentMainKey = resolveConfiguredAgentMainSessionKey({
           cfg,
@@ -452,7 +482,10 @@ export function createSessionsSendTool(opts?: {
               error: "Session not visible from this sandboxed agent session.",
             });
           }
-          if (!configuredAgentLabelMainKey) {
+          if (
+            !configuredAgentLabelMainKey ||
+            !isNoSessionFoundForLabel({ message: msg, label: labelParam })
+          ) {
             return jsonResult({
               runId: crypto.randomUUID(),
               status: "error",
@@ -489,13 +522,27 @@ export function createSessionsSendTool(opts?: {
           error: "Either sessionKey or label is required",
         });
       }
-      const resolvedSession = await resolveSessionReference({
+      let resolvedSession = await resolveSessionReference({
         sessionKey,
         alias,
         mainKey,
         requesterInternalKey: effectiveRequesterKey,
         restrictToSpawned,
       });
+      if (
+        !resolvedSession.ok &&
+        configuredAgentSessionKey &&
+        isNoSessionFoundForSessionKey({ message: resolvedSession.error, target: sessionKeyParam })
+      ) {
+        sessionKey = configuredAgentSessionKey;
+        resolvedSession = await resolveSessionReference({
+          sessionKey,
+          alias,
+          mainKey,
+          requesterInternalKey: effectiveRequesterKey,
+          restrictToSpawned,
+        });
+      }
       if (!resolvedSession.ok) {
         return jsonResult({
           runId: crypto.randomUUID(),
