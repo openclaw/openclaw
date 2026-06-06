@@ -1,17 +1,40 @@
 ---
-summary: "Parallel Search -- LLM-optimized dense excerpts from web sources"
+summary: "Parallel web search -- free hosted Search MCP (zero-config default) plus the paid v1 REST API"
 read_when:
-  - You want to use Parallel for web_search
-  - You need a PARALLEL_API_KEY
+  - You want free web search with no API key
+  - You want the Parallel v1 REST Search API
   - You want dense excerpts ranked for LLM context efficiency
 title: "Parallel search"
 ---
 
-OpenClaw supports [Parallel](https://parallel.ai/) as a `web_search` provider.
-Parallel returns ranked, LLM-optimized dense excerpts from a web index
-purpose-built for AI agents.
+OpenClaw bundles two [Parallel](https://parallel.ai/) `web_search` providers:
 
-## Get an API key
+- **Parallel Search (Free)** (`parallel-free`) -- the free hosted
+  [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) at
+  `https://search.parallel.ai/mcp`. Keyless and anonymous, so `web_search` works
+  with zero setup. This is OpenClaw's **zero-config default**: when no other web
+  search provider is configured, OpenClaw selects it automatically, so everyone
+  gets free web search out of the box. Its tool call is labeled **Parallel Web
+  Search** in the UI.
+- **Parallel Search** (`parallel`) -- the Parallel **v1 REST** Search API
+  (`/v1/search`). Requires `PARALLEL_API_KEY`; objective-tuned with higher rate
+  limits.
+
+Both return ranked, LLM-optimized dense excerpts from a web index purpose-built
+for AI agents. Use the free MCP for zero-setup search, or the REST API when you
+have a key. Select one explicitly with `tools.web.search.provider:
+"parallel-free"` or `"parallel"`.
+
+<Note>
+  Exception: OpenAI Responses models use OpenAI's **native** web search while
+  `tools.web.search.provider` is left unset, so they do not route through the
+  Parallel providers. Set `tools.web.search.provider: "parallel-free"` (or
+  `"parallel"`) to route those models through Parallel.
+</Note>
+
+## Get an API key (paid `parallel` provider)
+
+The free `parallel-free` provider needs no setup. To use the paid v1 REST API:
 
 <Steps>
   <Step title="Create an account">
@@ -58,6 +81,9 @@ purpose-built for AI agents.
 For a gateway install, put it in `~/.openclaw/.env`.
 
 ## Base URL override
+
+The base URL override applies to the paid `parallel` (REST) provider only; the
+free `parallel-free` provider always uses `https://search.parallel.ai/mcp`.
 
 Set `plugins.entries.parallel.config.webSearch.baseUrl` when Parallel requests
 should go through a compatible proxy or alternate Parallel endpoint (for
@@ -119,6 +145,10 @@ alias.
   when switching between providers; Parallel on its own defaults to 10
 - Results are cached for 15 minutes by default (configurable via
   `cacheTtlMinutes`)
+- The free `parallel-free` provider uses the same `objective` + `search_queries`
+  shape; `count` is applied client-side, a `session_id` is minted per call when
+  one is not supplied, and the result carries a `searchTransport` marker that
+  drives the **Parallel Web Search** tool label. The keyed REST path is unbranded.
 
 ## Related
 
