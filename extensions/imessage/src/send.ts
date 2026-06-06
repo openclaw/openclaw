@@ -731,6 +731,7 @@ async function trySendAttachmentForTarget(params: {
   service?: IMessageService;
   filePath: string;
   audioAsVoice?: boolean;
+  replyToId?: string;
   echoText?: string;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
@@ -761,6 +762,7 @@ async function trySendAttachmentForTarget(params: {
       "--file",
       params.filePath,
       ...(params.audioAsVoice ? ["--audio"] : []),
+      ...(params.replyToId ? ["--reply-to", params.replyToId] : []),
       "--transport",
       "auto",
     ]);
@@ -826,6 +828,7 @@ async function trySendAttachmentForTarget(params: {
       messageId,
       target: params.target,
       kind: params.audioAsVoice ? "voice" : "media",
+      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     }),
   };
 }
@@ -908,7 +911,7 @@ export async function sendMessageIMessage(
     opts.runCliJson ??
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
 
-  if (filePath && !resolvedReplyToId) {
+  if (filePath && (!resolvedReplyToId || opts.audioAsVoice)) {
     const attachmentEchoText = message.trim()
       ? resolveOutboundEchoText("", mediaContentType)
       : echoText;
@@ -919,6 +922,7 @@ export async function sendMessageIMessage(
       service,
       filePath,
       audioAsVoice: opts.audioAsVoice,
+      ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
       echoText: attachmentEchoText,
       runCliJson,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
