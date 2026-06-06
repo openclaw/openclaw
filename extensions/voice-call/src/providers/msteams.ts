@@ -84,6 +84,18 @@ interface MsteamsCallState {
   pendingAudio: Buffer[];
 }
 
+/** A sampled inbound video frame the agent can "look" at (camera or screen-share). */
+export interface MsteamsVideoFrame {
+  /** Base64-encoded image (JPEG) ready to attach to a vision model. */
+  dataBase64: string;
+  /** MIME type, e.g. "image/jpeg". */
+  mime: string;
+  width: number;
+  height: number;
+  /** Worker capture timestamp (epoch ms). */
+  ts: number;
+}
+
 /** PCM 16 kHz, 16-bit mono — the wire format both directions of the Teams bridge. */
 const MSTEAMS_SAMPLE_RATE_HZ = 16_000;
 const FRAME_DURATION_MS = 20;
@@ -127,6 +139,18 @@ export class MsteamsProvider implements VoiceCallProvider {
   private readonly calls = new Map<string, MsteamsCallState>();
   private readonly realtimeCalls = new Map<string, MsteamsRealtimeCall>();
 
+  /**
+   * Latest sampled inbound video frame per call+source, so the agent can "look" at what the caller
+   * is showing (camera / screen-share). Recording-gated and path-agnostic (works for both the
+   * streaming and realtime paths). Only the most recent frame per source is kept.
+   */
+  private readonly latestVideoFrames = new Map<
+    string,
+    { camera?: MsteamsVideoFrame; screenshare?: MsteamsVideoFrame }
+  >();
+  /** Recording-active state per call (both paths), used to gate inbound video like audio. */
+  private readonly recordingActiveByCall = new Map<string, boolean>();
+
   constructor(options: MsteamsProviderOptions) {
     const { port, bindAddress, path, sharedSecret, logger } = options;
     this.logger = logger;
@@ -140,6 +164,7 @@ export class MsteamsProvider implements VoiceCallProvider {
         onSessionStart: (session) => this.handleSessionStart(session),
         onSessionEnd: (info) => this.handleSessionEnd(info),
         onAudioFrame: (frame) => this.handleAudioFrame(frame),
+        onVideoFrame: (frame) => this.handleVideoFrame(frame),
         onRecordingStatus: (info) => this.handleRecordingStatus(info),
       });
     } else {
@@ -224,6 +249,8 @@ export class MsteamsProvider implements VoiceCallProvider {
     // anonymous callers never collide into one session (cross-caller memory
     // bleed) or match an allowlist as a generic caller.
     const from = session.caller.aadId ?? `teams:${providerCallId}`;
+    // Seed the recording gate for inbound video from the session's initial status.
+    this.recordingActiveByCall.set(providerCallId, session.recordingStatus === "active");
 
     // Realtime mode: bridge the call straight to the speech-to-speech model.
     // It does not route through CallManager, so the inbound-call policy is
@@ -357,6 +384,55 @@ export class MsteamsProvider implements VoiceCallProvider {
     }
   }
 
+  /**
+   * Buffer the latest inbound video frame per source so the agent can "look" at it on demand.
+   * Recording-gated (Media Access API): video is media-derived data and must not be processed
+   * before Teams recording is active. Only the most recent frame per source is retained.
+   */
+  private handleVideoFrame(info: {
+    callId: string;
+    source: "camera" | "screenshare";
+    width: number;
+    height: number;
+    mime: string;
+    dataBase64: string;
+    ts: number;
+  }): void {
+    if (this.requireRecordingStatus() && !this.recordingActiveByCall.get(info.callId)) {
+      return;
+    }
+    const frames = this.latestVideoFrames.get(info.callId) ?? {};
+    frames[info.source] = {
+      dataBase64: info.dataBase64,
+      mime: info.mime,
+      width: info.width,
+      height: info.height,
+      ts: info.ts,
+    };
+    this.latestVideoFrames.set(info.callId, frames);
+    this.logger?.debug?.(
+      `MsteamsProvider: video.frame ${info.callId} ${info.source} ${info.width}x${info.height}`,
+    );
+  }
+
+  /**
+   * The latest inbound video frame for a call. With no `source`, prefers screen-share over camera
+   * (the share is usually what the caller is asking about). Undefined if none captured yet.
+   */
+  getLatestVideoFrame(
+    providerCallId: string,
+    source?: "camera" | "screenshare",
+  ): MsteamsVideoFrame | undefined {
+    const frames = this.latestVideoFrames.get(providerCallId);
+    if (!frames) {
+      return undefined;
+    }
+    if (source) {
+      return frames[source];
+    }
+    return frames.screenshare ?? frames.camera;
+  }
+
   /** Whether the Teams recording-status gate is enforced (default true). */
   private requireRecordingStatus(): boolean {
     return this.responseRuntime?.voiceConfig.msteams?.requireRecordingStatus ?? true;
@@ -382,6 +458,7 @@ export class MsteamsProvider implements VoiceCallProvider {
   /** Track Teams recording status so transcript persistence can be gated on it. */
   private handleRecordingStatus(info: { callId: string; status: MsteamsRecordingStatus }): void {
     const active = info.status === "active";
+    this.recordingActiveByCall.set(info.callId, active);
     const state = this.calls.get(info.callId);
     if (state) {
       state.recordingActive = active;
@@ -483,6 +560,8 @@ export class MsteamsProvider implements VoiceCallProvider {
   }
 
   private handleSessionEnd(info: { callId: string; reason: string }): void {
+    this.latestVideoFrames.delete(info.callId);
+    this.recordingActiveByCall.delete(info.callId);
     const realtimeCall = this.realtimeCalls.get(info.callId);
     if (realtimeCall) {
       this.realtimeCalls.delete(info.callId);
