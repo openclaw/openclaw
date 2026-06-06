@@ -332,9 +332,9 @@ function buildGoogleGenerativeAiRequestUrl(model: GoogleTransportModel): string 
   return `${baseUrl}/${resolveGoogleModelPath(model.id)}:streamGenerateContent?alt=sse`;
 }
 
-function resolveGoogleVertexProject(options: GoogleTransportOptions | undefined): string {
+export function resolveGoogleVertexProject(options?: { project?: unknown }): string {
   const project =
-    normalizeOptionalString((options as { project?: unknown } | undefined)?.project) ||
+    normalizeOptionalString(options?.project) ||
     normalizeOptionalString(process.env.GOOGLE_CLOUD_PROJECT) ||
     normalizeOptionalString(process.env.GCLOUD_PROJECT);
   if (!project) {
@@ -345,9 +345,9 @@ function resolveGoogleVertexProject(options: GoogleTransportOptions | undefined)
   return project;
 }
 
-function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined): string {
+export function resolveGoogleVertexLocation(options?: { location?: unknown }): string {
   const location =
-    normalizeOptionalString((options as { location?: unknown } | undefined)?.location) ||
+    normalizeOptionalString(options?.location) ||
     normalizeOptionalString(process.env.GOOGLE_CLOUD_LOCATION);
   if (!location) {
     throw new Error(
@@ -358,7 +358,10 @@ function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined
 }
 
 export function resolveGoogleVertexBaseOrigin(
-  model: GoogleTransportModel,
+export function resolveGoogleVertexBaseOrigin(
+  model: { baseUrl?: string },
+  location: string,
+): string {
   location: string,
 ): string {
   const configured = normalizeOptionalString(model.baseUrl);
@@ -776,8 +779,8 @@ function buildGoogleHeaders(
   );
 }
 
-async function buildGoogleVertexHeaders(
-  model: GoogleTransportModel,
+export async function buildGoogleVertexHeaders(
+  model: { headers?: Record<string, string> },
   apiKey: string | undefined,
   optionHeaders: Record<string, string> | undefined,
   fetchImpl?: typeof fetch,

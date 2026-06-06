@@ -27,6 +27,10 @@ export {
 export {
   buildGoogleGenerativeAiParams,
   createGoogleGenerativeAiTransportStreamFn,
+  resolveGoogleVertexProject,
+  resolveGoogleVertexLocation,
+  resolveGoogleVertexBaseOrigin,
+  buildGoogleVertexHeaders,
 } from "./transport-stream.js";
 export {
   DEFAULT_GOOGLE_API_BASE_URL,

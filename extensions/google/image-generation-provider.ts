@@ -17,7 +17,14 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
+import {
+  buildGoogleVertexHeaders,
+  normalizeGoogleModelId,
+  resolveGoogleGenerativeAiHttpRequestConfig,
+  resolveGoogleVertexBaseOrigin,
+  resolveGoogleVertexLocation,
+  resolveGoogleVertexProject,
+} from "./api.js";
 
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
@@ -169,19 +176,44 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       },
     },
     async generateImage(req) {
+      const providerKey = req.provider === "google-vertex" ? "google-vertex" : "google";
       const auth = await resolveApiKeyForProvider({
-        provider: "google",
+        provider: providerKey,
         cfg: req.cfg,
         agentDir: req.agentDir,
         store: req.authStore,
       });
       if (!auth.apiKey) {
-        throw new Error("Google API key missing");
+        throw new Error(
+          `${providerKey === "google-vertex" ? "Google Vertex" : "Google"} API key missing`,
+        );
       }
 
       const model = normalizeGoogleImageModel(req.model);
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveGoogleGenerativeAiHttpRequestConfig({
+      const isVertex = providerKey === "google-vertex";
+      let requestUrl: string;
+      let requestHeaders: Record<string, string>;
+      let allowPrivateNetwork: boolean | undefined;
+      let dispatcherPolicy: unknown;
+
+      if (isVertex) {
+        const project = resolveGoogleVertexProject();
+        const location = resolveGoogleVertexLocation();
+        const configuredBaseUrl = req.cfg?.models?.providers?.["google-vertex"]?.baseUrl;
+        const origin = resolveGoogleVertexBaseOrigin({ baseUrl: configuredBaseUrl }, location);
+        requestUrl = `${origin}/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
+        const configuredHeaders = req.cfg?.models?.providers?.["google-vertex"]?.request?.headers;
+        requestHeaders = await buildGoogleVertexHeaders(
+          { headers: configuredHeaders },
+          auth.apiKey,
+          undefined,
+          fetch,
+        );
+        allowPrivateNetwork =
+          req.cfg?.models?.providers?.["google-vertex"]?.request?.allowPrivateNetwork;
+        dispatcherPolicy = req.cfg?.models?.providers?.["google-vertex"]?.request?.dispatcherPolicy;
+      } else {
+        const config = resolveGoogleGenerativeAiHttpRequestConfig({
           apiKey: auth.apiKey,
           baseUrl: req.cfg?.models?.providers?.google?.baseUrl,
           request: sanitizeConfiguredModelProviderRequest(
@@ -190,6 +222,12 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
           capability: "image",
           transport: "http",
         });
+        requestUrl = `${config.baseUrl}/models/${model}:generateContent`;
+        requestHeaders = config.headers;
+        allowPrivateNetwork = config.allowPrivateNetwork;
+        dispatcherPolicy = config.dispatcherPolicy;
+      }
+
       const imageConfig = mapSizeToImageConfig(req.size);
       const inputParts = (req.inputImages ?? []).map((image) => ({
         inlineData: {
@@ -204,8 +242,8 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       };
 
       const { response: res, release } = await postJsonRequest({
-        url: `${baseUrl}/models/${model}:generateContent`,
-        headers,
+        url: requestUrl,
+        headers: requestHeaders,
         body: {
           contents: [
             {

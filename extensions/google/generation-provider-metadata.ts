@@ -18,9 +18,10 @@ export const GOOGLE_VIDEO_MAX_DURATION_SECONDS =
 
 function isGoogleProviderConfigured(
   ctx: { agentDir?: string } | VideoGenerationProviderConfiguredContext,
+  providerId: string = "google",
 ): boolean {
   return isProviderApiKeyConfigured({
-    provider: "google",
+    provider: providerId,
     agentDir: ctx.agentDir,
   });
 }
@@ -34,7 +35,7 @@ export function createGoogleMusicGenerationProviderMetadata(): Omit<
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_MUSIC_MODEL,
     models: [DEFAULT_GOOGLE_MUSIC_MODEL, GOOGLE_PRO_MUSIC_MODEL],
-    isConfigured: isGoogleProviderConfigured,
+    isConfigured: (ctx) => isGoogleProviderConfigured(ctx, "google"),
     capabilities: {
       generate: {
         maxTracks: 1,
@@ -62,13 +63,12 @@ export function createGoogleMusicGenerationProviderMetadata(): Omit<
   };
 }
 
-export function createGoogleVideoGenerationProviderMetadata(): Omit<
-  VideoGenerationProvider,
-  "generateVideo"
-> {
+export function createGoogleVideoGenerationProviderMetadata(
+  providerId: "google" | "google-vertex" = "google",
+): Omit<VideoGenerationProvider, "generateVideo"> {
   return {
-    id: "google",
-    label: "Google",
+    id: providerId,
+    label: providerId === "google-vertex" ? "Google Vertex AI" : "Google",
     defaultModel: DEFAULT_GOOGLE_VIDEO_MODEL,
     models: [
       DEFAULT_GOOGLE_VIDEO_MODEL,
@@ -78,7 +78,7 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
       "veo-3.0-generate-001",
       "veo-2.0-generate-001",
     ],
-    isConfigured: isGoogleProviderConfigured,
+    isConfigured: (ctx) => isGoogleProviderConfigured(ctx, providerId),
     capabilities: {
       generate: {
         maxVideos: 1,
