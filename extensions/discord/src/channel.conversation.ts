@@ -53,7 +53,8 @@ export function matchDiscordAcpConversation(params: {
     params.bindingConversationId === params.parentConversationId
   ) {
     return {
-      conversationId: params.parentConversationId,
+      conversationId: params.conversationId,
+      parentConversationId: params.parentConversationId,
       matchPriority: 1,
     };
   }

@@ -231,8 +231,32 @@ describe("resetAcpSessionInPlace", () => {
     expect(managerMocks.updateSessionRuntimeOptions).not.toHaveBeenCalled();
   });
 
-  it("falls back to close-only resets when no configured binding exists", async () => {
+  it("clears metadata for configured-format session keys even when config lookup misses", async () => {
     const sessionKey = "agent:claude:acp:binding:demo-binding:default:9373ab192b2317f4";
+    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
+      acp: {
+        agent: "claude",
+        mode: "persistent",
+        backend: "acpx",
+      },
+    });
+
+    const result = await resetAcpSessionInPlace({
+      cfg: baseCfg,
+      sessionKey,
+      reason: "reset",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey).toHaveBeenCalledTimes(1);
+    const closeArgs = expectCloseArgs();
+    expect(closeArgs.sessionKey).toBe(sessionKey);
+    expect(closeArgs.clearMeta).toBe(true);
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+  });
+
+  it("does not clear metadata for dynamic ACP session keys outside the configured format", async () => {
+    const sessionKey = "agent:claude:acp:sms:+155****0123";
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
       acp: {
         agent: "claude",
