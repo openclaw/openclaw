@@ -126,6 +126,61 @@ describe("live plugin tool assertions", () => {
     }
   });
 
+  it("rejects markers that only appear in error payload text", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+    const sessionsDir = path.join(root, "state", "agents", "main", "sessions");
+
+    try {
+      writeJson(path.join(root, "agent.json"), {
+        payloads: [
+          { isError: true, text: "live-plugin-slug" },
+          { text: "regular reply without the expected marker" },
+        ],
+      });
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(
+        path.join(sessionsDir, "session.jsonl"),
+        ["e2e_slug_probe", "live-plugin-slug"].join("\n"),
+        "utf8",
+      );
+
+      const result = runAssertion(root);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("live agent reply did not contain tool slug");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects non-JSON stdout even when a later object contains the slug", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+    const sessionsDir = path.join(root, "state", "agents", "main", "sessions");
+
+    try {
+      writeFileSync(
+        path.join(root, "agent.json"),
+        ["warning before json", JSON.stringify({ payloads: [{ text: "live-plugin-slug" }] })].join(
+          "\n",
+        ),
+        "utf8",
+      );
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(
+        path.join(sessionsDir, "session.jsonl"),
+        ["e2e_slug_probe", "live-plugin-slug"].join("\n"),
+        "utf8",
+      );
+
+      const result = runAssertion(root);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("Unexpected token");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("bounds agent output diagnostics on missing reply slug", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
 

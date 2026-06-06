@@ -681,6 +681,9 @@ export function buildQaRuntimeParityReport(params: {
   const totalScenarios = params.summary.counts?.total ?? scenarios.length;
   const passedScenarios = scenarios.filter((scenario) => scenario.status === "pass").length;
   const failedScenarios = scenarios.filter((scenario) => scenario.status === "fail").length;
+  if (scenarios.length === 0 || totalScenarios <= 0) {
+    failures.push("Runtime parity report has no executed scenarios.");
+  }
 
   return {
     runtimePair,

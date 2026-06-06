@@ -4,7 +4,7 @@ import { runGatewaySmoke } from "../../scripts/dev/gateway-smoke.js";
 
 describe("gateway-smoke", () => {
   function createSmokeDeps(
-    responses: Record<string, { error?: string; ok: boolean }>,
+    responses: Record<string, { error?: string; ok: boolean } & Record<string, unknown>>,
     calls: Array<{ method: string; timeout?: number }> = [],
   ) {
     const stdout: string[] = [];
@@ -26,10 +26,12 @@ describe("gateway-smoke", () => {
             },
             request: async (method: string, _params?: unknown, timeout?: number) => {
               calls.push({ method, timeout });
+              const response = responses[method];
               return {
                 id: method,
-                ok: responses[method]?.ok ?? false,
-                error: responses[method]?.error,
+                ...response,
+                ok: response?.ok ?? false,
+                error: response?.error,
                 type: "res",
               };
             },
@@ -81,7 +83,7 @@ describe("gateway-smoke", () => {
     const fake = createSmokeDeps({
       connect: { ok: true },
       health: { ok: true },
-      "chat.history": { ok: true },
+      "chat.history": { ok: true, payload: { messages: [] } },
     });
 
     const code = await runGatewaySmoke(
@@ -98,6 +100,46 @@ describe("gateway-smoke", () => {
     ]);
     expect(fake.stdout).toEqual(["ok: connected + health + chat.history"]);
     expect(fake.stderr).toEqual([]);
+  });
+
+  it("fails when chat history success is missing message evidence", async () => {
+    const fake = createSmokeDeps({
+      connect: { ok: true },
+      health: { ok: true },
+      "chat.history": { ok: true },
+    });
+
+    const code = await runGatewaySmoke(
+      { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" },
+      fake.deps,
+    );
+
+    expect(code).toBe(4);
+    expect(fake.closed).toBe(1);
+    expect(fake.calls).toEqual([
+      { method: "connect", timeout: undefined },
+      { method: "health", timeout: undefined },
+      { method: "chat.history", timeout: 15000 },
+    ]);
+    expect(fake.stdout).toEqual([]);
+    expect(fake.stderr).toEqual(["chat.history failed: missing messages array"]);
+  });
+
+  it("fails when chat history messages are not an array", async () => {
+    const fake = createSmokeDeps({
+      connect: { ok: true },
+      health: { ok: true },
+      "chat.history": { ok: true, payload: { messages: {} } },
+    });
+
+    const code = await runGatewaySmoke(
+      { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" },
+      fake.deps,
+    );
+
+    expect(code).toBe(4);
+    expect(fake.closed).toBe(1);
+    expect(fake.stderr).toEqual(["chat.history failed: missing messages array"]);
   });
 
   it("fails after connect when health is unavailable", async () => {

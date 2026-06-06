@@ -455,7 +455,145 @@ export function readReportInputs(entries) {
 }
 
 function readGroupedReport(reportPath) {
-  return JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  validateGroupedReport(report, reportPath);
+  return report;
+}
+
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function validateCounter(counter, reportPath, fieldName, index = null) {
+  const label = index === null ? fieldName : `${fieldName}[${index}]`;
+  if (!counter || typeof counter !== "object" || Array.isArray(counter)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: ${label} must be an object`,
+    );
+  }
+  for (const key of ["durationMs", "fileCount", "testCount"]) {
+    if (!isFiniteNumber(counter[key])) {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: ${label}.${key} must be a finite number`,
+      );
+    }
+  }
+}
+
+function validateCounterRows(report, reportPath, fieldName) {
+  const rows = report[fieldName];
+  if (!Array.isArray(rows)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: ${fieldName} must be an array`,
+    );
+  }
+  rows.forEach((row, index) => {
+    validateCounter(row, reportPath, fieldName, index);
+    if (typeof row.key !== "string" || !row.key) {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: ${fieldName}[${index}].key must be a non-empty string`,
+      );
+    }
+  });
+}
+
+function validateTopFileRows(report, reportPath) {
+  if (!Array.isArray(report.topFiles)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: topFiles must be an array`,
+    );
+  }
+  report.topFiles.forEach((row, index) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: topFiles[${index}] must be an object`,
+      );
+    }
+    for (const key of ["config", "file", "group"]) {
+      if (typeof row[key] !== "string" || !row[key]) {
+        throw new Error(
+          `[test-group-report] invalid grouped report ${reportPath}: topFiles[${index}].${key} must be a non-empty string`,
+        );
+      }
+    }
+    for (const key of ["durationMs", "testCount"]) {
+      if (!isFiniteNumber(row[key])) {
+        throw new Error(
+          `[test-group-report] invalid grouped report ${reportPath}: topFiles[${index}].${key} must be a finite number`,
+        );
+      }
+    }
+  });
+}
+
+function validateRunRows(report, reportPath) {
+  if (!Array.isArray(report.runs)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: runs must be an array`,
+    );
+  }
+  report.runs.forEach((row, index) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: runs[${index}] must be an object`,
+      );
+    }
+    if (typeof row.config !== "string" && typeof row.label !== "string") {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: runs[${index}] must include config or label`,
+      );
+    }
+    if (!isFiniteNumber(row.elapsedMs) || !isFiniteNumber(row.status)) {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: runs[${index}] must include finite elapsedMs and status`,
+      );
+    }
+    if (
+      row.maxRssBytes !== null &&
+      row.maxRssBytes !== undefined &&
+      !isFiniteNumber(row.maxRssBytes)
+    ) {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: runs[${index}].maxRssBytes must be finite when present`,
+      );
+    }
+  });
+}
+
+function validateGroupedReport(report, reportPath) {
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: report must be an object`,
+    );
+  }
+  if (report.command !== "test-group-report") {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: command must be test-group-report`,
+    );
+  }
+  if (!["area", "folder", "top"].includes(report.groupBy)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: groupBy must be area, folder, or top`,
+    );
+  }
+  validateCounter(report.totals, reportPath, "totals");
+  validateCounterRows(report, reportPath, "groups");
+  validateCounterRows(report, reportPath, "configs");
+  validateTopFileRows(report, reportPath);
+  if (!Array.isArray(report.slowTests)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: slowTests must be an array`,
+    );
+  }
+  validateRunRows(report, reportPath);
+  if (
+    report.groups.length === 0 &&
+    report.configs.length === 0 &&
+    report.topFiles.length === 0 &&
+    report.runs.length === 0
+  ) {
+    throw new Error(`[test-group-report] invalid grouped report ${reportPath}: no evidence rows`);
+  }
 }
 
 /**
@@ -623,6 +761,7 @@ async function runReportPlans(params) {
           console.error(
             `[test-group-report] missing JSON report for failed config; see ${run.logPath}`,
           );
+          exitCode = 1;
           includeEntry = false;
         } else {
           console.error(
@@ -724,6 +863,10 @@ async function main() {
     process.exit(1);
   }
   const reportInputs = reportInputsResult.reports;
+  if (reportInputs.length === 0) {
+    console.error("[test-group-report] no valid JSON reports were available");
+    process.exit(1);
+  }
   const report = buildGroupedTestReport({
     groupBy: args.groupBy,
     maxTestMs: args.maxTestMs,

@@ -863,6 +863,27 @@ status=done`,
     expect(report.scenarios[0]?.status).toBe("fail");
   });
 
+  it("fails runtime parity reports with no executed scenarios", () => {
+    const report = buildQaRuntimeParityReport({
+      summary: {
+        scenarios: [],
+        counts: {
+          total: 0,
+          passed: 0,
+          failed: 0,
+        },
+        run: {
+          providerMode: "live-frontier",
+          runtimePair: ["openclaw", "codex"],
+        },
+      },
+      comparedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.failures).toContain("Runtime parity report has no executed scenarios.");
+  });
+
   it("renders a readable runtime parity markdown report", () => {
     const report = renderQaRuntimeParityMarkdownReport(
       buildQaRuntimeParityReport({

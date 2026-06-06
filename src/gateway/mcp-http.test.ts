@@ -105,6 +105,7 @@ import {
   ensureMcpLoopbackServer,
   startMcpLoopbackServer,
 } from "./mcp-http.js";
+import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 
 let server: Awaited<ReturnType<typeof startMcpLoopbackServer>> | undefined;
 
@@ -574,6 +575,43 @@ describe("mcp loopback server", () => {
     expect(getScopedToolsCall(1).inboundEventKind).toBe("room_event");
     expect(getScopedToolsCall(2).sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(getScopedToolsCall(3).currentInboundAudio).toBe(true);
+  });
+
+  it("caps loopback tool cache cardinality by evicting oldest contexts", () => {
+    const cache = new McpLoopbackToolCache();
+    const baseParams = {
+      accountId: undefined,
+      cfg: { session: { mainKey: "main" } } as never,
+      currentChannelId: "telegram:chat123",
+      currentInboundAudio: undefined,
+      currentMessageId: undefined,
+      currentThreadTs: "thread-1",
+      inboundEventKind: "room_event",
+      messageProvider: "telegram",
+      senderIsOwner: true,
+      sessionKey: "agent:main:telegram:group:chat123",
+      sourceReplyDeliveryMode: "message_tool_only",
+    } satisfies Parameters<McpLoopbackToolCache["resolve"]>[0];
+
+    for (let index = 0; index < 257; index += 1) {
+      cache.resolve({
+        ...baseParams,
+        currentMessageId: `message-${index}`,
+      });
+    }
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(257);
+
+    cache.resolve({
+      ...baseParams,
+      currentMessageId: "message-0",
+    });
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(258);
+
+    cache.resolve({
+      ...baseParams,
+      currentMessageId: "message-256",
+    });
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(258);
   });
 
   it("adds empty properties for object schemas that omit properties", async () => {

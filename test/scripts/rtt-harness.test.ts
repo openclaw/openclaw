@@ -526,6 +526,48 @@ describe("RTT harness", () => {
     expect(result.rtt).toEqual({ canaryMs: 5948, mentionReplyMs: undefined });
   });
 
+  it("marks malformed RTT summaries as failed results", () => {
+    const baseParams = {
+      artifacts: {
+        rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
+        rawReportPath: "runs/run/raw/telegram-qa-report.md",
+        rawSummaryPath: "runs/run/raw/telegram-qa-summary.json",
+        resultPath: "runs/run/result.json",
+      },
+      finishedAt: new Date("2026-05-01T00:00:12.000Z"),
+      providerMode: "mock-openai" as const,
+      runId: "run",
+      scenarios: ["telegram-mentioned-message-reply"],
+      spec: "openclaw@latest",
+      startedAt: new Date("2026-05-01T00:00:00.000Z"),
+      version: "2026.4.29",
+    };
+
+    for (const rawSummary of [
+      { scenarios: [] },
+      { scenarios: [{ id: "telegram-canary", rttMs: 5948, status: "pass" }] },
+      {
+        scenarios: [
+          { id: "telegram-canary", rttMs: 5948, status: "pass" },
+          { id: "telegram-mentioned-message-reply", status: "skipped" },
+        ],
+      },
+      {
+        scenarios: [
+          { id: "telegram-canary", rttMs: 5948, status: "pass" },
+          {
+            id: "telegram-mentioned-message-reply",
+            samples: [],
+            stats: { failed: 0, passed: 0, total: 0 },
+            status: "pass",
+          },
+        ],
+      },
+    ]) {
+      expect(buildRttResult({ ...baseParams, rawSummary }).run.status).toBe("fail");
+    }
+  });
+
   it("appends JSONL rows", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-test-"));
     tempDirs.push(tempDir);
