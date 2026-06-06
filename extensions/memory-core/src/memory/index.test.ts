@@ -562,6 +562,76 @@ describe("memory index", () => {
     }
   });
 
+  it("reopens a stale handle after another manager atomically rebuilds missing metadata", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    const dbPath = path.join(workspaceDir, "index-missing-meta-external-rebuild.sqlite");
+    const cfg = createCfg({
+      storePath: dbPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const liveManager = await getFreshManager(cfg);
+    try {
+      await liveManager.sync({ reason: "test", force: true });
+      (
+        liveManager as unknown as {
+          db: { exec: (sql: string) => void };
+        }
+      ).db.exec(`DELETE FROM meta WHERE key = 'memory_index_meta_v1'`);
+
+      expect(liveManager.status().custom?.indexIdentity).toEqual({
+        status: "missing",
+        reason: "index metadata is missing",
+      });
+
+      const cliManager = await getFreshManager(cfg, "cli");
+      try {
+        await cliManager.sync({ reason: "cli", force: true });
+        expect(cliManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      } finally {
+        await cliManager.close?.();
+      }
+
+      expect(liveManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      const results = await liveManager.search("alpha");
+
+      expect(results[0]?.path).toContain("memory/2026-01-12.md");
+    } finally {
+      await liveManager.close?.();
+    }
+  });
+
+  it("reopens a stale handle after another manager atomically rebuilds valid metadata", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    const dbPath = path.join(workspaceDir, "index-valid-meta-external-rebuild.sqlite");
+    const cfg = createCfg({
+      storePath: dbPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const liveManager = await getFreshManager(cfg);
+    try {
+      await liveManager.sync({ reason: "test", force: true });
+      expect(liveManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+      await fs.writeFile(
+        path.join(memoryDir, "2026-01-12.md"),
+        "# Log\nBeta memory line.\nZebra memory line.",
+      );
+      const cliManager = await getFreshManager(cfg, "cli");
+      try {
+        await cliManager.sync({ reason: "cli", force: true });
+        expect(cliManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      } finally {
+        await cliManager.close?.();
+      }
+
+      const results = await liveManager.search("beta");
+
+      expect(results[0]?.snippet).toContain("Beta memory line");
+    } finally {
+      await liveManager.close?.();
+    }
+  });
+
   it("does not search stale provider rows after embeddings become unavailable", async () => {
     const dbPath = path.join(workspaceDir, "index-provider-unavailable-cutover.sqlite");
     const oldCfg = createCfg({
