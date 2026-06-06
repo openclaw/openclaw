@@ -335,6 +335,40 @@ describe("runMessageAction media behavior", () => {
     });
   });
 
+  it("hydrates buffer-only send attachments into a temporary media file", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        channel: "workspace",
+        target: "12345678",
+        buffer: onePixelPng.toString("base64"),
+        filename: "pixel.png",
+        contentType: "image/png",
+      },
+    });
+
+    expect(result.kind).toBe("send");
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    expect(typeof sendArgs.mediaUrl).toBe("string");
+    expect(String(sendArgs.mediaUrl)).toMatch(/outbound-buffer-media/);
+    await expect(fs.readFile(String(sendArgs.mediaUrl))).resolves.toEqual(onePixelPng);
+    expect(sendArgs.payload).toMatchObject({
+      text: "",
+      mediaUrl: String(sendArgs.mediaUrl),
+    });
+  });
+
   it("sends structured mediaUrls arrays", async () => {
     setActivePluginRegistry(
       createTestRegistry([

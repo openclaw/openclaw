@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 // Message-action runner normalizes tool params, resolves channel/target/media,
 // applies policies, and dispatches send/poll/plugin actions.
 import {
@@ -33,8 +36,11 @@ import {
   normalizeMessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
+import { canonicalizeBase64 } from "../../media/base64.js";
+import { basenameFromAnyPath } from "../../media/file-name.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { extensionForMime } from "../../media/mime.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
@@ -49,6 +55,7 @@ import {
   type GatewayClientName,
 } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
+import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
@@ -466,6 +473,51 @@ type SendPayloadParts = {
   bestEffort?: boolean;
   silent?: boolean;
 };
+
+async function materializeBufferBackedSendMedia(params: {
+  actionParams: Record<string, unknown>;
+  sandboxRoot?: string;
+}): Promise<void> {
+  const existingMedia =
+    readStringParam(params.actionParams, "media", { trim: false }) ??
+    readStringParam(params.actionParams, "mediaUrl", { trim: false }) ??
+    readStringParam(params.actionParams, "path", { trim: false }) ??
+    readStringParam(params.actionParams, "filePath", { trim: false }) ??
+    readStringParam(params.actionParams, "fileUrl", { trim: false });
+  if (existingMedia) {
+    return;
+  }
+
+  const rawBuffer = readStringParam(params.actionParams, "buffer", { trim: false });
+  if (!rawBuffer) {
+    return;
+  }
+  const canonicalBase64 = canonicalizeBase64(rawBuffer);
+  if (!canonicalBase64) {
+    throw new Error("send buffer must be valid base64");
+  }
+
+  const filenameHint =
+    readStringParam(params.actionParams, "filename", { trim: false }) ?? "attachment";
+  const contentType =
+    readStringParam(params.actionParams, "contentType") ??
+    readStringParam(params.actionParams, "mimeType") ??
+    undefined;
+  const baseName = basenameFromAnyPath(filenameHint)?.trim() || "attachment";
+  const normalizedName = path.extname(baseName)
+    ? baseName
+    : `${baseName}.${extensionForMime(contentType) ?? "bin"}`;
+  const rootDir = params.sandboxRoot?.trim() || resolvePreferredOpenClawTmpDir();
+  const outputDir = path.join(rootDir, "outbound-buffer-media");
+  await fs.mkdir(outputDir, { recursive: true });
+  const outputPath = path.join(outputDir, `${randomUUID()}-${normalizedName}`);
+  await fs.writeFile(outputPath, Buffer.from(canonicalBase64, "base64"));
+  params.actionParams.buffer = canonicalBase64;
+  params.actionParams.media = outputPath;
+  if (!readStringParam(params.actionParams, "filename", { trim: false })) {
+    params.actionParams.filename = normalizedName;
+  }
+}
 
 function updateSendPayloadPartsFromReplyPayload(
   parts: SendPayloadParts,
@@ -934,6 +986,10 @@ async function buildSendPayloadParts(params: {
       }
     }
   }
+  await materializeBufferBackedSendMedia({
+    actionParams,
+    sandboxRoot: input.sandboxRoot,
+  });
   const mediaHint =
     readStringParam(actionParams, "media", { trim: false }) ??
     readStringParam(actionParams, "mediaUrl", { trim: false }) ??
