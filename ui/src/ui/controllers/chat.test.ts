@@ -1935,6 +1935,56 @@ describe("sendChatMessage", () => {
     });
   });
 
+  it("clears the local run when the send acks a terminal timeout", async () => {
+    const request = vi.fn((_method: string, params: { idempotencyKey: string }) =>
+      Promise.resolve({ runId: params.idempotencyKey, status: "timeout" }),
+    );
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "aborted before dispatch");
+
+    expect(result).toMatch(UUID_V4_RE);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    const runState = state as ChatState & {
+      chatRunStatus?: unknown;
+      lastLocalTerminalReconcile?: unknown;
+    };
+    expect(runState.chatRunStatus).toMatchObject({
+      phase: "interrupted",
+      runId: result,
+      sessionKey: "main",
+    });
+    expect(runState.lastLocalTerminalReconcile).toMatchObject({
+      phase: "interrupted",
+      runId: result,
+      sessionKey: "main",
+      sessionStatus: "killed",
+    });
+  });
+
+  it("preserves terminal timeout acks from Skill Workshop revision sends", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-revision", status: "timeout" });
+    const state = createState({
+      sessionKey: "global",
+      currentSessionId: "session-visible",
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await requestSkillWorkshopRevisionChatSend(state, {
+      proposalId: "support-file-sampler-20260531-68207b7b7f",
+      instructions: "Make the support files 5",
+      runId: "run-revision",
+    });
+
+    expect(result).toEqual({ runId: "run-revision", status: "timeout" });
+  });
+
   it("serializes non-image chat attachments as files", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
     const state = createState({

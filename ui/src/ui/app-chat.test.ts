@@ -1334,6 +1334,43 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("does not seed refreshSessionsAfterChat for a terminal timeout ack on a refreshing send", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "timeout" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/reset",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    const runId = String(payload.idempotencyKey);
+    const runState = host as ChatHost & {
+      chatStreamStartedAt?: number | null;
+      lastLocalTerminalReconcile?: unknown;
+    };
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(runState.chatStreamStartedAt).toBeNull();
+    expect(runState.lastLocalTerminalReconcile).toMatchObject({
+      phase: "interrupted",
+      runId,
+      sessionKey: "agent:main",
+      sessionStatus: "killed",
+    });
+    expect(host.refreshSessionsAfterChat.size).toBe(0);
+  });
+
   it("records visible send timing phases for a normal chat send", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
