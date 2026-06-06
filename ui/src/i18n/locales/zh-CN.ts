@@ -187,9 +187,12 @@ export const zh_CN: TranslationMap = {
     goal: "目标",
     goalNote: "目标备注",
     thinking: "思考",
+    thinkingTooltip:
+      "Maps to provider reasoning_effort. Only effective when the model supports it (compat.supportsReasoningEffort).",
     fast: "快速",
     verbose: "详细",
     reasoning: "推理",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "操作",
     addToWorkboard: "添加到 Workboard",
     openWorkboardCard: "打开 Workboard 卡片",

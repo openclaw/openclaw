@@ -1075,4 +1075,37 @@ describe("sessions view", () => {
     expect(emptyCell?.textContent?.trim()).toBe("No sessions found.");
     expect(emptyCell?.querySelector("button")).toBeNull();
   });
+
+  it("renders explanatory tooltips on Thinking and Reasoning dropdowns", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:tooltip-check:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            thinkingLevel: "high",
+            reasoningLevel: "stream",
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const headers = Array.from(container.querySelectorAll<HTMLTableCellElement>("thead th"));
+    const thinkingHeader = headers.find((cell) => cell.textContent?.trim() === "Thinking");
+    const reasoningHeader = headers.find((cell) => cell.textContent?.trim() === "Reasoning");
+    expect(thinkingHeader?.getAttribute("title")).toContain("reasoning_effort");
+    expect(reasoningHeader?.getAttribute("title")).toContain("display");
+
+    const selects = Array.from(container.querySelectorAll<HTMLSelectElement>("tbody select"));
+    const thinkingSelect = selects[0];
+    const reasoningSelect = selects[3];
+    expect(thinkingSelect?.getAttribute("title")).toContain("reasoning_effort");
+    expect(thinkingSelect?.getAttribute("aria-label")).toContain("reasoning_effort");
+    expect(reasoningSelect?.getAttribute("title")).toContain("display");
+    expect(reasoningSelect?.getAttribute("aria-label")).toContain("display");
+  });
 });

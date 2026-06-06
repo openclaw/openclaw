@@ -188,9 +188,12 @@ export const ar: TranslationMap = {
     goal: "الهدف",
     goalNote: "ملاحظة الهدف",
     thinking: "التفكير",
+    thinkingTooltip:
+      "Maps to provider reasoning_effort. Only effective when the model supports it (compat.supportsReasoningEffort).",
     fast: "سريع",
     verbose: "مطوّل",
     reasoning: "الاستدلال",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "الإجراءات",
     addToWorkboard: "إضافة إلى Workboard",
     openWorkboardCard: "فتح بطاقة Workboard",

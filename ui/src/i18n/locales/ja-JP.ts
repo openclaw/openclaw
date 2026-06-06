@@ -192,9 +192,12 @@ export const ja_JP: TranslationMap = {
     goal: "目標",
     goalNote: "目標メモ",
     thinking: "Thinking",
+    thinkingTooltip:
+      "Maps to provider reasoning_effort. Only effective when the model supports it (compat.supportsReasoningEffort).",
     fast: "高速",
     verbose: "詳細",
     reasoning: "推論",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "アクション",
     addToWorkboard: "Workboardに追加",
     openWorkboardCard: "Workboardカードを開く",

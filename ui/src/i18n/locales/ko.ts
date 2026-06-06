@@ -188,9 +188,12 @@ export const ko: TranslationMap = {
     goal: "목표",
     goalNote: "목표 메모",
     thinking: "생각 수준",
+    thinkingTooltip:
+      "Maps to provider reasoning_effort. Only effective when the model supports it (compat.supportsReasoningEffort).",
     fast: "빠름",
     verbose: "상세",
     reasoning: "추론",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "작업",
     addToWorkboard: "Workboard에 추가",
     openWorkboardCard: "Workboard 카드 열기",

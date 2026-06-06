@@ -189,9 +189,12 @@ export const vi: TranslationMap = {
     goal: "Mục tiêu",
     goalNote: "Ghi chú mục tiêu",
     thinking: "Suy nghĩ",
+    thinkingTooltip:
+      "Maps to provider reasoning_effort. Only effective when the model supports it (compat.supportsReasoningEffort).",
     fast: "Nhanh",
     verbose: "Chi tiết",
     reasoning: "Suy luận",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "Hành động",
     addToWorkboard: "Thêm vào Workboard",
     openWorkboardCard: "Mở thẻ Workboard",

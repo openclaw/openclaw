@@ -189,9 +189,12 @@ export const es: TranslationMap = {
     goal: "Objetivo",
     goalNote: "Nota del objetivo",
     thinking: "Pensamiento",
+    thinkingTooltip:
+      "Maps to provider reasoning_effort. Only effective when the model supports it (compat.supportsReasoningEffort).",
     fast: "Rápido",
     verbose: "Detallado",
     reasoning: "Razonamiento",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "Acciones",
     addToWorkboard: "Agregar al Workboard",
     openWorkboardCard: "Abrir tarjeta de Workboard",
