@@ -528,6 +528,24 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads[0]?.text).not.toContain("/tmp/demo.txt");
   });
 
+  it("preserves the raw edit mismatch error when verbose mode is full", () => {
+    const rawError =
+      "Could not find the exact text in /tmp/demo.txt. The old text must match exactly including all whitespace and newlines.";
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "edit",
+        error: rawError,
+      },
+      verboseLevel: "full",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Edit",
+      detail: rawError,
+      absentDetail: "exact text not found",
+    });
+  });
+
   it("keeps non-exec mutating tool failures visible", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "write", error: "permission denied" },

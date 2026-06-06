@@ -549,7 +549,9 @@ export function buildEmbeddedRunPayloads(params: {
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
         { markdown: useMarkdown },
       );
-      const summarizedDetail = summarizeToolErrorForUi(params.lastToolError);
+      const summarizedDetail = !warningPolicy.includeDetails
+        ? summarizeToolErrorForUi(params.lastToolError)
+        : undefined;
       const errorSuffix = summarizedDetail
         ? `: ${summarizedDetail}`
         : warningPolicy.includeDetails && params.lastToolError.error
