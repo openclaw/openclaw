@@ -15,6 +15,7 @@ function pickWatchdogProfile(
   backend: CliBackendConfig,
   useResume: boolean,
   trigger?: EmbeddedRunTrigger,
+  hasExplicitRunTimeout?: boolean,
 ): {
   noOutputTimeoutMs?: number;
   noOutputTimeoutRatio: number;
@@ -25,7 +26,7 @@ function pickWatchdogProfile(
     ? backend.reliability?.watchdog?.resume
     : backend.reliability?.watchdog?.fresh;
   const defaults =
-    trigger === "cron" && useResume && !configured
+    useResume && !configured && (trigger === "cron" || hasExplicitRunTimeout === true)
       ? CLI_FRESH_WATCHDOG_DEFAULTS
       : useResume
         ? CLI_RESUME_WATCHDOG_DEFAULTS
@@ -71,8 +72,19 @@ export function resolveCliNoOutputTimeoutMs(params: {
   timeoutMs: number;
   useResume: boolean;
   trigger?: EmbeddedRunTrigger;
+  runTimeoutOverrideMs?: number;
+  hasConfiguredAgentTimeout?: boolean;
 }): number {
-  const profile = pickWatchdogProfile(params.backend, params.useResume, params.trigger);
+  const hasExplicitRunTimeout =
+    typeof params.runTimeoutOverrideMs === "number" &&
+    Number.isFinite(params.runTimeoutOverrideMs) &&
+    params.runTimeoutOverrideMs > 0;
+  const profile = pickWatchdogProfile(
+    params.backend,
+    params.useResume,
+    params.trigger,
+    hasExplicitRunTimeout || params.hasConfiguredAgentTimeout === true,
+  );
   // Keep watchdog below global timeout in normal cases.
   const cap = Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, params.timeoutMs - 1_000);
   if (profile.noOutputTimeoutMs !== undefined) {
