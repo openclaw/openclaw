@@ -25,6 +25,7 @@ import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import { resolveConfiguredEmbeddingProviderId } from "./embedding-provider-runtime.js";
 import {
   collectConfiguredSpeechProviderIds,
   normalizeConfiguredSpeechProviderIdForStartup,
@@ -491,15 +492,19 @@ const MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS: ReadonlySet<string> = new Set(
   "none",
 ]);
 
-function normalizeExplicitMemoryEmbeddingProviderId(value: unknown): string | undefined {
+function normalizeMemoryEmbeddingProviderIdValue(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized || MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS.has(normalized)) {
-    return undefined;
-  }
-  return normalized;
+  return normalized || undefined;
+}
+
+function normalizeExplicitMemoryEmbeddingProviderId(value: unknown): string | undefined {
+  const normalized = normalizeMemoryEmbeddingProviderIdValue(value);
+  return normalized && !MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS.has(normalized)
+    ? normalized
+    : undefined;
 }
 
 function readMemorySearchEnabled(
@@ -536,6 +541,12 @@ function resolveMemoryEmbeddingProviderOwnerIds(
   config: OpenClawConfig,
 ): string[] {
   const ownerIds = [providerId];
+  const genericOwnerId = normalizeOptionalLowercaseString(
+    resolveConfiguredEmbeddingProviderId(providerId, config),
+  );
+  if (genericOwnerId && genericOwnerId !== providerId) {
+    ownerIds.push(genericOwnerId);
+  }
   const ownerApi = normalizeOptionalLowercaseString(
     findNormalizedProviderValue(config.models?.providers, providerId)?.api,
   );
@@ -556,20 +567,28 @@ function resolveEffectiveMemoryEmbeddingProviderEntries(
   if (!enabled) {
     return [];
   }
+  const rawProvider = normalizeMemoryEmbeddingProviderIdValue(
+    override?.provider ?? defaults?.provider,
+  );
+  const effectiveProvider = rawProvider === "auto" || !rawProvider ? "openai" : rawProvider;
+  if (effectiveProvider === "none") {
+    return [];
+  }
   const entries: Array<{
     configuredId: string;
     source: MemoryEmbeddingStartupProviderSource;
   }> = [];
-  const provider = normalizeExplicitMemoryEmbeddingProviderId(
-    override?.provider ?? defaults?.provider,
-  );
+  const provider =
+    rawProvider && !MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS.has(rawProvider)
+      ? rawProvider
+      : undefined;
   if (provider) {
     entries.push({ configuredId: provider, source: "provider" });
   }
   const fallback = normalizeExplicitMemoryEmbeddingProviderId(
     override?.fallback ?? defaults?.fallback ?? "none",
   );
-  if (fallback) {
+  if (fallback && fallback !== effectiveProvider) {
     entries.push({ configuredId: fallback, source: "fallback" });
   }
   return entries;

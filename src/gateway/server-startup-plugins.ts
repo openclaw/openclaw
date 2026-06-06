@@ -3,6 +3,7 @@ import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectUnregisteredConfiguredMemoryEmbeddingProviders } from "../plugins/channel-plugin-ids.js";
+import { listRegisteredEmbeddingProviders } from "../plugins/embedding-providers.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
@@ -208,6 +209,7 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
     [
       ...(params.pluginRegistry.memoryEmbeddingProviders ?? []),
       ...(params.pluginRegistry.embeddingProviders ?? []),
+      ...listRegisteredEmbeddingProviders().map((entry) => ({ provider: entry.adapter })),
     ].map((entry) => entry.provider.id),
   );
   const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({

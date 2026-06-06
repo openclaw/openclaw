@@ -1041,6 +1041,51 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "generic-embedding", "memory-core"],
     ],
     [
+      "does not load plugin owners for core generic memory embedding providers",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "openai-compatible" },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "does not load plugin owners for custom providers backed by core generic embeddings",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "tenant-embeddings" },
+          },
+        },
+        models: {
+          providers: {
+            "tenant-embeddings": {
+              api: "openai-responses",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "ignores memory embedding fallbacks when primary provider is fts-only",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "none", fallback: "openai" },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
       "ignores sentinel memory embedding providers that no plugin owns",
       {
         channels: {},

@@ -30,7 +30,7 @@ export function listEmbeddingProviders(cfg?: OpenClawConfig): EmbeddingProviderA
   });
 }
 
-function resolveConfiguredEmbeddingProviderId(
+export function resolveConfiguredEmbeddingProviderId(
   providerId: string,
   cfg?: OpenClawConfig,
 ): string | undefined {
