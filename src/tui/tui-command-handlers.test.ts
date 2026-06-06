@@ -1148,4 +1148,35 @@ describe("tui command handlers", () => {
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
     expect(closeOverlay).toHaveBeenCalledTimes(1);
   });
+
+  it("renders loading feedback before /models listModels resolves (issue #90720)", async () => {
+    let resolveList: (value: Array<{ provider: string; id: string; name?: string }>) => void =
+      () => {
+        throw new Error("listModels promise resolver was not initialized");
+      };
+    const listPromise = new Promise<Array<{ provider: string; id: string; name?: string }>>(
+      (resolve) => {
+        resolveList = (value) => resolve(value);
+      },
+    );
+    const listModels = vi.fn(() => listPromise);
+    const setActivityStatus = vi.fn() as SetActivityStatusMock;
+
+    const { handleCommand, requestRender } = createHarness({
+      listModels,
+      setActivityStatus,
+    });
+
+    const pending = handleCommand("/model");
+    await Promise.resolve();
+
+    // Before listModels resolves, the loading activity status and a render must be emitted.
+    expect(setActivityStatus).toHaveBeenCalledWith("loading models");
+    const loadingOrder = setActivityStatus.mock.invocationCallOrder[0] ?? 0;
+    const renderOrders = requestRender.mock.invocationCallOrder;
+    expect(renderOrders.filter((order) => order > loadingOrder)).not.toEqual([]);
+
+    resolveList([{ provider: "openrouter", id: "openrouter/auto", name: "OpenRouter Auto" }]);
+    await pending;
+  });
 });

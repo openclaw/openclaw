@@ -164,10 +164,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openModelSelector = async () => {
+    // Emit immediate feedback before awaiting listModels so slow model catalog/auth/provider
+    // discovery does not leave /models with zero visible feedback (issue #90720).
+    setActivityStatus("loading models");
+    tui.requestRender();
     try {
       const models = await client.listModels();
       if (models.length === 0) {
         chatLog.addSystem("no models available");
+        setActivityStatus("idle");
         tui.requestRender();
         return;
       }
@@ -180,6 +185,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         };
       });
       const selector = createSearchableSelectList(items, 9);
+      setActivityStatus("idle");
       openSelector(selector, async (value) => {
         try {
           const result = await client.patchSession({
@@ -195,6 +201,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       });
     } catch (err) {
       chatLog.addSystem(`model list failed: ${String(err)}`);
+      setActivityStatus("error");
       tui.requestRender();
     }
   };
