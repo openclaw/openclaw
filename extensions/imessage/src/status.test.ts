@@ -1,4 +1,6 @@
 // Imessage tests cover status plugin behavior.
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as setupRuntime from "openclaw/plugin-sdk/setup";
@@ -19,6 +21,26 @@ const getIMessageSetupStatus = createPluginSetupWizardStatus({
 } as never);
 
 const spawnMock = vi.hoisted(() => vi.fn());
+
+function createMockChildProcess() {
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    killed: boolean;
+    kill: (signal?: string) => boolean;
+  };
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.killed = false;
+  child.kill = (signal?: string) => {
+    child.killed = true;
+    child.emit("close", 0, signal ?? null);
+    return true;
+  };
+  return child;
+}
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -137,6 +159,25 @@ describe("createIMessageRpcClient", () => {
 
     await expect(first).resolves.toEqual({ ok: "first" });
     await expect(second).resolves.toEqual({ ok: "second" });
+  });
+
+  it("ignores stdout from a stale child after stop so late notifications cannot leak (#89830)", async () => {
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "");
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const onNotification = vi.fn();
+    const { IMessageRpcClient } = await import("./client.js");
+    const client = new IMessageRpcClient({ onNotification });
+
+    await client.start();
+    await client.stop();
+
+    // A not-yet-exited imsg child emits a complete notification after stop().
+    // The `this.child !== child` guard must drop it before handleStdoutChunk.
+    child.stdout.write('{"jsonrpc":"2.0","method":"messages.changed","params":{}}\n');
+
+    expect(onNotification).not.toHaveBeenCalled();
   });
 });
 
