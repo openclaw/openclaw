@@ -254,10 +254,20 @@ export async function recoverOrphanedSubagentSessions(params: {
           continue;
         }
 
-        // Skip runs that are too old to be worth recovering. After a long
-        // downtime the parent session has moved on and the child's original
-        // work is unlikely to still be relevant.
+        // Runs that are too old to be worth recovering must be finalized
+        // so they don't remain in an unended state. The scheduler only
+        // retries failedRuns; a plain skip would leave the run orphaned.
         if (isStaleUnendedSubagentRun(runRecord, now)) {
+          const staleAgeSeconds = Math.round(
+            (now - (runRecord.startedAt ?? runRecord.createdAt ?? now)) / 1000,
+          );
+          void finalizeInterruptedSubagentRun({
+            runId,
+            childSessionKey,
+            error: `stale aborted subagent run not resumed (${staleAgeSeconds}s old, exceeds stale-run window)`,
+          }).catch((err: unknown) => {
+            log.warn(`finalize stale run ${runId}: ${String(err)}`);
+          });
           result.skipped++;
           continue;
         }
