@@ -40,6 +40,8 @@ type GatewayScopedToolSurface = "http" | "loopback";
 export function resolveGatewayScopedTools(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  sessionId?: string;
+  onYield?: (message: string) => Promise<void> | void;
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -168,6 +170,8 @@ export function resolveGatewayScopedTools(params: {
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     currentMessageId: params.currentMessageId,
     currentInboundAudio: params.currentInboundAudio,
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    ...(params.onYield ? { onYield: params.onYield } : {}),
     senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,

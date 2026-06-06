@@ -4,6 +4,10 @@
 import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import {
+  clearMcpLoopbackYieldContext,
+  registerMcpLoopbackYieldContext,
+} from "../gateway/mcp-http.loopback-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
@@ -425,6 +429,7 @@ export async function runPreparedCliAgent(
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
   const hookRunner = getGlobalHookRunner();
+  const loopbackYieldContext = registerMcpLoopbackYieldContext(params.sessionId);
   const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
@@ -676,6 +681,9 @@ export async function runPreparedCliAgent(
     const agentSessionId = unflushedCliSessionId
       ? ""
       : (resultParams.effectiveCliSessionId ?? params.sessionId ?? "");
+    const yielded = loopbackYieldContext.yielded === true;
+    const stopReason = yielded ? "end_turn" : "completed";
+    const finishReason = yielded ? "end_turn" : "stop";
 
     return {
       payloads,
@@ -691,6 +699,7 @@ export async function runPreparedCliAgent(
             }
           : {}),
         systemPromptReport: context.systemPromptReport,
+        ...(yielded ? { yielded: true, livenessState: "paused" as const, stopReason } : {}),
         executionTrace: {
           winnerProvider: params.provider,
           winnerModel: context.modelId,
@@ -709,8 +718,8 @@ export async function runPreparedCliAgent(
           ...(context.effectiveAuthProfileId ? { authMode: "auth-profile" } : {}),
         },
         completion: {
-          finishReason: "stop",
-          stopReason: "completed",
+          finishReason,
+          stopReason,
           refusal: false,
         },
         agentMeta: {
@@ -932,6 +941,7 @@ export async function runPreparedCliAgent(
       return toCliRunFailure(err);
     }
   } finally {
+    clearMcpLoopbackYieldContext(params.sessionId, loopbackYieldContext);
     await context.preparedBackend.cleanup?.();
   }
 }

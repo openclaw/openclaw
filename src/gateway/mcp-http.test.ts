@@ -22,6 +22,7 @@ type MockBeforeToolCallHookResult =
   | { blocked: false; params: unknown };
 
 type ScopedToolsCall = {
+  sessionId?: string;
   sessionKey?: string;
   accountId?: string;
   messageProvider?: string;
@@ -672,6 +673,7 @@ describe("mcp loopback server", () => {
       token: runtime?.nonOwnerToken,
       headers: jsonHeaders({
         "x-session-key": "agent:main:telegram:group:chat123",
+        "x-openclaw-session-id": "run-session-123",
         "x-openclaw-account-id": "work",
         "x-openclaw-message-channel": "telegram",
         "x-openclaw-current-channel-id": "telegram:chat123",
@@ -687,6 +689,7 @@ describe("mcp loopback server", () => {
     expect(response.status).toBe(200);
     const call = getScopedToolsCall(0);
     expect(call.sessionKey).toBe("agent:main:telegram:group:chat123");
+    expect(call.sessionId).toBe("run-session-123");
     expect(call.accountId).toBe("work");
     expect(call.messageProvider).toBe("telegram");
     expect(call.currentChannelId).toBe("telegram:chat123");
@@ -704,6 +707,26 @@ describe("mcp loopback server", () => {
       "exec",
       "process",
     ]);
+  });
+
+  it("keeps loopback tool cache entries separate by session id", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const sendToolsList = async (sessionId: string) =>
+      await sendLoopbackToolsList({
+        token: runtime?.ownerToken,
+        headers: {
+          "x-session-key": "agent:main:telegram:group:chat123",
+          "x-openclaw-session-id": sessionId,
+          "x-openclaw-message-channel": "telegram",
+        },
+      });
+
+    expect((await sendToolsList("run-session-a")).status).toBe(200);
+    expect((await sendToolsList("run-session-b")).status).toBe(200);
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
+    expect(getScopedToolsCall(0).sessionId).toBe("run-session-a");
+    expect(getScopedToolsCall(1).sessionId).toBe("run-session-b");
   });
 
   it("keeps loopback tool cache entries separate by inbound event kind, delivery mode, and inbound audio", async () => {
@@ -1258,6 +1281,9 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
     expect(config.mcpServers?.openclaw?.headers?.Authorization).toBe(
       "Bearer ${OPENCLAW_MCP_TOKEN}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-session-id"]).toBe(
+      "${OPENCLAW_MCP_SESSION_ID}",
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
