@@ -2137,6 +2137,13 @@ export async function runAgentTurnWithFallback(params: {
                       }),
                     ]);
                   },
+                  onCommentaryText: async ({ text, itemId }) => {
+                    await params.opts?.onItemEvent?.({
+                      kind: "preamble",
+                      progressText: text,
+                      itemId,
+                    });
+                  },
                   onErrorBeforeLifecycle: async () => {
                     if (!rollbackFallbackCandidateSelection) {
                       return;
