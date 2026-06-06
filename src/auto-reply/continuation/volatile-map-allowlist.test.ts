@@ -51,17 +51,6 @@ const ALLOWLIST = [
       "Reset to empty on process restart; pending delegate records remain in TaskFlow and rebuild timer state when scheduling resumes.",
   },
   {
-    file: "src/auto-reply/continuation/delegate-store.ts",
-    symbol: "delayedReservations",
-    owner: "continuation delegate store delayed-reservation helper",
-    purpose:
-      "Holds per-session reservations that pair delayed timeout callbacks with queued TaskFlow delegates.",
-    safeVolatileClassification:
-      "Reservations are companions to process-local timers; the durable delegate queue is TaskFlow, not this reservation list.",
-    restartContract:
-      "Lost on process restart; queued delegates remain in TaskFlow and can be reserved again when continuation dispatch is re-armed.",
-  },
-  {
     file: "src/auto-reply/continuation/delegate-dispatch.ts",
     symbol: "hedgeTimers",
     owner: "continuation delegate dispatcher",

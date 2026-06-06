@@ -76,25 +76,6 @@ export type PendingContinuationDelegate = {
   expectedRevision?: number;
 };
 
-/**
- * A delayed delegate reservation tracked between scheduling and spawn.
- * Timers are volatile (in-memory only) unless TaskFlow backing is enabled.
- */
-export type DelayedContinuationReservation = {
-  id: string;
-  source: "bracket" | "tool";
-  task: string;
-  createdAt: number;
-  fireAt: number;
-  plannedHop: number;
-  silent?: boolean;
-  silentWake?: boolean;
-  targetSessionKey?: string;
-  targetSessionKeys?: string[];
-  fanoutMode?: ContinuationDelegateFanoutMode;
-  traceparent?: string;
-};
-
 // ---------------------------------------------------------------------------
 // Continuation runtime config — resolved from gateway config at use time
 // ---------------------------------------------------------------------------

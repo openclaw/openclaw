@@ -38,8 +38,6 @@ import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
   emitContinuationCompactionReleasedSpan,
-  emitContinuationDelegateFireSpan,
-  emitContinuationDelegateSpan,
   emitContinuationDisabledSpan,
   emitContinuationWorkFireSpan,
   emitContinuationWorkSpan,
@@ -53,7 +51,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
-import { generateChainId, generateSecureUuid } from "../../infra/secure-random.js";
+import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -69,14 +67,12 @@ import {
   resolveModelCostConfig,
 } from "../../utils/usage-format.js";
 import {
-  addDelayedContinuationReservation,
   consumePendingDelegates,
   consumeStagedPostCompactionDelegates,
-  highestDelayedContinuationReservationHop,
+  enqueuePendingDelegate,
   pendingDelegateCount,
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
-  takeDelayedContinuationReservation,
 } from "../continuation-delegate-store.js";
 import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
 import { checkContextPressure } from "../continuation/context-pressure.js";
@@ -2527,10 +2523,7 @@ export async function runReplyAgent(replyParams: {
       } = resolveLiveContinuationRuntimeConfig(cfg);
 
       const currentChainCount = activeSessionEntry?.continuationChainCount ?? 0;
-      const allocatedChainHop = Math.max(
-        currentChainCount,
-        highestDelayedContinuationReservationHop(sessionKey),
-      );
+      const allocatedChainHop = currentChainCount + pendingDelegateCount(sessionKey);
 
       if (allocatedChainHop >= maxChainLength) {
         defaultRuntime.log(
@@ -2604,7 +2597,7 @@ export async function runReplyAgent(replyParams: {
           });
         } else {
           bracketTokensAccumulated = true;
-          const nextChainCount = allocatedChainHop + 1;
+          const nextChainCount = currentChainCount + 1;
           const chainStartedAt = activeSessionEntry?.continuationChainStartedAt ?? Date.now();
           if (effectiveContinuationSignal.kind === "delegate") {
             const delegateTask = effectiveContinuationSignal.task;
@@ -2812,22 +2805,19 @@ export async function runReplyAgent(replyParams: {
                 },
               );
               if (!rejectedDelayedTarget) {
-                // Timed dispatch: spawn after delay. Timer does not survive
-                // gateway restart; durable timers are handled by a separate path.
                 const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, delegateDelayMs));
                 const outboundTraceparent = resolveContinuationTraceparent(
                   effectiveContinuationSignal.traceparent,
                 );
-                const reservationId = generateSecureUuid();
-                addDelayedContinuationReservation(sessionKey, {
-                  id: reservationId,
-                  source: "bracket",
+                const delegateMode = effectiveContinuationSignal.silentWake
+                  ? "silent-wake"
+                  : effectiveContinuationSignal.silent
+                    ? "silent"
+                    : "normal";
+                enqueuePendingDelegate(sessionKey, {
                   task: delegateTask,
-                  createdAt: chainStartedAt,
-                  fireAt: Date.now() + clampedDelay,
-                  plannedHop: nextChainCount,
-                  silent: effectiveContinuationSignal.silent,
-                  silentWake: effectiveContinuationSignal.silentWake,
+                  delayMs: clampedDelay,
+                  ...(delegateMode !== "normal" ? { mode: delegateMode } : {}),
                   ...(effectiveContinuationSignal.targetSessionKey
                     ? { targetSessionKey: effectiveContinuationSignal.targetSessionKey }
                     : {}),
@@ -2840,90 +2830,11 @@ export async function runReplyAgent(replyParams: {
                     : {}),
                   ...(outboundTraceparent ? { traceparent: outboundTraceparent } : {}),
                 });
-                const { chainId: persistedChainIdForTimer } = await persistContinuationChainState({
+                await persistContinuationChainState({
                   count: currentChainCount,
                   startedAt: chainStartedAt,
                   tokens: accumulatedChainTokens,
                 });
-                // Emit `continuation.delegate.dispatch` at the timer-deferred
-                // enqueue seam (after persist, before `setTimeout` arms).
-                {
-                  const delegateMode = effectiveContinuationSignal.silentWake
-                    ? "silent-wake"
-                    : effectiveContinuationSignal.silent
-                      ? "silent"
-                      : "normal";
-                  emitContinuationDelegateSpan({
-                    chainId: persistedChainIdForTimer,
-                    chainStepRemaining: maxChainLength - nextChainCount,
-                    delayMs: clampedDelay,
-                    delivery: "timer",
-                    delegateMode,
-                    traceparent: outboundTraceparent,
-                    log: (message) => defaultRuntime.log(message),
-                  });
-                }
-                // Snapshot dispatch-time inputs for the fire-span emission
-                // inside the timer callback.
-                const fireDelegateMode: "normal" | "silent" | "silent-wake" =
-                  effectiveContinuationSignal.silentWake
-                    ? "silent-wake"
-                    : effectiveContinuationSignal.silent
-                      ? "silent"
-                      : "normal";
-                const chainStepRemainingAtDispatch = maxChainLength - nextChainCount;
-                retainContinuationTimerRef(sessionKey);
-                const armedAt = Date.now();
-                const timerHandle = setTimeout(() => {
-                  const fireDeferredMs = Date.now() - armedAt;
-                  emitContinuationDelegateFireSpan({
-                    chainId: persistedChainIdForTimer as string,
-                    chainStepRemainingAtDispatch,
-                    delegateMode: fireDelegateMode,
-                    delayMs: clampedDelay,
-                    fireDeferredMs,
-                    log: (message) => defaultRuntime.log(message),
-                  });
-                  try {
-                    const reservation = takeDelayedContinuationReservation(
-                      sessionKey,
-                      reservationId,
-                    );
-                    if (!reservation) {
-                      defaultRuntime.log(
-                        `DELEGATE timer fired but reservation already cleared for session ${sessionKey}`,
-                      );
-                      emitContinuationDisabledSpan({
-                        chainId: persistedChainIdForTimer,
-                        chainStepRemaining: chainStepRemainingAtDispatch,
-                        disabledReason: "reservation.missing",
-                        signalKind: "bracket-delegate",
-                        delegateDelivery: "timer",
-                        delegateMode: fireDelegateMode,
-                        log: (message) => defaultRuntime.log(message),
-                      });
-                      return;
-                    }
-                    void doSpawn(reservation.plannedHop, reservation.task, {
-                      timerTriggered: true,
-                      silent: reservation.silent,
-                      silentWake: reservation.silentWake,
-                      startedAt: reservation.createdAt,
-                      ...(reservation.targetSessionKey
-                        ? { targetSessionKey: reservation.targetSessionKey }
-                        : {}),
-                      ...(reservation.targetSessionKeys && reservation.targetSessionKeys.length > 0
-                        ? { targetSessionKeys: reservation.targetSessionKeys }
-                        : {}),
-                      ...(reservation.fanoutMode ? { fanoutMode: reservation.fanoutMode } : {}),
-                      ...(reservation.traceparent ? { traceparent: reservation.traceparent } : {}),
-                    });
-                  } finally {
-                    unregisterContinuationTimerHandle(sessionKey, timerHandle);
-                  }
-                }, clampedDelay);
-                registerContinuationTimerHandle(sessionKey, timerHandle);
-                timerHandle.unref();
               }
             } else {
               await doSpawn(nextChainCount, delegateTask, {
@@ -3023,12 +2934,8 @@ export async function runReplyAgent(replyParams: {
       }
     }
 
-    // Silent continuations should produce no user-visible output.
-    if (wasSilentContinuation) {
-      return returnWithQueuedFollowupDrain(undefined);
-    }
-
-    // Consume and dispatch tool-dispatched delegates (continue_delegate tool).
+    // Consume and dispatch TaskFlow-backed delegates before silent returns so
+    // delayed delegates still arm their quiet-channel hedge.
     let toolDelegateDispatchResult:
       | { dispatched: number; rejected: number; chainState: ChainState }
       | undefined;
@@ -3050,10 +2957,22 @@ export async function runReplyAgent(replyParams: {
         },
         maxChainLength: continuationRuntimeConfig.maxChainLength,
         config: continuationRuntimeConfig,
-        reservedDelegateSlots: effectiveContinuationSignal?.kind === "delegate" ? 1 : 0,
+        reservedDelegateSlots:
+          effectiveContinuationSignal?.kind === "delegate" &&
+          (effectiveContinuationSignal.delayMs ?? 0) <= 0
+            ? 1
+            : 0,
         // Pass a fresh-loader so the hedge timer re-loads the chain state
         // from the persisted session entry at fire time.
         loadFreshChainState: () => loadContinuationChainState(activeSessionEntry, 0),
+        persistChainState: async (nextState) => {
+          await persistContinuationChainState({
+            count: nextState.currentChainCount,
+            startedAt: nextState.chainStartedAt,
+            tokens: nextState.accumulatedChainTokens,
+            ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
+          });
+        },
       });
     }
 
@@ -3077,6 +2996,11 @@ export async function runReplyAgent(replyParams: {
         tokens: nextState.accumulatedChainTokens,
         ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
       });
+    }
+
+    // Silent continuations should produce no user-visible output.
+    if (wasSilentContinuation) {
+      return returnWithQueuedFollowupDrain(undefined);
     }
 
     if (finalPayloads.length === 0 && effectiveContinuationSignal) {
