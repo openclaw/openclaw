@@ -173,6 +173,9 @@ describe("googlechat setup", () => {
         if (message === "App URL") {
           return "https://example.com/googlechat";
         }
+        if (message === "App principal (optional, for Google Workspace Add-on tokens)") {
+          return "";
+        }
         throw new Error(`Unexpected prompt: ${message}`);
       }) as WizardPrompter["text"],
     });
@@ -191,6 +194,69 @@ describe("googlechat setup", () => {
     );
     expect(result.cfg.channels?.googlechat?.audienceType).toBe("app-url");
     expect(result.cfg.channels?.googlechat?.audience).toBe("https://example.com/googlechat");
+  });
+
+  it("setup for app-url collects and stores optional appPrincipal", async () => {
+    const prompter = createTestWizardPrompter({
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Service account JSON path") {
+          return "/tmp/googlechat-service-account.json";
+        }
+        if (message === "App URL") {
+          return "https://example.com/googlechat";
+        }
+        if (message === "App principal (optional, for Google Workspace Add-on tokens)") {
+          return "123456789012345678901";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: googlechatConfigure,
+      cfg: {} as OpenClawConfig,
+      prompter,
+      options: {},
+    });
+
+    expect(result.cfg.channels?.googlechat?.audienceType).toBe("app-url");
+    expect(result.cfg.channels?.googlechat?.appPrincipal).toBe("123456789012345678901");
+  });
+
+  it("setup for project-number does not prompt for appPrincipal", async () => {
+    const prompter = createTestWizardPrompter({
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Service account JSON path") {
+          return "/tmp/googlechat-service-account.json";
+        }
+        if (message === "Project number") {
+          return "1234567890";
+        }
+        if (message === "App principal (optional, for Google Workspace Add-on tokens)") {
+          throw new Error("Should not prompt for appPrincipal when audienceType is project-number");
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+      select: vi.fn(async ({ message }: { message: string; options: Array<{ value: string }> }) => {
+        if (message === "Google Chat auth method") {
+          return "file";
+        }
+        if (message === "Webhook audience type") {
+          return "project-number";
+        }
+        throw new Error(`Unexpected select: ${message}`);
+      }) as WizardPrompter["select"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: googlechatConfigure,
+      cfg: {} as OpenClawConfig,
+      prompter,
+      options: {},
+    });
+
+    expect(result.cfg.channels?.googlechat?.audienceType).toBe("project-number");
+    expect(result.cfg.channels?.googlechat?.appPrincipal).toBeUndefined();
   });
 
   it("reads the named-account DM policy instead of the channel root", () => {

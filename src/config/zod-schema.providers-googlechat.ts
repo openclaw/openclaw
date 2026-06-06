@@ -73,7 +73,7 @@ export const GoogleChatAccountSchema = z
     serviceAccountFile: z.string().optional(),
     audienceType: z.enum(["app-url", "project-number"]).optional(),
     audience: z.string().optional(),
-    appPrincipal: z.string().optional(),
+    appPrincipal: z.string().optional().describe("Required for Google Workspace Add-on app-url tokens; optional otherwise."),
     webhookPath: z.string().optional(),
     webhookUrl: z.string().optional(),
     botUser: z.string().optional(),

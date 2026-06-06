@@ -28,12 +28,14 @@ export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
           : {};
     const audienceType = input.audienceType?.trim();
     const audience = input.audience?.trim();
+    const appPrincipal = input.appPrincipal?.trim();
     const webhookPath = input.webhookPath?.trim();
     const webhookUrl = input.webhookUrl?.trim();
     return {
       ...patch,
       ...(audienceType ? { audienceType } : {}),
       ...(audience ? { audience } : {}),
+      ...(appPrincipal ? { appPrincipal } : {}),
       ...(webhookPath ? { webhookPath } : {}),
       ...(webhookUrl ? { webhookUrl } : {}),
     };

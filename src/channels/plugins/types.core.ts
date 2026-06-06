@@ -116,6 +116,7 @@ export type ChannelSetupInput = {
   webhookUrl?: string;
   audienceType?: string;
   audience?: string;
+  appPrincipal?: string;
   useEnv?: boolean;
   homeserver?: string;
   dangerouslyAllowPrivateNetwork?: boolean;

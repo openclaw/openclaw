@@ -225,6 +225,16 @@ export const googlechatSetupWizard: ChannelSetupWizard = {
       validate: (value) =>
         normalizeStringifiedOptionalString(value) ? undefined : t("common.required"),
     });
+    const appPrincipal =
+      audienceType === "app-url"
+        ? normalizeOptionalString(
+            await prompter.text({
+              message: "App principal (optional, for Google Workspace Add-on tokens)",
+              placeholder: "123456789012345678901",
+              initialValue: account.config.appPrincipal || undefined,
+            }),
+          )
+        : undefined;
     return {
       cfg: migrateBaseNameToDefaultAccount({
         cfg: applySetupAccountConfigPatch({
@@ -234,6 +244,7 @@ export const googlechatSetupWizard: ChannelSetupWizard = {
           patch: {
             audienceType,
             audience: normalizeOptionalString(audience) ?? "",
+            ...(appPrincipal ? { appPrincipal } : {}),
           },
         }),
         channelKey: channel,

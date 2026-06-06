@@ -156,6 +156,7 @@ Configure your tunnel's ingress rules to only route the webhook path:
 2. OpenClaw verifies the token against the configured `audienceType` + `audience`:
    - `audienceType: "app-url"` → audience is your HTTPS webhook URL.
    - `audienceType: "project-number"` → audience is the Cloud project number.
+   - When using `app-url` with a Google Workspace Add-on token, set `appPrincipal` to the exact add-on principal to accept. This is optional for `project-number` and for plain `app-url` tokens.
 3. Messages are routed by space:
    - DMs use session key `agent:<agentId>:googlechat:direct:<spaceId>`.
    - Spaces use session key `agent:<agentId>:googlechat:group:<spaceId>`.
