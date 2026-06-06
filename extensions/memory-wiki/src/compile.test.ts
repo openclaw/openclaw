@@ -121,6 +121,31 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
   });
 
+  it("compiles wiki pages stored in query-dir subfolders", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.mkdir(path.join(rootDir, "sources", "meetings"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "meetings", "nested.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.nested", title: "Nested" },
+        body: "# Nested\n",
+      }),
+      "utf8",
+    );
+
+    const result = await compileMemoryWikiVault(config);
+
+    expect(result.pageCounts.source).toBe(1);
+    const agentDigest = JSON.parse(
+      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+    ) as { pages: Array<{ path: string }> };
+    expectDigestPage(agentDigest.pages, "sources/meetings/nested.md");
+  });
+
   it("bounds concurrent page reads while compiling", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
