@@ -810,7 +810,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
-  private emitChatAborted(runId: string, run: LocalRunState) {
+  private emitChatAborted(runId: string, run: LocalRunState, errorMessage?: string) {
     this.clearPendingLifecycleError(runId);
     run.markQueuedRunReady();
     const alreadyFinal = run.finalSent;
@@ -826,6 +826,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       runId,
       sessionKey: run.sessionKey,
       state: "aborted",
+      ...(errorMessage ? { errorMessage } : {}),
     });
   }
 
@@ -915,6 +916,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     const phase = lifecyclePhase;
     const aborted = evt.data?.aborted === true || run.controller.signal.aborted;
+    // Last tool failure carried on the lifecycle metadata; shown on the abort line.
+    const toolErrorSummary =
+      typeof evt.data?.toolErrorSummary === "string" ? evt.data.toolErrorSummary : undefined;
     if (phase === "finishing") {
       run.finishing = true;
       run.markQueuedRunReady();
@@ -925,7 +929,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (phase === "end") {
       run.finishing = false;
       if (aborted) {
-        this.emitChatAborted(evt.runId, run);
+        this.emitChatAborted(evt.runId, run, toolErrorSummary);
         return;
       }
       run.lifecycleEnded = true;
@@ -938,7 +942,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (phase === "error") {
       run.finishing = false;
       if (aborted) {
-        this.emitChatAborted(evt.runId, run);
+        this.emitChatAborted(evt.runId, run, toolErrorSummary);
         return;
       }
       const errorMessage = typeof evt.data?.error === "string" ? evt.data.error : undefined;

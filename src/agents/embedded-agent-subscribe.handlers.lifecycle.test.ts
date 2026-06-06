@@ -242,6 +242,32 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("carries a sanitized tool-error summary on aborted terminals", async () => {
+    emitAgentEventMock.mockClear();
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalAborted = true;
+    ctx.state.lastToolError = {
+      toolName: "edit",
+      error:
+        'Validation failed for tool "edit":\n  - edits: must have required properties edits\n\nReceived arguments:\n{\n  "path": "secret.txt"\n}',
+    };
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      stream: "lifecycle",
+      data: expect.objectContaining({
+        phase: "end",
+        aborted: true,
+        toolErrorSummary: "edit tool validation failed: edits: must have required properties edits",
+      }),
+    });
+    // The echoed model arguments must never ride the lifecycle event.
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("Received arguments");
+  });
+
   it("keeps normal lifecycle end events explicitly non-aborted", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, { onAgentEvent });

@@ -982,6 +982,48 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  it("carries the lifecycle tool-error summary onto the aborted chat event", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "edit the file",
+      runId: "run-validation-loop",
+    });
+
+    registeredListener?.({
+      runId: "run-validation-loop",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        aborted: true,
+        toolErrorSummary: "edit tool validation failed: edits: must have required properties edits",
+      },
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "run-validation-loop",
+        sessionKey: "agent:main:main",
+        state: "aborted",
+        errorMessage: "edit tool validation failed: edits: must have required properties edits",
+      },
+    });
+  });
+
   it("sends broad stop-like text as a normal prompt when idle", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{
