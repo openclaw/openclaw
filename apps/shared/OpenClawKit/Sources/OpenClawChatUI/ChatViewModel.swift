@@ -868,7 +868,12 @@ public final class OpenClawChatViewModel {
                 self.pendingLocalUserEchoMessageIDsByRunID[response.runId] = pendingUserMessageID
                 self.armPendingRunTimeout(runId: response.runId)
             }
-            if !self.finishPendingRunIfTerminalSendAck(response) {
+            if response.status == "ok" {
+                let historyContext = self.beginHistoryRequest(for: sessionSnapshot)
+                await self.refreshHistoryAfterRun(historyRequest: historyContext)
+                guard self.isCurrentSession(sessionSnapshot) else { return }
+                self.finishPendingRunAfterTerminalOkSendAck(response)
+            } else if !self.finishPendingRunIfTerminalSendAck(response) {
                 let historyContext = self.beginHistoryRequest(for: sessionSnapshot)
                 await self.refreshHistoryAfterRun(historyRequest: historyContext)
                 guard self.isCurrentSession(sessionSnapshot) else { return }
@@ -1717,6 +1722,15 @@ public final class OpenClawChatViewModel {
             return message
         }
         return "Chat failed"
+    }
+
+    private func finishPendingRunAfterTerminalOkSendAck(_ response: OpenClawChatSendResponse) {
+        self.clearPendingRun(response.runId)
+        self.pendingToolCallsById = [:]
+        self.streamingAssistantText = nil
+        self.logDiagnostic(
+            "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
+                + "runId=\(response.runId) status=ok")
     }
 
     private func finishPendingRunIfTerminalSendAck(_ response: OpenClawChatSendResponse) -> Bool {
