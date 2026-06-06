@@ -1,4 +1,5 @@
 // Google tests cover google plugin behavior.
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -6,7 +7,6 @@ import {
 import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-contracts";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { hasTrustedFfmpegForLiveVoiceNote } from "../../test/helpers/live-voice-note.js";
 import plugin from "./index.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
@@ -48,6 +48,20 @@ function isTransientGeminiSearchError(error: unknown): boolean {
   }
   const message = error.message.toLowerCase();
   return message.includes("timeout") || message.includes("aborted");
+}
+
+function hasTrustedFfmpegForLiveVoiceNote(label: string): boolean {
+  try {
+    resolveFfmpegBin();
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("ffmpeg not found in trusted system directories")) {
+      console.warn(`[${label}:live] skip voice-note transcode: ffmpeg unavailable`);
+      return false;
+    }
+    throw error;
+  }
 }
 
 const registerGooglePlugin = () =>
