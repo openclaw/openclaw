@@ -42,7 +42,7 @@ if [[ "$BUNDLE_ID" == *.debug ]]; then
 fi
 
 sparkle_canonical_build_from_version() {
-  node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
+  (cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")
 }
 
 build_path_for_arch() {

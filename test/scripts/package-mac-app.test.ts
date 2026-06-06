@@ -48,6 +48,17 @@ function getPackageManagerHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function getSparkleBuildHelperBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("sparkle_canonical_build_from_version()");
+  const end = script.indexOf("build_path_for_arch()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
 function getStopPackagedAppBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("running_packaged_app_pids()");
@@ -174,6 +185,45 @@ describe("package-mac-app plist stamping", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("pnpm is not on PATH and corepack pnpm is unavailable");
+  });
+
+  it("runs Sparkle build metadata derivation from the repository root", () => {
+    const helperBlock = getSparkleBuildHelperBlock();
+    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-sparkle-root-"));
+    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-sparkle-tools-"));
+    tempDirs.push(tempRoot, toolsDir);
+
+    const nodePath = path.join(toolsDir, "node");
+    writeFileSync(
+      nodePath,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'if [[ "$PWD" != "$OPENCLAW_ROOT" ]]; then',
+        '  echo "node ran outside repo root: $PWD" >&2',
+        "  exit 1",
+        "fi",
+        "echo 2026060290",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(nodePath, 0o755);
+
+    const result = runHelper(`
+      set -euo pipefail
+      ROOT_DIR=${JSON.stringify(tempRoot)}
+      OPENCLAW_ROOT=${JSON.stringify(tempRoot)}
+      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      export OPENCLAW_ROOT PATH
+      cd /tmp
+      ${helperBlock}
+      sparkle_canonical_build_from_version 2026.6.2
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("2026060290\n");
+    expect(result.stderr).toBe("");
   });
 
   it("does not kill unrelated OpenClaw processes during packaging", () => {
