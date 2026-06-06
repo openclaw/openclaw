@@ -2062,13 +2062,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(collaborationInstructions).toContain("# Collaboration Mode: Default");
     expect(collaborationInstructions).toContain("request_user_input availability");
     expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
-    expect(collaborationInstructions).toContain(
-      "standing developer instructions for this active agent's identity, voice, personality, user relationship, and collaboration style",
-    );
-    expect(collaborationInstructions).toContain("File purposes:");
-    expect(collaborationInstructions).toContain(
-      "`SOUL.md` defines the agent's personality, tone, stance, and collaboration style.",
-    );
     expect(collaborationInstructions).toContain("<AGENT_SOUL>");
     expect(collaborationInstructions).toContain("</AGENT_SOUL>");
     expect(collaborationInstructions).toContain(soulGuidance);
@@ -2187,10 +2180,6 @@ describe("runCodexAppServerAttempt", () => {
     const collaborationInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
     expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
-    expect(collaborationInstructions).toContain("These files are instruction context");
-    expect(collaborationInstructions).toContain(
-      "`USER.md` defines durable user context, preferences, relationship notes, and local expectations.",
-    );
     expect(collaborationInstructions).toContain("<AGENT_SOUL>");
     expect(collaborationInstructions).toContain("</AGENT_SOUL>");
     expect(collaborationInstructions).toContain(soulGuidance);

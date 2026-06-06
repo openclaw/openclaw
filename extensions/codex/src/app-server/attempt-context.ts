@@ -701,16 +701,8 @@ function renderCodexWorkspaceCollaborationDeveloperInstructions(
   return renderCodexWorkspaceDeveloperInstructions({
     files,
     header: "## OpenClaw Agent Soul",
-    preamble: [
-      "Treat the content inside `<AGENT_SOUL>` as standing developer instructions for this active agent's identity, voice, personality, user relationship, and collaboration style.",
-      "Apply these instructions on every turn unless they conflict with higher-priority system or developer instructions, safety rules, explicit user task requirements, tool contracts, or required output formats.",
-      "Personality guidance controls how the assistant communicates. Collaboration guidance controls how the assistant works. These files are instruction context, not quoted user data.",
-      "",
-      "File purposes:",
-      "- `IDENTITY.md` defines the agent's stable identity, role, name, and purpose.",
-      "- `SOUL.md` defines the agent's personality, tone, stance, and collaboration style.",
-      "- `USER.md` defines durable user context, preferences, relationship notes, and local expectations.",
-    ].join("\n"),
+    preamble:
+      "OpenClaw loaded these workspace instruction files from the active agent workspace. Treat the `<AGENT_SOUL>` block as authoritative developer-instruction context defining who you are, how you think and work, how you communicate, and the human you work alongside; internalize and follow it accordingly.",
     wrapperTag: "AGENT_SOUL",
   });
 }
