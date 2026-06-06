@@ -58,6 +58,7 @@ export type TelegramIngressWorkerOptions = {
   timeoutSeconds?: number;
   network?: TelegramNetworkConfig;
   proxy?: string;
+  includeGuestUpdates?: boolean;
 };
 
 export type TelegramIngressWorkerHandle = {

@@ -13,7 +13,12 @@ import {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
-import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
+import {
+  resolveTelegramAllowedUpdates,
+  shouldRequestTelegramGuestUpdates,
+  type TelegramGuestModeConfig,
+} from "./allowed-updates.js";
+import type { TelegramBotInfo } from "./bot-info.js";
 import { isTelegramExecApprovalHandlerConfigured } from "./exec-approvals.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import type { MonitorTelegramOpts } from "./monitor.types.js";
@@ -30,7 +35,13 @@ import type {
 
 export type { MonitorTelegramOpts } from "./monitor.types.js";
 
-export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
+export function createTelegramRunnerOptions(
+  cfg: OpenClawConfig,
+  params?: {
+    guest?: TelegramGuestModeConfig;
+    botInfo?: Pick<TelegramBotInfo, "supports_guest_queries">;
+  },
+): RunOptions<unknown> {
   return {
     sink: {
       concurrency: resolveAgentMaxConcurrent(cfg),
@@ -40,7 +51,7 @@ export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unk
         // Match grammY defaults
         timeout: 30,
         // Request reactions without dropping default update types.
-        allowed_updates: resolveTelegramAllowedUpdates(),
+        allowed_updates: resolveTelegramAllowedUpdates(params),
       },
       // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
       silent: true,
@@ -191,6 +202,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
         webhookCertPath: opts.webhookCertPath,
+        botInfo: opts.botInfo,
         setStatus: opts.setStatus,
       });
       await waitForAbortSignal(opts.abortSignal);
@@ -290,7 +302,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         proxyFetch,
         botInfo: opts.botInfo,
         abortSignal: opts.abortSignal,
-        runnerOptions: createTelegramRunnerOptions(cfg),
+        runnerOptions: createTelegramRunnerOptions(cfg, {
+          guest: account.config.guest,
+          botInfo: opts.botInfo,
+        }),
         getLastUpdateId: () => lastUpdateId,
         persistUpdateId,
         log,
@@ -303,6 +318,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           apiRoot: account.config.apiRoot,
           timeoutSeconds: account.config.timeoutSeconds,
           proxy: account.config.proxy,
+          includeGuestUpdates: shouldRequestTelegramGuestUpdates({
+            guest: account.config.guest,
+            botInfo: opts.botInfo,
+          }),
           network: account.config.network,
         },
       });

@@ -51,6 +51,7 @@ export function resolveTelegramConversationRoute(params: {
   replyThreadId?: number;
   senderId?: string | number | null;
   topicAgentId?: string | null;
+  skipBindings?: boolean;
 }): TelegramConversationRouteResult {
   const peerId = params.isGroup
     ? buildTelegramGroupPeerId(params.chatId, params.resolvedThreadId)
@@ -107,6 +108,13 @@ export function resolveTelegramConversationRoute(params: {
     logVerbose(
       `telegram: topic route override: topic=${params.resolvedThreadId ?? params.replyThreadId} agent=${topicAgentId} sessionKey=${route.sessionKey}`,
     );
+  }
+
+  if (params.skipBindings === true) {
+    return {
+      route,
+      bindingMode: { kind: "none" },
+    };
   }
 
   const configuredRoute = resolveConfiguredBindingRoute({

@@ -166,7 +166,9 @@ async function main(): Promise<void> {
           body: {
             timeout: pollTimeoutSeconds,
             limit: pollLimit,
-            allowed_updates: resolveTelegramAllowedUpdates(),
+            allowed_updates: resolveTelegramAllowedUpdates({
+              includeGuest: options.includeGuestUpdates,
+            }),
             ...(offset === null ? {} : { offset }),
           },
         });

@@ -34,6 +34,7 @@ type TelegramSequentialKeyContext = {
   editedChannelPost?: Message;
   update?: {
     message?: Message;
+    guest_message?: Message & { guest_query_id?: string };
     edited_message?: Message;
     channel_post?: Message;
     edited_channel_post?: Message;
@@ -103,9 +104,22 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   if (reaction?.chat?.id) {
     return `telegram:${reaction.chat.id}`;
   }
+  const guestMessage = ctx.update?.guest_message;
+  if (guestMessage) {
+    const guestChatId = guestMessage.chat?.id ?? ctx.chat?.id;
+    const guestSenderId = guestMessage.from?.id;
+    if (guestChatId !== undefined && guestSenderId !== undefined) {
+      return `telegram:guest:${guestChatId}:sender:${guestSenderId}`;
+    }
+    const guestQueryId = guestMessage.guest_query_id?.trim();
+    if (guestQueryId) {
+      return `telegram:guest:${guestQueryId}`;
+    }
+  }
   const msg =
     ctx.message ??
     ctx.channelPost ??
+    guestMessage ??
     ctx.editedMessage ??
     ctx.editedChannelPost ??
     ctx.update?.message ??

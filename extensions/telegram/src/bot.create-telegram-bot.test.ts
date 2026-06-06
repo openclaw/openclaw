@@ -5,6 +5,7 @@ import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runt
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TelegramBotInfo } from "./bot-info.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
@@ -15,6 +16,7 @@ const configMutation = await import("openclaw/plugin-sdk/config-mutation");
 const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
 const EYES_EMOJI = "\u{1F440}";
 const {
+  answerGuestQuerySpy,
   answerCallbackQuerySpy,
   botCtorSpy,
   commandSpy,
@@ -24,6 +26,7 @@ const {
   enqueueSystemEventSpy,
   getLoadWebMediaMock,
   getChatSpy,
+  getFileSpy,
   getLoadConfigMock,
   getLoadSessionStoreMock,
   getOnHandler,
@@ -91,6 +94,13 @@ type TelegramMiddleware = (
   ctx: TelegramMiddlewareTestContext,
   next: () => Promise<void>,
 ) => Promise<void> | void;
+type TelegramGuestAnswerPayloadForTest = {
+  result: {
+    input_message_content: {
+      message_text: string;
+    };
+  };
+};
 
 function getRegisteredTelegramMiddlewares(): TelegramMiddleware[] {
   return middlewareUseSpy.mock.calls
@@ -143,6 +153,24 @@ function installPerKeySequentializer(): void {
   });
 }
 
+function makeTelegramBotInfo(overrides: Partial<TelegramBotInfo> = {}): TelegramBotInfo {
+  return {
+    id: 123456,
+    is_bot: true,
+    first_name: "OpenClaw",
+    username: "openclaw_bot",
+    can_join_groups: true,
+    can_read_all_group_messages: false,
+    can_manage_bots: false,
+    supports_inline_queries: false,
+    can_connect_to_business: false,
+    has_main_web_app: false,
+    has_topics_enabled: false,
+    allows_users_to_create_topics: false,
+    ...overrides,
+  };
+}
+
 function mockTelegramConfigWrites() {
   return vi.spyOn(configMutation, "mutateConfigFile").mockResolvedValue({} as never);
 }
@@ -157,6 +185,15 @@ function requireValue<T>(value: T | null | undefined, label: string): T {
     throw new Error(`expected ${label}`);
   }
   return value;
+}
+
+function requireGuestAnswerPayload(
+  label = "answerGuestQuery payload",
+): TelegramGuestAnswerPayloadForTest {
+  return requireValue(
+    answerGuestQuerySpy.mock.calls.at(0)?.[0] as TelegramGuestAnswerPayloadForTest | undefined,
+    label,
+  );
 }
 
 function createDeferred<T = void>() {
@@ -357,6 +394,718 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok", botInfo });
 
     expect(getBotCtorOptions().botInfo).toBe(botInfo);
+  });
+
+  it("ignores Telegram guest messages by default even when bot metadata advertises support", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+    const botInfo = makeTelegramBotInfo({
+      supports_guest_queries: true,
+    });
+    createTelegramBot({ token: "tok", botInfo });
+
+    const finalHandler = vi.fn(async () => undefined);
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 900,
+          guest_message: {
+            guest_query_id: "guest-query-default-disabled",
+            chat: { id: -100122, type: "supergroup", title: "Guest Group" },
+            from: { id: 424241, username: "guestuser0" },
+            text: "@openclaw_bot hello",
+            date: 1736380799,
+            message_id: 41,
+          },
+        },
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler,
+    });
+
+    expect(finalHandler).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(answerGuestQuerySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("answers Telegram guest messages in explicit auto mode when bot metadata advertises support", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          guest: { enabled: "auto" },
+        },
+      },
+    });
+    const botInfo = makeTelegramBotInfo({
+      supports_guest_queries: true,
+    });
+    replySpy.mockResolvedValue({ text: "guest auto answer" });
+    createTelegramBot({ token: "tok", botInfo });
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 9001,
+          guest_message: {
+            guest_query_id: "guest-query-auto-enabled",
+            chat: { id: -1001221, type: "supergroup", title: "Guest Group" },
+            from: { id: 4242411, username: "guestuser01" },
+            text: "@openclaw_bot hello",
+            date: 1736380799,
+            message_id: 41,
+          },
+        },
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler: vi.fn(async () => undefined),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireGuestAnswerPayload();
+    expect(payload?.result.input_message_content.message_text).toBe("guest auto answer");
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("ignores Telegram guest messages in auto mode when bot metadata lacks support", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          guest: { enabled: "auto" },
+        },
+      },
+    });
+    const botInfo = makeTelegramBotInfo({
+      supports_guest_queries: false,
+    });
+    createTelegramBot({ token: "tok", botInfo });
+
+    const finalHandler = vi.fn(async () => undefined);
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 9002,
+          guest_message: {
+            guest_query_id: "guest-query-auto-disabled",
+            chat: { id: -1001222, type: "supergroup", title: "Guest Group" },
+            from: { id: 4242412, username: "guestuser02" },
+            text: "@openclaw_bot hello",
+            date: 1736380799,
+            message_id: 41,
+          },
+        },
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler,
+    });
+
+    expect(finalHandler).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(answerGuestQuerySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks Telegram guest messages through account-level allowFrom", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: [999999],
+          guest: { enabled: true },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 9003,
+          guest_message: {
+            guest_query_id: "guest-query-account-blocked",
+            chat: { id: -1001223, type: "supergroup", title: "Guest Group" },
+            from: { id: 4242413, username: "guestuser03" },
+            text: "@openclaw_bot hello",
+            date: 1736380799,
+            message_id: 41,
+          },
+        },
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler: vi.fn(async () => undefined),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(answerGuestQuerySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("answers Telegram guest messages with answerGuestQuery", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          guest: { enabled: true },
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+    replySpy.mockResolvedValue({ text: "guest answer" });
+    createTelegramBot({ token: "tok" });
+
+    const finalHandler = vi.fn(async () => undefined);
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 901,
+          guest_message: {
+            guest_query_id: "guest-query-1",
+            chat: { id: -100123, type: "supergroup", title: "Guest Group" },
+            from: { id: 424242, username: "guestuser" },
+            text: "@openclaw_bot hello",
+            date: 1736380800,
+            message_id: 42,
+            message_thread_id: 99,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "media/file.jpg" }),
+      },
+      finalHandler,
+    });
+
+    expect(finalHandler).not.toHaveBeenCalled();
+    expect(answerGuestQuerySpy).toHaveBeenCalledWith({
+      guest_query_id: "guest-query-1",
+      result: expect.objectContaining({
+        type: "article",
+        input_message_content: { message_text: "guest answer" },
+      }),
+    });
+    expect(replySpy.mock.calls.at(0)?.[1]?.sourceReplyDeliveryMode).toBe("automatic");
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.ChatType).toBe("direct");
+    expect(payload.From).toBe("telegram:guest-from-group:-100123:sender:424242");
+    expect(payload.OriginatingTo).toBe("telegram:guest:guest-query-1");
+    expect(payload.SessionKey).toBe(
+      "agent:main:telegram:default:direct:guest-from-group:-100123:sender:424242",
+    );
+    expect(payload.BodyForAgent).toContain("guestuser (@guestuser) id:424242: @openclaw_bot hello");
+    expect(payload.GroupSubject).toBeUndefined();
+    expect(payload.MessageThreadId).toBeUndefined();
+    expect(payload.IsForum).toBe(false);
+    expect(payload.GroupSystemPrompt).toContain("Telegram Guest Mode query");
+    const recordInboundSession =
+      telegramBotDepsForTest.recordInboundSession as unknown as ReturnType<typeof vi.fn>;
+    const recordParams = requireRecord(
+      recordInboundSession.mock.calls.at(0)?.[0],
+      "recordInboundSession params",
+    );
+    expect(recordParams.updateLastRoute).toBeUndefined();
+    expect(getChatSpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("includes Telegram guest message and reply media in agent context", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          guest: { enabled: true },
+        },
+      },
+    });
+    getFileSpy
+      .mockResolvedValueOnce({ file_path: "photos/current.jpg" })
+      .mockResolvedValueOnce({ file_path: "photos/reply.jpg" });
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+    );
+    replySpy.mockResolvedValue({ text: "I can inspect both images" });
+    try {
+      createTelegramBot({ token: "tok", proxyFetch: fetchSpy });
+
+      await runTelegramMiddlewareChain({
+        ctx: {
+          update: {
+            update_id: 9011,
+            guest_message: {
+              guest_query_id: "guest-query-media-context",
+              chat: { id: -100123, type: "supergroup", title: "Guest Group" },
+              from: { id: 424242, username: "guestuser" },
+              text: "@openclaw_bot compare these",
+              date: 1736380800,
+              message_id: 42,
+              photo: [{ file_id: "current-photo", file_unique_id: "current-photo-u" }],
+              reply_to_message: {
+                chat: { id: -100123, type: "supergroup", title: "Guest Group" },
+                from: { id: 777777, username: "otheruser" },
+                date: 1736380799,
+                message_id: 41,
+                photo: [{ file_id: "reply-photo", file_unique_id: "reply-photo-u" }],
+              },
+            },
+          },
+          me: { username: "openclaw_bot" },
+        },
+        finalHandler: vi.fn(async () => undefined),
+      });
+
+      expect(getFileSpy).toHaveBeenCalledWith("current-photo");
+      expect(getFileSpy).toHaveBeenCalledWith("reply-photo");
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(loadWebMedia).not.toHaveBeenCalled();
+      const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+      expect(payload.MediaPaths).toHaveLength(2);
+      expect(payload.MediaPaths).toEqual(expect.arrayContaining([expect.any(String)]));
+      expect(payload.MediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
+      expect(payload.ReplyChain).toEqual(
+        expect.arrayContaining([expect.objectContaining({ body: "<media:image>" })]),
+      );
+      expect(answerGuestQuerySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          guest_query_id: "guest-query-media-context",
+          result: expect.objectContaining({
+            type: "article",
+            input_message_content: { message_text: "I can inspect both images" },
+          }),
+        }),
+      );
+      expect(sendPhotoSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockReset();
+    }
+  });
+
+  it("keeps Telegram guest local media replies on the text answer path", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          guest: { enabled: true },
+        },
+      },
+    });
+    replySpy.mockResolvedValue({
+      text: "I created the file, but Telegram Guest Mode cannot upload local files directly.",
+      mediaUrl: "/home/horo/generated/qr.png",
+    });
+    createTelegramBot({ token: "tok" });
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 9012,
+          guest_message: {
+            guest_query_id: "guest-query-local-output",
+            chat: { id: -100123, type: "supergroup", title: "Guest Group" },
+            from: { id: 424242, username: "guestuser" },
+            text: "@openclaw_bot create a qr",
+            date: 1736380800,
+            message_id: 42,
+          },
+        },
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler: vi.fn(async () => undefined),
+    });
+
+    expect(sendPhotoSpy).not.toHaveBeenCalled();
+    expect(loadWebMedia).not.toHaveBeenCalled();
+    expect(answerGuestQuerySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guest_query_id: "guest-query-local-output",
+        result: expect.objectContaining({
+          type: "article",
+          input_message_content: {
+            message_text:
+              "I created the file, but Telegram Guest Mode cannot upload local files directly.",
+          },
+        }),
+      }),
+    );
+  });
+
+  it("keeps Telegram guest messages out of normal conversation bindings", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+        list: [{ id: "main" }, { id: "bound-agent" }],
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          guest: { enabled: true },
+        },
+      },
+      bindings: [
+        {
+          agentId: "bound-agent",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "group", id: "-100129" },
+          },
+        },
+      ],
+    });
+    const previousPipeline = telegramBotDepsForTest.createChannelMessageReplyPipeline;
+    const pipelineSpy = vi.fn(() => ({}));
+    telegramBotDepsForTest.createChannelMessageReplyPipeline =
+      pipelineSpy as unknown as typeof telegramBotDepsForTest.createChannelMessageReplyPipeline;
+    try {
+      replySpy.mockResolvedValue({ text: "guest answer" });
+      createTelegramBot({ token: "tok" });
+
+      await runTelegramMiddlewareChain({
+        ctx: {
+          update: {
+            update_id: 902,
+            guest_message: {
+              guest_query_id: "guest-query-binding",
+              chat: { id: -100129, type: "supergroup", title: "Guest Group" },
+              from: { id: 424248, username: "guestuser7" },
+              text: "@openclaw_bot hello",
+              date: 1736380801,
+              message_id: 43,
+            },
+          },
+          me: { username: "openclaw_bot" },
+        },
+        finalHandler: vi.fn(async () => undefined),
+      });
+    } finally {
+      telegramBotDepsForTest.createChannelMessageReplyPipeline = previousPipeline;
+    }
+
+    expect(pipelineSpy).toHaveBeenCalledWith(expect.objectContaining({ agentId: "main" }));
+    const context = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(context.SessionKey).toBe(
+      "agent:main:telegram:default:direct:guest-from-group:-100129:sender:424248",
+    );
+    expect(context.SessionKey).not.toContain("bound-agent");
+    expect(answerGuestQuerySpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("routes Telegram guest messages on non-default accounts as direct turns", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          defaultAccount: "default",
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          guest: { enabled: true },
+          accounts: {
+            default: { botToken: "default-token" },
+            secondary: {
+              botToken: "secondary-token",
+              dmPolicy: "open",
+              allowFrom: ["*"],
+              guest: { enabled: true },
+            },
+          },
+        },
+      },
+    });
+    replySpy.mockResolvedValue({ text: "guest answer" });
+    createTelegramBot({ token: "tok", accountId: "secondary" });
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 902,
+          guest_message: {
+            guest_query_id: "guest-query-secondary",
+            chat: { id: -100124, type: "supergroup", title: "Guest Group" },
+            from: { id: 424243, username: "guestuser2" },
+            text: "@openclaw_bot hello",
+            date: 1736380801,
+            message_id: 43,
+          },
+        },
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler: vi.fn(async () => undefined),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const context = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(context.AccountId).toBe("secondary");
+    expect(context.ChatType).toBe("direct");
+    expect(context.SessionKey).toBe(
+      "agent:main:telegram:secondary:direct:guest-from-group:-100124:sender:424243",
+    );
+    const payload = requireGuestAnswerPayload();
+    expect(payload?.result.input_message_content.message_text).toBe("guest answer");
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not apply per-group allowFrom to Telegram guest commands", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: [424244],
+          guest: { enabled: true },
+          groups: {
+            "-100125": { allowFrom: [999999] },
+          },
+        },
+      },
+    });
+    replySpy.mockResolvedValue({ text: "guest command answer" });
+    createTelegramBot({ token: "tok" });
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 903,
+          guest_message: {
+            guest_query_id: "guest-query-group-policy",
+            chat: { id: -100125, type: "supergroup", title: "Guest Group" },
+            from: { id: 424244, username: "guestuser3" },
+            text: "/status@openclaw_bot",
+            date: 1736380801,
+            message_id: 43,
+          },
+        },
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler: vi.fn(async () => undefined),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireGuestAnswerPayload();
+    expect(payload?.result.input_message_content.message_text).toBe("guest command answer");
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("caps Telegram guest answers to the text message limit", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          guest: { enabled: true },
+        },
+      },
+    });
+    const longAnswer = "x".repeat(5000);
+    replySpy.mockResolvedValue({ text: longAnswer });
+    createTelegramBot({ token: "tok" });
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 904,
+          guest_message: {
+            guest_query_id: "guest-query-long",
+            chat: { id: -100126, type: "supergroup", title: "Guest Group" },
+            from: { id: 424245, username: "guestuser4" },
+            text: "@openclaw_bot explain",
+            date: 1736380801,
+            message_id: 43,
+          },
+        },
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler: vi.fn(async () => undefined),
+    });
+
+    const payload = requireGuestAnswerPayload();
+    const text = payload?.result.input_message_content.message_text;
+    expect(text).toBe("x".repeat(4096));
+  });
+
+  it("sends only the first Telegram guest answer when multiple finals are produced", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          guest: { enabled: true },
+        },
+      },
+    });
+    replySpy.mockResolvedValue([{ text: "first answer" }, { text: "second answer" }]);
+    createTelegramBot({ token: "tok" });
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 905,
+          guest_message: {
+            guest_query_id: "guest-query-multiple",
+            chat: { id: -100127, type: "supergroup", title: "Guest Group" },
+            from: { id: 424246, username: "guestuser5" },
+            text: "@openclaw_bot hello",
+            date: 1736380802,
+            message_id: 44,
+          },
+        },
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler: vi.fn(async () => undefined),
+    });
+
+    expect(answerGuestQuerySpy).toHaveBeenCalledTimes(1);
+    const payload = requireGuestAnswerPayload();
+    expect(payload?.result.input_message_content.message_text).toBe("first answer");
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not consume the Telegram guest answer for non-final progress", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          guest: { enabled: true },
+        },
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (dispatchParams) => {
+      await dispatchParams.dispatcherOptions.deliver?.(
+        { text: "progress update" },
+        {
+          kind: "tool",
+        },
+      );
+      await dispatchParams.dispatcherOptions.deliver?.(
+        { text: "final answer" },
+        {
+          kind: "final",
+        },
+      );
+      return {
+        queuedFinal: true,
+        counts: { block: 0, final: 1, tool: 1 },
+      };
+    });
+    createTelegramBot({ token: "tok" });
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 907,
+          guest_message: {
+            guest_query_id: "guest-query-progress",
+            chat: { id: -100130, type: "supergroup", title: "Guest Group" },
+            from: { id: 424249, username: "guestuser8" },
+            text: "@openclaw_bot hello",
+            date: 1736380803,
+            message_id: 46,
+          },
+        },
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler: vi.fn(async () => undefined),
+    });
+
+    expect(answerGuestQuerySpy).toHaveBeenCalledTimes(1);
+    const payload = requireGuestAnswerPayload();
+    expect(payload?.result.input_message_content.message_text).toBe("final answer");
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("routes Telegram guest dispatch errors through answerGuestQuery", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          guest: { enabled: true },
+        },
+      },
+    });
+    replySpy.mockRejectedValue(new Error("reply failed"));
+    createTelegramBot({ token: "tok" });
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 906,
+          guest_message: {
+            guest_query_id: "guest-query-error",
+            chat: { id: -100128, type: "supergroup", title: "Guest Group" },
+            from: { id: 424247, username: "guestuser6" },
+            text: "@openclaw_bot hello",
+            date: 1736380803,
+            message_id: 45,
+          },
+        },
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler: vi.fn(async () => undefined),
+    });
+
+    expect(answerGuestQuerySpy).toHaveBeenCalledTimes(1);
+    const payload = requireGuestAnswerPayload();
+    expect(payload?.result.input_message_content.message_text).toBe(
+      "Something went wrong while processing your request. Please try again.",
+    );
+    expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 
   it("normalizes full Telegram bot endpoint apiRoot before passing it to grammY", () => {
@@ -1567,7 +2316,7 @@ describe("createTelegramBot", () => {
           headers: { "content-type": "image/jpeg" },
         }),
     );
-    const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
+    const messageGetFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
 
     try {
       createTelegramBot({ token: "tok" });
@@ -1582,10 +2331,10 @@ describe("createTelegramBot", () => {
           from: { id: senderId, username: "random" },
         },
         me: { username: "openclaw_bot" },
-        getFile: getFileSpy,
+        getFile: messageGetFileSpy,
       });
 
-      expect(getFileSpy).not.toHaveBeenCalled();
+      expect(messageGetFileSpy).not.toHaveBeenCalled();
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(sendMessageSpy).toHaveBeenCalledTimes(1);
       const pairingText = String(sendMessageSpy.mock.calls.at(0)?.[1]);
@@ -1645,7 +2394,7 @@ describe("createTelegramBot", () => {
           headers: { "content-type": "image/jpeg" },
         }),
     );
-    const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
+    const messageGetFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
 
     try {
       createTelegramBot({ token: "tok" });
@@ -1660,10 +2409,10 @@ describe("createTelegramBot", () => {
           from: { id: 999, username: "random" },
         },
         me: { username: "openclaw_bot" },
-        getFile: getFileSpy,
+        getFile: messageGetFileSpy,
       });
 
-      expect(getFileSpy).not.toHaveBeenCalled();
+      expect(messageGetFileSpy).not.toHaveBeenCalled();
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(sendMessageSpy).not.toHaveBeenCalled();
       expect(replySpy).not.toHaveBeenCalled();
@@ -1688,7 +2437,7 @@ describe("createTelegramBot", () => {
           headers: { "content-type": "image/jpeg" },
         }),
     );
-    const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
+    const messageGetFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
 
     try {
       createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
@@ -1704,10 +2453,10 @@ describe("createTelegramBot", () => {
           from: { id: senderId, username: "random" },
         },
         me: { username: "openclaw_bot" },
-        getFile: getFileSpy,
+        getFile: messageGetFileSpy,
       });
 
-      expect(getFileSpy).not.toHaveBeenCalled();
+      expect(messageGetFileSpy).not.toHaveBeenCalled();
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(sendMessageSpy).toHaveBeenCalledTimes(1);
       const pairingText = String(sendMessageSpy.mock.calls.at(0)?.[1]);

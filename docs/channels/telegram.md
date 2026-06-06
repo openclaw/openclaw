@@ -178,6 +178,17 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Practical pattern for one-owner bots: set your user ID in `channels.telegram.allowFrom`, leave `groupAllowFrom` unset, and allow the target groups under `channels.telegram.groups`.
     Runtime note: if `channels.telegram` is completely missing, runtime defaults to fail-closed `groupPolicy="allowlist"` unless `channels.defaults.groupPolicy` is explicitly set.
 
+    Guest Mode is inline-like, not normal group membership. It is disabled unless you explicitly set
+    `channels.telegram.guest.enabled` to `true` or `"auto"` (`"auto"` follows Telegram bot metadata).
+    When Telegram sends a `guest_message`, OpenClaw treats the triggering user as having the same
+    privilege as a Telegram direct-message sender allowed by `channels.telegram.allowFrom`. This adds
+    a Telegram ingress path, but does not grant broader access than DM access: the bot is not a member
+    of the source group, does not receive group history, and does not apply `groupPolicy`,
+    `groups.<id>`, `groupAllowFrom`, or per-group `allowFrom` as an access gate. The source group ID
+    is kept only as guest context, and the guest turn uses an isolated direct-style session key
+    (`agent:<agent>:telegram:<account>:direct:guest-from-group:<chatId>:sender:<userId>`) so it
+    is not treated as the normal group conversation or shared across bot accounts.
+
     Owner-only group setup:
 
 ```json5
