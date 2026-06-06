@@ -1414,6 +1414,7 @@
                   "providers/elevenlabs",
                   "providers/fal",
                   "providers/fireworks",
+                  "providers/forai",
                   "providers/github-copilot",
                   "providers/gmi",
                   "providers/google",

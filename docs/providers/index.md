@@ -40,6 +40,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [ElevenLabs](/providers/elevenlabs)
 - [fal](/providers/fal)
 - [Fireworks](/providers/fireworks)
+- [ForAI](/providers/forai)
 - [GitHub Copilot](/providers/github-copilot)
 - [GMI Cloud](/providers/gmi)
 - [Google (Gemini)](/providers/google)
