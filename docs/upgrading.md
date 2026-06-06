@@ -6,17 +6,17 @@ If terminal commands, SSH, `cd`, or folder paths are unfamiliar, read [`beginner
 
 Official OpenClaw basis:
 
-OpenClaw updating guide: https://docs.openclaw.ai/install/updating
+OpenClaw updating guide: <https://docs.openclaw.ai/install/updating>
 
-OpenClaw Docker guide: https://docs.openclaw.ai/install/docker
+OpenClaw Docker guide: <https://docs.openclaw.ai/install/docker>
 
-Upstream source: https://github.com/openclaw/openclaw
+Upstream source: <https://github.com/openclaw/openclaw>
 
 Official host Docker/Dockge basis:
 
-Docker Engine on Ubuntu: https://docs.docker.com/engine/install/ubuntu/
+Docker Engine on Ubuntu: <https://docs.docker.com/engine/install/ubuntu/>
 
-Dockge upstream README: https://github.com/louislam/dockge
+Dockge upstream README: <https://github.com/louislam/dockge>
 
 Do not use one upgrade recipe for every install. Pick the page that matches how the assistant was installed.
 
