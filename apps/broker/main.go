@@ -872,6 +872,10 @@ func run() error {
 	mux.HandleFunc("/materialize-secret", materializeSecretHandler)
 	mux.HandleFunc("/chat", chatHandler)
 	mux.HandleFunc("/chat-pty", chatPTYHandler)
+	mux.HandleFunc("/datasets", finalizedDatasets)
+	mux.HandleFunc("/datasets/uploads", newDatasetUpload)
+	mux.HandleFunc("/datasets/uploads/", datasetUploadByID)
+	mux.HandleFunc("/datasets/", finalizedDatasetByID)
 
 	// Persistent-session GC. Runs for the lifetime of the server; we tear
 	// it down with the server's graceful-shutdown context.
