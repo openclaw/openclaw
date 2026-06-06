@@ -70,6 +70,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
+import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -2774,64 +2775,72 @@ export async function listSessionsFromStoreAsync(params: {
     (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
 
   const sessions: GatewaySessionRow[] = [];
-  for (let i = 0; i < entries.length; i++) {
-    const [key, entry] = entries[i];
-    const includeTranscriptFields = i < sessionListTranscriptFieldRows;
-    const rowAgentId =
-      key === "global" && typeof opts.agentId === "string"
-        ? normalizeAgentId(opts.agentId)
-        : undefined;
-    const storeChildSessionsByKey =
-      fullRowContext?.storeChildSessionsByKey ??
-      buildSingleRowStoreChildSessionsByKey({ store, storePath, key, now });
-    const row = buildGatewaySessionRow({
-      cfg,
-      storePath,
-      store,
-      key,
-      entry,
-      agentId: rowAgentId,
-      modelCatalog: params.modelCatalog,
-      now,
-      includeDerivedTitles: false,
-      includeLastMessage: false,
-      transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
-      storeChildSessionsByKey,
-      rowContext: sharedRowContext,
-      skipTranscriptUsageFallback: true,
-      lightweightListRow: true,
-    });
-    if (
-      entry?.sessionId &&
-      includeTranscriptFields &&
-      (includeDerivedTitles || includeLastMessage)
-    ) {
-      const parsed = parseAgentSessionKey(key);
-      const sessionAgentId =
-        rowAgentId ??
-        (parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg));
-      const fields = await readSessionTitleFieldsFromTranscriptAsync(
-        entry.sessionId,
+  // Pin the active plugin-registry workspace dir for the whole row-building
+  // batch. Each row resolves plugin metadata (model-id normalization) keyed by
+  // the active workspaceDir; this loop yields to the event loop between batches,
+  // and concurrent agent-turns/crons mutate the global workspaceDir during those
+  // yields. Without the pin, the plugin-metadata-snapshot memo key changes per
+  // row and never hits, turning one list into O(rows) full plugin scans.
+  await withPinnedActivePluginRegistryWorkspaceDir(async () => {
+    for (let i = 0; i < entries.length; i++) {
+      const [key, entry] = entries[i];
+      const includeTranscriptFields = i < sessionListTranscriptFieldRows;
+      const rowAgentId =
+        key === "global" && typeof opts.agentId === "string"
+          ? normalizeAgentId(opts.agentId)
+          : undefined;
+      const storeChildSessionsByKey =
+        fullRowContext?.storeChildSessionsByKey ??
+        buildSingleRowStoreChildSessionsByKey({ store, storePath, key, now });
+      const row = buildGatewaySessionRow({
+        cfg,
         storePath,
-        entry.sessionFile,
-        sessionAgentId,
-      );
-      if (includeDerivedTitles) {
-        row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
-      }
-      if (includeLastMessage && fields.lastMessagePreview) {
-        row.lastMessagePreview = fields.lastMessagePreview;
-      }
-    }
-    sessions.push(row);
-    // Yield to the event loop between batches so WebSocket heartbeats,
-    // channel I/O, and concurrent RPC calls are not starved.
-    if ((i + 1) % SESSIONS_LIST_YIELD_BATCH_SIZE === 0 && i + 1 < entries.length) {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
+        store,
+        key,
+        entry,
+        agentId: rowAgentId,
+        modelCatalog: params.modelCatalog,
+        now,
+        includeDerivedTitles: false,
+        includeLastMessage: false,
+        transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
+        storeChildSessionsByKey,
+        rowContext: sharedRowContext,
+        skipTranscriptUsageFallback: true,
+        lightweightListRow: true,
       });
+      if (
+        entry?.sessionId &&
+        includeTranscriptFields &&
+        (includeDerivedTitles || includeLastMessage)
+      ) {
+        const parsed = parseAgentSessionKey(key);
+        const sessionAgentId =
+          rowAgentId ??
+          (parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg));
+        const fields = await readSessionTitleFieldsFromTranscriptAsync(
+          entry.sessionId,
+          storePath,
+          entry.sessionFile,
+          sessionAgentId,
+        );
+        if (includeDerivedTitles) {
+          row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+        }
+        if (includeLastMessage && fields.lastMessagePreview) {
+          row.lastMessagePreview = fields.lastMessagePreview;
+        }
+      }
+      sessions.push(row);
+      // Yield to the event loop between batches so WebSocket heartbeats,
+      // channel I/O, and concurrent RPC calls are not starved.
+      if ((i + 1) % SESSIONS_LIST_YIELD_BATCH_SIZE === 0 && i + 1 < entries.length) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
     }
-  }
+  });
 
   return {
     ts: now,
