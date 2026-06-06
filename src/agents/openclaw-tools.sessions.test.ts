@@ -373,7 +373,7 @@ describe("sessions tools", () => {
       callGatewayMock.mockImplementation(async (opts: unknown) => {
         const request = opts as GatewayCall;
         if (request.method === "sessions.resolve") {
-          throw new Error(`Session not found: ${request.params?.key ?? request.params?.sessionId}`);
+          throw new Error("Session not found");
         }
         if (request.method === "sessions.create") {
           return { key: "agent:orion:main", sessionId: "sess-orion-created" };
