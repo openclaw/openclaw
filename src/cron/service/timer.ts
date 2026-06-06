@@ -126,7 +126,11 @@ export async function executeJobCoreWithTimeout(
   const runAbortController = new AbortController();
   markCronJobActive(job.id, {
     runId: opts?.runId,
-    abortController: runAbortController,
+    // Main-session cron jobs enqueue work into a downstream child session.
+    // The cron wrapper does not own that queued run, so exposing its abort
+    // signal would let task cancellation mark the ledger row cancelled while
+    // the child session can continue running.
+    ...(job.sessionTarget !== "main" ? { abortController: runAbortController } : {}),
   });
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {

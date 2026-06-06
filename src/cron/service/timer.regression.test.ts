@@ -11,6 +11,13 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import {
+  cancelTaskById,
+  listTaskRecords,
+  resetTaskRegistryControlRuntimeForTests,
+  resetTaskRegistryForTests,
+  setTaskRegistryControlRuntimeForTests,
+} from "../../tasks/task-registry.js";
 import { cancelCronJobRun } from "../active-jobs.js";
 import * as schedule from "../schedule.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -1118,6 +1125,112 @@ describe("cron service timer regressions", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(runHeartbeatOnce).toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("does not report main-session cron task rows cancelled while queued work can continue", async () => {
+    vi.useFakeTimers();
+    try {
+      resetTaskRegistryForTests();
+      setTaskRegistryControlRuntimeForTests({
+        getAcpSessionManager: () => ({
+          cancelSession: vi.fn(),
+        }),
+        killSubagentRunAdmin: vi.fn(),
+        cancelCronJobRun,
+      });
+
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+      const cronJob: CronJob = {
+        id: "main-session-cancel-boundary",
+        name: "main session cancel boundary",
+        enabled: true,
+        createdAtMs: scheduledAt - 60_000,
+        updatedAtMs: scheduledAt - 60_000,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "queued downstream work" },
+        state: { nextRunAtMs: scheduledAt },
+      };
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      let now = scheduledAt;
+      const heartbeatResult = createDeferred<HeartbeatRunResult>();
+      const runHeartbeatOnce = vi.fn(async (): Promise<HeartbeatRunResult> => {
+        return await heartbeatResult.promise;
+      });
+      const enqueueSystemEvent = vi.fn();
+      const requestHeartbeat = vi.fn();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent,
+        requestHeartbeat,
+        runHeartbeatOnce,
+        wakeNowHeartbeatBusyMaxWaitMs: 1_000,
+        wakeNowHeartbeatBusyRetryDelayMs: 50,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+
+      const timerPromise = onTimer(state);
+      const runId = `cron:main-session-cancel-boundary:${scheduledAt}`;
+      for (
+        let attempt = 0;
+        attempt < 10 && runHeartbeatOnce.mock.calls.length === 0;
+        attempt += 1
+      ) {
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+      }
+      expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+
+      const task = listTaskRecords().find(
+        (entry) => entry.runtime === "cron" && entry.runId === runId,
+      );
+      if (!task) {
+        throw new Error("Expected main-session cron task row");
+      }
+      expect(task.status).toBe("running");
+
+      const cancelResult = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(cancelResult.found).toBe(true);
+      expect(cancelResult.cancelled).toBe(false);
+      expect(cancelResult.reason).toBe("Cron task has no active cancellation handle.");
+      expect(listTaskRecords().find((entry) => entry.taskId === task.taskId)?.status).toBe(
+        "running",
+      );
+
+      now = scheduledAt + 2_000;
+      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY });
+      await vi.advanceTimersByTimeAsync(0);
+      await timerPromise;
+
+      const expectedSessionKey = `agent:main:cron:main-session-cancel-boundary:run:${scheduledAt}`;
+      expect(enqueueSystemEvent).toHaveBeenCalledWith(
+        "queued downstream work",
+        expect.objectContaining({
+          contextKey: "cron:main-session-cancel-boundary",
+          sessionKey: expectedSessionKey,
+        }),
+      );
+      expect(requestHeartbeat).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "cron:main-session-cancel-boundary",
+          sessionKey: expectedSessionKey,
+        }),
+      );
+    } finally {
+      resetTaskRegistryControlRuntimeForTests();
+      resetTaskRegistryForTests();
+      vi.useRealTimers();
+    }
   });
 
   it("retries recurring wake-now main jobs until temporary lane pressure clears (#75964)", async () => {
