@@ -1665,6 +1665,122 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).not.toContain("Run the qmd sync");
   });
 
+  it("excludes soft-deleted .jsonl.deleted.* transcripts from the dreaming session corpus", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    // Soft-deleted archive carrying ordinary prose (no cron/heartbeat marker)
+    // — the same shape that contaminated 2026.6.1 dreaming corpora.
+    await fs.writeFile(
+      path.join(sessionsDir, "stale.jsonl.deleted.2026-04-16T18-06-16.529Z"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-16T18:01:00.000Z",
+            content: "DELETED_ARCHIVE_USER_PROMPT should never reach the corpus",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-16T18:02:00.000Z",
+            content: "DELETED_ARCHIVE_ASSISTANT_REPLY should never reach the corpus",
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    // Reset archives are equivalent and must also be skipped.
+    await fs.writeFile(
+      path.join(sessionsDir, "stale.jsonl.reset.2026-04-16T18-07-16.529Z"),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          timestamp: "2026-04-16T18:03:00.000Z",
+          content: "RESET_ARCHIVE_PROMPT should never reach the corpus",
+        },
+      }) + "\n",
+      "utf-8",
+    );
+    // A live transcript should still flow through.
+    await fs.writeFile(
+      path.join(sessionsDir, "live.jsonl"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-16T18:08:00.000Z",
+            content: "Document the Ollama provider setup.",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-16T18:09:00.000Z",
+            content: "I documented the Ollama provider setup in the workspace notes.",
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: { workspace: workspaceDir },
+          list: [{ id: "main", workspace: workspaceDir }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: { enabled: true, limit: 20, lookbackDays: 7 },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
+    try {
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+
+    const corpus = await fs.readFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-16.txt"),
+      "utf-8",
+    );
+    expect(corpus).toContain("Document the Ollama provider setup.");
+    expect(corpus).not.toContain("DELETED_ARCHIVE_USER_PROMPT");
+    expect(corpus).not.toContain("DELETED_ARCHIVE_ASSISTANT_REPLY");
+    expect(corpus).not.toContain("RESET_ARCHIVE_PROMPT");
+    expect(corpus).not.toContain(".jsonl.deleted.");
+    expect(corpus).not.toContain(".jsonl.reset.");
+  });
+
   it("ignores chat scaffolding tags when building rem reflections", () => {
     const preview = testing.previewRemDreaming({
       entries: [

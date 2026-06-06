@@ -100,6 +100,11 @@ const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
 const SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION = 4096;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
 const SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE = /\.checkpoint\..+\.jsonl$/i;
+// Soft-deleted/reset session archives stay on disk for usage accounting
+// (see isUsageCountedSessionTranscriptFileName) but must never feed the
+// dreaming session corpus — their contents are stale and contaminate later
+// dreaming candidates (issue #90466).
+const SESSION_ARCHIVED_TRANSCRIPT_FILENAME_RE = /\.jsonl\.(?:deleted|reset)\.[^/]+$/i;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
@@ -673,6 +678,10 @@ function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
   return SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE.test(path.basename(absolutePath));
 }
 
+function isArchivedSessionTranscriptPath(absolutePath: string): boolean {
+  return SESSION_ARCHIVED_TRANSCRIPT_FILENAME_RE.test(path.basename(absolutePath));
+}
+
 function buildSessionRenderedLine(params: {
   agentId: string;
   sessionPath: string;
@@ -803,6 +812,12 @@ async function collectSessionIngestionBatches(params: {
           };
     for (const absolutePath of files) {
       if (isCheckpointSessionTranscriptPath(absolutePath)) {
+        continue;
+      }
+      // listSessionFilesForAgent returns soft-deleted/reset archives for
+      // usage accounting; their contents are stale and must not seed the
+      // dreaming session corpus (issue #90466).
+      if (isArchivedSessionTranscriptPath(absolutePath)) {
         continue;
       }
       const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
