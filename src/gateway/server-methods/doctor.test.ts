@@ -642,6 +642,205 @@ describe("doctor.memory.status", () => {
     }
   });
 
+  it("counts timestamp-suffixed and slugged recall-store entries in dreaming stats", async () => {
+    const now = Date.parse("2026-06-06T00:30:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const recentIso = "2026-06-05T23:45:00.000Z";
+    const olderIso = "2026-06-03T10:00:00.000Z";
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-slug-"));
+    const mainWorkspaceDir = path.join(workspaceRoot, "main");
+    const mainStorePath = path.join(
+      mainWorkspaceDir,
+      "memory",
+      ".dreams",
+      "short-term-recall.json",
+    );
+    const mainPhaseSignalPath = path.join(
+      mainWorkspaceDir,
+      "memory",
+      ".dreams",
+      "phase-signals.json",
+    );
+    await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+    // Include both timestamp-suffixed (-HHMM) and slugged (-vendor-pitch) paths
+    await fs.writeFile(
+      mainStorePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: recentIso,
+          entries: {
+            "memory:memory/2026-06-04-1503.md:1:2": {
+              path: "memory/2026-06-04-1503.md",
+              startLine: 1,
+              endLine: 2,
+              snippet: "Timestamp-suffixed entry.",
+              source: "memory",
+              recallCount: 4,
+              dailyCount: 2,
+              lastRecalledAt: recentIso,
+              promotedAt: recentIso,
+            },
+            "memory:memory/2026-06-03-vendor-pitch.md:1:2": {
+              path: "memory/2026-06-03-vendor-pitch.md",
+              startLine: 1,
+              endLine: 2,
+              snippet: "Slugged llmSlug entry.",
+              source: "memory",
+              recallCount: 7,
+              dailyCount: 4,
+              promotedAt: olderIso,
+            },
+            "memory:memory/2026-06-05-0930.md:1:2": {
+              path: "memory/2026-06-05-0930.md",
+              startLine: 1,
+              endLine: 2,
+              snippet: "Another timestamp-suffixed entry.",
+              source: "memory",
+              recallCount: 3,
+              dailyCount: 1,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      mainPhaseSignalPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: recentIso,
+          entries: {
+            "memory:memory/2026-06-04-1503.md:1:2": {
+              lightHits: 2,
+              remHits: 3,
+            },
+            "memory:memory/2026-06-03-vendor-pitch.md:1:2": {
+              lightHits: 1,
+              remHits: 2,
+            },
+            "memory:memory/2026-06-05-0930.md:1:2": {
+              lightHits: 1,
+              remHits: 1,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          userTimezone: "America/Los_Angeles",
+          memorySearch: {
+            enabled: true,
+          },
+        },
+        list: [],
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                frequency: "0 */4 * * *",
+                phases: {
+                  deep: {
+                    recencyHalfLifeDays: 21,
+                    maxAgeDays: 30,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockReturnValue(mainWorkspaceDir);
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir: mainWorkspaceDir }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const cronList = vi.fn(async () => [
+      {
+        name: "Memory Dreaming Promotion",
+        description: "[managed-by=memory-core.short-term-promotion] test",
+        enabled: true,
+        payload: {
+          kind: "systemEvent",
+          text: "__openclaw_memory_core_short_term_promotion_dream__",
+        },
+        state: { nextRunAtMs: now + 60_000 },
+      },
+    ]);
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryStatus(respond, { cron: { list: cronList } });
+      const payload = respondPayload(respond);
+      const dreaming = expectRecordFields(payload.dreaming, {
+        enabled: true,
+        // All 3 entries (including timestamp and slugged) should be counted
+        // Active (non-promoted) entries: only 2026-06-05-0930.md
+        shortTermCount: 1,
+        recallSignalCount: 3, // from active entry
+        dailySignalCount: 1, // from active entry
+        totalSignalCount: 4, // recallSignalCount + dailySignalCount
+        phaseSignalCount: 2, // lightHits 1 + remHits 1 from active entry
+        lightPhaseHitCount: 1,
+        remPhaseHitCount: 1,
+        promotedTotal: 2, // both promoted entries counted
+        promotedToday: 1, // only 2026-06-04-1503 promoted today
+      });
+      // Verify timestamp-suffixed entry is present and counted
+      expectRecordFields(
+        findRecordByField(dreaming.promotedEntries, "path", "memory/2026-06-04-1503.md"),
+        {
+          promotedAt: recentIso,
+          snippet: "Timestamp-suffixed entry.",
+        },
+      );
+      // Verify slugged entry is present and counted
+      expectRecordFields(
+        findRecordByField(dreaming.promotedEntries, "path", "memory/2026-06-03-vendor-pitch.md"),
+        {
+          promotedAt: olderIso,
+          snippet: "Slugged llmSlug entry.",
+        },
+      );
+      // Verify short-term entry with timestamp suffix is present
+      expectRecordFields((dreaming.shortTermEntries as unknown[])[0], {
+        path: "memory/2026-06-05-0930.md",
+        snippet: "Another timestamp-suffixed entry.",
+        totalSignalCount: 4,
+        lightHits: 1,
+        remHits: 1,
+        phaseHitCount: 2,
+      });
+      // Verify signal entries include slugged path
+      expectRecordFields((dreaming.signalEntries as unknown[])[0], {
+        path: "memory/2026-06-05-0930.md",
+        totalSignalCount: 4,
+      });
+      expect(close).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it("scopes dreaming status to the requested agent workspace", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-selected-"));
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
