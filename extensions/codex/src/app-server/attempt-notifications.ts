@@ -40,7 +40,6 @@ export function describeNotificationActivity(
     lastNotificationItemId: readString(item, "id"),
     lastNotificationItemType: readString(item, "type"),
     lastNotificationItemRole: readString(item, "role"),
-    lastAssistantTextPreview: readRawAssistantTextPreview(item),
   };
 }
 

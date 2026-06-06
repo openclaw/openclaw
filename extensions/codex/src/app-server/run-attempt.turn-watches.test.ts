@@ -320,7 +320,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
   });
 
-  it("marks started mutating item timeouts as replay-invalid", async () => {
+  it("does not use completion timeout outcome for terminal timeout with active mutating item", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
@@ -351,15 +351,14 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     expect(result.timedOut).toBe(true);
     expect(result.itemLifecycle).toMatchObject({ activeCount: 1, completedCount: 0 });
-    expect(result.promptTimeoutOutcome).toEqual({
-      message:
-        "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
-      replayInvalid: true,
-      livenessState: "abandoned",
-    });
+    expect(result.codexAppServerFailure?.turnWatchTimeoutKind).toBe("terminal");
+    expect(result.codexAppServerFailure?.replaySafe).toBe(false);
+    expect(result.codexAppServerFailure?.replayBlockedReason).toBe("potential_side_effect");
+    expect(result.codexAppServerFailure?.diagnostics).toBeUndefined();
+    expect(result.promptTimeoutOutcome).toBeUndefined();
   });
 
-  it("does not mark assistant-only completion timeouts as replay-invalid", async () => {
+  it("does not use completion timeout outcome for non-completion timeout with assistant output", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
@@ -392,10 +391,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.timedOut).toBe(true);
     expect(result.itemLifecycle.completedCount).toBe(1);
     expect(result.toolMetas).toEqual([]);
-    expect(result.promptTimeoutOutcome).toEqual({
-      message:
-        "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.",
-    });
+    expect(result.codexAppServerFailure?.turnWatchTimeoutKind).not.toBe("completion");
+    expect(result.codexAppServerFailure?.replaySafe).toBe(false);
+    expect(result.codexAppServerFailure?.replayBlockedReason).toBe("assistant_output");
+    expect(result.codexAppServerFailure?.diagnostics).toBeUndefined();
+    expect(result.promptTimeoutOutcome).toBeUndefined();
   });
 
   it("unsubscribes and closes the app-server client when the active turn goes idle past the attempt timeout", async () => {
@@ -2449,7 +2449,6 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const terminalWarnData = terminalWarnCall?.[1] as
       | {
           lastActivityReason?: string;
-          lastAssistantTextPreview?: string;
           lastNotificationItemId?: string;
           lastNotificationItemRole?: string;
           lastNotificationItemType?: string;
@@ -2467,7 +2466,6 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(terminalWarnData?.lastNotificationItemId).toBe("raw-status-1");
     expect(terminalWarnData?.lastNotificationItemType).toBe("message");
     expect(terminalWarnData?.lastNotificationItemRole).toBe("assistant");
-    expect(terminalWarnData?.lastAssistantTextPreview).toBe("I'm writing the report now.");
     expect(
       warn.mock.calls.some(
         ([message]) => message === "codex app-server turn idle timed out waiting for completion",
@@ -2829,11 +2827,16 @@ describe("runCodexAppServerAttempt turn watches", () => {
       aborted: result.aborted,
       timedOut: result.timedOut,
       promptError: result.promptError,
+      promptTimeoutOutcome: result.promptTimeoutOutcome,
       codexAppServerFailure: result.codexAppServerFailure,
-    }).toEqual({
+    }).toMatchObject({
       aborted: true,
       timedOut: true,
       promptError: "codex app-server turn idle timed out waiting for turn/completed",
+      promptTimeoutOutcome: {
+        message:
+          "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.",
+      },
       codexAppServerFailure: {
         kind: "turn_completion_idle_timeout",
         turnWatchTimeoutKind: "completion",
@@ -2841,6 +2844,16 @@ describe("runCodexAppServerAttempt turn watches", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         replaySafe: true,
+        diagnostics: {
+          timeoutMs: 15,
+          lastActivityReason: "turn:start",
+          activeAppServerTurnRequests: 0,
+          activeTurnItemCount: 0,
+          terminalTurnNotificationQueued: false,
+          completionIdleWatchArmed: true,
+          assistantCompletionIdleWatchArmed: false,
+          terminalIdleWatchArmed: true,
+        },
       },
     });
     await vi.waitFor(
