@@ -658,17 +658,6 @@
       "groupLabel": "Google",
       "groupHint": "Gemini API key + OAuth",
       "onboardingFeatured": true
-    },
-    {
-      "provider": "google-antigravity-cli",
-      "method": "oauth",
-      "choiceId": "google-antigravity-cli",
-      "choiceLabel": "Antigravity CLI OAuth",
-      "choiceHint": "Google OAuth delegated to the agy CLI",
-      "groupId": "google",
-      "groupLabel": "Google",
-      "groupHint": "Gemini API key + OAuth",
-      "onboardingFeatured": true
     }
   ],
   "uiHints": {
