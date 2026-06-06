@@ -25,6 +25,10 @@ function toMcpContentBlock(block: unknown): unknown {
     return block;
   }
 
+  if (typeof block.data === "string" && typeof block.mimeType === "string") {
+    return block;
+  }
+
   const source = block.source;
   if (
     isRecord(source) &&
@@ -32,17 +36,10 @@ function toMcpContentBlock(block: unknown): unknown {
     typeof source.data === "string" &&
     typeof source.media_type === "string"
   ) {
-    return block;
-  }
-
-  if (typeof block.data === "string" && typeof block.mimeType === "string") {
     return {
       type: "image",
-      source: {
-        type: "base64",
-        media_type: block.mimeType,
-        data: block.data,
-      },
+      data: source.data,
+      mimeType: source.media_type,
     };
   }
 
