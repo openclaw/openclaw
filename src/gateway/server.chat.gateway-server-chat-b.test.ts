@@ -841,6 +841,7 @@ describe("gateway server chat", () => {
 
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const abortResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const broadcast = vi.fn();
       const context = {
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         logGateway: {
@@ -861,7 +862,7 @@ describe("gateway server chat", () => {
         clearChatRunState: vi.fn(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
-        broadcast: vi.fn(),
+        broadcast,
         nodeSendToSession: vi.fn(),
         registerToolEventRecipient: vi.fn(),
         getRuntimeConfig: () => ({}),
@@ -955,7 +956,7 @@ describe("gateway server chat", () => {
           endedAt: expect.any(Number),
         }),
       );
-      const chatBroadcasts = context.broadcast.mock.calls
+      const chatBroadcasts = broadcast.mock.calls
         .filter(([event]) => event === "chat")
         .map(([, payload]) => payload as { runId?: string; state?: string });
       expect(chatBroadcasts).toEqual(
@@ -994,6 +995,7 @@ describe("gateway server chat", () => {
 
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const abortResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const broadcast = vi.fn();
       const context = {
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         logGateway: {
@@ -1014,7 +1016,7 @@ describe("gateway server chat", () => {
         clearChatRunState: vi.fn(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
-        broadcast: vi.fn(),
+        broadcast,
         nodeSendToSession: vi.fn(),
         registerToolEventRecipient: vi.fn(),
         getRuntimeConfig: () => ({}),
@@ -1024,12 +1026,11 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
         const recorder = (args as { replyOptions?: GetReplyOptions }).replyOptions
           ?.userTurnTranscriptRecorder;
-        recorder?.markRuntimePersistencePending({
-          then: (resolve: () => void, reject: (reason?: unknown) => void) => {
-            runtimePersistenceStarted = true;
-            return runtimePersistenceRelease.promise.then(resolve, reject);
-          },
-        } as unknown as Promise<void>);
+        const runtimePersistence = new Promise<void>((resolve, reject) => {
+          runtimePersistenceStarted = true;
+          runtimePersistenceRelease.promise.then(resolve, reject);
+        });
+        recorder?.markRuntimePersistencePending(runtimePersistence);
         throw new Error("dispatch failed before late abort");
       });
 
@@ -1109,7 +1110,7 @@ describe("gateway server chat", () => {
         );
       }, FAST_WAIT_OPTS);
 
-      const chatBroadcasts = context.broadcast.mock.calls
+      const chatBroadcasts = broadcast.mock.calls
         .filter(([event]) => event === "chat")
         .map(([, payload]) => payload as { runId?: string; state?: string });
       expect(chatBroadcasts).toEqual(
