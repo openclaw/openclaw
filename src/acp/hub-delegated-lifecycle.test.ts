@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   clearHubDelegatedSessionMarker,
@@ -88,6 +89,65 @@ describe("hub-delegated lifecycle", () => {
         },
       });
       expect(events).toEqual(["close", "unbind"]);
+    });
+  });
+
+  it("restores hubDelegated when runtime close fails", async () => {
+    await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
+      const storePath = path.join(home, "agents/codex/sessions/sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      const sessionKey = "agent:codex:acp:close-restore";
+      const marker = {
+        ownerSessionKey: "agent:main:main",
+        createdAt: Date.now(),
+      };
+      const entry: SessionEntry = {
+        sessionId: "sess-close-restore",
+        updatedAt: Date.now(),
+        hubDelegated: marker,
+      };
+      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+
+      await expect(
+        closeHubDelegatedAcpWorker({
+          cfg: { session: { store: storePath } },
+          sessionKey,
+          storePath,
+          storeSessionKey: sessionKey,
+          reason: "manual-delegate-close",
+          closeRuntime: async () => {
+            throw new Error("close failed");
+          },
+        }),
+      ).rejects.toThrow("close failed");
+
+      const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+        string,
+        SessionEntry
+      >;
+      expect(persisted[sessionKey]?.hubDelegated).toEqual(marker);
+    });
+  });
+
+  it("lists hub-delegated rows from discovered stores for unconfigured harness agents", async () => {
+    await withStateDirEnv("openclaw-hub-delegate-life-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "agents/retired-harness/sessions/sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      const sessionKey = "agent:retired-harness:acp:orphan-delegate";
+      const entry: SessionEntry = {
+        sessionId: "sess-orphan-delegate",
+        updatedAt: Date.now(),
+        label: "orphan",
+        hubDelegated: {
+          ownerSessionKey: "agent:main:main",
+          createdAt: Date.now(),
+        },
+      };
+      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+      runtimeConfigState.cfg = {};
+
+      const entries = await listHubDelegatedMaintenanceCandidates({});
+      expect(entries.some((candidate) => candidate.sessionKey === sessionKey)).toBe(true);
     });
   });
 

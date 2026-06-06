@@ -1,5 +1,9 @@
 // Resolves configured ACP harness agent ids for store scans and spawn routing.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  resolveAllAgentSessionStoreTargetsSync,
+  type SessionStoreTarget,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { listAgentIds } from "./agent-scope.js";
@@ -37,4 +41,9 @@ export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): stri
     }
   }
   return Array.from(ids);
+}
+
+/** Resolves configured and on-disk agent session stores for ACP maintenance scans. */
+export function resolveDiscoveredAcpSessionStoreTargets(cfg: OpenClawConfig): SessionStoreTarget[] {
+  return resolveAllAgentSessionStoreTargetsSync(cfg);
 }

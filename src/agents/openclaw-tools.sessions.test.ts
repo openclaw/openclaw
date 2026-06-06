@@ -1230,13 +1230,13 @@ describe("sessions tools", () => {
     );
   });
 
-  it("sessions_send scopes label resolve to the requester owner", async () => {
+  it("sessions_send scopes hub-delegated label resolve to owner only when needed", async () => {
     const requesterKey = "agent:main:webchat:main";
     const targetKey = "agent:codex:acp:delegate-child";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
       if (request.method === "sessions.resolve") {
-        expect(request.params?.spawnedBy).toBe(requesterKey);
+        expect(request.params?.spawnedBy).toBeUndefined();
         return { key: targetKey };
       }
       if (request.method === "agent") {
@@ -1294,6 +1294,130 @@ describe("sessions tools", () => {
         (call) => (call[0] as { method?: string }).method === "sessions.resolve",
       ),
     ).toBe(true);
+  });
+
+  it("sessions_send resolves generic labels without spawnedBy under visibility=all", async () => {
+    const requesterKey = "agent:main:webchat:main";
+    const targetKey = "agent:beta:discord:channel:123";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        expect(request.params?.spawnedBy).toBeUndefined();
+        return { key: targetKey };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-visible", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-visible", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "visible reply" }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? {
+            sessionId: "visible-session",
+            updatedAt: 1,
+            label: "shared-label",
+          }
+        : undefined,
+    );
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "webchat",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-generic-label", {
+      label: "shared-label",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("ok");
+  });
+
+  it("sessions_send retries hub-delegated label resolve with spawnedBy after ambiguity", async () => {
+    const requesterKey = "agent:main:webchat:main";
+    const targetKey = "agent:codex:acp:delegate-child";
+    let resolveAttempts = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        resolveAttempts += 1;
+        if (!request.params?.spawnedBy) {
+          throw new Error(
+            "Multiple sessions found with label: refactor (agent:codex:acp:a, agent:codex:acp:b)",
+          );
+        }
+        expect(request.params?.spawnedBy).toBe(requesterKey);
+        return { key: targetKey };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-child", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "child reply" }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? {
+            sessionId: "child-session",
+            updatedAt: 1,
+            spawnedBy: requesterKey,
+            parentSessionKey: requesterKey,
+            hubDelegated: {
+              ownerSessionKey: requesterKey,
+              createdAt: 1,
+            },
+            label: "refactor",
+          }
+        : undefined,
+    );
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "webchat",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-label-retry", {
+      label: "refactor",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("ok");
+    expect(resolveAttempts).toBe(2);
   });
 
   it("sessions_send resolves sessionId inputs", async () => {

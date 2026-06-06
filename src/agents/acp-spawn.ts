@@ -82,7 +82,10 @@ import {
   resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
-import { resolveConfiguredAcpSubagentTargetIds } from "./acp-subagent-targets.js";
+import {
+  resolveConfiguredAcpSubagentTargetIds,
+  resolveDiscoveredAcpSessionStoreTargets,
+} from "./acp-subagent-targets.js";
 import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -389,9 +392,8 @@ function findHubDelegateLabelConflict(params: {
   if (!ownerSessionKey || !label) {
     return undefined;
   }
-  for (const agentId of resolveConfiguredAcpSubagentTargetIds(params.cfg)) {
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-    const store = loadSessionStore(storePath);
+  for (const target of resolveDiscoveredAcpSessionStoreTargets(params.cfg)) {
+    const store = loadSessionStore(target.storePath);
     for (const [sessionKey, entry] of Object.entries(store)) {
       if (
         isHubDelegatedAcpSessionEntry(entry) &&

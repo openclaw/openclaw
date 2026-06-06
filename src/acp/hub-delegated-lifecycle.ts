@@ -3,10 +3,11 @@ import {
   isHubDelegatedAcpSessionEntry,
   resolveHubDelegatedAcpPolicy,
   resolveHubDelegatedExpiry,
+  type HubDelegatedSessionMeta,
 } from "@openclaw/acp-core";
-import { resolveConfiguredAcpSubagentTargetIds } from "../agents/acp-subagent-targets.js";
+import { resolveDiscoveredAcpSessionStoreTargets } from "../agents/acp-subagent-targets.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { loadSessionStore } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "./runtime/session-meta.js";
@@ -35,6 +36,47 @@ export async function clearHubDelegatedSessionMarker(params: {
   );
 }
 
+function readHubDelegatedSessionMarker(params: {
+  storePath: string;
+  storeSessionKey: string;
+}): HubDelegatedSessionMeta | undefined {
+  let store: Record<string, SessionEntry>;
+  try {
+    store = loadSessionStore(params.storePath, { clone: false });
+  } catch {
+    return undefined;
+  }
+  const entry = store[params.storeSessionKey];
+  if (!isHubDelegatedAcpSessionEntry(entry) || !entry.hubDelegated) {
+    return undefined;
+  }
+  return entry.hubDelegated;
+}
+
+export async function restoreHubDelegatedSessionMarker(params: {
+  storePath: string;
+  storeSessionKey: string;
+  marker: HubDelegatedSessionMeta;
+}): Promise<void> {
+  const { updateSessionStore } = await import("../config/sessions/store.js");
+  await updateSessionStore(
+    params.storePath,
+    (store) => {
+      const entry = store[params.storeSessionKey];
+      if (!entry) {
+        return null;
+      }
+      const next = { ...entry, hubDelegated: params.marker };
+      store[params.storeSessionKey] = next;
+      return next;
+    },
+    {
+      skipMaintenance: true,
+      activeSessionKey: params.storeSessionKey,
+    },
+  );
+}
+
 export async function closeHubDelegatedAcpWorker(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -48,17 +90,38 @@ export async function closeHubDelegatedAcpWorker(params: {
   }) => Promise<void>;
   unbind?: (input: { targetSessionKey: string; reason: string }) => Promise<unknown>;
 }): Promise<void> {
-  // Drop the delegate marker before runtime close so missing-metadata repair cannot
-  // resurrect a worker whose sqlite metadata was already cleared.
-  await clearHubDelegatedSessionMarker({
+  const markerSnapshot = readHubDelegatedSessionMarker({
     storePath: params.storePath,
     storeSessionKey: params.storeSessionKey,
   });
-  await params.closeRuntime({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    reason: params.reason,
-  });
+  if (markerSnapshot) {
+    // Drop the delegate marker before runtime close so missing-metadata repair cannot
+    // resurrect a worker whose sqlite metadata was already cleared.
+    await clearHubDelegatedSessionMarker({
+      storePath: params.storePath,
+      storeSessionKey: params.storeSessionKey,
+    });
+  }
+  try {
+    await params.closeRuntime({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      reason: params.reason,
+    });
+  } catch (err) {
+    if (markerSnapshot) {
+      try {
+        await restoreHubDelegatedSessionMarker({
+          storePath: params.storePath,
+          storeSessionKey: params.storeSessionKey,
+          marker: markerSnapshot,
+        });
+      } catch {
+        // Best-effort restore keeps maintenance/operator paths able to retry close.
+      }
+    }
+    throw err;
+  }
   try {
     await params.unbind?.({
       targetSessionKey: params.sessionKey,
@@ -74,8 +137,8 @@ export async function listHubDelegatedMaintenanceCandidates(params: {
 }): Promise<AcpSessionStoreEntry[]> {
   const cfg = params.cfg ?? getRuntimeConfig();
   const bySessionKey = new Map<string, AcpSessionStoreEntry>();
-  for (const agentId of resolveConfiguredAcpSubagentTargetIds(cfg)) {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  for (const target of resolveDiscoveredAcpSessionStoreTargets(cfg)) {
+    const storePath = target.storePath;
     let store: Record<string, SessionEntry>;
     try {
       store = loadSessionStore(storePath, { clone: false });

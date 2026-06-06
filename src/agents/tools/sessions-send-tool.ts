@@ -4,6 +4,7 @@
  * Sends messages to visible sessions, starts embedded runs, and optionally announces replies.
  */
 import crypto from "node:crypto";
+import { isHubDelegatedAcpSessionEntry } from "@openclaw/acp-core";
 import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -204,6 +205,104 @@ function isPendingErrorAgentWaitTimeout(result: AgentWaitResult): boolean {
   );
 }
 
+function isHubDelegatedLabelResolveRetryError(error: string): boolean {
+  const normalized = error.trim().toLowerCase();
+  return (
+    normalized.includes("no session found with label") ||
+    normalized.includes("multiple sessions found with label")
+  );
+}
+
+async function resolveSessionsSendLabelSessionKey(params: {
+  gatewayCall: GatewayCaller;
+  label: string;
+  requestedAgentId?: string;
+  effectiveRequesterKey: string | null | undefined;
+  restrictToSpawned: boolean;
+}): Promise<
+  { ok: true; key: string } | { ok: false; status: "error" | "forbidden"; error: string }
+> {
+  const requesterKey = normalizeOptionalString(params.effectiveRequesterKey);
+  const baseParams: Record<string, unknown> = {
+    label: params.label,
+    ...(params.requestedAgentId ? { agentId: params.requestedAgentId } : {}),
+  };
+
+  const tryResolve = async (
+    resolveParams: Record<string, unknown>,
+  ): Promise<{ ok: true; key: string } | { ok: false; error: string }> => {
+    try {
+      const resolved = await params.gatewayCall<{ key: string }>({
+        method: "sessions.resolve",
+        params: resolveParams,
+        timeoutMs: 10_000,
+      });
+      const key = normalizeOptionalString(resolved?.key) ?? "";
+      if (!key) {
+        return { ok: false, error: `No session found with label: ${params.label}` };
+      }
+      return { ok: true, key };
+    } catch (err) {
+      return { ok: false, error: formatErrorMessage(err) };
+    }
+  };
+
+  const assertHubDelegateOwner = (
+    key: string,
+  ): { ok: true; key: string } | { ok: false; status: "forbidden"; error: string } => {
+    const entry = loadSessionEntryByKey(key);
+    if (
+      entry &&
+      isHubDelegatedAcpSessionEntry(entry) &&
+      entry.hubDelegated &&
+      requesterKey &&
+      normalizeOptionalString(entry.hubDelegated.ownerSessionKey) !== requesterKey
+    ) {
+      return {
+        ok: false,
+        status: "forbidden",
+        error: "Hub-delegated session label is owned by another session.",
+      };
+    }
+    return { ok: true, key };
+  };
+
+  if (params.restrictToSpawned) {
+    if (!requesterKey) {
+      return {
+        ok: false,
+        status: "forbidden",
+        error: "Session not visible from this sandboxed agent session.",
+      };
+    }
+    const scoped = await tryResolve({ ...baseParams, spawnedBy: requesterKey });
+    if (!scoped.ok) {
+      return {
+        ok: false,
+        status: "forbidden",
+        error: "Session not visible from this sandboxed agent session.",
+      };
+    }
+    return assertHubDelegateOwner(scoped.key);
+  }
+
+  let resolved = await tryResolve(baseParams);
+  if (!resolved.ok && requesterKey && isHubDelegatedLabelResolveRetryError(resolved.error)) {
+    const scoped = await tryResolve({ ...baseParams, spawnedBy: requesterKey });
+    if (scoped.ok) {
+      resolved = scoped;
+    }
+  }
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      status: "error",
+      error: resolved.error || `No session found with label: ${params.label}`,
+    };
+  }
+  return assertHubDelegateOwner(resolved.key);
+}
+
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
   runId: string;
@@ -389,50 +488,21 @@ export function createSessionsSendTool(opts?: {
           }
         }
 
-        const resolveParams: Record<string, unknown> = {
+        const labelResolve = await resolveSessionsSendLabelSessionKey({
+          gatewayCall,
           label: labelParam,
-          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-          ...(effectiveRequesterKey ? { spawnedBy: effectiveRequesterKey } : {}),
-        };
-        let resolvedKey;
-        try {
-          const resolved = await gatewayCall<{ key: string }>({
-            method: "sessions.resolve",
-            params: resolveParams,
-            timeoutMs: 10_000,
-          });
-          resolvedKey = normalizeOptionalString(resolved?.key) ?? "";
-        } catch (err) {
-          const msg = formatErrorMessage(err);
-          if (restrictToSpawned) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error: "Session not visible from this sandboxed agent session.",
-            });
-          }
+          requestedAgentId,
+          effectiveRequesterKey,
+          restrictToSpawned,
+        });
+        if (!labelResolve.ok) {
           return jsonResult({
             runId: crypto.randomUUID(),
-            status: "error",
-            error: msg || `No session found with label: ${labelParam}`,
+            status: labelResolve.status,
+            error: labelResolve.error,
           });
         }
-
-        if (!resolvedKey) {
-          if (restrictToSpawned) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error: "Session not visible from this sandboxed agent session.",
-            });
-          }
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "error",
-            error: `No session found with label: ${labelParam}`,
-          });
-        }
-        sessionKey = resolvedKey;
+        sessionKey = labelResolve.key;
       }
 
       if (!sessionKey) {
