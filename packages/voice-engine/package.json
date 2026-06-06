@@ -1,14 +1,13 @@
 {
   "name": "@jarvis/voice-engine",
   "version": "2026.6.2",
-  "description": "Jarvis Voice-to-Voice Engine with NVIDIA Riva, ElevenLabs, and system TTS support",
+  "description": "Jarvis Voice-to-Voice Engine with NVIDIA Riva integration and laptop control",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
       "types": "./dist/index.d.ts"
     }
   },
@@ -16,37 +15,28 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest",
-    "lint": "eslint src/**/*.ts"
+    "lint": "eslint src/"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
-    "node-fetch": "^3.3.2",
-    "socket.io-client": "^4.7.2"
+    "@grpc/grpc-js": "^1.11.0",
+    "@grpc/proto-loader": "^0.7.13",
+    "axios": "^1.6.0",
+    "dotenv": "^16.4.0",
+    "form-data": "^4.0.1"
   },
   "devDependencies": {
-    "@types/node": "^20.10.6",
-    "typescript": "^5.3.3",
-    "vitest": "^1.1.0"
-  },
-  "engines": {
-    "node": ">=22.19.0"
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
   },
   "keywords": [
     "jarvis",
     "voice",
-    "speech-to-text",
-    "text-to-speech",
-    "nvidia-riva",
-    "elevenlabs",
     "tts",
     "stt",
-    "ai-assistant"
-  ],
-  "author": "Jarvis Team",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/narikootma-ai/openclaw.git",
-    "directory": "packages/voice-engine"
-  }
+    "nvidia-riva",
+    "elevenlabs",
+    "speech-recognition",
+    "text-to-speech"
+  ]
 }
