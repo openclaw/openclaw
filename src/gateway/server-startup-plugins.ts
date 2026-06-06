@@ -171,16 +171,6 @@ export async function prepareGatewayPluginBootstrap(params: {
 
   const runtimePluginsLoaded =
     !params.minimalTestGateway && shouldLoadRuntimePlugins && !shouldLoadSetupRuntimePlugins;
-  if (runtimePluginsLoaded) {
-    // Surface configured memory embedding providers that no loaded plugin
-    // registered so semantic recall silently dropping to keyword/FTS-only is
-    // diagnosable from gateway startup logs.
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: gatewayPluginConfig,
-      pluginRegistry,
-      log: params.log,
-    });
-  }
 
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
@@ -242,7 +232,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
   const { loadGatewayStartupPlugins } = await import("./server-plugin-bootstrap.js");
-  return loadGatewayStartupPlugins({
+  const loaded = await loadGatewayStartupPlugins({
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
     workspaceDir: params.workspaceDir,
@@ -258,4 +248,15 @@ export async function loadGatewayStartupPluginRuntime(params: {
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
     startupTrace: params.startupTrace,
   });
+  if (params.preferSetupRuntimeForChannelPlugins !== true) {
+    // Surface configured memory embedding providers after the full startup
+    // runtime load; setup-runtime pre-bind loads intentionally register only
+    // early channel hooks and would produce false missing-provider warnings.
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: params.cfg,
+      pluginRegistry: loaded.pluginRegistry,
+      log: params.log,
+    });
+  }
+  return loaded;
 }

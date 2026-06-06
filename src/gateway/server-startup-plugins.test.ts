@@ -436,6 +436,64 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
   });
 });
 
+describe("loadGatewayStartupPluginRuntime memory provider diagnostics", () => {
+  beforeEach(() => {
+    loadGatewayStartupPlugins.mockClear().mockReturnValue({
+      pluginRegistry: { diagnostics: [], gatewayHandlers: {}, plugins: [] },
+      gatewayMethods: ["ping"],
+    });
+  });
+
+  it("warns after a full startup runtime load when configured memory embedding providers stay unregistered", async () => {
+    const log = createLog();
+    const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
+
+    await loadGatewayStartupPluginRuntime({
+      cfg: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "voyage",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/workspace",
+      log,
+      baseMethods: ["ping"],
+      startupPluginIds: ["voyage"],
+    });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('memorySearch.provider="voyage"'),
+    );
+  });
+
+  it("does not warn during setup-runtime pre-bind loads", async () => {
+    const log = createLog();
+    const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
+
+    await loadGatewayStartupPluginRuntime({
+      cfg: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "voyage",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/workspace",
+      log,
+      baseMethods: ["ping"],
+      startupPluginIds: ["telegram"],
+      preferSetupRuntimeForChannelPlugins: true,
+    });
+
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+});
+
 describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
   function registry(providerIds: string[], options: { embeddingProviderIds?: string[] } = {}) {
     return {
