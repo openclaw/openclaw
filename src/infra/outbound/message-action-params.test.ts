@@ -578,6 +578,35 @@ describe("message action media helpers", () => {
     expect(args.contentType).toBeUndefined();
   });
 
+  it("promotes buffer-only structured attachments to top-level args (#90768)", async () => {
+    // Buffer-only attachments (no media/path/url) used to be invisible to the
+    // structured-attachment resolver, so message.send/reply with just a
+    // base64 buffer + filename + contentType silently dropped the file.
+    const base64 = Buffer.from("hello-bytes").toString("base64");
+    const args: Record<string, unknown> = {
+      attachments: [
+        {
+          buffer: base64,
+          filename: "memo.txt",
+          contentType: "text/plain",
+        },
+      ],
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "imessage",
+      args,
+      action: "sendAttachment",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.buffer).toBe(base64);
+    expect(args.filename).toBe("memo.txt");
+    expect(args.contentType).toBe("text/plain");
+  });
+
   it("does not fall back caption->message on reply (reply has its own text field)", async () => {
     // sendAttachment uses caption as the body text and falls back from
     // message -> caption when the agent only supplied `message`. Reply has

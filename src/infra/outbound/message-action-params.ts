@@ -49,7 +49,7 @@ type StructuredAttachmentSource = {
   attachment: Record<string, unknown>;
   key: string;
   value: string;
-  kind: "media" | "file";
+  kind: "media" | "file" | "buffer";
   contentType?: string;
   filename?: string;
 };
@@ -107,6 +107,7 @@ function collectStructuredAttachmentSources(
     if (!isRecord(attachment)) {
       continue;
     }
+    let matched = false;
     for (const key of STRUCTURED_ATTACHMENT_MEDIA_SOURCE_PARAM_KEYS) {
       const entry = resolveMediaParamEntry(attachment, key);
       if (!entry || !normalizeOptionalString(entry.value)) {
@@ -121,8 +122,31 @@ function collectStructuredAttachmentSources(
           readStringParam(attachment, "contentType") ?? readStringParam(attachment, "mimeType"),
         filename: readStringParam(attachment, "filename") ?? readStringParam(attachment, "name"),
       });
+      matched = true;
       break;
     }
+    if (matched) {
+      continue;
+    }
+    // Buffer-only attachments carry no media path/URL; surface them so the
+    // runner can hydrate the buffer onto top-level args before channel dispatch.
+    const bufferKey = resolveSnakeCaseParamKey(attachment, "buffer");
+    if (!bufferKey) {
+      continue;
+    }
+    const bufferValue = readStringParam(attachment, "buffer", { trim: false });
+    if (!bufferValue) {
+      continue;
+    }
+    sources.push({
+      attachment,
+      key: bufferKey,
+      value: bufferValue,
+      kind: "buffer",
+      contentType:
+        readStringParam(attachment, "contentType") ?? readStringParam(attachment, "mimeType"),
+      filename: readStringParam(attachment, "filename") ?? readStringParam(attachment, "name"),
+    });
   }
   return sources;
 }
@@ -501,6 +525,15 @@ async function hydrateAttachmentActionPayload(params: {
   }
   if (attachmentSource?.contentType && !readStringParam(params.args, "contentType")) {
     params.args.contentType = attachmentSource.contentType;
+  }
+  // Buffer-only structured attachments carry no media path/URL. Promote the
+  // raw base64 to top-level args so downstream hydration treats them like a
+  // direct buffer send instead of dropping the attachment.
+  if (
+    attachmentSource?.kind === "buffer" &&
+    !readStringParam(params.args, "buffer", { trim: false })
+  ) {
+    params.args.buffer = attachmentSource.value;
   }
 
   if (params.allowMessageCaptionFallback) {
