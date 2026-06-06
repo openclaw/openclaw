@@ -1,6 +1,7 @@
 // Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
   emitInternalDiagnosticEvent,
+  getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticSessionActiveWorkKind,
@@ -331,10 +332,56 @@ export function markDiagnosticEmbeddedRunEnded(params: {
   // emitted completion would otherwise survive and re-block later turns on the
   // same sessionKey as blocked_tool_call. A still-active inner run keeps them.
   const clearAllActivity = params.clearRunActivity !== false;
-  if (clearAllActivity || activity.activeEmbeddedRuns.size === 0) {
-    clearActiveRunMarkers(activity, clearAllActivity ? undefined : "orphaned_no_owner");
+  if (clearAllActivity) {
+    clearActiveRunMarkers(activity, undefined);
+  } else if (activity.activeEmbeddedRuns.size === 0) {
+    evictOrphanedActivityMarkers(activity, params);
   }
   touchSessionActivity(activity, "embedded_run:ended");
+}
+
+// Owner-less reply-run teardown: the embedded owner is gone, so any leftover
+// tool/model markers are orphaned and must be evicted. Tool/model start events
+// are async-queued, so a start emitted before this teardown can still drain
+// after it; without a sequence cutoff that late start would re-arm an owner-less
+// marker and restore the blocked_tool_call leak. Fence the session owner refs at
+// the current event sequence (mirrors stuck-session recovery) before clearing.
+function evictOrphanedActivityMarkers(
+  activity: SessionActivity,
+  params: { sessionId?: string; sessionKey?: string },
+): void {
+  rememberRecoveredOwnerStartEventCutoffs(
+    activity,
+    collectOrphanOwnerRefs(activity, params),
+    getInternalDiagnosticEventSequence(),
+  );
+  clearActiveRunMarkers(activity, "orphaned_no_owner");
+}
+
+function collectOrphanOwnerRefs(
+  activity: SessionActivity,
+  params: { sessionId?: string },
+): Set<string> {
+  const refs = new Set<string>();
+  const add = (ref: string | undefined) => {
+    const trimmed = ref?.trim();
+    if (trimmed) {
+      refs.add(trimmed);
+    }
+  };
+  // The session id covers a late start for this run even if no marker has been
+  // recorded yet; marker run/session ids cover starts that key off a run id.
+  add(params.sessionId);
+  add(activity.sessionId);
+  for (const tool of activity.activeTools.values()) {
+    add(tool.runId);
+    add(tool.sessionId);
+  }
+  for (const modelCall of activity.activeModelCalls.values()) {
+    add(modelCall.runId);
+    add(modelCall.sessionId);
+  }
+  return refs;
 }
 
 // Clears all tool/model markers for a session. When an evictReason is given the

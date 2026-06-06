@@ -1,7 +1,11 @@
 // Tests active reply run registry add, lookup, and cleanup behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
-import { onInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import {
+  emitInternalDiagnosticEvent,
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../../infra/diagnostic-events.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticToolStartedForTest,
@@ -135,6 +139,31 @@ describe("reply run registry", () => {
       evictedTools: 1,
       evictedModelCalls: 0,
     });
+  });
+
+  it("ignores a tool start that drains after an owner-less reply completion", async () => {
+    const sessionKey = "agent:main:slack:channel:chat-2";
+    const sessionId = "session-1";
+    const op = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+
+    // A native tool start is emitted while the run is active but stays queued in
+    // the async diagnostic pipeline (not yet drained into activity state).
+    emitInternalDiagnosticEvent({
+      type: "tool.execution.started",
+      runId: "run-1",
+      sessionId,
+      sessionKey,
+      toolName: "bash",
+      toolCallId: "t1",
+    });
+
+    // The reply run completes (owner-less teardown) before the start drains.
+    op.complete();
+    expect(getDiagnosticSessionActivitySnapshot({ sessionKey }).activeWorkKind).toBeUndefined();
+
+    // Draining the queued start must NOT re-arm an owner-less marker.
+    await waitForDiagnosticEventsDrained();
+    expect(getDiagnosticSessionActivitySnapshot({ sessionKey }).activeWorkKind).toBeUndefined();
   });
 
   it("clears queued operations immediately on user abort", () => {
