@@ -71,6 +71,8 @@ type QueueEntry = {
   taskTimeoutProgressAtMs?: () => number | undefined;
   onWait?: CommandQueueEnqueueOptions["onWait"];
   rejectOnWait?: CommandQueueEnqueueOptions["rejectOnWait"];
+  waitTimer?: ReturnType<typeof setTimeout>;
+  waitNotified?: boolean;
 };
 
 type LaneState = {
@@ -256,6 +258,13 @@ function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]):
   }
 }
 
+function clearEntryWaitTimer(entry: QueueEntry): void {
+  if (entry.waitTimer) {
+    clearTimeout(entry.waitTimer);
+    entry.waitTimer = undefined;
+  }
+}
+
 function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
   const insertAt = state.queue.findIndex(
     (queued) =>
@@ -269,6 +278,79 @@ function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
     return;
   }
   state.queue.splice(insertAt, 0, entry);
+}
+
+function createWaitInfo(lane: string, state: LaneState, entry: QueueEntry): CommandQueueWaitInfo {
+  const queueIndex = state.queue.indexOf(entry);
+  return {
+    lane,
+    waitedMs: Math.max(0, Date.now() - entry.enqueuedAt),
+    warnAfterMs: entry.warnAfterMs,
+    queueAhead: entry.queuedAheadAtEnqueue,
+    activeAhead: entry.activeAheadAtEnqueue,
+    activeNow: state.activeTaskIds.size,
+    queueBehind:
+      queueIndex >= 0 ? Math.max(0, state.queue.length - queueIndex - 1) : state.queue.length,
+  };
+}
+
+function notifyEntryWaitExceeded(lane: string, state: LaneState, entry: QueueEntry): unknown {
+  if (entry.waitNotified) {
+    return undefined;
+  }
+  entry.waitNotified = true;
+  const waitInfo = createWaitInfo(lane, state, entry);
+  try {
+    entry.onWait?.(waitInfo.waitedMs, entry.queuedAheadAtEnqueue, waitInfo);
+  } catch (err) {
+    diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
+  }
+  let waitRejection: unknown;
+  if (entry.rejectOnWait) {
+    try {
+      waitRejection = entry.rejectOnWait(waitInfo);
+    } catch (err) {
+      waitRejection = err;
+    }
+  }
+  diag.warn(
+    `lane wait exceeded: lane=${lane} waitedMs=${waitInfo.waitedMs} queueAhead=${waitInfo.queueAhead} ` +
+      `activeAhead=${waitInfo.activeAhead} activeNow=${waitInfo.activeNow} queueBehind=${waitInfo.queueBehind}`,
+  );
+  return waitRejection;
+}
+
+function removeQueuedEntry(state: LaneState, entry: QueueEntry): boolean {
+  const queueIndex = state.queue.indexOf(entry);
+  if (queueIndex < 0) {
+    return false;
+  }
+  state.queue.splice(queueIndex, 1);
+  clearEntryWaitTimer(entry);
+  return true;
+}
+
+function armQueuedWaitTimer(lane: string, state: LaneState, entry: QueueEntry): void {
+  if (!entry.onWait && !entry.rejectOnWait) {
+    return;
+  }
+  const delayMs = Math.max(0, entry.warnAfterMs);
+  entry.waitTimer = setTimeout(() => {
+    entry.waitTimer = undefined;
+    if (entry.waitNotified || !state.queue.includes(entry)) {
+      return;
+    }
+    const waitRejection = notifyEntryWaitExceeded(lane, state, entry);
+    if (waitRejection === undefined) {
+      return;
+    }
+    if (!removeQueuedEntry(state, entry)) {
+      return;
+    }
+    entry.reject(waitRejection);
+    drainLane(lane);
+  }, delayMs);
+  entry.waitTimer.unref?.();
 }
 
 async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unknown> {
@@ -341,34 +423,11 @@ function drainLane(lane: string) {
     try {
       while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
         const entry = state.queue.shift() as QueueEntry;
+        clearEntryWaitTimer(entry);
         const waitedMs = Date.now() - entry.enqueuedAt;
         let waitRejection: unknown;
-        if (waitedMs >= entry.warnAfterMs) {
-          const waitInfo: CommandQueueWaitInfo = {
-            lane,
-            waitedMs,
-            warnAfterMs: entry.warnAfterMs,
-            queueAhead: entry.queuedAheadAtEnqueue,
-            activeAhead: entry.activeAheadAtEnqueue,
-            activeNow: state.activeTaskIds.size,
-            queueBehind: state.queue.length,
-          };
-          try {
-            entry.onWait?.(waitedMs, entry.queuedAheadAtEnqueue, waitInfo);
-          } catch (err) {
-            diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
-          }
-          if (entry.rejectOnWait) {
-            try {
-              waitRejection = entry.rejectOnWait(waitInfo);
-            } catch (err) {
-              waitRejection = err;
-            }
-          }
-          diag.warn(
-            `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${entry.queuedAheadAtEnqueue} ` +
-              `activeAhead=${entry.activeAheadAtEnqueue} activeNow=${state.activeTaskIds.size} queueBehind=${state.queue.length}`,
-          );
+        if (waitedMs >= entry.warnAfterMs && !entry.waitNotified) {
+          waitRejection = notifyEntryWaitExceeded(lane, state, entry);
         }
         logLaneDequeue(lane, waitedMs, state.queue.length);
         if (waitRejection !== undefined) {
@@ -455,7 +514,7 @@ export function enqueueCommandInLane<T>(
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
-    enqueueLaneEntry(state, {
+    const entry: QueueEntry = {
       task: () => task(),
       resolve: (value) => resolve(value as T),
       reject,
@@ -469,7 +528,9 @@ export function enqueueCommandInLane<T>(
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
       onWait: opts?.onWait,
       rejectOnWait: opts?.rejectOnWait,
-    });
+    };
+    enqueueLaneEntry(state, entry);
+    armQueuedWaitTimer(cleaned, state, entry);
     logLaneEnqueue(cleaned, getLaneDepth(state));
     drainLane(cleaned);
   });
@@ -530,6 +591,7 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
   const removed = state.queue.length;
   const pending = state.queue.splice(0);
   for (const entry of pending) {
+    clearEntryWaitTimer(entry);
     entry.reject(new CommandLaneClearedError(cleaned));
   }
   return removed;
@@ -565,6 +627,11 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
 export function resetCommandQueueStateForTest(): void {
   const queueState = getQueueState();
   queueState.gatewayDraining = false;
+  for (const state of queueState.lanes.values()) {
+    for (const entry of state.queue) {
+      clearEntryWaitTimer(entry);
+    }
+  }
   queueState.lanes.clear();
   for (const waiter of Array.from(queueState.activeTaskWaiters)) {
     resolveActiveTaskWaiter(waiter, { drained: true });

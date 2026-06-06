@@ -345,15 +345,63 @@ describe("command queue", () => {
         return "third";
       });
 
+      const secondRejected = expect(second).rejects.toThrow(
+        new RegExp(`busy lane=${lane} waitedMs=\\d+ queueAhead=0 activeAhead=1`),
+      );
+
       await vi.advanceTimersByTimeAsync(6);
+      await secondRejected;
+      expect(calls).toEqual([]);
+
       blocker.resolve();
 
       await expect(first).resolves.toBe("first");
-      await expect(second).rejects.toThrow(
-        new RegExp(`busy lane=${lane} waitedMs=\\d+ queueAhead=0 activeAhead=1`),
-      );
       await expect(third).resolves.toBe("third");
       expect(calls).toEqual(["first", "third"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a waited entry while the active lane remains blocked", async () => {
+    vi.useFakeTimers();
+    try {
+      const lane = `reject-while-active-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      setCommandLaneConcurrency(lane, 1);
+      const blocker = createDeferred();
+      let queuedTaskRan = false;
+
+      const first = enqueueCommandInLane(lane, async () => {
+        await blocker.promise;
+        return "first";
+      });
+      const second = enqueueCommandInLane(
+        lane,
+        async () => {
+          queuedTaskRan = true;
+          return "second";
+        },
+        {
+          warnAfterMs: 5,
+          rejectOnWait: (info) =>
+            new Error(
+              `busy lane=${info.lane} waitedMs=${info.waitedMs} activeNow=${info.activeNow} queueBehind=${info.queueBehind}`,
+            ),
+        },
+      );
+
+      const secondRejected = expect(second).rejects.toThrow(
+        new RegExp(`busy lane=${lane} waitedMs=\\d+ activeNow=1 queueBehind=0`),
+      );
+
+      await vi.advanceTimersByTimeAsync(6);
+      await secondRejected;
+      expect(queuedTaskRan).toBe(false);
+      expectLaneSnapshotFields(lane, { activeCount: 1, queuedCount: 0 });
+
+      blocker.resolve();
+      await expect(first).resolves.toBe("first");
+      expect(queuedTaskRan).toBe(false);
     } finally {
       vi.useRealTimers();
     }
