@@ -34,6 +34,9 @@ const state = vi.hoisted(() => ({
   queueEmbeddedAgentMessageMock: vi.fn(),
   runEmbeddedAgentMock: vi.fn(),
 }));
+const diagnosticMocks = vi.hoisted(() => ({
+  markDiagnosticSessionPendingFinalDelivery: vi.fn(),
+}));
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -111,6 +114,16 @@ vi.mock("./queue.js", () => ({
   refreshQueuedFollowupSession: vi.fn(),
   scheduleFollowupDrain: vi.fn(),
 }));
+vi.mock("../../logging/diagnostic.js", async () => {
+  const actual = await vi.importActual<typeof import("../../logging/diagnostic.js")>(
+    "../../logging/diagnostic.js",
+  );
+  return {
+    ...actual,
+    markDiagnosticSessionPendingFinalDelivery:
+      diagnosticMocks.markDiagnosticSessionPendingFinalDelivery,
+  };
+});
 
 beforeAll(async () => {
   // Avoid attributing the initial agent-runner import cost to the first test case.
@@ -134,6 +147,7 @@ beforeEach(() => {
   });
   state.queueEmbeddedAgentMessageMock.mockReset();
   state.queueEmbeddedAgentMessageMock.mockReturnValue(false);
+  diagnosticMocks.markDiagnosticSessionPendingFinalDelivery.mockReset();
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(refreshQueuedFollowupSession).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
@@ -517,6 +531,11 @@ describe("runReplyAgent pending final delivery capture", () => {
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBe(true);
     expect(stored.pendingFinalDeliveryText).toBe("visible final");
+    expect(stored.pendingFinalDeliveryIntentId).toBe("msg");
+    expect(diagnosticMocks.markDiagnosticSessionPendingFinalDelivery).toHaveBeenCalledWith({
+      sessionKey: "main",
+      pending: true,
+    });
   });
 
   it("persists auto-reply delivery context for restart recovery", async () => {
@@ -568,6 +587,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       accountId: "work",
       threadId: "1503645939964055592",
     });
+    expect(stored.pendingFinalDeliveryIntentId).toBe("1503645939964055592");
     expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
   });

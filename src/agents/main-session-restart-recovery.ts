@@ -6,7 +6,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
+import {
+  resolveSlackDirectPendingFinalDeliveryContext,
+  sanitizePendingFinalDeliveryText,
+} from "../auto-reply/reply/pending-final-delivery.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   type SessionEntry,
@@ -369,11 +372,22 @@ function resolveRestartRecoveryDeliveryContext(params: {
   ) {
     return undefined;
   }
-  return {
-    ...deliveryContext,
-    channel,
-    to,
-  };
+  return (
+    resolveSlackDirectPendingFinalDeliveryContext({
+      context: {
+        ...deliveryContext,
+        channel,
+        to,
+      },
+      nativeChannelId: params.entry.origin?.nativeChannelId,
+      chatType: params.entry.origin?.chatType,
+      directUserTarget: params.entry.origin?.to,
+    }) ?? {
+      ...deliveryContext,
+      channel,
+      to,
+    }
+  );
 }
 
 async function resumeMainSession(params: {

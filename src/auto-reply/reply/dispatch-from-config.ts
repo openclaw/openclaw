@@ -137,6 +137,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   isSameRoutePendingFinalDeliveryReplaySafe,
   pendingFinalDeliveryClearedPatch,
+  resolveSlackDirectPendingFinalDeliveryContext,
   sanitizePendingFinalDeliveryText,
 } from "./pending-final-delivery.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
@@ -2090,7 +2091,13 @@ export async function dispatchReplyFromConfig(
     const replayPendingFinalDeliveryForCurrentRoute = async (): Promise<{
       queuedFinal: boolean;
       routedFinalCount: number;
+      replayedCurrentTurnFinal: boolean;
     }> => {
+      const noReplay = {
+        queuedFinal: false,
+        routedFinalCount: 0,
+        replayedCurrentTurnFinal: false,
+      };
       const entry = sessionStoreEntry.entry;
       if (
         !entry?.pendingFinalDelivery ||
@@ -2098,7 +2105,14 @@ export async function dispatchReplyFromConfig(
         suppressDelivery ||
         sendPolicyDenied
       ) {
-        return { queuedFinal: false, routedFinalCount: 0 };
+        return noReplay;
+      }
+      if (
+        !dispatchReplyOperation &&
+        preDispatchAbortOperation &&
+        !preDispatchAbortOperation.result
+      ) {
+        return noReplay;
       }
       const text = sanitizePendingFinalDeliveryText(entry.pendingFinalDeliveryText);
       if (!text) {
@@ -2106,23 +2120,36 @@ export async function dispatchReplyFromConfig(
           storePath: sessionStoreEntry.storePath,
           sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
         });
-        return { queuedFinal: false, routedFinalCount: 0 };
+        return noReplay;
       }
-      const currentContext = normalizeDeliveryContext({
-        channel: shouldRouteToOriginating
-          ? routeReplyChannel
-          : (replyRoute.channel ?? deliveryChannel),
-        to: shouldRouteToOriginating ? routeReplyTo : replyRoute.to,
-        accountId: replyRoute.accountId,
-        threadId: routeReplyThreadId,
+      const currentContext = resolveSlackDirectPendingFinalDeliveryContext({
+        context: normalizeDeliveryContext({
+          channel: shouldRouteToOriginating
+            ? routeReplyChannel
+            : (replyRoute.channel ?? deliveryChannel),
+          to: shouldRouteToOriginating ? routeReplyTo : replyRoute.to,
+          accountId: replyRoute.accountId,
+          threadId: routeReplyThreadId,
+        }),
+        nativeChannelId: normalizeOptionalString(ctx.NativeChannelId),
+        chatType: normalizeOptionalString(ctx.ChatType),
+        directUserTarget: normalizeOptionalString(ctx.OriginatingTo ?? ctx.To),
+      });
+      const pendingContext = resolveSlackDirectPendingFinalDeliveryContext({
+        context: entry.pendingFinalDeliveryContext,
+        nativeChannelId: normalizeOptionalString(
+          entry.origin?.nativeChannelId ?? ctx.NativeChannelId,
+        ),
+        chatType: normalizeOptionalString(entry.origin?.chatType ?? ctx.ChatType),
+        directUserTarget: normalizeOptionalString(entry.origin?.to ?? ctx.OriginatingTo ?? ctx.To),
       });
       if (
         !isSameRoutePendingFinalDeliveryReplaySafe({
-          pendingContext: entry.pendingFinalDeliveryContext,
+          pendingContext,
           currentContext,
         })
       ) {
-        return { queuedFinal: false, routedFinalCount: 0 };
+        return noReplay;
       }
       const result = await sendFinalPayload({ text }, { abortSignal: getPreDispatchAbortSignal() });
       if (result.queuedFinal || result.routedFinalCount > 0) {
@@ -2134,10 +2161,34 @@ export async function dispatchReplyFromConfig(
           `dispatch-from-config: replayed pending final delivery for session=${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"}`,
         );
       }
-      return result;
+      const pendingIntentId = normalizeOptionalString(
+        entry.pendingFinalDeliveryIntentId ?? undefined,
+      );
+      const currentIntentId = normalizeOptionalString(ctx.MessageSidFull ?? ctx.MessageSid);
+      return {
+        ...result,
+        replayedCurrentTurnFinal: Boolean(
+          (result.queuedFinal || result.routedFinalCount > 0) &&
+          pendingIntentId &&
+          currentIntentId &&
+          pendingIntentId === currentIntentId,
+        ),
+      };
     };
 
     const replayedPendingFinalDelivery = await replayPendingFinalDeliveryForCurrentRoute();
+    if (replayedPendingFinalDelivery.replayedCurrentTurnFinal) {
+      const counts = dispatcher.getQueuedCounts();
+      counts.final += replayedPendingFinalDelivery.routedFinalCount;
+      recordProcessed("completed", { reason: "pending_final_delivery_replayed" });
+      markIdle("message_completed");
+      commitInboundDedupeIfClaimed();
+      completeDispatchReplyOperation();
+      return attachSourceReplyDeliveryMode({
+        queuedFinal: replayedPendingFinalDelivery.queuedFinal,
+        counts,
+      });
+    }
 
     // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
     if (hookRunner?.hasHooks("before_dispatch")) {
@@ -2229,11 +2280,13 @@ export async function dispatchReplyFromConfig(
         ),
       );
       if (replyDispatchResult?.handled) {
+        const counts = { ...replyDispatchResult.counts };
+        counts.final += replayedPendingFinalDelivery.routedFinalCount;
         commitInboundDedupeIfClaimed();
         completeDispatchReplyOperation();
         return attachSourceReplyDeliveryMode({
-          queuedFinal: replyDispatchResult.queuedFinal,
-          counts: replyDispatchResult.counts,
+          queuedFinal: replyDispatchResult.queuedFinal || replayedPendingFinalDelivery.queuedFinal,
+          counts,
         });
       }
     }

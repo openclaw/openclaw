@@ -616,6 +616,51 @@ describe("main-session-restart-recovery", () => {
     );
   });
 
+  it("resumes Slack DM pending finals through the native DM channel when stored target is user-scoped", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const pendingPayload = "The final answer is 42.";
+    await writeStore(sessionsDir, {
+      "agent:main:slack:direct:u039p2yjr29": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: pendingPayload,
+        pendingFinalDeliveryContext: {
+          channel: "slack",
+          to: "user:U039P2YJR29",
+          accountId: "son-of-anton",
+        },
+        pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
+        origin: {
+          provider: "slack",
+          chatType: "direct",
+          to: "user:U039P2YJR29",
+          nativeChannelId: "D0ACL8LRTJP",
+          accountId: "son-of-anton",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "calculate the answer" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
+      { role: "toolResult", content: "42" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams()).toMatchObject({
+      deliver: true,
+      bestEffortDeliver: true,
+      channel: "slack",
+      to: "channel:D0ACL8LRTJP",
+      accountId: "son-of-anton",
+    });
+    expect(firstGatewayParams().message).toContain(pendingPayload);
+  });
+
   it("sanitizes durable pending final delivery payloads before resume prompts", async () => {
     const sessionsDir = await makeSessionsDir();
     const pendingPayload = [

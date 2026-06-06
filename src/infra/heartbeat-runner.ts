@@ -74,7 +74,7 @@ import {
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasActiveCronJobs } from "../cron/active-jobs.js";
@@ -536,7 +536,7 @@ function shouldUseHeartbeatLightContext(params: {
   if (params.heartbeat?.lightContext === false) {
     return false;
   }
-  const totalTokens = params.entry?.totalTokens;
+  const totalTokens = resolveFreshSessionTotalTokens(params.entry);
   return (
     typeof totalTokens === "number" &&
     Number.isFinite(totalTokens) &&

@@ -51,6 +51,65 @@ function routeFieldMatches(
   return String(left) === String(right);
 }
 
+function normalizeSlackDirectUserTarget(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const withoutPrefix = trimmed.toLowerCase().startsWith("user:")
+    ? trimmed.slice("user:".length).trim()
+    : trimmed;
+  return /^U[A-Z0-9]+$/i.test(withoutPrefix) ? withoutPrefix.toUpperCase() : undefined;
+}
+
+function normalizeSlackDmChannelTarget(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const withoutPrefix = trimmed.toLowerCase().startsWith("channel:")
+    ? trimmed.slice("channel:".length).trim()
+    : trimmed;
+  return /^D[A-Z0-9]+$/i.test(withoutPrefix) ? withoutPrefix.toUpperCase() : undefined;
+}
+
+/**
+ * Slack text-only DM sends can persist as user-scoped targets (`user:U...`),
+ * while the already-received event also proves the concrete DM channel (`D...`).
+ * Prefer the concrete channel for pending-final recovery so replay uses the
+ * same address family as normal Slack DM replies.
+ */
+export function resolveSlackDirectPendingFinalDeliveryContext(params: {
+  context?: DeliveryContext;
+  nativeChannelId?: string;
+  chatType?: string;
+  directUserTarget?: string;
+}): DeliveryContext | undefined {
+  const context = normalizeDeliveryContext(params.context);
+  if (!context || context.channel !== "slack") {
+    return context;
+  }
+  if (params.chatType?.trim().toLowerCase() !== "direct") {
+    return context;
+  }
+  const nativeDmChannelId = normalizeSlackDmChannelTarget(params.nativeChannelId);
+  if (!nativeDmChannelId) {
+    return context;
+  }
+  const contextUser = normalizeSlackDirectUserTarget(context.to);
+  if (!contextUser) {
+    return context;
+  }
+  const expectedUser = normalizeSlackDirectUserTarget(params.directUserTarget);
+  if (expectedUser && expectedUser !== contextUser) {
+    return context;
+  }
+  return normalizeDeliveryContext({
+    ...context,
+    to: `channel:${nativeDmChannelId}`,
+  });
+}
+
 /**
  * Pending final replay is only safe when the saved target and the current
  * source-reply target prove the same channel destination.

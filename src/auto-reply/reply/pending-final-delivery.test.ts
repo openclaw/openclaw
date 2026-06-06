@@ -6,6 +6,7 @@ import {
 } from "../../agents/internal-runtime-context.js";
 import {
   isSameRoutePendingFinalDeliveryReplaySafe,
+  resolveSlackDirectPendingFinalDeliveryContext,
   sanitizePendingFinalDeliveryText,
 } from "./pending-final-delivery.js";
 
@@ -96,5 +97,64 @@ describe("isSameRoutePendingFinalDeliveryReplaySafe", () => {
         currentContext: { channel: "slack", to: "D999", accountId: "son-of-anton" },
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveSlackDirectPendingFinalDeliveryContext", () => {
+  it("uses the concrete Slack DM channel for direct user-scoped pending targets", () => {
+    expect(
+      resolveSlackDirectPendingFinalDeliveryContext({
+        context: {
+          channel: "slack",
+          to: "user:U039P2YJR29",
+          accountId: "son-of-anton",
+          threadId: "1780718204.607",
+        },
+        nativeChannelId: "D0ACL8LRTJP",
+        chatType: "direct",
+        directUserTarget: "user:U039P2YJR29",
+      }),
+    ).toEqual({
+      channel: "slack",
+      to: "channel:D0ACL8LRTJP",
+      accountId: "son-of-anton",
+      threadId: "1780718204.607",
+    });
+  });
+
+  it("does not rewrite Slack DM targets when the proven user differs", () => {
+    expect(
+      resolveSlackDirectPendingFinalDeliveryContext({
+        context: {
+          channel: "slack",
+          to: "user:U039P2YJR29",
+          accountId: "son-of-anton",
+        },
+        nativeChannelId: "D0ACL8LRTJP",
+        chatType: "direct",
+        directUserTarget: "user:UOTHER",
+      }),
+    ).toEqual({
+      channel: "slack",
+      to: "user:U039P2YJR29",
+      accountId: "son-of-anton",
+    });
+  });
+
+  it("leaves non-Slack and non-direct targets unchanged", () => {
+    expect(
+      resolveSlackDirectPendingFinalDeliveryContext({
+        context: { channel: "discord", to: "user:U039P2YJR29" },
+        nativeChannelId: "D0ACL8LRTJP",
+        chatType: "direct",
+      }),
+    ).toEqual({ channel: "discord", to: "user:U039P2YJR29", accountId: undefined });
+    expect(
+      resolveSlackDirectPendingFinalDeliveryContext({
+        context: { channel: "slack", to: "user:U039P2YJR29" },
+        nativeChannelId: "D0ACL8LRTJP",
+        chatType: "group",
+      }),
+    ).toEqual({ channel: "slack", to: "user:U039P2YJR29", accountId: undefined });
   });
 });

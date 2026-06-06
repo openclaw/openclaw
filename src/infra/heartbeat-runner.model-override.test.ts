@@ -285,6 +285,35 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
   });
 
+  it("does not use lightweight bootstrap context from stale token totals", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      const result = await runHeartbeatWithSeed({
+        seedSession,
+        cfg,
+        sessionKey,
+        replySpy,
+        seedInput: { totalTokens: 800_000, totalTokensFresh: false },
+      });
+
+      const replyOptions = expectReplyOptions(result.opts, { isHeartbeat: true });
+      expect(replyOptions.bootstrapContextMode).toBeUndefined();
+    });
+  });
+
   it("honors explicit heartbeat lightContext false for huge sessions", async () => {
     await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
