@@ -59,6 +59,7 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "needs",
   "requires",
 ] as const;
+const EDIT_EXACT_MATCH_ERROR_PREFIX = "could not find the exact text in";
 
 const MUTATING_FAILURE_ACTION_PATTERN =
   "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message|run|execute|execution|command|script|shell|bash|exec|tool|action|operation)";
@@ -85,6 +86,21 @@ const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = normalizeOptionalLowercaseString(error) ?? "";
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
+}
+
+function summarizeToolErrorForUi(lastToolError: ToolErrorSummary): string | undefined {
+  const toolName = normalizeOptionalLowercaseString(lastToolError.toolName) ?? "";
+  const error = lastToolError.error?.trim();
+  if (!error) {
+    return undefined;
+  }
+  if (toolName === "edit") {
+    const errorLower = normalizeOptionalLowercaseString(error) ?? "";
+    if (errorLower.includes(EDIT_EXACT_MATCH_ERROR_PREFIX)) {
+      return "exact text not found — oldText must match the file exactly, including whitespace/newlines";
+    }
+  }
+  return undefined;
 }
 
 function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
@@ -533,8 +549,10 @@ export function buildEmbeddedRunPayloads(params: {
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
         { markdown: useMarkdown },
       );
-      const errorSuffix =
-        warningPolicy.includeDetails && params.lastToolError.error
+      const summarizedDetail = summarizeToolErrorForUi(params.lastToolError);
+      const errorSuffix = summarizedDetail
+        ? `: ${summarizedDetail}`
+        : warningPolicy.includeDetails && params.lastToolError.error
           ? `: ${params.lastToolError.error}`
           : "";
       const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
