@@ -18,32 +18,17 @@ const EXPECTED_COMMANDS = ["kitchen", "kitchen-sink"];
 const EXPECTED_TOOLS = ["kitchen_sink_text", "kitchen_sink_search", "kitchen_sink_image_job"];
 const EXPECTED_PROVIDERS = ["kitchen-sink-provider", "kitchen-sink-llm"];
 const EXPECTED_SPEECH_PROVIDERS = ["kitchen-sink-speech", "kitchen-sink-speech-provider"];
-const READY_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_READY_MS, 240000);
-const COMMAND_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS,
-  180000,
-);
-const INSTALL_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS,
-  Math.max(COMMAND_TIMEOUT_MS, 600000),
-);
-const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS, 60000);
-const FETCH_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS, 10000);
-const FETCH_BODY_MAX_BYTES = readPositiveInt(
-  process.env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES,
-  1024 * 1024,
-);
-const MAX_RSS_MIB = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB, 2048);
-const MAX_COMMAND_RSS_MIB = readPositiveInt(
-  process.env.OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB,
-  8192,
-);
+const DEFAULT_READY_TIMEOUT_MS = 240000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 180000;
+const DEFAULT_INSTALL_TIMEOUT_MS = 600000;
+const DEFAULT_RPC_TIMEOUT_MS = 60000;
+const DEFAULT_FETCH_TIMEOUT_MS = 10000;
+const DEFAULT_FETCH_BODY_MAX_BYTES = 1024 * 1024;
+const DEFAULT_MAX_RSS_MIB = 2048;
+const DEFAULT_MAX_COMMAND_RSS_MIB = 8192;
+const DEFAULT_OUTPUT_CAPTURE_CHARS = 1024 * 1024;
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
-const OUTPUT_CAPTURE_CHARS = readPositiveInt(
-  process.env.OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS,
-  1024 * 1024,
-);
 const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
@@ -88,13 +73,70 @@ export function shouldPrintHelp(argv) {
   return argv.some((arg) => arg === "--help" || arg === "-h");
 }
 
-export function readPositiveInt(raw, fallback) {
+export function readPositiveInt(raw, fallback, label = "value") {
   const text = String(raw || "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
   const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
+  return parsed;
+}
+
+export function resolveKitchenSinkRpcConfig(env = process.env) {
+  const commandTimeoutMs = readPositiveInt(
+    env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS,
+    DEFAULT_COMMAND_TIMEOUT_MS,
+    "OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS",
+  );
+  return {
+    commandMaxRssMiB: readPositiveInt(
+      env.OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB,
+      DEFAULT_MAX_COMMAND_RSS_MIB,
+      "OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB",
+    ),
+    commandTimeoutMs,
+    fetchBodyMaxBytes: readPositiveInt(
+      env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES,
+      DEFAULT_FETCH_BODY_MAX_BYTES,
+      "OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES",
+    ),
+    fetchTimeoutMs: readPositiveInt(
+      env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS,
+      DEFAULT_FETCH_TIMEOUT_MS,
+      "OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS",
+    ),
+    installTimeoutMs: readPositiveInt(
+      env.OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS,
+      Math.max(commandTimeoutMs, DEFAULT_INSTALL_TIMEOUT_MS),
+      "OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS",
+    ),
+    maxRssMiB: readPositiveInt(
+      env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB,
+      DEFAULT_MAX_RSS_MIB,
+      "OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB",
+    ),
+    outputCaptureChars: readPositiveInt(
+      env.OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS,
+      DEFAULT_OUTPUT_CAPTURE_CHARS,
+      "OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS",
+    ),
+    readyTimeoutMs: readPositiveInt(
+      env.OPENCLAW_KITCHEN_SINK_RPC_READY_MS,
+      DEFAULT_READY_TIMEOUT_MS,
+      "OPENCLAW_KITCHEN_SINK_RPC_READY_MS",
+    ),
+    rpcTimeoutMs: readPositiveInt(
+      env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS,
+      DEFAULT_RPC_TIMEOUT_MS,
+      "OPENCLAW_KITCHEN_SINK_RPC_CALL_MS",
+    ),
+  };
 }
 
 function resolveOpenClawRunner() {
@@ -175,7 +217,11 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-export function appendBoundedOutput(buffer, chunk, maxChars = OUTPUT_CAPTURE_CHARS) {
+export function appendBoundedOutput(
+  buffer,
+  chunk,
+  maxChars = resolveKitchenSinkRpcConfig().outputCaptureChars,
+) {
   const text = String(chunk);
   const combined = `${buffer.text}${text}`;
   const overflowChars = Math.max(0, combined.length - maxChars);
@@ -193,6 +239,7 @@ function formatCapturedOutput(label, buffer) {
 
 export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const config = resolveKitchenSinkRpcConfig();
     const {
       resourceLabel,
       resourceSampleIntervalMs = 1000,
@@ -200,7 +247,7 @@ export function runCommand(command, args, options = {}) {
       resourceSamples,
       sampleProcessImpl = sampleProcess,
       timeoutKillGraceMs = 2000,
-      timeoutMs = COMMAND_TIMEOUT_MS,
+      timeoutMs = config.commandTimeoutMs,
       ...spawnOptions
     } = options;
     const child = childProcess.spawn(command, args, {
@@ -321,6 +368,7 @@ function signalProcessGroup(child, signal) {
 }
 
 async function runOpenClaw(runner, args, env, options = {}) {
+  const config = resolveKitchenSinkRpcConfig(env);
   const command = await resolveOpenClawCommand(runner, args, env, {
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -331,7 +379,7 @@ async function runOpenClaw(runner, args, env, options = {}) {
     resourceSampleIntervalMs: options.resourceSampleIntervalMs,
     resourceSampleOptions: options.resourceSampleOptions,
     resourceSamples: options.resourceSamples,
-    timeoutMs: options.timeoutMs ?? COMMAND_TIMEOUT_MS,
+    timeoutMs: options.timeoutMs ?? config.commandTimeoutMs,
   });
 }
 
@@ -439,6 +487,7 @@ export function unwrapRpcPayload(raw) {
 }
 
 async function rpcCall(method, params, options) {
+  const config = resolveKitchenSinkRpcConfig(options.env);
   const module = await loadCallGatewayModule(options.runner);
   const payload = module
     ? await module.callGateway({
@@ -448,7 +497,7 @@ async function rpcCall(method, params, options) {
         token: TOKEN,
         method,
         params: params ?? {},
-        timeoutMs: RPC_TIMEOUT_MS,
+        timeoutMs: config.rpcTimeoutMs,
         requiredMethods: [method],
       })
     : await rpcCallViaCli(method, params, options);
@@ -476,6 +525,7 @@ async function importCallGatewayModule() {
 }
 
 async function rpcCallViaCli(method, params, options) {
+  const config = resolveKitchenSinkRpcConfig(options.env);
   const { stdout } = await runOpenClaw(
     options.runner,
     [
@@ -487,7 +537,7 @@ async function rpcCallViaCli(method, params, options) {
       "--token",
       TOKEN,
       "--timeout",
-      String(RPC_TIMEOUT_MS),
+      String(config.rpcTimeoutMs),
       "--json",
       "--params",
       JSON.stringify(params ?? {}),
@@ -499,10 +549,11 @@ async function rpcCallViaCli(method, params, options) {
 }
 
 export function createRpcCliRunOptions(method, options = {}) {
+  const config = resolveKitchenSinkRpcConfig(options.env);
   return {
     ...options.commandResourceOptions,
     resourceLabel: `gateway call ${method}`,
-    timeoutMs: RPC_TIMEOUT_MS + 30000,
+    timeoutMs: config.rpcTimeoutMs + 30000,
   };
 }
 
@@ -530,8 +581,9 @@ export function usesBuiltOpenClawEntry(runner, cwd = process.cwd(), env = proces
 
 async function retryRpcCall(method, params, options) {
   const started = Date.now();
+  const config = resolveKitchenSinkRpcConfig(options.env);
   let lastError;
-  while (Date.now() - started < READY_TIMEOUT_MS) {
+  while (Date.now() - started < config.readyTimeoutMs) {
     try {
       return await rpcCall(method, params, options);
     } catch (error) {
@@ -581,9 +633,10 @@ function isRetryableTransientNetworkError(error, seen = new Set()) {
 }
 
 export async function fetchJson(url, options = {}) {
+  const config = resolveKitchenSinkRpcConfig();
   const attempts = Math.max(1, options.attempts ?? 3);
-  const timeoutMs = Math.max(1, options.timeoutMs ?? FETCH_TIMEOUT_MS);
-  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? FETCH_BODY_MAX_BYTES);
+  const timeoutMs = Math.max(1, options.timeoutMs ?? config.fetchTimeoutMs);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? config.fetchBodyMaxBytes);
   const externalSignal = options.signal;
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -653,7 +706,10 @@ export async function fetchJson(url, options = {}) {
   throw toLintErrorObject(lastError ?? new Error(`fetch ${url} failed`), "Non-Error thrown");
 }
 
-export async function readBoundedResponseText(response, byteLimit = FETCH_BODY_MAX_BYTES) {
+export async function readBoundedResponseText(
+  response,
+  byteLimit = resolveKitchenSinkRpcConfig().fetchBodyMaxBytes,
+) {
   const contentLength = response.headers?.get?.("content-length");
   if (contentLength) {
     const parsedContentLength = Number(contentLength);
@@ -894,9 +950,10 @@ export function createGatewayReadyLogScanner(logPath, marker = "[gateway] ready"
 }
 
 export async function waitForGatewayReady(child, port, logPath, options = {}) {
+  const config = resolveKitchenSinkRpcConfig();
   const started = Date.now();
   let lastError = "";
-  const timeoutMs = Math.max(1, options.timeoutMs ?? READY_TIMEOUT_MS);
+  const timeoutMs = Math.max(1, options.timeoutMs ?? config.readyTimeoutMs);
   const pollDelayMs = Math.max(1, options.pollDelayMs ?? 250);
   const logReportedReady = createGatewayReadyLogScanner(logPath);
   const childExit = createChildExitPromise(child);
@@ -917,7 +974,7 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
           attempts: 1,
           fetchImpl: options.fetchImpl,
           signal: probeAbort.signal,
-          timeoutMs: Math.min(FETCH_TIMEOUT_MS, remainingMs),
+          timeoutMs: Math.min(config.fetchTimeoutMs, remainingMs),
         });
         return { kind: "readyz", readyz };
       } catch (error) {
@@ -937,10 +994,10 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
         throw outcome.error;
       }
       const readyz = outcome.readyz;
-      if (readyz.ok) {
+      if (readyz.ok && readyz.body?.ready === true) {
         return;
       }
-      lastError = `/readyz HTTP ${readyz.status}`;
+      lastError = `/readyz HTTP ${readyz.status} body=${JSON.stringify(readyz.body)}`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
@@ -1100,6 +1157,99 @@ export function assertDiagnosticStabilityClean(payload) {
         JSON.stringify(payload, null, 2),
       )}`,
     );
+  }
+}
+
+function assertObjectPayload(payload, label) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`${label} returned invalid payload: ${JSON.stringify(payload)}`);
+  }
+  return payload;
+}
+
+export function assertGatewayHealthPayload(payload) {
+  const health = assertObjectPayload(payload, "health");
+  const problems = [];
+  if (health.ok !== true) {
+    problems.push("ok=true");
+  }
+  if (!Number.isFinite(health.ts)) {
+    problems.push("numeric ts");
+  }
+  if (!Number.isFinite(health.durationMs)) {
+    problems.push("numeric durationMs");
+  }
+  if (!health.channels || typeof health.channels !== "object" || Array.isArray(health.channels)) {
+    problems.push("channels object");
+  }
+  if (!Array.isArray(health.channelOrder)) {
+    problems.push("channelOrder array");
+  }
+  if (!isNonEmptyString(health.defaultAgentId)) {
+    problems.push("defaultAgentId");
+  }
+  if (!Array.isArray(health.agents)) {
+    problems.push("agents array");
+  }
+  if (
+    !health.sessions ||
+    typeof health.sessions !== "object" ||
+    Array.isArray(health.sessions) ||
+    !isNonEmptyString(health.sessions.path) ||
+    !Number.isFinite(health.sessions.count) ||
+    !Array.isArray(health.sessions.recent)
+  ) {
+    problems.push("sessions summary");
+  }
+  if (problems.length > 0) {
+    throw new Error(`health payload missing ${problems.join(", ")}: ${JSON.stringify(payload)}`);
+  }
+}
+
+export function assertGatewayStatusPayload(payload) {
+  const status = assertObjectPayload(payload, "status");
+  const problems = [];
+  if (
+    !status.heartbeat ||
+    typeof status.heartbeat !== "object" ||
+    Array.isArray(status.heartbeat) ||
+    !isNonEmptyString(status.heartbeat.defaultAgentId) ||
+    !Array.isArray(status.heartbeat.agents)
+  ) {
+    problems.push("heartbeat summary");
+  }
+  if (!Array.isArray(status.channelSummary)) {
+    problems.push("channelSummary array");
+  }
+  if (!Array.isArray(status.queuedSystemEvents)) {
+    problems.push("queuedSystemEvents array");
+  }
+  if (!status.tasks || typeof status.tasks !== "object" || Array.isArray(status.tasks)) {
+    problems.push("tasks summary");
+  }
+  if (
+    !status.taskAudit ||
+    typeof status.taskAudit !== "object" ||
+    Array.isArray(status.taskAudit)
+  ) {
+    problems.push("taskAudit summary");
+  }
+  if (
+    !status.sessions ||
+    typeof status.sessions !== "object" ||
+    Array.isArray(status.sessions) ||
+    !Array.isArray(status.sessions.paths) ||
+    !Number.isFinite(status.sessions.count) ||
+    !Array.isArray(status.sessions.recent) ||
+    !Array.isArray(status.sessions.byAgent) ||
+    !status.sessions.defaults ||
+    typeof status.sessions.defaults !== "object" ||
+    Array.isArray(status.sessions.defaults)
+  ) {
+    problems.push("sessions summary");
+  }
+  if (problems.length > 0) {
+    throw new Error(`status payload missing ${problems.join(", ")}: ${JSON.stringify(payload)}`);
   }
 }
 
@@ -1449,27 +1599,34 @@ function assertProcessResourceCeiling(sample, { label, maxRssMiB, requireSample 
     }
     return;
   }
+  if (!Number.isFinite(sample.rssMiB) || sample.rssMiB <= 0) {
+    throw new Error(`${label} RSS sample was invalid: ${String(sample.rssMiB)} MiB`);
+  }
+  const aggregateRssMiB = sample.aggregateRssMiB ?? sample.rssMiB;
+  if (!Number.isFinite(aggregateRssMiB) || aggregateRssMiB <= 0) {
+    throw new Error(`${label} aggregate RSS sample was invalid: ${String(aggregateRssMiB)} MiB`);
+  }
   if (sample.rssMiB > maxRssMiB) {
     throw new Error(`${label} RSS exceeded ${maxRssMiB} MiB: ${sample.rssMiB} MiB`);
   }
-  if ((sample.aggregateRssMiB ?? sample.rssMiB) > maxRssMiB) {
-    throw new Error(
-      `${label} aggregate RSS exceeded ${maxRssMiB} MiB: ${sample.aggregateRssMiB} MiB`,
-    );
+  if (aggregateRssMiB > maxRssMiB) {
+    throw new Error(`${label} aggregate RSS exceeded ${maxRssMiB} MiB: ${aggregateRssMiB} MiB`);
   }
 }
 
 export function assertResourceCeiling(sample) {
+  const config = resolveKitchenSinkRpcConfig();
   assertProcessResourceCeiling(sample, {
     label: "gateway",
-    maxRssMiB: MAX_RSS_MIB,
+    maxRssMiB: config.maxRssMiB,
   });
 }
 
 export function assertCommandResourceCeiling(sample) {
+  const config = resolveKitchenSinkRpcConfig();
   assertProcessResourceCeiling(sample, {
     label: "command",
-    maxRssMiB: MAX_COMMAND_RSS_MIB,
+    maxRssMiB: config.commandMaxRssMiB,
   });
 }
 
@@ -1587,8 +1744,13 @@ function isNonEmptyString(value) {
 }
 
 export async function main() {
+  const config = resolveKitchenSinkRpcConfig();
   let runner = resolveOpenClawRunner();
-  const port = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_PORT, DEFAULT_PORT);
+  const port = readPositiveInt(
+    process.env.OPENCLAW_KITCHEN_SINK_RPC_PORT,
+    DEFAULT_PORT,
+    "OPENCLAW_KITCHEN_SINK_RPC_PORT",
+  );
   const { root, env } = makeEnv();
   const logPath = path.join(root, "gateway.log");
   const keepTmp = process.env.OPENCLAW_KITCHEN_SINK_KEEP_TMP === "1";
@@ -1608,7 +1770,7 @@ export async function main() {
     await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, {
       ...commandResourceOptions,
       resourceLabel: "plugins install",
-      timeoutMs: INSTALL_TIMEOUT_MS,
+      timeoutMs: config.installTimeoutMs,
     });
     runner = resolveOpenClawRunner();
     console.log(`Kitchen Sink RPC runtime runner: ${runner.label}`);
@@ -1677,8 +1839,10 @@ export async function main() {
       throw new Error(`/readyz did not report ready: ${JSON.stringify(readyz)}`);
     }
 
-    await retryRpcCall("health", {}, rpcOptions);
-    await retryRpcCall("status", {}, rpcOptions);
+    const health = await retryRpcCall("health", {}, rpcOptions);
+    assertGatewayHealthPayload(health);
+    const status = await retryRpcCall("status", {}, rpcOptions);
+    assertGatewayStatusPayload(status);
     const channelStatus = await retryRpcCall(
       "channels.status",
       { probe: true, timeoutMs: 10000 },

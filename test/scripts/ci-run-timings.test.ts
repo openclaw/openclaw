@@ -54,6 +54,18 @@ describe("scripts/ci-run-timings.mjs", () => {
     ]);
   });
 
+  it("rejects empty CI job payloads instead of printing empty timing evidence", () => {
+    expect(() =>
+      summarizeRunTimings({
+        conclusion: "success",
+        createdAt: "2026-04-22T10:00:00Z",
+        jobs: [],
+        status: "completed",
+        updatedAt: "2026-04-22T10:01:30Z",
+      }),
+    ).toThrow("CI run timing summary requires at least one job");
+  });
+
   it("selects the push CI run for the current main SHA", () => {
     expect(
       selectLatestMainPushCiRun(

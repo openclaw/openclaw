@@ -5,9 +5,9 @@ import { spawnSync as defaultSpawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const repoRoot = process.cwd();
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.tmpdir();
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
@@ -41,6 +41,14 @@ function readNonEmptyEnv(name) {
   return value === undefined || value.length === 0 ? null : value;
 }
 
+function readRequiredPathOption(argv, index, flag) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${flag} requires a path`);
+  }
+  return value;
+}
+
 function parseArgs(argv) {
   const options = {
     jsonPath:
@@ -53,19 +61,13 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--json") {
-      const value = argv[index + 1];
-      if (!value) {
-        throw new Error("--json requires a path");
-      }
+      const value = readRequiredPathOption(argv, index, "--json");
       options.jsonPath = path.resolve(value);
       index += 1;
       continue;
     }
     if (arg === "--summary") {
-      const value = argv[index + 1];
-      if (!value) {
-        throw new Error("--summary requires a path");
-      }
+      const value = readRequiredPathOption(argv, index, "--summary");
       options.summaryPath = path.resolve(value);
       index += 1;
       continue;
@@ -153,7 +155,8 @@ function parseMaxRssMb(stderr) {
   if (!lastMatch) {
     return null;
   }
-  return Number(lastMatch[1]) / 1024;
+  const maxRssKb = Number(lastMatch[1]);
+  return Number.isFinite(maxRssKb) && maxRssKb > 0 ? maxRssKb / 1024 : null;
 }
 
 function formatMb(value) {
@@ -367,6 +370,7 @@ export const testing = {
   parseArgs,
   readPositiveIntEnv,
   readPositiveNumberEnv,
+  repoRoot,
   resolveDefaultLimitsMb,
   runCase,
   runStartupMemoryCheck,

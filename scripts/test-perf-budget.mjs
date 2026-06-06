@@ -27,6 +27,37 @@ function parseArgs(argv, env = process.env) {
   );
 }
 
+function formatErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function collectPerfReportStats(reportPath) {
+  let report;
+  try {
+    report = readJsonFile(reportPath);
+  } catch (error) {
+    throw new Error(
+      `[test-perf-budget] failed to read Vitest JSON report ${reportPath}: ${formatErrorMessage(
+        error,
+      )}`,
+      { cause: error },
+    );
+  }
+
+  let totalFileDurationMs = 0;
+  let fileCount = 0;
+  for (const result of report.testResults ?? []) {
+    if (typeof result.startTime === "number" && typeof result.endTime === "number") {
+      totalFileDurationMs += Math.max(0, result.endTime - result.startTime);
+      fileCount += 1;
+    }
+  }
+  if (fileCount === 0) {
+    throw new Error(`[test-perf-budget] Vitest JSON report contained no timed file results`);
+  }
+  return { fileCount, totalFileDurationMs };
+}
+
 function main() {
   let opts;
   try {
@@ -43,18 +74,12 @@ function main() {
   });
   const elapsedMs = Number.parseFloat(String(process.hrtime.bigint() - startedAt)) / 1_000_000;
 
-  let totalFileDurationMs = 0;
-  let fileCount = 0;
+  let reportStats;
   try {
-    const report = readJsonFile(reportPath);
-    for (const result of report.testResults ?? []) {
-      if (typeof result.startTime === "number" && typeof result.endTime === "number") {
-        totalFileDurationMs += Math.max(0, result.endTime - result.startTime);
-        fileCount += 1;
-      }
-    }
-  } catch {
-    // Keep budget checks based on wall time when JSON parsing fails.
+    reportStats = collectPerfReportStats(reportPath);
+  } catch (error) {
+    console.error(formatErrorMessage(error));
+    process.exit(1);
   }
 
   const allowedByBaseline =
@@ -82,8 +107,8 @@ function main() {
 
   console.log(
     `[test-perf-budget] config=${opts.config} wall=${formatMs(elapsedMs)} file-sum=${formatMs(
-      totalFileDurationMs,
-    )} files=${String(fileCount)}`,
+      reportStats.totalFileDurationMs,
+    )} files=${String(reportStats.fileCount)}`,
   );
 
   if (failed) {
@@ -93,6 +118,7 @@ function main() {
 
 /** Test-facing parser helpers for budget validation. */
 export const testing = {
+  collectPerfReportStats,
   parseArgs,
   parseBudgetNumber,
 };

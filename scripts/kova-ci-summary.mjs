@@ -32,6 +32,11 @@ const keyMetricIds = [
 
 const reportPath = path.resolve(args.report);
 const report = JSON.parse(await readFile(reportPath, "utf8"));
+const invalidReport = validateKovaSummaryReport(report);
+if (invalidReport) {
+  console.error(`error: invalid Kova report: ${invalidReport}`);
+  process.exit(1);
+}
 const markdown = renderSummary(report, {
   lane: args.lane || "kova",
   reportUrl: args.reportUrl || "",
@@ -150,6 +155,29 @@ function renderSummary(reportLocal, options) {
   }
 
   return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function validateKovaSummaryReport(reportLocal) {
+  if (!reportLocal || typeof reportLocal !== "object" || Array.isArray(reportLocal)) {
+    return "report must be an object";
+  }
+  const statuses = reportLocal.summary?.statuses;
+  if (
+    !statuses ||
+    typeof statuses !== "object" ||
+    Array.isArray(statuses) ||
+    Object.keys(statuses).length === 0
+  ) {
+    return "missing summary.statuses";
+  }
+  const records = Array.isArray(reportLocal.records) ? reportLocal.records : [];
+  const groups = Array.isArray(reportLocal.performance?.groups)
+    ? reportLocal.performance.groups
+    : [];
+  if (records.length === 0 && groups.length === 0) {
+    return "missing records or performance groups";
+  }
+  return null;
 }
 
 function collectViolations(records) {

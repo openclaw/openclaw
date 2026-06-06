@@ -57,6 +57,14 @@ function usage() {
   ].join("\n");
 }
 
+function readRequiredValue(argv, index, flag) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+
 /**
  * Parses report, compare, and Vitest-run options for grouped test reports.
  */
@@ -102,30 +110,30 @@ export function parseTestGroupReportArgs(argv) {
       continue;
     }
     if (arg === "--config") {
-      args.configs.push(argv[index + 1] ?? "");
+      args.configs.push(readRequiredValue(argv, index, "--config"));
       index += 1;
       continue;
     }
     if (arg === "--compare") {
       args.compare = {
-        before: argv[index + 1] ?? "",
-        after: argv[index + 2] ?? "",
+        before: readRequiredValue(argv, index, "--compare"),
+        after: readRequiredValue(argv, index + 1, "--compare"),
       };
       index += 2;
       continue;
     }
     if (arg === "--report") {
-      args.reports.push(argv[index + 1] ?? "");
+      args.reports.push(readRequiredValue(argv, index, "--report"));
       index += 1;
       continue;
     }
     if (arg === "--group-by") {
-      args.groupBy = argv[index + 1] ?? args.groupBy;
+      args.groupBy = readRequiredValue(argv, index, "--group-by");
       index += 1;
       continue;
     }
     if (arg === "--output") {
-      args.output = argv[index + 1] ?? args.output;
+      args.output = readRequiredValue(argv, index, "--output");
       index += 1;
       continue;
     }
@@ -406,12 +414,40 @@ async function runVitestJsonReport(params) {
 }
 
 function readReportInput(entry) {
+  const report = JSON.parse(fs.readFileSync(entry.reportPath, "utf8"));
+  if (!report || typeof report !== "object" || !Array.isArray(report.testResults)) {
+    throw new Error("missing testResults array");
+  }
+  if (report.testResults.length === 0) {
+    throw new Error("empty testResults array");
+  }
   return {
     config: entry.config,
-    report: JSON.parse(fs.readFileSync(entry.reportPath, "utf8")),
+    report,
     reportPath: entry.reportPath,
     run: entry.run ?? null,
   };
+}
+
+export function readReportInputs(entries) {
+  const invalid = [];
+  const missing = [];
+  const reports = [];
+  for (const entry of entries) {
+    if (!fs.existsSync(entry.reportPath)) {
+      missing.push(entry);
+      continue;
+    }
+    try {
+      reports.push(readReportInput(entry));
+    } catch (error) {
+      invalid.push({
+        entry,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { invalid, missing, reports };
 }
 
 function readGroupedReport(reportPath) {
@@ -666,9 +702,24 @@ async function main() {
     process.exit(exitCode);
   }
 
-  const reportInputs = runEntries
-    .filter((entry) => fs.existsSync(entry.reportPath))
-    .map(readReportInput);
+  const reportInputsResult = readReportInputs(runEntries);
+  if (reportInputsResult.missing.length > 0) {
+    for (const entry of reportInputsResult.missing) {
+      console.error(
+        `[test-group-report] missing JSON report for ${entry.config}: ${entry.reportPath}`,
+      );
+    }
+    process.exit(1);
+  }
+  if (reportInputsResult.invalid.length > 0) {
+    for (const { entry, reason } of reportInputsResult.invalid) {
+      console.error(
+        `[test-group-report] invalid JSON report for ${entry.config}: ${entry.reportPath} (${reason})`,
+      );
+    }
+    process.exit(1);
+  }
+  const reportInputs = reportInputsResult.reports;
   const report = buildGroupedTestReport({
     groupBy: args.groupBy,
     maxTestMs: args.maxTestMs,

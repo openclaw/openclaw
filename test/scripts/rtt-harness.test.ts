@@ -576,4 +576,16 @@ describe("RTT harness", () => {
       timeoutMs: 240_000,
     });
   });
+
+  it("rejects missing CLI path option values", () => {
+    for (const [flag, next] of [
+      ["--package-tgz", "--runs"],
+      ["--harness-root", "--output"],
+      ["--output", "--samples"],
+    ] as const) {
+      expect(() => cliTesting.parseArgs(["openclaw@latest", flag, next])).toThrow(
+        `${flag} requires a path.`,
+      );
+    }
+  });
 });

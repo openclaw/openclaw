@@ -41,6 +41,7 @@ type WorkflowJob = {
   if?: string;
   name?: string;
   needs?: string | string[];
+  permissions?: Record<string, string>;
   "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
 };
@@ -924,7 +925,7 @@ describe("package artifact reuse", () => {
     expect(build).toContain('source "$SCRIPT_ROOT_DIR/scripts/lib/docker-build.sh"');
     expect(build).toContain('source "$SCRIPT_ROOT_DIR/scripts/lib/docker-e2e-container.sh"');
     expect(build).toContain(
-      'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_LIVE_DOCKER_PULL_TIMEOUT:-180s}}"',
+      'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_LIVE_DOCKER_PULL_TIMEOUT:-600s}}"',
     );
     expect(build).toContain('LIVE_IMAGE_PULL_ATTEMPTS="${OPENCLAW_LIVE_DOCKER_PULL_ATTEMPTS:-3}"');
     expect(build).toContain('docker_e2e_docker_cmd pull "$LIVE_IMAGE_NAME"');
@@ -1357,6 +1358,57 @@ describe("package artifact reuse", () => {
     expectTextToIncludeAll(liveE2eWorkflow, [
       "OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000",
       "OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
+    ]);
+  });
+
+  it("keeps release QA advisory failures visible to the verifier", () => {
+    const advisoryJobNames = [
+      "qa_lab_parity_lane_release_checks",
+      "qa_lab_parity_report_release_checks",
+      "qa_lab_runtime_parity_release_checks",
+      "qa_live_matrix_release_checks",
+      "qa_live_telegram_release_checks",
+      "qa_live_discord_release_checks",
+      "qa_live_whatsapp_release_checks",
+      "qa_live_slack_release_checks",
+    ];
+
+    for (const jobName of advisoryJobNames) {
+      const job = workflowJob(RELEASE_CHECKS_WORKFLOW, jobName);
+      expect(job["continue-on-error"], jobName).toBe(true);
+
+      const recordStep = workflowStep(job, "Record advisory status");
+      expect(recordStep.if, jobName).toBe("always()");
+      expect(recordStep.run, jobName).toContain("status_path=");
+      expect(recordStep.run, jobName).toContain(".artifacts/release-check-status");
+      expect(recordStep.env?.RELEASE_CHECK_STEP_OUTCOMES, jobName).toContain("upload_");
+
+      const uploadStep = workflowStep(job, "Upload advisory status");
+      expect(uploadStep.if, jobName).toBe("always()");
+      expect(uploadStep.uses, jobName).toBe("actions/upload-artifact@v7");
+      expect(uploadStep.with?.name, jobName).toContain("release-check-status-");
+      expect(uploadStep.with?.path, jobName).toMatch(
+        /^\.artifacts\/release-check-status\/.+\.env$/u,
+      );
+      expect(uploadStep.with?.["if-no-files-found"], jobName).toBe("error");
+    }
+
+    const summary = workflowJob(RELEASE_CHECKS_WORKFLOW, "summary");
+    expect(summary.permissions?.actions).toBe("read");
+    const downloadStep = workflowStep(summary, "Download advisory status artifacts");
+    expect(downloadStep["continue-on-error"]).toBe(true);
+    expect(downloadStep.uses).toBe("actions/download-artifact@v8");
+    expect(downloadStep.with?.pattern).toBe("release-check-status-*");
+    expect(downloadStep.with?.["merge-multiple"]).toBe(true);
+
+    const verifyStep = workflowStep(summary, "Verify release check results");
+    expectTextToIncludeAll(verifyStep.run, [
+      "release_check_result()",
+      'elif [[ "$fallback" != "success" && "$fallback" != "skipped" ]]; then',
+      'elif [[ "$fallback" == "success" ]]; then',
+      "advisory_status_override_allowed()",
+      'if advisory_status_override_allowed "$name"; then',
+      "QA release-check lanes are advisory and do not block release validation.",
     ]);
   });
 

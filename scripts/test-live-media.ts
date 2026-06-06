@@ -256,6 +256,26 @@ function hasExplicitProviderSelection(options: CliOptions): boolean {
   return options.globalProviders !== null || Object.keys(options.suiteProviders).length > 0;
 }
 
+function hasExplicitProviderSelectionForSuite(options: CliOptions, suiteId: MediaSuiteId): boolean {
+  if (Object.hasOwn(options.suiteProviders, suiteId)) {
+    return true;
+  }
+  if (!options.globalProviders) {
+    return false;
+  }
+  return MEDIA_SUITES[suiteId].providers.some((provider) => options.globalProviders?.has(provider));
+}
+
+export function findSkippedExplicitProviderSelections(
+  options: CliOptions,
+  plan: SuiteRunPlan[],
+): SuiteRunPlan[] {
+  return plan.filter(
+    (entry) =>
+      entry.providers.length === 0 && hasExplicitProviderSelectionForSuite(options, entry.suite.id),
+  );
+}
+
 function selectProviders(params: {
   suite: MediaSuiteConfig;
   globalProviders: Set<string> | null;
@@ -395,6 +415,13 @@ export async function runCli(argv: string[]): Promise<number> {
     console.log(
       `[live:media] skip ${entry.suite.id}: ${entry.skippedReason ?? "no providers selected"}`,
     );
+  }
+  const skippedExplicit = findSkippedExplicitProviderSelections(options, plan);
+  if (skippedExplicit.length > 0) {
+    console.error(
+      `[live:media] no runnable providers matched explicit provider selection for: ${skippedExplicit.map((entry) => entry.suite.id).join(", ")}`,
+    );
+    return 1;
   }
   if (runnable.length === 0) {
     console.log("[live:media] nothing to run");

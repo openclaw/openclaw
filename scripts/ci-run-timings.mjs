@@ -127,6 +127,9 @@ function collectRunTimingContext(run) {
  */
 export function summarizeRunTimings(run, limit = 15) {
   const { created, jobs, updated } = collectRunTimingContext(run);
+  if (jobs.length === 0) {
+    throw new Error("CI run timing summary requires at least one job");
+  }
   const byDuration = [...jobs]
     .filter((job) => job.durationSeconds !== null)
     .toSorted((left, right) => right.durationSeconds - left.durationSeconds)
@@ -312,6 +315,9 @@ function loadRun(runId) {
 
 function summarizeJobs(run) {
   const { created, jobs, updated } = collectRunTimingContext(run);
+  if (jobs.length === 0) {
+    throw new Error("CI run timing summary requires at least one job");
+  }
   const completedJobs = jobs.filter((job) => job.started !== null && job.completed !== null);
   const successfulDurations = jobs
     .filter((job) => job.status === "completed" && job.conclusion === "success")
