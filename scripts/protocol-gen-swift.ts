@@ -80,7 +80,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ["CronRunLogEntry", ["errorReason", "failureNotificationDelivery"]],
   ["ExecApprovalRequestParams", ["requireDeliveryRoute", "suppressDelivery"]],
   ["AgentSummary", ["thinkingLevels", "thinkingOptions", "thinkingDefault"]],
-  ["ModelChoice", ["available"]],
+  ["ModelChoice", ["available", "agentRuntime"]],
 ];
 
 const DEFAULTED_OPTIONAL_INIT_PARAMS: Record<string, Set<string>> = Object.fromEntries(

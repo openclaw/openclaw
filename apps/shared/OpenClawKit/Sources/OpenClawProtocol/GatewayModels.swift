@@ -4702,7 +4702,7 @@ public struct ModelChoice: Codable, Sendable {
         available: Bool? = nil,
         contextwindow: Int?,
         reasoning: Bool?,
-        agentruntime: [String: AnyCodable]?)
+        agentruntime: [String: AnyCodable]? = nil)
     {
         self.id = id
         self.name = name
