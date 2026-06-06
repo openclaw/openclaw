@@ -150,16 +150,19 @@ function setChatError(host: ChatHost, error: string | null) {
   host.chatError = error;
 }
 
-function isAcceptedChatSendAck(ack: ChatSendAck | null): ack is ChatSendAck {
+type AcceptedChatSendAck = ChatSendAck & { status: "started" | "in_flight" | "ok" };
+type TerminalFailureChatSendAck = ChatSendAck & { status: "timeout" | "error" };
+
+function isAcceptedChatSendAck(ack: ChatSendAck | null): ack is AcceptedChatSendAck {
   return ack != null && (ack.status === "ok" || isNonTerminalAgentRunStatus(ack.status));
 }
 
-function isTerminalFailureChatSendAck(ack: ChatSendAck | null): ack is ChatSendAck {
+function isTerminalFailureChatSendAck(ack: ChatSendAck | null): ack is TerminalFailureChatSendAck {
   return ack?.status === "timeout" || ack?.status === "error";
 }
 
 function formatTerminalChatSendAckError(
-  ack: ChatSendAck,
+  ack: TerminalFailureChatSendAck,
   context: "chat" | "detached" | "steer",
 ): string {
   if (ack.status === "error") {
