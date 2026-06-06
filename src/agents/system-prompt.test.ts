@@ -519,6 +519,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
     expect(prompt).toContain("Source: /tmp/openclaw");
     expect(prompt).toContain("OpenClaw behavior/config/architecture: read local docs first.");
+    expect(prompt).toContain(
+      "Self-knowledge rule: for questions about OpenClaw mechanisms, capabilities, configuration, or behavior, search/read the relevant docs above before answering.",
+    );
+    expect(prompt).toContain(
+      "Do not infer from sparse context, workspace files, or training data; if docs do not cover it, say so explicitly and then inspect source if needed.",
+    );
     expect(prompt).toContain("If docs are stale/incomplete, inspect local source.");
   });
 
@@ -529,6 +535,12 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Docs: https://docs.openclaw.ai");
     expect(prompt).toContain("Source: https://github.com/openclaw/openclaw");
+    expect(prompt).toContain(
+      "Self-knowledge rule: for questions about OpenClaw mechanisms, capabilities, configuration, or behavior, search/read the relevant docs above before answering.",
+    );
+    expect(prompt).toContain(
+      "Do not infer from sparse context, workspace files, or training data; if docs do not cover it, say so explicitly and then inspect source if needed.",
+    );
     expect(prompt).toContain("If docs are stale/incomplete, inspect GitHub source.");
   });
 

@@ -316,6 +316,11 @@ stale. The prompt also notes the public docs mirror, community Discord, and Claw
 ([https://clawhub.ai](https://clawhub.ai)) for skills discovery. It tells the model to
 consult docs first for OpenClaw behavior, commands, configuration, or architecture, and to
 run `openclaw status` itself when possible (asking the user only when it lacks access).
+For questions about OpenClaw's own mechanisms, capabilities, configuration, or behavior,
+the prompt tells the model to search and read the relevant docs before answering. It also
+tells the model not to infer from sparse context, workspace files, or training data; if the
+docs do not cover the question, it must say so explicitly and then inspect source when
+needed.
 For configuration specifically, it points agents to the `gateway` tool action
 `config.schema.lookup` for exact field-level docs and constraints, then to
 `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`

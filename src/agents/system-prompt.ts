@@ -591,6 +591,8 @@ function buildDocsSection(params: {
     docsPath
       ? "OpenClaw behavior/config/architecture: read local docs first."
       : "OpenClaw behavior/config/architecture: read docs mirror first.",
+    "Self-knowledge rule: for questions about OpenClaw mechanisms, capabilities, configuration, or behavior, search/read the relevant docs above before answering.",
+    "Do not infer from sparse context, workspace files, or training data; if docs do not cover it, say so explicitly and then inspect source if needed.",
     "Config fields: use `gateway` action `config.schema.lookup`; broader config docs: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
     sourcePath
       ? "If docs are stale/incomplete, inspect local source."
