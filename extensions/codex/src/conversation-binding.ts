@@ -144,6 +144,7 @@ async function resolveConversationAppServerRuntime(params: {
     execPolicy,
     modelProvider: params.modelProvider,
     model: params.model,
+    config: params.config,
     openClawSandboxActive: Boolean(sandboxForPolicy?.enabled),
   });
   return { execPolicy, runtime };
@@ -361,6 +362,8 @@ async function resolveThreadBindingRuntime(
     appServer: runtime,
     provider: reviewerModelProvider,
     model: params.model,
+    config: params.config,
+    env: process.env,
   });
   assertNativeConversationApprovalPolicySupported({
     execPolicy,
@@ -371,6 +374,8 @@ async function resolveThreadBindingRuntime(
     modelBackedApprovalsReviewerUnavailable: !canUseCodexModelBackedApprovalsReviewerForModel({
       modelProvider: reviewerModelProvider,
       model: params.model,
+      config: params.config,
+      env: process.env,
     }),
   });
   const client = await getLeasedSharedCodexAppServerClient({
@@ -521,6 +526,8 @@ async function runBoundTurn(params: {
     appServer: runtime,
     provider: reviewerModelProvider,
     model: binding.model,
+    config: params.config,
+    env: process.env,
   });
   const approvalPolicy = execPolicy?.touched
     ? modelScopedRuntime.approvalPolicy
@@ -535,6 +542,8 @@ async function runBoundTurn(params: {
     modelBackedApprovalsReviewerUnavailable: !canUseCodexModelBackedApprovalsReviewerForModel({
       modelProvider: reviewerModelProvider,
       model: binding.model,
+      config: params.config,
+      env: process.env,
     }),
   });
 

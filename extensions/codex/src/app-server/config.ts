@@ -3,6 +3,10 @@ import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
 import {
+  resolveProviderIdForAuth,
+  type ProviderAuthAliasLookupParams,
+} from "openclaw/plugin-sdk/agent-runtime";
+import {
   resolveExecApprovalsFromFile,
   type ExecApprovalsFile,
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
@@ -35,6 +39,7 @@ export type OpenClawExecPolicyForCodexAppServer = {
   touched: boolean;
 };
 type OpenClawExecPolicy = OpenClawExecPolicyForCodexAppServer;
+type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
 type CodexAppServerDefaultPolicy = {
   mode: CodexAppServerPolicyMode;
   approvalPolicy?: CodexAppServerApprovalPolicy;
@@ -145,6 +150,8 @@ export type CodexAppServerRuntimeOptions = {
 export type CodexModelBackedReviewerContext = {
   modelProvider?: string;
   model?: string;
+  config?: ProviderAuthAliasConfig;
+  env?: NodeJS.ProcessEnv;
 };
 
 export type CodexPluginConfig = {
@@ -400,6 +407,7 @@ export function resolveCodexAppServerRuntimeOptions(
     execPolicy?: OpenClawExecPolicyForCodexAppServer;
     modelProvider?: string;
     model?: string;
+    config?: ProviderAuthAliasConfig;
     env?: NodeJS.ProcessEnv;
     requirementsToml?: string | null;
     requirementsPath?: string;
@@ -444,6 +452,8 @@ export function resolveCodexAppServerRuntimeOptions(
   const canUseModelBackedReviewer = canUseCodexModelBackedApprovalsReviewerForModel({
     modelProvider: params.modelProvider,
     model: params.model,
+    config: params.config,
+    env,
   });
   const explicitModelBackedReviewer =
     explicitApprovalsReviewer === "auto_review" ||
@@ -604,15 +614,32 @@ export function canUseCodexModelBackedApprovalsReviewerForModel(
   const inferredProvider = inferProviderFromModelRef(params.model);
   if (explicitProvider && explicitProvider !== "codex") {
     return (
-      isCodexModelBackedApprovalsReviewerProvider(explicitProvider) &&
+      isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params) &&
       (inferredProvider === undefined ||
-        isCodexModelBackedApprovalsReviewerProvider(inferredProvider))
+        isTrustedCodexModelBackedApprovalsReviewerProvider(inferredProvider, params))
     );
   }
   if (inferredProvider !== undefined) {
-    return isCodexModelBackedApprovalsReviewerProvider(inferredProvider);
+    return isTrustedCodexModelBackedApprovalsReviewerProvider(inferredProvider, params);
   }
-  return isCodexModelBackedApprovalsReviewerProvider(explicitProvider);
+  return isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params);
+}
+
+export function isTrustedCodexModelBackedOpenAIProvider(params: {
+  config?: ProviderAuthAliasConfig;
+  env?: NodeJS.ProcessEnv;
+  model?: string;
+}): boolean {
+  if (!isNativeOpenAIBaseUrl(params.env?.OPENAI_BASE_URL ?? params.env?.OPENAI_API_BASE)) {
+    return false;
+  }
+  const openAIProviders = readConfiguredOpenAIProvidersForModelBackedReview(params.config);
+  if (openAIProviders.length === 0) {
+    return true;
+  }
+  return openAIProviders.every((openAIProvider) =>
+    configuredOpenAIProviderIsTrustedForModelBackedReview(openAIProvider, params.model)
+  );
 }
 
 export function resolveCodexModelBackedReviewerPolicyContext(params: {
@@ -1186,6 +1213,96 @@ function selectForcedUserApprovalsReviewer(params: {
 function isCodexModelBackedApprovalsReviewerProvider(provider: string | undefined): boolean {
   const normalized = provider?.trim().toLowerCase();
   return normalized === "openai";
+}
+
+function isTrustedCodexModelBackedApprovalsReviewerProvider(
+  provider: string | undefined,
+  params: Pick<CodexModelBackedReviewerContext, "config" | "env" | "model">,
+): boolean {
+  return (
+    isCodexModelBackedApprovalsReviewerProvider(provider) &&
+    isTrustedCodexModelBackedOpenAIProvider({
+      config: params.config,
+      env: params.env,
+      model: params.model,
+    })
+  );
+}
+
+function readConfiguredOpenAIProvidersForModelBackedReview(
+  config: ProviderAuthAliasConfig | undefined,
+): Array<Record<string, unknown>> {
+  const providerRecords = readRecord(readRecord(readRecord(config)?.models)?.providers);
+  if (!providerRecords) {
+    return [];
+  }
+  const openAIProviders: Array<Record<string, unknown>> = [];
+  for (const [providerId, providerConfig] of Object.entries(providerRecords)) {
+    if (resolveProviderIdForAuth(providerId, { config }) !== "openai") {
+      continue;
+    }
+    const record = readRecord(providerConfig);
+    if (record) {
+      openAIProviders.push(record);
+    }
+  }
+  return openAIProviders;
+}
+
+function configuredOpenAIProviderIsTrustedForModelBackedReview(
+  openAIProvider: Record<string, unknown>,
+  modelInput: string | undefined,
+): boolean {
+  if (readRecord(openAIProvider.localService)) {
+    return false;
+  }
+  if (!isNativeOpenAIBaseUrl(openAIProvider.baseUrl)) {
+    return false;
+  }
+  const models = openAIProvider.models;
+  if (!Array.isArray(models)) {
+    return true;
+  }
+  const modelId = normalizeOpenAIModelBackedReviewerModelId(modelInput);
+  if (!modelId) {
+    return false;
+  }
+  for (const entry of models) {
+    const model = readRecord(entry);
+    if (typeof model?.id !== "string" || !matchesConfiguredOpenAIModelId(modelId, model.id)) {
+      continue;
+    }
+    if (!isNativeOpenAIBaseUrl(model.baseUrl)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function normalizeOpenAIModelBackedReviewerModelId(modelInput: string | undefined): string {
+  const normalized = modelInput?.trim() ?? "";
+  const authProfileIndex = normalized.indexOf("@");
+  const withoutAuthProfile =
+    authProfileIndex > 0 ? normalized.slice(0, authProfileIndex) : normalized;
+  const slashIndex = withoutAuthProfile.indexOf("/");
+  return slashIndex > 0 ? withoutAuthProfile.slice(slashIndex + 1).trim() : withoutAuthProfile;
+}
+
+function matchesConfiguredOpenAIModelId(modelId: string, configuredModelId: string): boolean {
+  const configured = normalizeOpenAIModelBackedReviewerModelId(configuredModelId);
+  return Boolean(configured) && (modelId === configured || modelId.startsWith(`${configured}@`));
+}
+
+function isNativeOpenAIBaseUrl(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) {
+    return true;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname.toLowerCase() === "api.openai.com";
+  } catch {
+    return false;
+  }
 }
 
 function normalizeCodexModelBackedReviewerPolicyProvider(provider: string): string {

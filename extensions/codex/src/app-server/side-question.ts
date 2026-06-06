@@ -193,6 +193,7 @@ export async function runCodexAppServerSideQuestion(
     execPolicy,
     modelProvider: reviewerPolicyContext.modelProvider,
     model: reviewerPolicyContext.model,
+    config: params.cfg,
   });
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
@@ -225,10 +226,14 @@ export async function runCodexAppServerSideQuestion(
       appServer,
       provider: reviewerPolicyContext.modelProvider,
       model: reviewerPolicyContext.model,
+      config: params.cfg,
+      env: process.env,
     });
     const useModelScopedPolicy = !canUseCodexModelBackedApprovalsReviewerForModel({
       modelProvider: reviewerPolicyContext.modelProvider,
       model: reviewerPolicyContext.model,
+      config: params.cfg,
+      env: process.env,
     });
     const approvalPolicy = useModelScopedPolicy
       ? modelScopedAppServer.approvalPolicy

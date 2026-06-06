@@ -16,11 +16,13 @@ import {
   type NativeHookRelayRegistrationHandle,
   runBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/agent-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
-import type { OpenClawExecPolicyForCodexAppServer } from "./config.js";
+import {
+  isTrustedCodexModelBackedOpenAIProvider,
+  type OpenClawExecPolicyForCodexAppServer,
+} from "./config.js";
 import {
   approvalRequestExplicitlyUnavailable,
   mapExecDecisionToOutcome,
@@ -527,10 +529,10 @@ function canUseInternalExecAutoReviewReviewer(
   if (provider !== "openai") {
     return false;
   }
-  return configuredOpenAIProviderIsTrustedForExecReview({
+  return isTrustedCodexModelBackedOpenAIProvider({
     config,
     env,
-    modelId: model.slice(slashIndex + 1).trim(),
+    model: model.slice(slashIndex + 1).trim(),
   });
 }
 
@@ -583,91 +585,6 @@ function normalizeExecReviewerAliasRef(modelRef: string): string {
   const slashIndex = trimmed.indexOf("/");
   const authProfileIndex = trimmed.indexOf("@", slashIndex + 1);
   return authProfileIndex > 0 ? trimmed.slice(0, authProfileIndex) : trimmed;
-}
-
-function configuredOpenAIProviderIsTrustedForExecReview(params: {
-  config: EmbeddedRunAttemptParams["config"] | undefined;
-  env: NodeJS.ProcessEnv | undefined;
-  modelId: string;
-}): boolean {
-  if (!isNativeOpenAIBaseUrl(params.env?.OPENAI_BASE_URL ?? params.env?.OPENAI_API_BASE)) {
-    return false;
-  }
-  const openAIProviders = readConfiguredOpenAIProvidersForExecReview(params.config);
-  if (openAIProviders.length === 0) {
-    return true;
-  }
-  return openAIProviders.every((openAIProvider) =>
-    configuredOpenAIProviderIsTrustedForExecReviewModel(openAIProvider, params.modelId)
-  );
-}
-
-function readConfiguredOpenAIProvidersForExecReview(
-  config: EmbeddedRunAttemptParams["config"] | undefined,
-): Array<Record<string, unknown>> {
-  const providers = readUnknownRecord(readUnknownRecord(config)?.models)?.providers;
-  const providerRecords = readUnknownRecord(providers);
-  if (!providerRecords) {
-    return [];
-  }
-  const openAIProviders: Array<Record<string, unknown>> = [];
-  for (const [providerId, providerConfig] of Object.entries(providerRecords)) {
-    if (resolveProviderIdForAuth(providerId, { config }) !== "openai") {
-      continue;
-    }
-    const record = readUnknownRecord(providerConfig);
-    if (record) {
-      openAIProviders.push(record);
-    }
-  }
-  return openAIProviders;
-}
-
-function configuredOpenAIProviderIsTrustedForExecReviewModel(
-  openAIProvider: Record<string, unknown>,
-  modelIdInput: string,
-): boolean {
-  if (readUnknownRecord(openAIProvider.localService)) {
-    return false;
-  }
-  if (!isNativeOpenAIBaseUrl(openAIProvider.baseUrl)) {
-    return false;
-  }
-  const models = openAIProvider.models;
-  if (!Array.isArray(models)) {
-    return true;
-  }
-  const modelId = modelIdInput.trim();
-  if (!modelId) {
-    return false;
-  }
-  for (const entry of models) {
-    const model = readUnknownRecord(entry);
-    if (typeof model?.id !== "string" || !matchesConfiguredOpenAIModelId(modelId, model.id)) {
-      continue;
-    }
-    if (!isNativeOpenAIBaseUrl(model.baseUrl)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function matchesConfiguredOpenAIModelId(modelId: string, configuredModelId: string): boolean {
-  const configured = configuredModelId.trim();
-  return Boolean(configured) && (modelId === configured || modelId.startsWith(`${configured}@`));
-}
-
-function isNativeOpenAIBaseUrl(value: unknown): boolean {
-  if (typeof value !== "string" || !value.trim()) {
-    return true;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.hostname.toLowerCase() === "api.openai.com";
-  } catch {
-    return false;
-  }
 }
 
 function resolveAgentExecConfig(

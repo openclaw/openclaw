@@ -156,6 +156,7 @@ export async function setCodexConversationModel(params: {
     pluginConfig: params.pluginConfig,
     modelProvider: reviewerPolicyContext.modelProvider,
     model: reviewerPolicyContext.model,
+    config: params.config,
   });
   const modelProvider = resolveConversationControlModelProvider({
     authProfileId: binding.authProfileId,

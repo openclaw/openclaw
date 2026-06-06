@@ -345,6 +345,30 @@ describe("Codex app-server config", () => {
       model: "openai/gpt-oss-20b",
     });
     expect(canUseCodexModelBackedApprovalsReviewerForModel(boundLocalOpenAIName)).toBe(false);
+    expect(
+      canUseCodexModelBackedApprovalsReviewerForModel({
+        modelProvider: "openai",
+        model: "gpt-5.5",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "http://localhost:8080/v1",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      canUseCodexModelBackedApprovalsReviewerForModel({
+        modelProvider: "openai",
+        model: "gpt-5.5",
+        env: {
+          OPENAI_BASE_URL: "http://localhost:8080/v1",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(false);
   });
 
   it("uses user approvals when requirements force prompting but model provider is unknown", () => {

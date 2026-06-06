@@ -97,6 +97,43 @@ describe("Codex app-server policy", () => {
     ).toBe("auto_review");
   });
 
+  it("uses human approval for OpenAI-compatible custom endpoints", () => {
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      env: {},
+      requirementsToml: null,
+      execMode: "auto",
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      config: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://localhost:8080/v1",
+            },
+          },
+        },
+      },
+    });
+
+    expect(appServer.approvalsReviewer).toBe("user");
+    expect(
+      resolveCodexAppServerForModelProvider({
+        appServer,
+        provider: "openai",
+        model: "gpt-5.5",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "http://localhost:8080/v1",
+              },
+            },
+          },
+        },
+      }).approvalsReviewer,
+    ).toBe("user");
+  });
+
   it("uses human approval instead of Codex Guardian for custom model providers", () => {
     const appServer = resolveCodexAppServerRuntimeOptions({
       env: {},

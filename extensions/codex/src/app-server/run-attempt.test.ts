@@ -4770,6 +4770,46 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.approvalsReviewer).toBe("user");
   });
 
+  it("uses human approval instead of Guardian for custom OpenAI-compatible endpoints", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = {
+      ...createParams(sessionFile, workspaceDir),
+      provider: "openai",
+      modelId: "gpt-5.5",
+      config: {
+        tools: {
+          exec: {
+            mode: "auto",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://localhost:8080/v1",
+            },
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams;
+
+    const run = runCodexAppServerAttempt(params, { pluginConfig: {} });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = requests.find((request) => request.method === "thread/start");
+    const startRequestParams = startRequest?.params as Record<string, unknown> | undefined;
+    expect(startRequestParams?.modelProvider).toBe("openai");
+    expect(startRequestParams?.approvalPolicy).toBe("on-request");
+    expect(startRequestParams?.approvalsReviewer).toBe("user");
+
+    const turnRequest = requests.find((request) => request.method === "turn/start");
+    const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(turnRequestParams?.approvalsReviewer).toBe("user");
+  });
+
   it("keeps Codex code-mode-only while disabling Guardian for provider-qualified local models", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

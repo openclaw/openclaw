@@ -49,6 +49,8 @@ export function resolveCodexAppServerForModelProvider(params: {
   appServer: CodexAppServerRuntimeOptions;
   provider?: string;
   model?: string;
+  config?: Parameters<typeof canUseCodexModelBackedApprovalsReviewerForModel>[0]["config"];
+  env?: NodeJS.ProcessEnv;
 }): CodexAppServerRuntimeOptions {
   const explicitProvider = normalizeModelBackedReviewerProvider(params.provider);
   if (
@@ -56,6 +58,8 @@ export function resolveCodexAppServerForModelProvider(params: {
     canUseCodexModelBackedApprovalsReviewerForModel({
       modelProvider: explicitProvider,
       model: params.model,
+      config: params.config,
+      env: params.env,
     })
   ) {
     return params.appServer;
