@@ -79,8 +79,10 @@ const TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE =
 const SUMMARY_PROMPT_INSTRUCTIONS_ECHO_RE =
   /^you are an assistant that summarizes texts concisely while keeping the most important information\.\s+summarize the text to approximately \d+ characters\.\s+maintain the original tone and style\.\s+reply only with the summary, without additional explanations\.\s*/i;
 const USER_SUMMARY_PROMPT_ECHO = String.raw`the user (?:wants|asks|asked|requested) me to summarize`;
+const USER_SUMMARY_TARGET_ECHO = String.raw`(?:(?:the\s+)?(?:provided|following|above|original|given|this)\s+(?:text|content|message|response|passage)|text to summarize)`;
+const USER_SUMMARY_METADATA_ECHO = String.raw`${USER_SUMMARY_PROMPT_ECHO}\s+${USER_SUMMARY_TARGET_ECHO}(?:\s+about\b[^.!?\n]*)?\s+to\s+approximately\s+[\d,]+\s+characters\b[^.!?\n]*\.`;
 const LEADING_SUMMARY_PROMPT_ECHO_RE = new RegExp(
-  String.raw`^(?:(?:${USER_SUMMARY_PROMPT_ECHO}(?:\s+(?:(?:the\s+)?(?:provided|following|above|original|given|this)\s+(?:text|content|message|response|passage)|text to summarize))?(?:\s+for\s+(?:audio|tts))?\.|${USER_SUMMARY_PROMPT_ECHO}\s*(?::|—|–|\s-\s)|i (?:need|should|will|'ll) (?:to )?(?:summarize|include|keep|maintain|craft|write|produce)(?:\s+(?:the\s+)?(?:summary|key points?|important information|original tone|tone and style))?\.|let me (?:craft|write|produce|summarize)(?:\s+(?:a\s+)?summary)?\.)\s*)+`,
+  String.raw`^(?:(?:${USER_SUMMARY_METADATA_ECHO}|${USER_SUMMARY_PROMPT_ECHO}(?:\s+${USER_SUMMARY_TARGET_ECHO})?(?:\s+for\s+(?:audio|tts))?\.|${USER_SUMMARY_PROMPT_ECHO}\s*(?::|—|–|\s-\s)|i (?:need|should|will|'ll) (?:to )?(?:summarize|include|keep|maintain|craft|write|produce)(?:\s+(?:the\s+)?(?:summary|key points?|important information|original tone|tone and style))?\.|let me (?:craft|write|produce|summarize)(?:\s+(?:a\s+)?summary)?\.)\s*)+`,
   "i",
 );
 

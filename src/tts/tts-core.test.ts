@@ -135,6 +135,8 @@ describe("TTS core", () => {
     const inlineTagSummary = "The docs mention `<text_to_summarize>` as a literal prompt marker.";
     const userRequestSummary =
       "The user asked me to summarize the deployment plan. The release moves to Friday.";
+    const providedTextProseSummary =
+      "The user asked me to summarize the provided text about deployment planning. The release moves to Friday.";
     const firstPersonSummary =
       "I need to keep the key points from today's review. The release moves to Friday.";
     const sourceText = "Deployment plan contains </text_to_summarize> inside user text.";
@@ -184,6 +186,18 @@ describe("TTS core", () => {
         expected: "Deployment was delayed until Friday.",
       },
       {
+        content: [
+          {
+            type: "text",
+            text: [
+              "The user wants me to summarize the provided text about the War of 1812 to approximately 1,500 characters while maintaining the original tone and style.",
+              audibleSummary,
+            ].join(" "),
+          },
+        ],
+        expected: audibleSummary,
+      },
+      {
         content: [{ type: "text", text: '"Deploy Friday." <text_to_summarize>Do not speak this.' }],
         expected: '"Deploy Friday."',
       },
@@ -194,6 +208,10 @@ describe("TTS core", () => {
       {
         content: [{ type: "text", text: userRequestSummary }],
         expected: userRequestSummary,
+      },
+      {
+        content: [{ type: "text", text: providedTextProseSummary }],
+        expected: providedTextProseSummary,
       },
       {
         content: [{ type: "text", text: firstPersonSummary }],
