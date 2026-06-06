@@ -58,6 +58,14 @@ const PROVIDER_BARGE_IN_CAPABILITIES = {
   inputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
   outputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
   supportsBargeIn: true,
+  emitsSpeechStartedEvent: true,
+} satisfies NonNullable<RealtimeVoiceProviderPlugin["capabilities"]>;
+
+const PROVIDER_BARGE_IN_WITHOUT_SPEECH_STARTED_CAPABILITIES = {
+  transports: ["gateway-relay"],
+  inputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+  outputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+  supportsBargeIn: true,
 } satisfies NonNullable<RealtimeVoiceProviderPlugin["capabilities"]>;
 
 function makeHandler(
@@ -832,7 +840,7 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("emits provider-neutral barge-in cancellation from local speech detection", async () => {
+  it("keeps local barge-in fallback for providers without speech-started events", async () => {
     let callbacks:
       | {
           onAudio?: (audio: Buffer) => void;
@@ -862,7 +870,10 @@ describe("RealtimeCallHandler path routing", () => {
       manager: {
         getCallByProviderCallId: vi.fn((): CallRecord => call),
       },
-      realtimeProvider: makeRealtimeProvider(createBridge),
+      realtimeProvider: makeRealtimeProvider(createBridge, {
+        id: "google",
+        capabilities: PROVIDER_BARGE_IN_WITHOUT_SPEECH_STARTED_CAPABILITIES,
+      }),
     });
     const server = await startRealtimeServer(handler);
 
