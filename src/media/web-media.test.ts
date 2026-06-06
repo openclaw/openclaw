@@ -837,8 +837,8 @@ describe("loadWebMedia", () => {
 
         // File is gone…
         let statError: NodeJS.ErrnoException | undefined;
-        await fs.stat(saved.path).catch((err: NodeJS.ErrnoException) => {
-          statError = err;
+        await fs.stat(saved.path).catch((err: unknown) => {
+          statError = err as NodeJS.ErrnoException;
         });
         expect(statError?.code).toBe("ENOENT");
 
