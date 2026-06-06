@@ -976,6 +976,25 @@ describe("memory index", () => {
     expect(third).toBe(second);
   });
 
+  it("closes stale default managers when provider requirement changes", async () => {
+    const storePath = path.join(workspaceDir, "index-provider-requirement-cache.sqlite");
+    const implicitCfg = createCfg({ storePath });
+    const implicit = requireManager(
+      await getMemorySearchManager({ cfg: implicitCfg, agentId: "main" }),
+    );
+    managersForCleanup.add(implicit);
+    await implicit.probeEmbeddingAvailability();
+
+    const explicitCfg = createCfg({ storePath, provider: "openai" });
+    const explicit = requireManager(
+      await getMemorySearchManager({ cfg: explicitCfg, agentId: "main" }),
+    );
+    managersForCleanup.add(explicit);
+
+    expect(explicit === implicit).toBe(false);
+    expect(providerCloseCalls).toBe(1);
+  });
+
   it("retries embedding provider close before releasing the manager", async () => {
     providerCloseFailuresRemaining = 1;
     const cfg = createCfg({

@@ -105,37 +105,12 @@ export async function closeMemoryIndexManagersForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {
-  const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
-  if (!settings) {
-    return;
-  }
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const providerRequirement = resolveMemoryEmbeddingProviderRequirement({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    settings,
-  });
-  const key = resolveMemoryIndexManagerCacheKey({
+  await closeMemoryIndexManagersForScope({
     agentId: params.agentId,
     workspaceDir,
-    settings,
-    providerRequirement,
     purpose: "default",
   });
-  const pending = INDEX_CACHE_PENDING.get(key);
-  if (pending) {
-    await Promise.allSettled([pending]);
-  }
-  const manager = INDEX_CACHE.get(key);
-  if (!manager) {
-    return;
-  }
-  INDEX_CACHE.delete(key);
-  try {
-    await manager.close();
-  } catch (err) {
-    log.warn(`failed to close memory index manager for agent ${params.agentId}: ${String(err)}`);
-  }
 }
 
 function resolveEffectiveMemorySearchSettings(
@@ -204,6 +179,45 @@ function resolveMemoryIndexManagerCacheKey(params: {
     JSON.stringify(params.providerRequirement),
     params.purpose,
   ].join(":");
+}
+
+function isMemoryIndexManagerCacheKeyInScope(
+  key: string,
+  params: {
+    agentId: string;
+    workspaceDir: string;
+    purpose: MemoryIndexManagerPurpose;
+  },
+): boolean {
+  return (
+    key.startsWith(`${params.agentId}:${params.workspaceDir}:`) &&
+    key.endsWith(`:${params.purpose}`)
+  );
+}
+
+async function closeMemoryIndexManagersForScope(params: {
+  agentId: string;
+  workspaceDir: string;
+  purpose: MemoryIndexManagerPurpose;
+  exceptKey?: string;
+}): Promise<void> {
+  const isScopedKey = (key: string) =>
+    key !== params.exceptKey && isMemoryIndexManagerCacheKeyInScope(key, params);
+  const pending = Array.from(INDEX_CACHE_PENDING.entries())
+    .filter(([key]) => isScopedKey(key))
+    .map(([, value]) => value);
+  if (pending.length > 0) {
+    await Promise.allSettled(pending);
+  }
+  const entries = Array.from(INDEX_CACHE.entries()).filter(([key]) => isScopedKey(key));
+  for (const [key, manager] of entries) {
+    INDEX_CACHE.delete(key);
+    try {
+      await manager.close();
+    } catch (err) {
+      log.warn(`failed to close memory index manager for agent ${params.agentId}: ${String(err)}`);
+    }
+  }
 }
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
@@ -319,6 +333,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       purpose,
     });
     const transient = purpose === "status" || purpose === "cli";
+    if (!transient) {
+      await closeMemoryIndexManagersForScope({
+        agentId,
+        workspaceDir,
+        purpose,
+        exceptKey: key,
+      });
+    }
     return await getOrCreateManagedCacheEntry({
       cache: INDEX_CACHE,
       pending: INDEX_CACHE_PENDING,
