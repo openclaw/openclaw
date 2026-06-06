@@ -118,6 +118,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
     getVisibleBlockReplyCount: () => 0,
+    getToolExecutionSinceLastBlockReply: () => false,
     getSuccessfulCronAdds: () => 0,
     getReplayState: () => ({
       replayInvalid: false,

@@ -175,7 +175,7 @@ export type EmbeddedRunAttemptResult = {
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
-  visibleBlockReplyCount?: number;
+  hasVisibleBlockReplyAfterLastToolExecution?: boolean;
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;

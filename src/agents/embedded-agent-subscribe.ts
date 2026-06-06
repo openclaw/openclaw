@@ -1380,6 +1380,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
     getVisibleBlockReplyCount: () => state.visibleBlockReplyCount,
+    getToolExecutionSinceLastBlockReply: () => state.toolExecutionSinceLastBlockReply,
     getSuccessfulCronAdds: () => state.successfulCronAdds,
     getReplayState: () => ({ ...state.replayState }),
     // Returns true if any messaging tool successfully sent a message.
