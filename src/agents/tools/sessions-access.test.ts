@@ -69,6 +69,9 @@ describe("sandbox session-tools context", () => {
     expect(context.restrictToSpawned).toBe(true);
     expect(context.requesterInternalKey).toBe("agent:main:main");
     expect(context.effectiveRequesterKey).toBe("agent:main:main");
+    expect([...context.currentSessionKeys]).toEqual(
+      expect.arrayContaining(["agent:main:main", "main"]),
+    );
   });
 
   it("does not restrict subagent sessions in sandboxed mode", () => {
@@ -457,5 +460,35 @@ describe("createSessionVisibilityGuard", () => {
       error:
         "Session history visibility is restricted to the current session (tools.sessions.visibility=self).",
     });
+  });
+
+  it("allows configured current-session aliases under self visibility", async () => {
+    const guard = await createSessionVisibilityGuard({
+      action: "history",
+      requesterSessionKey: "agent:main:telegram:direct:123",
+      currentSessionKeys: new Set(["agent:main:telegram:direct:123", "main"]),
+      visibility: "self",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("main")).toEqual({ allowed: true });
+    expect(guard.check("agent:main:telegram:direct:456")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session history visibility is restricted to the current session (tools.sessions.visibility=self).",
+    });
+  });
+
+  it("allows configured current-session aliases under tree visibility", async () => {
+    const guard = await createSessionVisibilityGuard({
+      action: "list",
+      requesterSessionKey: "agent:main:telegram:direct:123",
+      currentSessionKeys: new Set(["agent:main:telegram:direct:123", "main"]),
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("main")).toEqual({ allowed: true });
   });
 });

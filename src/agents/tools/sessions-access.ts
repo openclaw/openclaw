@@ -29,6 +29,7 @@ export function resolveSandboxedSessionToolContext(params: {
   visibility: "spawned" | "all";
   requesterInternalKey: string | undefined;
   effectiveRequesterKey: string;
+  currentSessionKeys: ReadonlySet<string>;
   restrictToSpawned: boolean;
 } {
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
@@ -42,6 +43,11 @@ export function resolveSandboxedSessionToolContext(params: {
       })
     : undefined;
   const effectiveRequesterKey = requesterInternalKey ?? alias;
+  const currentSessionKeys = new Set(
+    [effectiveRequesterKey, requesterInternalKey, alias, mainKey, "main"].filter(
+      (key): key is string => typeof key === "string" && key.trim().length > 0,
+    ),
+  );
   const restrictToSpawned =
     params.sandboxed === true &&
     visibility === "spawned" &&
@@ -54,6 +60,7 @@ export function resolveSandboxedSessionToolContext(params: {
     visibility,
     requesterInternalKey,
     effectiveRequesterKey,
+    currentSessionKeys,
     restrictToSpawned,
   };
 }

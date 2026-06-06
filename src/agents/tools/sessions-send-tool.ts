@@ -328,7 +328,7 @@ export function createSessionsSendTool(opts?: {
       const gatewayCall = opts?.callGateway ?? callGateway;
       const message = readStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
-      const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+      const { cfg, mainKey, alias, effectiveRequesterKey, currentSessionKeys, restrictToSpawned } =
         resolveSessionToolContext(opts);
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
@@ -499,6 +499,7 @@ export function createSessionsSendTool(opts?: {
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "send",
         requesterSessionKey: effectiveRequesterKey,
+        currentSessionKeys,
         visibility: sessionVisibility,
         a2aPolicy,
       });
