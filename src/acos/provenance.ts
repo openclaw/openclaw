@@ -143,9 +143,9 @@ export function hasAcosApproval(
   provenance: AcosProvenance | undefined,
   action: AcosActionClass,
 ): boolean {
-  return Boolean(
+  return (
     provenance?.approval_granted === true &&
-    approvalScopeIncludes(provenance.approval_scope, action),
+    approvalScopeIncludes(provenance.approval_scope, action)
   );
 }
 
