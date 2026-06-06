@@ -296,6 +296,7 @@ exit 1
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "default",
         HOME: "/Volumes/Data/Users/test",
+        USER: "test",
       });
       // launchd cannot bootstrap from the external volume; the generated script
       // must target the boot-volume plist, not the external HOME one.

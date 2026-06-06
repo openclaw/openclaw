@@ -1952,6 +1952,25 @@ describe("external APFS volume fallback", () => {
     );
     expect(bootstrapCall).toBeDefined();
   });
+  it("resolves to /Users/<login-user> when HOME is the external volume root (#60398)", async () => {
+    state.externalVolume = true;
+    // The reported shape: $HOME is the external volume root itself, so its last
+    // path segment is the volume name, not the user. The account must come from
+    // USER, not basename(HOME).
+    const env = { ...createDefaultLaunchdEnv(), HOME: "/Volumes/MainDataDrive", USER: "test" };
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+    const bootPlist = "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist";
+    expect(state.fileWrites.some((w) => w.path === bootPlist)).toBe(true);
+    // It must NOT derive the account from the volume name.
+    expect(state.fileWrites.some((w) => w.path.startsWith("/Users/MainDataDrive/"))).toBe(false);
+    expect(
+      state.launchctlCalls.find((c) => c[0] === "bootstrap" && c[2] === bootPlist),
+    ).toBeDefined();
+  });
   it("uninstall trashes the plist on the boot volume, not across the external volume", async () => {
     state.externalVolume = true;
     const env = { ...createDefaultLaunchdEnv(), HOME: "/Volumes/Data/Users/test", USER: "test" };
