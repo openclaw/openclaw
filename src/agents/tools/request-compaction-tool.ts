@@ -68,6 +68,14 @@ const RequestCompactionToolSchema = Type.Object({
       "Example: 'context pressure at 92%, working state evacuated to memory files and 2 post-compaction delegates staged.'",
     maxLength: 1024,
   }),
+  focus: Type.Optional(
+    Type.String({
+      description:
+        "Optional instructions that steer what the compaction summary should preserve. " +
+        "Use this to name load-bearing facts, decisions, files, or open questions the summarizer must keep.",
+      maxLength: 4096,
+    }),
+  ),
   traceparent: Type.Optional(
     Type.String({
       description:
@@ -186,6 +194,7 @@ export function createRequestCompactionTool(opts: RequestCompactionToolOpts): An
       }
 
       const reasonText = readStringParam(params, "reason", { required: true }).slice(0, 1024);
+      const focusText = readStringParam(params, "focus")?.slice(0, 4096);
       const traceparentRaw = readStringParam(params, "traceparent");
       const explicitTraceparent =
         traceparentRaw !== undefined ? normalizeDiagnosticTraceparent(traceparentRaw) : undefined;
@@ -264,6 +273,7 @@ export function createRequestCompactionTool(opts: RequestCompactionToolOpts): An
         diagId,
         trigger: "volitional",
         reason: reasonText,
+        ...(focusText ? { customInstructions: focusText } : {}),
         contextUsage,
         requestedAtMs: now,
         ...traceContextFields,

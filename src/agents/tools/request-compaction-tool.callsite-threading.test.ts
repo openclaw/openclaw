@@ -21,6 +21,7 @@ import {
   runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import type { RequestCompactionInvocation } from "../compaction-attribution.js";
 import {
   _resetGuardState,
   _resetVolitionalCounts,
@@ -41,6 +42,7 @@ interface CapturedCompactParams {
   provider: string;
   model: string;
   authProfileId?: string;
+  customInstructions?: string;
 }
 
 const REQUEST_COMPACTION_SESSION_KEY = "agent:main:discord:channel:request-compaction-trace";
@@ -124,8 +126,10 @@ function buildTriggerCompactionClosure(
     provider: string; // The persisted primary provider
     authProfileId?: string;
   },
-): () => Promise<{ ok: boolean; compacted: boolean; reason?: string }> {
-  return async () => {
+): (
+  request?: Pick<RequestCompactionInvocation, "customInstructions">,
+) => Promise<{ ok: boolean; compacted: boolean; reason?: string }> {
+  return async (request = {}) => {
     try {
       // Inline the import pattern from the call sites
       const { compactEmbeddedAgentSession } =
@@ -152,6 +156,7 @@ function buildTriggerCompactionClosure(
         provider: innerProvider,
         model: innerModel,
         authProfileId: compactionAuthProfileId,
+        customInstructions: request.customInstructions,
       });
 
       return {
@@ -279,6 +284,29 @@ describe("call-site threading: provider/model passthrough", () => {
       provider: "anthropic",
       model: "claude-opus-4",
       authProfileId: "profile-full",
+      customInstructions: undefined,
+    });
+  });
+
+  it("passes request focus through to compact customInstructions", async () => {
+    const run = {
+      sessionId: "session-focus",
+      sessionKey: "agent:main:matrix:channel:room",
+      sessionFile: "/data/sessions/focus.jsonl",
+      workspaceDir: "/home/user/workspace",
+      messageProvider: "matrix",
+      provider: "anthropic",
+      authProfileId: "profile-focus",
+    };
+
+    const triggerCompaction = buildTriggerCompactionClosure("anthropic", "claude-opus-4", run);
+    await triggerCompaction({
+      customInstructions: "preserve the b683 fix-spec and the open path-b question",
+    });
+
+    expect(capturedCompactCalls[0]).toMatchObject({
+      sessionId: "session-focus",
+      customInstructions: "preserve the b683 fix-spec and the open path-b question",
     });
   });
 });
