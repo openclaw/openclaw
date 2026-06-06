@@ -4158,6 +4158,14 @@ export async function runEmbeddedAttempt(
             );
           }
 
+          const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
+            prompt: promptForModel,
+            ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
+            ...(typeof preparedUserTurnMessage?.timestamp === "number"
+              ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
+              : {}),
+          });
+
           if (!skipPromptSubmission && !isRawModelRun && hookRunner?.hasHooks("llm_input")) {
             hookRunner
               .runLlmInput(
@@ -4167,7 +4175,7 @@ export async function runEmbeddedAttempt(
                   provider: params.provider,
                   model: params.modelId,
                   systemPrompt: systemPromptForHook,
-                  prompt: promptForModel,
+                  prompt: llmBoundaryPromptForPrecheck,
                   historyMessages: cloneHookMessages(hookMessagesForCurrentPrompt),
                   imagesCount: imageResult.images.length,
                   tools,
@@ -4188,13 +4196,6 @@ export async function runEmbeddedAttempt(
               });
           }
 
-          const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
-            prompt: promptForModel,
-            ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
-            ...(typeof preparedUserTurnMessage?.timestamp === "number"
-              ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
-              : {}),
-          });
           const llmBoundaryOptionsForPrecheck = boundaryTimezone
             ? { timezone: boundaryTimezone }
             : undefined;
