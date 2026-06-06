@@ -3438,7 +3438,7 @@ describe("exec approval handlers", () => {
     }
   });
 
-  it("keeps originating chat fallback when explicit exec forwarding fails", async () => {
+  it("expires approvals when explicit exec forwarding fails", async () => {
     const { manager, handlers, forwarder, respond, context } =
       createForwardingExecApprovalFixture();
     const expireSpy = vi.spyOn(manager, "expire");
@@ -3464,22 +3464,19 @@ describe("exec approval handlers", () => {
     });
 
     await vi.waitFor(() => {
-      expect(lastMockCallArg(respond)).toBe(true);
-      expectRecordFields(lastMockCallArg(respond, 1), {
-        status: "accepted",
-        id: "approval-forwarding-failed",
-      });
-      expect(lastMockCallArg(respond, 2)).toBeUndefined();
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
     });
 
-    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
-    expect(expireSpy).not.toHaveBeenCalled();
-
     rejectDelivery(new Error("approval delivery failed"));
-    await Promise.resolve();
-
-    manager.resolve("approval-forwarding-failed", "allow-once");
     await requestPromise;
+
+    expect(expireSpy).toHaveBeenCalledWith("approval-forwarding-failed", "no-approval-route");
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), {
+      id: "approval-forwarding-failed",
+      decision: null,
+    });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
   it("keeps approvals pending when the originating chat can handle /approve directly", async () => {

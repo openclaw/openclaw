@@ -382,7 +382,7 @@ describe("createPluginApprovalHandlers", () => {
       }
     });
 
-    it("keeps plugin approvals pending when explicit forwarding fails but originating chat can approve", async () => {
+    it("expires plugin approvals when explicit forwarding fails", async () => {
       const forwarder = {
         handleRequested: vi.fn(async () => false),
         handleResolved: vi.fn(async () => {}),
@@ -409,12 +409,12 @@ describe("createPluginApprovalHandlers", () => {
         },
       );
 
-      const requestPromise = handlers["plugin.approval.request"](opts);
-      const approvalId = await waitForAcceptedApproval(respond);
+      await handlers["plugin.approval.request"](opts);
 
       expect(forwarder.handlePluginApprovalRequested).toHaveBeenCalledTimes(1);
-      manager.resolve(approvalId, "allow-once");
-      await requestPromise;
+      const result = expectResponseOk(respond);
+      expect(result.decision).toBeNull();
+      expect(manager.getSnapshot(String(result.id))?.resolvedBy).toBe("no-approval-route");
     });
 
     it.each(invalidRequestCases)("rejects $name", async ({ params }) => {

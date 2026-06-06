@@ -449,28 +449,20 @@ export async function handlePendingApprovalRequest<
     : approvalClientConnIds !== null
       ? approvalClientConnIds.size > 0
       : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false);
+  const deliveredResult = suppressDelivery ? false : params.deliverRequest();
+  const delivery = normalizeApprovalDeliveryResult(
+    isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult,
+  );
   // A turn-source route can approve without an active approval client, so keep
-  // the record alive when the originating channel/account can still receive it.
+  // the record alive when no explicit delivery route was attempted.
   const hasTurnSourceRoute =
     !hasApprovalClients &&
+    !delivery.attempted &&
     hasApprovalTurnSourceRoute({
       turnSourceChannel: params.record.request.turnSourceChannel,
       turnSourceAccountId: params.record.request.turnSourceAccountId,
       approvalKind: params.approvalKind ?? "exec",
     });
-  const deliveredResult = suppressDelivery ? false : params.deliverRequest();
-  const delivery = hasTurnSourceRoute
-    ? { delivered: false, attempted: false }
-    : normalizeApprovalDeliveryResult(
-        isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult,
-      );
-  if (hasTurnSourceRoute && isPromiseLike(deliveredResult)) {
-    void deliveredResult.catch((err: unknown) => {
-      params.context.logGateway?.error?.(
-        `approval delivery failed while turn-source fallback is available: ${String(err)}`,
-      );
-    });
-  }
 
   if (
     params.requireDeliveryRoute !== false &&
