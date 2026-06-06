@@ -543,7 +543,14 @@ export async function runPreparedCliAgent(
           };
     const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse);
     const assistantText = output.text.trim();
-    if (!assistantText && params.allowEmptyAssistantReplyAsSilent !== true) {
+    // Synthetic-placeholder turns surface through the classifier path so the
+    // run result carries terminalReplyKind metadata for observability instead of
+    // collapsing into a generic empty_response failover error.
+    if (
+      !assistantText &&
+      params.allowEmptyAssistantReplyAsSilent !== true &&
+      output.syntheticPlaceholder !== true
+    ) {
       throw new FailoverError("CLI backend returned an empty response.", {
         reason: "empty_response",
         provider: params.provider,
