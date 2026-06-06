@@ -236,32 +236,32 @@ function getDialogHookPostHandler() {
   return handler;
 }
 
-function getStoragePostHandler(path: string, ssrfPolicy?: unknown) {
+function getStoragePostHandler(routePath: string, ssrfPolicy?: unknown) {
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentStorageRoutes(app, {
     state: () => ({ resolved: { ssrfPolicy } }),
   } as never);
-  const handler = postHandlers.get(path);
+  const handler = postHandlers.get(routePath);
   expect(handler).toBeTypeOf("function");
   return handler;
 }
 
-function getDebugPostHandler(path: string) {
+function getDebugPostHandler(routePath: string) {
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentDebugRoutes(app, {
     state: () => ({ resolved: {} }),
   } as never);
-  const handler = postHandlers.get(path);
+  const handler = postHandlers.get(routePath);
   expect(handler).toBeTypeOf("function");
   return handler;
 }
 
-function getDebugGetHandler(path: string) {
+function getDebugGetHandler(routePath: string) {
   const { app, getHandlers } = createBrowserRouteApp();
   registerBrowserAgentDebugRoutes(app, {
     state: () => ({ resolved: {} }),
   } as never);
-  const handler = getHandlers.get(path);
+  const handler = getHandlers.get(routePath);
   expect(handler).toBeTypeOf("function");
   return handler;
 }

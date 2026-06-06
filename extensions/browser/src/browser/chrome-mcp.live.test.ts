@@ -66,7 +66,9 @@ function listen(server: Server, host = "127.0.0.1"): Promise<number> {
 }
 
 function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve) => server.close(() => resolve()));
+  return new Promise((resolve) => {
+    server.close(() => resolve());
+  });
 }
 
 async function waitForJson(url: string, timeoutMs = 15_000): Promise<unknown> {
@@ -82,7 +84,9 @@ async function waitForJson(url: string, timeoutMs = 15_000): Promise<unknown> {
     } catch (err) {
       last = err;
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 200);
+    });
   }
   throw last instanceof Error ? last : new Error(`timed out waiting for ${url}`);
 }
@@ -310,7 +314,9 @@ async function startFixture(): Promise<LiveFixture> {
 async function stopFixture(fixture: LiveFixture): Promise<void> {
   await resetChromeMcpSessionsForTest().catch(() => {});
   fixture.chrome.kill("SIGTERM");
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 500);
+  });
   if (fixture.chrome.exitCode === null) {
     fixture.chrome.kill("SIGKILL");
   }

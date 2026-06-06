@@ -312,10 +312,12 @@ function runFfprobe(filePath: string, timeoutMs: number): Promise<string> {
       { timeout: timeoutMs, maxBuffer: 256 * 1024 },
       (error, stdout, stderr) => {
         if (error) {
-          if (stderr && !(error as { stderr?: unknown }).stderr) {
-            Object.assign(error, { stderr });
+          const ffprobeError =
+            error instanceof Error ? error : new Error(formatErrorMessage(error));
+          if (stderr && !(ffprobeError as { stderr?: unknown }).stderr) {
+            Object.assign(ffprobeError, { stderr });
           }
-          reject(error);
+          reject(ffprobeError);
           return;
         }
         resolve(stdout);
@@ -402,7 +404,9 @@ async function resolveHeapSnapshotReadPathOrRespond(
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function inspectScreencastArtifactWithProbe(

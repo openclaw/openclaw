@@ -425,9 +425,9 @@ function readStringRecord(value: unknown): Record<string, string> | undefined {
   }
   const out: Record<string, string> = {};
   for (const [key, entry] of Object.entries(record)) {
-    const value = readStringValue(entry);
-    if (value !== undefined) {
-      out[key] = value;
+    const stringEntry = readStringValue(entry);
+    if (stringEntry !== undefined) {
+      out[key] = stringEntry;
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;
@@ -1076,7 +1076,9 @@ async function terminateChromeMcpBrowserProcessesForOptions(
   if (signaled === 0) {
     return 0;
   }
-  await new Promise((resolve) => setTimeout(resolve, CHROME_MCP_BROWSER_STOP_GRACE_MS));
+  await new Promise((resolve) => {
+    setTimeout(resolve, CHROME_MCP_BROWSER_STOP_GRACE_MS);
+  });
   const remaining = await findChromeMcpBrowserProcessIdsForUserDataDir(options.userDataDir);
   signalProcesses(remaining, "SIGKILL");
   return signaled;

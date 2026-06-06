@@ -87,7 +87,7 @@ describe("observed browser dialogs", () => {
     const { page, emit } = createPageHarness();
     ensurePageState(page);
     const dialog = createDialog({ type: "alert", message: "Heads up" });
-    dialog.accept.mockImplementation(async () => await new Promise(() => {}));
+    dialog.accept.mockReturnValue(new Promise<void>(() => {}));
 
     emit("dialog", dialog);
     const closedPromise = respondToObservedDialogOnPage({ page, dialogId: "d1", accept: true });
@@ -139,10 +139,12 @@ describe("observed browser dialogs", () => {
 
     expect(observed.signal.aborted).toBe(false);
     expect(dialog.dismiss).toHaveBeenCalledOnce();
-    expect(getObservedBrowserStateForPage(page).dialogs.pending).toEqual([]);
-    expect(getObservedBrowserStateForPage(page).dialogs.recent).toMatchObject([
-      { id: "d1", type: "alert", closedBy: "armed" },
-    ]);
+    await vi.waitFor(() => {
+      expect(getObservedBrowserStateForPage(page).dialogs.pending).toEqual([]);
+      expect(getObservedBrowserStateForPage(page).dialogs.recent).toMatchObject([
+        { id: "d1", type: "alert", closedBy: "armed" },
+      ]);
+    });
     observed.cleanup();
   });
 
