@@ -76,35 +76,43 @@ describe("Codex native hook relay config", () => {
       "hooks.state": {
         "/<session-flags>/config.toml:pre_tool_use:0:0": {
           enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          trusted_hash:
+            "sha256:a4a57646848c61302267df95a0bd76f16d824cb1c9c2dc662c8bc20afae1fa56",
         },
         "<session-flags>/config.toml:pre_tool_use:0:0": {
           enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          trusted_hash:
+            "sha256:a4a57646848c61302267df95a0bd76f16d824cb1c9c2dc662c8bc20afae1fa56",
         },
         "/<session-flags>/config.toml:post_tool_use:0:0": {
           enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          trusted_hash:
+            "sha256:d0417a1d3dbb2e0932108324166e810ae9d49d502c4f50f7375c08f7044ad509",
         },
         "<session-flags>/config.toml:post_tool_use:0:0": {
           enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          trusted_hash:
+            "sha256:d0417a1d3dbb2e0932108324166e810ae9d49d502c4f50f7375c08f7044ad509",
         },
         "/<session-flags>/config.toml:permission_request:0:0": {
           enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          trusted_hash:
+            "sha256:104026bb88dc111501950002dee431aeff6c472e2cf90cfa514add13edd47715",
         },
         "<session-flags>/config.toml:permission_request:0:0": {
           enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          trusted_hash:
+            "sha256:104026bb88dc111501950002dee431aeff6c472e2cf90cfa514add13edd47715",
         },
         "/<session-flags>/config.toml:stop:0:0": {
           enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          trusted_hash:
+            "sha256:5805c416342c5d13e3566473230e2d2adfacb1473d346cfe190442bd0f2e6675",
         },
         "<session-flags>/config.toml:stop:0:0": {
           enabled: true,
-          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          trusted_hash:
+            "sha256:5805c416342c5d13e3566473230e2d2adfacb1473d346cfe190442bd0f2e6675",
         },
       },
     });

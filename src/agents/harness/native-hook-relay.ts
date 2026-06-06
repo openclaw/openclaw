@@ -338,6 +338,7 @@ let nativeHookRelayDeferredToolApprovalRequester: NativeHookRelayDeferredToolApp
   requestDeferredPluginToolApproval;
 
 const NATIVE_HOOK_TOOL_NAME_ALIASES: Record<string, string> = {
+  code_mode_exec: "exec",
   exec_command: "exec",
 };
 
