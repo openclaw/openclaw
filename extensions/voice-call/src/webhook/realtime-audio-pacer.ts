@@ -96,6 +96,11 @@ export class RealtimeAudioPacer {
     return clearedAudioBytes;
   }
 
+  /** True while queued audio or a paced send timer can still reach the telephony stream. */
+  hasPendingAudio(): boolean {
+    return !this.closed && (this.queuedAudioBytes > 0 || this.timer !== null);
+  }
+
   /** Stop sending and discard queued frames. */
   close(): void {
     this.closed = true;

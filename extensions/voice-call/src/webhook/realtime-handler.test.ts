@@ -840,6 +840,99 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("clears queued telephony audio when provider speech_started follows response.done", async () => {
+    let callbacks:
+      | {
+          onAudio?: (audio: Buffer) => void;
+          onEvent?: (event: {
+            direction: "client" | "server";
+            type: string;
+            detail?: string;
+          }) => void;
+        }
+      | undefined;
+    const sendAudio = vi.fn();
+    const call: CallRecord = {
+      callId: "call-1",
+      providerCallId: "CA-late-barge-in",
+      provider: "twilio",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    };
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge({ sendAudio });
+      },
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn((): CallRecord => call),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge, {
+        capabilities: PROVIDER_BARGE_IN_CAPABILITIES,
+      }),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      const outboundMessages: Array<Record<string, unknown>> = [];
+      ws.on("message", (data) => {
+        outboundMessages.push(JSON.parse(data.toString()) as Record<string, unknown>);
+      });
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-late-barge-in", callSid: "CA-late-barge-in" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onAudio?.(Buffer.alloc(320, 0xff));
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "media")).toBe(true);
+        });
+        callbacks?.onEvent?.({ direction: "server", type: "response.done" });
+        const clearCountBeforeBargeIn = outboundMessages.filter(
+          (message) => message.event === "clear",
+        ).length;
+
+        callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.filter((message) => message.event === "clear").length).toBe(
+            clearCountBeforeBargeIn + 1,
+          );
+        });
+        expect(
+          (
+            call.metadata?.recentTalkEvents as
+              | Array<{
+                  type: string;
+                }>
+              | undefined
+          )?.filter((event) => event.type === "turn.cancelled"),
+        ).toHaveLength(0);
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("keeps local barge-in fallback for providers without speech-started events", async () => {
     let callbacks:
       | {

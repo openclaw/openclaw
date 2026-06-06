@@ -595,14 +595,19 @@ export class RealtimeCallHandler {
       );
     };
     const cancelOutputAudioForBargeIn = (source: "local" | "provider", reason: string): boolean => {
-      if (!talk.outputAudioActive) {
+      const outputAudioActive = talk.outputAudioActive;
+      const pendingTelephonyAudio = audioPacer.hasPendingAudio();
+      if (!outputAudioActive && !pendingTelephonyAudio) {
         return false;
       }
-      const interruptedTurnId = ensureTalkTurn();
+      const interruptedTurnId = outputAudioActive ? ensureTalkTurn() : talk.activeTurnId;
       const clearedBytes = audioPacer.clearAudio();
       console.log(
         `[voice-call] realtime outbound audio cleared by ${source} barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
       );
+      if (!outputAudioActive || !interruptedTurnId) {
+        return clearedBytes > 0 || pendingTelephonyAudio;
+      }
       finishOutputAudio(reason);
       const cancelled = talk.cancelTurn({
         turnId: interruptedTurnId,
