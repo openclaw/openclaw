@@ -443,7 +443,13 @@ function assertInstalled() {
     expectIncludes(inspect.services, "kitchen-sink-service", "services");
     if (surfaceMode === "full") {
       expectIncludesAny(inspect.commands, ["kitchen", "kitchen-sink-command"], "commands");
-      expectIncludesAny(toolNames, ["kitchen_sink_text", "kitchen-sink-tool"], "tools");
+      for (const toolName of [
+        "kitchen_sink_text",
+        "kitchen_sink_search",
+        "kitchen_sink_image_job",
+      ]) {
+        expectIncludes(toolNames, toolName, "tools");
+      }
     } else {
       expectIncludes(inspect.commands, "kitchen", "commands");
       expectIncludes(toolNames, "kitchen_sink_text", "tools");

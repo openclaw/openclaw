@@ -40,6 +40,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterId,
+  resolveEmbeddingProviderFallbackModel,
   type EmbeddingProvider,
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
@@ -279,6 +280,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(): void;
   protected abstract resetProviderInitializationForRetry(): void;
+  protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
@@ -299,6 +301,8 @@ export abstract class MemoryManagerSyncOps {
     hasIndexedChunks?: boolean;
   }): MemoryIndexIdentityState {
     const hasProviderOverride = params && "provider" in params;
+    // Plain status can compare identity before provider init. Mirror provider
+    // init's empty-model fallback so adapter defaults do not look mismatched.
     const configuredProvider =
       this.settings.provider === "none"
         ? null
@@ -306,7 +310,9 @@ export abstract class MemoryManagerSyncOps {
             id:
               resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
               this.settings.provider,
-            model: this.settings.model,
+            model:
+              this.settings.model.trim() ||
+              resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg),
           };
     const provider = hasProviderOverride
       ? params.provider!
@@ -1772,6 +1778,7 @@ export abstract class MemoryManagerSyncOps {
     if (this.provider) {
       return;
     }
+    this.assertRequiredProviderAvailable("sync");
     const existingMeta = this.readMeta();
     if (
       !existingMeta ||

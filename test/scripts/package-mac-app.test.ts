@@ -48,6 +48,55 @@ function getPackageManagerHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function getStopPackagedAppBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("running_packaged_app_pids()");
+  const end = script.indexOf("\nstop_packaged_app_if_running\n");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-package-stop-root-"));
+  const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-stop-tools-"));
+  tempDirs.push(root, toolsDir);
+
+  const appRoot = path.join(root, "dist", "OpenClaw.app");
+  const appBinary = path.join(appRoot, "Contents", "MacOS", "OpenClaw");
+  const lsofPath = path.join(toolsDir, "lsof");
+  const pgrepPath = path.join(toolsDir, "pgrep");
+  const sleepPath = path.join(toolsDir, "sleep");
+
+  writeFileSync(
+    lsofPath,
+    ["#!/usr/bin/env bash", `printf 'n%s\\n' ${JSON.stringify(appBinary)}`].join("\n"),
+    "utf8",
+  );
+  writeFileSync(pgrepPath, "#!/usr/bin/env bash\nprintf '123\\n'\n", "utf8");
+  writeFileSync(sleepPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+  chmodSync(lsofPath, 0o755);
+  chmodSync(pgrepPath, 0o755);
+  chmodSync(sleepPath, 0o755);
+
+  return runHelper(`
+    set -euo pipefail
+    APP_ROOT=${JSON.stringify(appRoot)}
+    PRODUCT=OpenClaw
+    PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+    kill() {
+      if [[ "\${1:-}" == "-0" ]]; then
+        return ${killZeroStatus}
+      fi
+      return 0
+    }
+    ${getStopPackagedAppBlock()}
+    stop_packaged_app_if_running
+  `);
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -141,6 +190,20 @@ describe("package-mac-app plist stamping", () => {
     expect(stopBlock).toContain(
       '[[ "$command_line" == "$app_binary" || "$command_line" == "$app_binary "* ]]',
     );
+  });
+
+  it("fails when the packaged app survives forced shutdown", () => {
+    const result = runStopPackagedAppHarness(0);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("ERROR: Packaged OpenClaw bundle did not exit: 123");
+  });
+
+  it("passes when the packaged app exits after shutdown", () => {
+    const result = runStopPackagedAppHarness(1);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
   });
 
   it("keeps mac packaging script checks in the macOS CI lane", () => {

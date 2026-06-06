@@ -104,6 +104,21 @@ function formatErrorMessage(error) {
   return String(error);
 }
 
+async function readyzReportsReady(response) {
+  if (!response.ok) {
+    return false;
+  }
+  if (typeof response.json !== "function") {
+    return false;
+  }
+  try {
+    const body = await response.json();
+    return body && typeof body === "object" && body.ready === true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Polls readiness endpoints while also failing fast if the child exits.
  */
@@ -134,17 +149,22 @@ export async function waitForGatewayReady({
         `gateway exited before readiness code=${observedExit.code ?? "null"} signal=${observedExit.signal ?? "null"}\n${stderr.slice(-4000)}`,
       );
     }
-    for (const endpoint of ["/readyz", "/healthz"]) {
-      try {
-        const response = await fetchImpl(`http://127.0.0.1:${port}${endpoint}`, {
-          signal: AbortSignal.timeout(probeTimeoutMs),
-        });
-        if (response.ok) {
-          return;
-        }
-      } catch {
-        // The gateway may not have bound the port yet.
+    try {
+      const response = await fetchImpl(`http://127.0.0.1:${port}/readyz`, {
+        signal: AbortSignal.timeout(probeTimeoutMs),
+      });
+      if (await readyzReportsReady(response)) {
+        return;
       }
+    } catch {
+      // The gateway may not have bound the port yet.
+    }
+    try {
+      await fetchImpl(`http://127.0.0.1:${port}/healthz`, {
+        signal: AbortSignal.timeout(probeTimeoutMs),
+      });
+    } catch {
+      // Liveness is diagnostic only; /readyz is the usable RPC readiness contract.
     }
     await sleep(sleepMs);
   }

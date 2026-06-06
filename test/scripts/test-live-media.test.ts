@@ -1,6 +1,10 @@
 // Test Live Media tests cover test live media script behavior.
 import { describe, expect, it } from "vitest";
-import { parseArgs } from "../../scripts/test-live-media.ts";
+import {
+  MEDIA_SUITES,
+  findSkippedExplicitProviderSelections,
+  parseArgs,
+} from "../../scripts/test-live-media.ts";
 
 describe("scripts/test-live-media", () => {
   it("rejects unknown global providers for the selected suites", () => {
@@ -38,5 +42,41 @@ describe("scripts/test-live-media", () => {
       requireAuth: false,
       passthroughArgs: ["--project", "tooling", "-t", "media-smoke"],
     });
+  });
+
+  it("fails explicit suite selections that auth filtering would skip", () => {
+    const options = parseArgs([
+      "image",
+      "music",
+      "--image-providers",
+      "openai",
+      "--music-providers",
+      "minimax",
+    ]);
+    const skipped = findSkippedExplicitProviderSelections(options, [
+      { suite: MEDIA_SUITES.image, providers: ["openai"] },
+      {
+        suite: MEDIA_SUITES.music,
+        providers: [],
+        skippedReason: "no providers with usable auth",
+      },
+    ]);
+
+    expect(skipped.map((entry) => entry.suite.id)).toEqual(["music"]);
+  });
+
+  it("does not fail global provider filters for suites without provider overlap", () => {
+    const options = parseArgs(["image", "music", "video", "--providers", "openai"]);
+    const skipped = findSkippedExplicitProviderSelections(options, [
+      { suite: MEDIA_SUITES.image, providers: ["openai"] },
+      {
+        suite: MEDIA_SUITES.music,
+        providers: [],
+        skippedReason: "no providers selected",
+      },
+      { suite: MEDIA_SUITES.video, providers: ["openai"] },
+    ]);
+
+    expect(skipped).toEqual([]);
   });
 });

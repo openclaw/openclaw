@@ -20,6 +20,7 @@ import {
   collectQaBaselineRegressionObservations,
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
+  readQaSuiteSummary,
   selectPluginEntries,
 } from "./lib/plugin-gateway-gauntlet.mjs";
 
@@ -776,67 +777,6 @@ async function runQaChunks(params) {
     }
   }
   return summaries;
-}
-
-function readQaSuiteSummary(summaryPath) {
-  if (!fs.existsSync(summaryPath)) {
-    return {
-      diagnosticFailure: "qa-summary-missing",
-      diagnosticDetail: `expected QA suite summary at ${summaryPath}`,
-      summary: null,
-    };
-  }
-  try {
-    const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
-    const invalidReason = validateQaSuiteSummary(summary);
-    if (invalidReason) {
-      return {
-        diagnosticFailure: "qa-summary-invalid",
-        diagnosticDetail: invalidReason,
-        summary: null,
-      };
-    }
-    if (summary.counts.failed > 0) {
-      return {
-        diagnosticFailure: "qa-summary-failed-scenarios",
-        diagnosticDetail: `QA suite reported ${summary.counts.failed} failed scenario(s)`,
-        summary,
-      };
-    }
-    return {
-      diagnosticFailure: null,
-      diagnosticDetail: null,
-      summary,
-    };
-  } catch (error) {
-    return {
-      diagnosticFailure: "qa-summary-invalid",
-      diagnosticDetail: error instanceof Error ? error.message : String(error),
-      summary: null,
-    };
-  }
-}
-
-function validateQaSuiteSummary(summary) {
-  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
-    return "QA suite summary must be a JSON object";
-  }
-  if (!Array.isArray(summary.scenarios)) {
-    return "QA suite summary missing scenarios array";
-  }
-  if (
-    !summary.counts ||
-    typeof summary.counts !== "object" ||
-    !Number.isFinite(summary.counts.total) ||
-    !Number.isFinite(summary.counts.passed) ||
-    !Number.isFinite(summary.counts.failed)
-  ) {
-    return "QA suite summary missing numeric counts";
-  }
-  if (!summary.run || typeof summary.run !== "object" || Array.isArray(summary.run)) {
-    return "QA suite summary missing run metadata";
-  }
-  return null;
 }
 
 async function main() {
