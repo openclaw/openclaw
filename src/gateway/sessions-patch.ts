@@ -1,5 +1,6 @@
 // Session patch applier for gateway session metadata and model/runtime overrides.
 import { randomUUID } from "node:crypto";
+import { findHubDelegatedLabelConflictInStore } from "@openclaw/acp-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -402,12 +403,25 @@ export async function applySessionsPatchToStore(params: {
       if (!parsed.ok) {
         return invalid(parsed.error);
       }
-      for (const [key, entry] of Object.entries(store)) {
-        if (key === storeKey) {
-          continue;
-        }
-        if (entry?.label === parsed.label) {
+      const ownerSessionKey = normalizeOptionalString(next.hubDelegated?.ownerSessionKey);
+      if (ownerSessionKey) {
+        const conflictingKey = findHubDelegatedLabelConflictInStore({
+          store,
+          storeKey,
+          ownerSessionKey,
+          label: parsed.label,
+        });
+        if (conflictingKey) {
           return invalid(`label already in use: ${parsed.label}`);
+        }
+      } else {
+        for (const [key, entry] of Object.entries(store)) {
+          if (key === storeKey) {
+            continue;
+          }
+          if (entry?.label === parsed.label) {
+            return invalid(`label already in use: ${parsed.label}`);
+          }
         }
       }
       next.label = parsed.label;

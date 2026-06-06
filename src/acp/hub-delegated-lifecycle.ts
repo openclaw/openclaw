@@ -1,10 +1,12 @@
 // Hub-delegated ACP worker close and maintenance helpers.
 import {
   isHubDelegatedAcpSessionEntry,
+  isHubDelegatedOwnedByRequester,
   resolveHubDelegatedAcpPolicy,
   resolveHubDelegatedExpiry,
   type HubDelegatedSessionMeta,
 } from "@openclaw/acp-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDiscoveredAcpSessionStoreTargets } from "../agents/acp-subagent-targets.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
@@ -172,6 +174,23 @@ export async function listHubDelegatedMaintenanceCandidates(params: {
     }
   }
   return Array.from(bySessionKey.values());
+}
+
+export async function listOwnedHubDelegatedSessionEntries(params: {
+  cfg?: OpenClawConfig;
+  requesterSessionKey: string;
+}): Promise<AcpSessionStoreEntry[]> {
+  const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey);
+  if (!requesterSessionKey) {
+    return [];
+  }
+  const candidates = await listHubDelegatedMaintenanceCandidates({ cfg: params.cfg });
+  return candidates.filter((entry) =>
+    isHubDelegatedOwnedByRequester({
+      entry: entry.entry,
+      requesterSessionKey,
+    }),
+  );
 }
 
 export function resolveExpiredHubDelegatedCandidates(params: {

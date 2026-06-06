@@ -64,6 +64,39 @@ export function isHubDelegatedOwnedByRequester(params: {
   return requester === owner || requester === spawnedBy || requester === parentSessionKey;
 }
 
+type HubDelegatedLabelStoreEntry = HubDelegatedSessionEntry & {
+  label?: string;
+};
+
+/** Returns the conflicting store key when the same owner already uses this label. */
+export function findHubDelegatedLabelConflictInStore(params: {
+  store: Record<string, HubDelegatedLabelStoreEntry>;
+  storeKey: string;
+  ownerSessionKey: string;
+  label: string;
+}): string | undefined {
+  const ownerSessionKey = normalizeOptionalString(params.ownerSessionKey);
+  const label = normalizeOptionalString(params.label);
+  if (!ownerSessionKey || !label) {
+    return undefined;
+  }
+  for (const [sessionKey, entry] of Object.entries(params.store)) {
+    if (sessionKey === params.storeKey) {
+      continue;
+    }
+    if (!isHubDelegatedAcpSessionEntry(entry)) {
+      continue;
+    }
+    if (normalizeOptionalString(entry.hubDelegated.ownerSessionKey) !== ownerSessionKey) {
+      continue;
+    }
+    if (normalizeOptionalString(entry.label) === label) {
+      return sessionKey;
+    }
+  }
+  return undefined;
+}
+
 export function resolveHubDelegatedLastActivityAt(
   entry: HubDelegatedSessionEntry & { hubDelegated: HubDelegatedSessionMeta },
 ): number {

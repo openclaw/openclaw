@@ -4,6 +4,7 @@ import {
   DEFAULT_HUB_DELEGATED_IDLE_HOURS,
   DEFAULT_HUB_DELEGATED_MAX_AGE_HOURS,
   formatHubDelegatedAutoLabel,
+  findHubDelegatedLabelConflictInStore,
   isHubDelegatedAcpSessionEntry,
   isHubDelegatedOwnedByRequester,
   resolveHubDelegatedAcpPolicy,
@@ -113,6 +114,63 @@ describe("isHubDelegatedAcpSessionEntry", () => {
         hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: 1 },
       }),
     ).toBe(true);
+  });
+});
+
+describe("findHubDelegatedLabelConflictInStore", () => {
+  it("scopes conflicts to the same owner and ignores closed rows without hubDelegated", () => {
+    const store = {
+      "agent:codex:acp:closed": {
+        label: "refactor",
+        updatedAt: 1,
+      },
+      "agent:codex:acp:other-owner": {
+        label: "refactor",
+        updatedAt: 2,
+        hubDelegated: {
+          ownerSessionKey: "agent:main:discord:other",
+          createdAt: 2,
+        },
+      },
+      "agent:codex:acp:active": {
+        label: "refactor",
+        updatedAt: 3,
+        hubDelegated: {
+          ownerSessionKey: "agent:main:webchat:main",
+          createdAt: 3,
+        },
+      },
+    };
+
+    expect(
+      findHubDelegatedLabelConflictInStore({
+        store,
+        storeKey: "agent:codex:acp:new",
+        ownerSessionKey: "agent:main:webchat:main",
+        label: "refactor",
+      }),
+    ).toBe("agent:codex:acp:active");
+    expect(
+      findHubDelegatedLabelConflictInStore({
+        store: {
+          "agent:codex:acp:closed": {
+            label: "refactor",
+            updatedAt: 1,
+          },
+        },
+        storeKey: "agent:codex:acp:reuse-after-close",
+        ownerSessionKey: "agent:main:webchat:main",
+        label: "refactor",
+      }),
+    ).toBeUndefined();
+    expect(
+      findHubDelegatedLabelConflictInStore({
+        store,
+        storeKey: "agent:codex:acp:other-owner-new",
+        ownerSessionKey: "agent:main:discord:other",
+        label: "refactor",
+      }),
+    ).toBe("agent:codex:acp:other-owner");
   });
 });
 

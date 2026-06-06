@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import {
-  isHubDelegatedAcpSessionEntry,
+  findHubDelegatedLabelConflictInStore,
   resolveHubDelegatedAutoLabel,
   type HubDelegatedSessionMeta,
 } from "@openclaw/acp-core";
@@ -394,14 +394,14 @@ function findHubDelegateLabelConflict(params: {
   }
   for (const target of resolveDiscoveredAcpSessionStoreTargets(params.cfg)) {
     const store = loadSessionStore(target.storePath);
-    for (const [sessionKey, entry] of Object.entries(store)) {
-      if (
-        isHubDelegatedAcpSessionEntry(entry) &&
-        entry.hubDelegated.ownerSessionKey === ownerSessionKey &&
-        normalizeOptionalString(entry.label) === label
-      ) {
-        return sessionKey;
-      }
+    const conflictingKey = findHubDelegatedLabelConflictInStore({
+      store,
+      storeKey: "",
+      ownerSessionKey,
+      label,
+    });
+    if (conflictingKey) {
+      return conflictingKey;
     }
   }
   return undefined;

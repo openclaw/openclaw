@@ -1,21 +1,24 @@
 // Hub-delegated ACP slash commands for operator list/close/status.
 import {
   isHubDelegatedAcpSessionEntry,
-  isHubDelegatedOwnedByRequester,
   resolveHubDelegatedAcpPolicy,
   resolveHubDelegatedExpiryPreview,
 } from "@openclaw/acp-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import type { AcpCloseSessionResult } from "../../../acp/control-plane/manager.types.js";
-import { closeHubDelegatedAcpWorker } from "../../../acp/hub-delegated-lifecycle.js";
-import { listAcpSessionEntries } from "../../../acp/runtime/session-meta.js";
+import {
+  closeHubDelegatedAcpWorker,
+  listOwnedHubDelegatedSessionEntries,
+} from "../../../acp/hub-delegated-lifecycle.js";
+import type { AcpSessionStoreEntry } from "../../../acp/runtime/session-meta.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../../agents/tools/sessions-helpers.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../../infra/outbound/session-binding.types.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { collectAcpErrorText, stopWithText } from "./shared.js";
 
@@ -51,14 +54,19 @@ async function listOwnedHubDelegates(params: HandleCommandsParams) {
     return undefined;
   }
   const policy = resolveHubDelegatedAcpPolicy(params.cfg.acp?.delegate);
-  const allEntries = await listAcpSessionEntries({ cfg: params.cfg });
-  const entries = allEntries.filter((entry) =>
-    isHubDelegatedOwnedByRequester({
-      entry: entry.entry,
-      requesterSessionKey: requesterKey,
-    }),
-  );
+  const entries = await listOwnedHubDelegatedSessionEntries({
+    cfg: params.cfg,
+    requesterSessionKey: requesterKey,
+  });
   return { requesterKey, policy, entries };
+}
+
+function resolveHubDelegatedDisplayAgent(entry: AcpSessionStoreEntry): string {
+  return entry.acp?.agent ?? parseAgentSessionKey(entry.sessionKey)?.agentId ?? "unknown";
+}
+
+function resolveHubDelegatedDisplayState(entry: AcpSessionStoreEntry): string {
+  return entry.acp?.state ?? "metadata-missing";
 }
 
 function formatDelegateLine(params: {
@@ -103,7 +111,7 @@ export async function handleAcpDelegateAction(
     const rows = entries
       .toSorted((a, b) => (b.entry?.updatedAt ?? 0) - (a.entry?.updatedAt ?? 0))
       .map(({ sessionKey, entry, acp }) => {
-        if (!entry?.hubDelegated || !acp || !isHubDelegatedAcpSessionEntry(entry)) {
+        if (!entry?.hubDelegated || !isHubDelegatedAcpSessionEntry(entry)) {
           return "";
         }
         const expiry = resolveHubDelegatedExpiryPreview({
@@ -112,9 +120,11 @@ export async function handleAcpDelegateAction(
         });
         return formatDelegateLine({
           sessionKey,
-          label: normalizeOptionalString(entry.label) ?? acp.agent,
-          agent: acp.agent,
-          state: acp.state,
+          label:
+            normalizeOptionalString(entry.label) ??
+            resolveHubDelegatedDisplayAgent({ sessionKey, entry, acp }),
+          agent: resolveHubDelegatedDisplayAgent({ sessionKey, entry, acp }),
+          state: resolveHubDelegatedDisplayState({ sessionKey, entry, acp }),
           ...expiry,
         });
       })
@@ -130,7 +140,7 @@ export async function handleAcpDelegateAction(
   const match = entries.find(
     (entry) => normalizeOptionalString(entry.entry?.label)?.toLowerCase() === label.toLowerCase(),
   );
-  if (!match?.entry?.hubDelegated || !match.acp) {
+  if (!match?.entry?.hubDelegated || !isHubDelegatedAcpSessionEntry(match.entry)) {
     return stopWithText(`⚠️ No hub-delegated session with label "${label}" for this owner.`);
   }
 
@@ -142,8 +152,8 @@ export async function handleAcpDelegateAction(
     const lines = [
       `Hub-delegated session: ${label}`,
       `Key: ${match.sessionKey}`,
-      `Agent: ${match.acp.agent}`,
-      `State: ${match.acp.state}`,
+      `Agent: ${resolveHubDelegatedDisplayAgent(match)}`,
+      `State: ${resolveHubDelegatedDisplayState(match)}`,
       `Owner: ${requesterKey}`,
       ...(expiry.idleExpiresAt
         ? [`Idle expires: ${new Date(expiry.idleExpiresAt).toISOString()}`]
@@ -167,6 +177,9 @@ export async function handleAcpDelegateAction(
       storeSessionKey: match.storeSessionKey,
       reason: "manual-delegate-close",
       closeRuntime: async ({ cfg, sessionKey, reason }) => {
+        if (!match.acp) {
+          return;
+        }
         closed = await acpManager.closeSession({
           cfg,
           sessionKey,

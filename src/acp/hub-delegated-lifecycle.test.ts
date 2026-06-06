@@ -9,6 +9,7 @@ import {
   clearHubDelegatedSessionMarker,
   closeHubDelegatedAcpWorker,
   listHubDelegatedMaintenanceCandidates,
+  listOwnedHubDelegatedSessionEntries,
   resolveExpiredHubDelegatedCandidates,
 } from "./hub-delegated-lifecycle.js";
 
@@ -148,6 +149,45 @@ describe("hub-delegated lifecycle", () => {
 
       const entries = await listHubDelegatedMaintenanceCandidates({});
       expect(entries.some((candidate) => candidate.sessionKey === sessionKey)).toBe(true);
+    });
+  });
+
+  it("listOwnedHubDelegatedSessionEntries returns only requester-owned rows", async () => {
+    await withStateDirEnv("openclaw-hub-delegate-life-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "agents/codex/sessions/sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      const ownedKey = "agent:codex:acp:owned-delegate";
+      const foreignKey = "agent:codex:acp:foreign-delegate";
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [ownedKey]: {
+            sessionId: "sess-owned",
+            updatedAt: Date.now(),
+            label: "owned",
+            hubDelegated: {
+              ownerSessionKey: "agent:main:webchat:main",
+              createdAt: Date.now(),
+            },
+          },
+          [foreignKey]: {
+            sessionId: "sess-foreign",
+            updatedAt: Date.now(),
+            label: "foreign",
+            hubDelegated: {
+              ownerSessionKey: "agent:main:discord:other",
+              createdAt: Date.now(),
+            },
+          },
+        }),
+      );
+      runtimeConfigState.cfg = {};
+
+      const entries = await listOwnedHubDelegatedSessionEntries({
+        requesterSessionKey: "agent:main:webchat:main",
+      });
+      expect(entries.map((entry) => entry.sessionKey)).toEqual([ownedKey]);
+      expect(entries[0]?.acp).toBeUndefined();
     });
   });
 

@@ -135,9 +135,13 @@ vi.mock("../channels/plugins/registry.js", () => ({
   normalizeChannelId: hoisted.normalizeChannelIdMock,
 }));
 
-vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: hoisted.resolveStorePathMock,
-}));
+vi.mock("../config/sessions/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/paths.js")>();
+  return {
+    ...actual,
+    resolveStorePath: hoisted.resolveStorePathMock,
+  };
+});
 
 vi.mock("../config/sessions/store.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
