@@ -1,6 +1,5 @@
 import type { AppViewState } from "./app-view-state.ts";
 import {
-  buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
@@ -56,7 +55,6 @@ function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
 
 function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
-  displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
   currentOverride: string,
   defaultModel: string,
 ): ChatModelSelectOption[] {
@@ -85,7 +83,6 @@ export function resolveChatModelSelectState(
   state: ChatModelSelectStateInput,
 ): ChatModelSelectState {
   const catalog = state.chatModelCatalog ?? [];
-  const displayLookup = buildCatalogDisplayLookup(catalog);
   const currentOverride = resolveChatModelOverrideValue(state);
   const defaultModel = resolveDefaultModelValue(state);
   return {
@@ -93,6 +90,6 @@ export function resolveChatModelSelectState(
     defaultModel,
     defaultDisplay: defaultModel,
     defaultLabel: defaultModel ? `Default (${defaultModel})` : "Default model",
-    options: buildChatModelOptions(catalog, displayLookup, currentOverride, defaultModel),
+    options: buildChatModelOptions(catalog, currentOverride, defaultModel),
   };
 }
