@@ -3815,6 +3815,159 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
   });
 
+  it("delivers completed assistant output when the client closes before turn completion", async () => {
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { turnTerminalIdleTimeoutMs: 60_000 },
+    );
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "msg-final-1",
+          text: "Done before restart.",
+        },
+      },
+    });
+    harness.close();
+
+    const result = await run;
+    expect(result.promptError).toBeNull();
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.assistantTexts).toEqual(["Done before restart."]);
+    expect(result.codexAppServerFailure).toBeUndefined();
+  });
+
+  it("keeps partial assistant output as a client-close failure", async () => {
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { turnTerminalIdleTimeoutMs: 60_000 },
+    );
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "msg-partial-1",
+        delta: "Still writing",
+      },
+    });
+    harness.close();
+
+    const result = await run;
+    expect(result.promptError).toBe("codex app-server client closed before turn completed");
+    expect(result.assistantTexts).toEqual(["Still writing"]);
+    expect(result.codexAppServerFailure).toEqual({
+      kind: "client_closed_before_turn_completed",
+      transport: "stdio",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      replaySafe: false,
+      replayBlockedReason: "assistant_output",
+    });
+  });
+
+  it("keeps a later partial assistant output as a client-close failure after an earlier completed message", async () => {
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { turnTerminalIdleTimeoutMs: 60_000 },
+    );
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "msg-completed-1",
+          text: "Earlier complete reply.",
+        },
+      },
+    });
+    await harness.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "msg-partial-2",
+        delta: "Later partial reply",
+      },
+    });
+    harness.close();
+
+    const result = await run;
+    expect(result.promptError).toBe("codex app-server client closed before turn completed");
+    expect(result.assistantTexts).toEqual(["Later partial reply"]);
+    expect(result.codexAppServerFailure).toEqual({
+      kind: "client_closed_before_turn_completed",
+      transport: "stdio",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      replaySafe: false,
+      replayBlockedReason: "assistant_output",
+    });
+  });
+
+  it("keeps completed assistant output as a client-close failure while another item is active", async () => {
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { turnTerminalIdleTimeoutMs: 60_000 },
+    );
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "cmd-active-1",
+          status: "inProgress",
+        },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "msg-final-1",
+          text: "Done before restart.",
+        },
+      },
+    });
+    harness.close();
+
+    const result = await run;
+    expect(result.promptError).toBe("codex app-server client closed before turn completed");
+    expect(result.assistantTexts).toEqual(["Done before restart."]);
+    expect(result.codexAppServerFailure).toEqual({
+      kind: "client_closed_before_turn_completed",
+      transport: "stdio",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      replaySafe: false,
+      replayBlockedReason: "potential_side_effect",
+    });
+  });
+
   it("does not fail a turn when the client closes after terminal completion is queued", async () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(
