@@ -364,8 +364,8 @@ async function hasTrustedGeneratedHtmlMarker(resolvedFilePath: string): Promise<
  * lookup can recognize it as a trusted source. Callers must have already
  * verified the source was trusted before staging.
  */
-// TODO: prune rows when the staged outbound file is swept by the media-store
-// retention pass; until that pass exists, rows accumulate per stage.
+// Rows accumulate per stage until a media-store retention pass deletes both the
+// staged file and its provenance row in lockstep.
 export async function markTrustedGeneratedHtmlPath(filePath: string): Promise<void> {
   const resolvedFilePath = await realpath(filePath);
   const now = Date.now();
