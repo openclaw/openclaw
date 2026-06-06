@@ -1091,7 +1091,6 @@ export async function sendChatMessage(
   setChatError(state, null);
   reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
     clearRunStatus: true,
-    clearLocalTerminalReconcile: true,
   });
   const runId = generateUUID();
   state.chatRunId = runId;
