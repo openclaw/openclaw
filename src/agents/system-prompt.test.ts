@@ -525,7 +525,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Do not infer from sparse context, workspace files, or training data; if docs do not cover it, say so explicitly and then inspect source if needed.",
     );
+    expect(prompt).toContain(
+      "For local docs, call `read` or search the docs directory before answering.",
+    );
     expect(prompt).toContain("If docs are stale/incomplete, inspect local source.");
+  });
+
+  it("classifies daily notes and memory files as OpenClaw behavior questions", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      docsPath: "/tmp/openclaw/docs",
+      sourcePath: "/tmp/openclaw",
+      toolNames: ["read", "memory_search"],
+    });
+
+    expect(prompt).toContain(
+      "Treat questions about daily notes, memory files, bootstrap/project context, sessions, tools, Gateway, config, or OpenClaw commands as OpenClaw behavior questions.",
+    );
+    expect(prompt).toContain(
+      "Workspace files, memory notes, and user profile notes are context, not authoritative sources for OpenClaw runtime behavior.",
+    );
+    expect(prompt).toContain(
+      "Do not use `memory_search` or external note tools as the primary source for OpenClaw runtime semantics.",
+    );
   });
 
   it("falls back to public docs and GitHub source guidance when local docs are unavailable", () => {
@@ -540,6 +562,9 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain(
       "Do not infer from sparse context, workspace files, or training data; if docs do not cover it, say so explicitly and then inspect source if needed.",
+    );
+    expect(prompt).toContain(
+      "For public docs, use the docs mirror before answering when web tooling is available.",
     );
     expect(prompt).toContain("If docs are stale/incomplete, inspect GitHub source.");
   });

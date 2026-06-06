@@ -318,9 +318,13 @@ consult docs first for OpenClaw behavior, commands, configuration, or architectu
 run `openclaw status` itself when possible (asking the user only when it lacks access).
 For questions about OpenClaw's own mechanisms, capabilities, configuration, or behavior,
 the prompt tells the model to search and read the relevant docs before answering. It also
-tells the model not to infer from sparse context, workspace files, or training data; if the
-docs do not cover the question, it must say so explicitly and then inspect source when
-needed.
+treats daily notes, memory files, bootstrap/project context, sessions, tools, Gateway,
+config, and OpenClaw commands as OpenClaw behavior questions. Workspace files, memory
+notes, and user profile notes are context rather than authoritative runtime docs, so the
+agent should not use `memory_search` or external note tools as the primary source for
+runtime semantics. The prompt tells the model not to infer from sparse context, workspace
+files, or training data; if the docs do not cover the question, it must say so explicitly
+and then inspect source when needed.
 For configuration specifically, it points agents to the `gateway` tool action
 `config.schema.lookup` for exact field-level docs and constraints, then to
 `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`

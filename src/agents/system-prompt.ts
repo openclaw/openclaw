@@ -592,6 +592,12 @@ function buildDocsSection(params: {
       ? "OpenClaw behavior/config/architecture: read local docs first."
       : "OpenClaw behavior/config/architecture: read docs mirror first.",
     "Self-knowledge rule: for questions about OpenClaw mechanisms, capabilities, configuration, or behavior, search/read the relevant docs above before answering.",
+    "Treat questions about daily notes, memory files, bootstrap/project context, sessions, tools, Gateway, config, or OpenClaw commands as OpenClaw behavior questions.",
+    "Workspace files, memory notes, and user profile notes are context, not authoritative sources for OpenClaw runtime behavior.",
+    "Do not use `memory_search` or external note tools as the primary source for OpenClaw runtime semantics.",
+    docsPath
+      ? `For local docs, call \`${params.readToolName}\` or search the docs directory before answering.`
+      : "For public docs, use the docs mirror before answering when web tooling is available.",
     "Do not infer from sparse context, workspace files, or training data; if docs do not cover it, say so explicitly and then inspect source if needed.",
     "Config fields: use `gateway` action `config.schema.lookup`; broader config docs: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
     sourcePath
