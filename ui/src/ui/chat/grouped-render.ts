@@ -380,21 +380,17 @@ export function renderStreamingGroup(
   authToken?: string | null,
 ) {
   const name = assistant?.name ?? "Assistant";
+  const bubbleContent = isStreaming
+    ? html`<div class="chat-text chat-text--streaming" dir="${detectTextDirection(text)}">${text}</div>`
+    : html`<div class="chat-text" dir="${detectTextDirection(text)}">${unsafeHTML(toSanitizedMarkdownHtml(text))}</div>`;
 
   return html`
     <div class="chat-group assistant">
       ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
-        ${renderGroupedMessage(
-          {
-            role: "assistant",
-            content: [{ type: "text", text }],
-            timestamp: startedAt,
-          },
-          `stream:${startedAt}`,
-          { isStreaming, showReasoning: false },
-          onOpenSidebar,
-        )}
+        <div class="chat-bubble streaming">
+          ${bubbleContent}
+        </div>
         <div class="chat-group-footer">
           <span class="chat-sender-name">${name}</span>
           ${renderChatTimestamp(startedAt)}
@@ -1938,8 +1934,8 @@ function renderMarkdownText(
 ) {
   if (isStreaming) {
     return html`
-      <div class="chat-text" dir="${detectTextDirection(markdown)}">
-        ${unsafeHTML(toStreamingMarkdownHtml(markdown, markdownRenderOptions))}
+      <div class="chat-text chat-text--streaming" dir="${detectTextDirection(markdown)}">
+        ${markdown}
       </div>
     `;
   }

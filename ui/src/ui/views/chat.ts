@@ -16,6 +16,7 @@ import {
   isSupportedChatAttachmentFile,
 } from "../chat/attachment-support.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat/build-chat-items.ts";
+import { ChatStreamBuffer } from "../chat/chat-stream-buffer.ts";
 import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../chat/chat-welcome.ts";
@@ -468,6 +469,8 @@ interface ChatEphemeralState {
     scrollTop: number;
   } | null;
   historyRenderAnchorFrame: number | null;
+  streamBuffer: ChatStreamBuffer;
+  streamBufferDirty: boolean;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -490,6 +493,8 @@ function createChatEphemeralState(): ChatEphemeralState {
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
     historyRenderAnchorFrame: null,
+    streamBuffer: new ChatStreamBuffer(),
+    streamBufferDirty: false,
   };
 }
 
@@ -603,6 +608,7 @@ export function resetChatViewState() {
   Object.assign(vs, createChatEphemeralState());
   chatItemsBySession.clear();
   composerDraftMirrors.clear();
+  vs.streamBuffer.reset();
 }
 
 export const cleanupChatModuleState = resetChatViewState;
@@ -1558,9 +1564,19 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
-  const displayStream = props.stream ?? null;
-  const historyRenderLimit = resolveChatHistoryRenderWindow(props);
 
+  if (props.sessionKey !== vs.historyRenderSessionKey) {
+    vs.streamBuffer.reset();
+  }
+  const streamBufferInput = displayStream ?? "";
+  if (streamBufferInput && !vs.streamBuffer.completed) {
+    vs.streamBuffer.enqueue(streamBufferInput);
+  } else if (!streamBufferInput && vs.streamBuffer.text && !vs.streamBuffer.completed) {
+    vs.streamBuffer.complete();
+  }
+  const bufferedStream = vs.streamBuffer.text;
+
+  const historyRenderLimit = resolveChatHistoryRenderWindow(props);
   const handleCodeBlockCopy = (e: Event) => {
     const btn = (e.target as HTMLElement).closest(".code-block-copy");
     if (!btn) {
@@ -1578,6 +1594,13 @@ export function renderChat(props: ChatProps) {
   const handleChatThreadScroll = (event: Event) => {
     maybeExpandChatHistoryRenderWindow(event, requestUpdate);
     props.onChatScroll?.(event);
+    if (props.onScrollToBottom && event.currentTarget instanceof HTMLElement) {
+      const target = event.currentTarget;
+      const distanceFromBottom = Math.max(0, target.scrollHeight - target.scrollTop - target.clientHeight);
+      if (distanceFromBottom < 48) {
+        props.onScrollToBottom();
+      }
+    }
   };
 
   const chatItems = buildCachedChatItems({
@@ -1585,7 +1608,7 @@ export function renderChat(props: ChatProps) {
     messages: props.messages,
     toolMessages: props.toolMessages,
     streamSegments: props.streamSegments,
-    stream: displayStream,
+    stream: trackedFinalStream,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     showToolCalls: props.showToolCalls,
