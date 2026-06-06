@@ -113,6 +113,28 @@ function resolveConfiguredAgentMainSessionKey(params: {
   });
 }
 
+const RESERVED_SESSION_TARGETS = new Set(["current", "global", "main"]);
+
+function resolveBareConfiguredAgentMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  target?: string;
+  mainKey: string;
+}): string | undefined {
+  const target = normalizeOptionalString(params.target);
+  if (!target) {
+    return undefined;
+  }
+  const agentId = normalizeAgentId(target);
+  if (RESERVED_SESSION_TARGETS.has(agentId)) {
+    return undefined;
+  }
+  return resolveConfiguredAgentMainSessionKey({
+    cfg: params.cfg,
+    agentId,
+    mainKey: params.mainKey,
+  });
+}
+
 function isConfiguredAgentMainSessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -348,7 +370,12 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
-      let sessionKey = sessionKeyParam;
+      let sessionKey =
+        resolveBareConfiguredAgentMainSessionKey({
+          cfg,
+          target: sessionKeyParam,
+          mainKey,
+        }) ?? sessionKeyParam;
       if (!sessionKey && !labelParam && labelAgentIdParam) {
         const agentMainKey = resolveConfiguredAgentMainSessionKey({
           cfg,
@@ -396,6 +423,13 @@ export function createSessionsSendTool(opts?: {
           }
         }
 
+        const configuredAgentLabelMainKey = !labelAgentIdParam
+          ? resolveBareConfiguredAgentMainSessionKey({
+              cfg,
+              target: labelParam,
+              mainKey,
+            })
+          : undefined;
         const resolveParams: Record<string, unknown> = {
           label: labelParam,
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
@@ -418,11 +452,13 @@ export function createSessionsSendTool(opts?: {
               error: "Session not visible from this sandboxed agent session.",
             });
           }
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "error",
-            error: msg || `No session found with label: ${labelParam}`,
-          });
+          if (!configuredAgentLabelMainKey) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "error",
+              error: msg || `No session found with label: ${labelParam}`,
+            });
+          }
         }
 
         if (!resolvedKey) {
@@ -433,13 +469,17 @@ export function createSessionsSendTool(opts?: {
               error: "Session not visible from this sandboxed agent session.",
             });
           }
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "error",
-            error: `No session found with label: ${labelParam}`,
-          });
+          if (!configuredAgentLabelMainKey) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "error",
+              error: `No session found with label: ${labelParam}`,
+            });
+          }
+          sessionKey = configuredAgentLabelMainKey;
+        } else {
+          sessionKey = resolvedKey;
         }
-        sessionKey = resolvedKey;
       }
 
       if (!sessionKey) {

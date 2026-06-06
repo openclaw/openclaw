@@ -360,6 +360,59 @@ describe("sessions tools", () => {
     expect(agentParams(agentCall ?? {}).message).toContain(value);
   });
 
+  it.each([
+    { targetField: "sessionKey", targetArgs: { sessionKey: "orion" } },
+    { targetField: "label", targetArgs: { label: "orion" } },
+  ])(
+    "sessions_send treats a bare configured agent id in $targetField as that agent's main session",
+    async ({ targetArgs }) => {
+      const config = {
+        ...TEST_CONFIG,
+        agents: { list: [{ id: "main" }, { id: "orion" }] },
+      } as OpenClawConfig;
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as GatewayCall;
+        if (request.method === "sessions.resolve") {
+          throw new Error(`Session not found: ${request.params?.key ?? request.params?.sessionId}`);
+        }
+        if (request.method === "sessions.create") {
+          return { key: "agent:orion:main", sessionId: "sess-orion-created" };
+        }
+        if (request.method === "agent") {
+          return { runId: "run-orion", status: "accepted" };
+        }
+        return {};
+      });
+
+      const tool = createOpenClawTools({ config }).find(
+        (candidate) => candidate.name === "sessions_send",
+      );
+      if (!tool) {
+        throw new Error("missing sessions_send tool");
+      }
+
+      const result = await tool.execute("call-orion", {
+        ...targetArgs,
+        message: "hello orion",
+        timeoutSeconds: 0,
+      });
+
+      expect(sessionsSendDetails(result.details)).toMatchObject({
+        status: "accepted",
+        runId: "run-orion",
+        sessionKey: "agent:orion:main",
+      });
+      const createCall = callGatewayMock.mock.calls
+        .map((call) => call[0] as GatewayCall)
+        .find((call) => call.method === "sessions.create");
+      expect(createCall?.params).toMatchObject({ key: "agent:orion:main", agentId: "orion" });
+      const agentCall = callGatewayMock.mock.calls
+        .map((call) => call[0] as GatewayCall)
+        .find((call) => call.method === "agent");
+      expect(agentParams(agentCall ?? {}).sessionKey).toBe("agent:orion:main");
+    },
+  );
+
   it("sessions_send sanitizes formatted reasoning from aliases", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };

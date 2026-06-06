@@ -95,6 +95,10 @@ the response:
   immediately.
 - **Wait for reply:** set a timeout and get the response inline.
 
+Configured agents can be targeted with `agentId` or by using the configured
+agent id as the `sessionKey` or `label`; OpenClaw creates the missing main
+session before sending.
+
 Thread-scoped chat sessions, such as Slack or Discord keys ending in
 `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel
 session key for inter-agent coordination so tool-routed messages do not appear
