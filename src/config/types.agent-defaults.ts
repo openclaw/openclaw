@@ -484,6 +484,42 @@ export type AgentDefaultsConfig = {
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
+  /** Agent self-elected turn continuation (CONTINUE_WORK signal). */
+  continuation?: {
+    enabled?: boolean;
+    defaultDelayMs?: number;
+    minDelayMs?: number;
+    maxDelayMs?: number;
+    maxChainLength?: number;
+    costCapTokens?: number;
+    /** Maximum number of continue_delegate tool calls per agent turn (default: 5). */
+    maxDelegatesPerTurn?: number;
+    /**
+     * Context-pressure awareness threshold (exclusive (0.0, 1.0]). When the session's token
+     * usage exceeds this fraction of the context window, a [system:context-pressure]
+     * event is injected pre-run so the agent can elect evacuation. Disabled when
+     * unset. Recommended: 0.8 (80%).
+     */
+    contextPressureThreshold?: number;
+    /**
+     * Early-warning band as a fraction of contextPressureThreshold (default: 0.3125,
+     * which fires at 25% when the threshold is 0.8). Set to 0 to opt out.
+     */
+    earlyWarningBand?: number;
+    /**
+     * Cross-session delegate targeting policy.
+     * - `"disabled"` (default): delegates can return to the dispatching session or
+     *   use `fanoutMode: "tree"` for lineage-only routing. Non-self `targetSessionKey`,
+     *   `targetSessionKeys` containing any non-self session, and `fanoutMode: "all"`
+     *   are rejected with a tool error.
+     * - `"enabled"`: all targeting modes are available, including cross-session
+     *   `targetSessionKey`, `targetSessionKeys`, and `fanoutMode: "all"`.
+     *
+     * `fanoutMode: "tree"` (lineage-only return) is always allowed regardless of this setting.
+     * Self-targeting (`targetSessionKey` matching the dispatching session) is always allowed.
+     */
+    crossSessionTargeting?: "disabled" | "enabled";
+  };
 };
 
 export type AgentCompactionMode = "default" | "safeguard";

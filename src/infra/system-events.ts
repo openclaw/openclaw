@@ -14,12 +14,28 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { normalizeDiagnosticTraceparent } from "./diagnostic-trace-context.js";
 
 export type SystemEvent = {
   text: string;
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  sessionDeliveryAckId?: string;
+  sessionDeliveryAckStateDir?: string;
+  forceSenderIsOwnerFalse?: boolean;
+  /** @deprecated Use forceSenderIsOwnerFalse. Kept for installed plugin compatibility. */
+  trusted?: boolean;
+  /**
+   * W3C `traceparent` captured at enqueue-time so the substrate-queue drain can
+   * reconstruct the producer trace at announce/deliver time. Per RFC §6.7 the
+   * substrate queue is an asynchronous boundary (enqueue turn != drain turn,
+   * possibly across a gateway restart), so trace context rides on the payload
+   * itself rather than on a runtime ambient. Optional and additive — invalid
+   * traceparent values are silently dropped at enqueue-time so producers never
+   * fail-the-write on a malformed header.
+   */
+  traceparent?: string;
 };
 
 const MAX_EVENTS = 20;
@@ -37,7 +53,22 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  sessionDeliveryAckId?: string;
+  sessionDeliveryAckStateDir?: string;
+  forceSenderIsOwnerFalse?: boolean;
+  /** @deprecated Use forceSenderIsOwnerFalse. Kept for installed plugin compatibility. */
+  trusted?: boolean;
+  /**
+   * Optional W3C `traceparent` to attach to the queued event for cross-boundary
+   * trace correlation. Invalid values are silently dropped (additive contract:
+   * a malformed traceparent never prevents an enqueue).
+   */
+  traceparent?: string;
 };
+
+function normalizeTraceparent(traceparent?: string): string | undefined {
+  return normalizeDiagnosticTraceparent(traceparent);
+}
 
 function requireSessionKey(key?: string | null): string {
   const trimmed = normalizeOptionalString(key) ?? "";
@@ -99,12 +130,28 @@ function findDuplicateInQueue(
   return queue.some((event) => isDuplicateSystemEvent(event, incoming));
 }
 
+function applyContextKeyPolicy(entry: SessionQueue, incomingContextKey: string | null): void {
+  if (incomingContextKey !== null) {
+    entry.lastContextKey = incomingContextKey;
+  }
+}
+
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  // These entries are rendered as `System:` lines, so strip nested system-marker
-  // spoofs at the queue boundary before any plugin/channel text reaches a prompt.
-  const cleaned = sanitizeInboundSystemTags(text).trim();
+  // Untrusted producers (channel/plugin payloads downgraded via
+  // `forceSenderIsOwnerFalse`/legacy `trusted:false`) get their nested
+  // system-marker spoofs neutralized at the queue boundary, restoring the
+  // guard removed in b7273f36d7. This is defense-in-depth alongside the
+  // drain-layer sanitizer (`session-system-events.ts`): even if a queued
+  // entry is later rendered via an alternate drain/heartbeat path that does
+  // not re-apply the trust-gated sanitizer, a stored spoof can never reach a
+  // prompt. Trusted-internal enrichment (OCR/transcripts/continuation) is
+  // preserved verbatim by deliberate design — see the trusted-default
+  // regression anchors in system-events.test.ts. The drain-layer sanitizer is
+  // idempotent, so double-sanitizing the untrusted path is a no-op.
+  const rawText = resolveEventOwnerDowngrade(options) ? sanitizeInboundSystemTags(text) : text;
+  const cleaned = rawText.trim();
   if (!cleaned) {
     return false;
   }
@@ -112,15 +159,24 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
   if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)) {
     return false;
-  }
-  if (normalizedContextKey !== null) {
-    entry.lastContextKey = normalizedContextKey;
-  }
+  } // skip consecutive duplicates
+  const normalizedTraceparent = normalizeTraceparent(options?.traceparent);
+  const forceSenderIsOwnerFalse =
+    options.forceSenderIsOwnerFalse ??
+    // Preserve the old plugin SDK contract without carrying trust labels into prompts.
+    options.trusted === false;
+  applyContextKeyPolicy(entry, normalizedContextKey);
   entry.queue.push({
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
+    ...(options.sessionDeliveryAckId ? { sessionDeliveryAckId: options.sessionDeliveryAckId } : {}),
+    ...(options.sessionDeliveryAckStateDir
+      ? { sessionDeliveryAckStateDir: options.sessionDeliveryAckStateDir }
+      : {}),
+    forceSenderIsOwnerFalse,
+    ...(normalizedTraceparent ? { traceparent: normalizedTraceparent } : {}),
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -151,6 +207,12 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
 }
 
+export function resolveEventOwnerDowngrade(
+  event: Pick<SystemEvent, "forceSenderIsOwnerFalse" | "trusted">,
+): boolean {
+  return event.forceSenderIsOwnerFalse ?? event.trusted === false;
+}
+
 function isDuplicateSystemEvent(
   existing: SystemEvent,
   incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext">,
@@ -167,6 +229,10 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.text === right.text &&
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
+    left.sessionDeliveryAckId === right.sessionDeliveryAckId &&
+    left.sessionDeliveryAckStateDir === right.sessionDeliveryAckStateDir &&
+    left.forceSenderIsOwnerFalse === resolveEventOwnerDowngrade(right) &&
+    (left.traceparent ?? undefined) === (right.traceparent ?? undefined) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }
@@ -233,6 +299,37 @@ export function consumeSelectedSystemEventEntries(
 
 export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventEntries(sessionKey).map((event) => event.text);
+}
+
+/**
+ * Remove system events matching a predicate without draining the entire queue.
+ * Returns the removed events; non-matching events stay queued.
+ */
+export function removeSystemEvents(
+  sessionKey: string,
+  predicate: (event: SystemEvent) => boolean,
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = queues.get(key);
+  if (!entry || entry.queue.length === 0) {
+    return [];
+  }
+  const removed: SystemEvent[] = [];
+  entry.queue = entry.queue.filter((event) => {
+    if (predicate(event)) {
+      removed.push(event);
+      return false;
+    }
+    return true;
+  });
+  if (entry.queue.length === 0) {
+    queues.delete(key);
+  } else if (removed.length > 0) {
+    // Reset dedup state to reflect actual queue contents.
+    const last = entry.queue[entry.queue.length - 1];
+    entry.lastContextKey = last.contextKey ?? null;
+  }
+  return removed;
 }
 
 export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {

@@ -106,6 +106,11 @@ describe("overflow compaction in run loop", () => {
       mockedLog.warn,
       "context overflow detected (attempt 1/3); attempting auto-compaction",
     );
+    // Regression guard: overflow compaction must also emit a
+    // [context-pressure:fire] anchor so operators grepping for mid-turn
+    // pressure triggers (trigger F, per RFC §4.1) find the in-turn event
+    // that bypasses the pre-run checkContextPressure() path.
+    expectLogIncludes(mockedLog.warn, "[context-pressure:fire] mid-turn trigger=overflow");
     expectLogIncludes(mockedLog.info, "auto-compaction succeeded");
     // Should not be an error result
     expect(result.meta.error).toBeUndefined();
@@ -180,6 +185,28 @@ describe("overflow compaction in run loop", () => {
     expect(retryParams.prompt).toBe(baseParams.prompt);
     expect(retryParams.suppressNextUserMessagePersistence).toBe(false);
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("emits [session-key:missing] when sessionKey is missing on overflow path", async () => {
+    // Same overflow trigger as the first test but with empty sessionKey — the
+    // enqueueSystemEvent gate should skip and leave a breadcrumb via the
+    // canonical session-key skip helper.
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
+    });
+
+    await runEmbeddedAgent({ ...baseParams, sessionKey: "" });
+
+    // The mid-turn [context-pressure:fire] anchor still emits (it uses
+    // sessionKey ?? sessionId as a display value, not as a gate).
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("[context-pressure:fire] mid-turn trigger=overflow"),
+    );
+    // But the system-event enqueue was skipped → canonical breadcrumb emitted.
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("[session-key:missing] site=pi-runner.overflow-compaction"),
+    );
   });
 
   it("retries after successful compaction on likely-overflow promptError variants", async () => {

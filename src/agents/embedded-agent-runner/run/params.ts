@@ -10,6 +10,7 @@ import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registr
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { DiagnosticRunFireReason } from "../../../infra/diagnostic-events.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
@@ -28,6 +29,7 @@ import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
+import type { RequestCompactionToolOpts } from "../../tools/request-compaction-tool.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
@@ -53,6 +55,10 @@ export type RunEmbeddedAgentParams = {
   agentAccountId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
   trigger?: EmbeddedRunTrigger;
+  /** Low-cardinality firing reason for loop diagnostics. */
+  fireReason?: DiagnosticRunFireReason;
+  /** Run id that caused this run to be scheduled, when applicable. */
+  parentRunId?: string;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
@@ -107,6 +113,14 @@ export type RunEmbeddedAgentParams = {
   forceHeartbeatTool?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
+  /** Whether this run drains continue_delegate work staged during the turn. */
+  drainsContinuationDelegateQueue?: boolean;
+  /** Callback for continue_work to request a post-turn continuation. */
+  continueWorkOpts?: {
+    requestContinuation: (
+      request: import("../../tools/continue-work-tool.js").ContinueWorkRequest,
+    ) => void;
+  };
   sessionFile: string;
   workspaceDir: string;
   /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */
@@ -255,4 +269,10 @@ export type RunEmbeddedAgentParams = {
    * exit promptly after emitting the final JSON result.
    */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Continuation: request_compaction tool opts (injected from execution context). */
+  requestCompactionOpts?: {
+    sessionId?: string;
+    getContextUsage: () => number | null;
+    triggerCompaction: RequestCompactionToolOpts["triggerCompaction"];
+  };
 };

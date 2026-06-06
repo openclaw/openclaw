@@ -4,6 +4,13 @@
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 
 /** Failover action selected for one embedded run failure decision point. */
+export type RunFailoverDecisionAction =
+  | "continue_normal"
+  | "rotate_profile"
+  | "fallback_model"
+  | "surface_error"
+  | "return_error_payload";
+
 export type RunFailoverDecision =
   | {
       action: "continue_normal";
@@ -66,6 +73,7 @@ type AssistantDecisionParams = {
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
   harnessOwnsTransport?: boolean;
+  compactionFailureContext?: boolean;
   profileRotated: boolean;
 };
 
@@ -142,7 +150,13 @@ export function mergeRetryFailoverReason(params: {
   failoverReason: FailoverReason | null;
   timedOut?: boolean;
 }): FailoverReason | null {
-  return params.failoverReason ?? (params.timedOut ? "timeout" : null) ?? params.previous;
+  // timedOut takes precedence — timeout must always surface as the reason
+  // to prevent session-lock deadlock (#86). A pre-existing failoverReason
+  // (e.g. "rate_limit") must not mask a timeout condition.
+  if (params.timedOut) {
+    return "timeout";
+  }
+  return params.failoverReason ?? params.previous;
 }
 
 export function resolveRunFailoverDecision(
@@ -202,7 +216,45 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     };
   }
 
+  if (params.compactionFailureContext) {
+    return {
+      action: "surface_error",
+      reason: params.failoverReason,
+    };
+  }
   if (params.externalAbort) {
+    return {
+      action: "surface_error",
+      reason: params.failoverReason,
+    };
+  }
+  if (
+    params.timedOut &&
+    !params.aborted &&
+    !params.timedOutDuringToolExecution &&
+    !params.timedOutDuringCompaction &&
+    !params.harnessOwnsTransport
+  ) {
+    // Plain LLM-phase timeout outside an in-flight abort: surface so local
+    // timeout recovery can run (#86 deadlock fix). Aborted + LLM-phase
+    // timeouts fall through to shouldRotateAssistant rotation; tool-execution
+    // + compaction timeouts fall through to continue_normal (#52147 — neither
+    // rotate nor fallback while a tool/compaction is in flight). When the
+    // harness owns the transport (harnessOwnsTransport=true), the timeout is
+    // not a local LLM-phase silence — defer to shouldRotateAssistant so a
+    // concrete failoverReason can drive rotation/fallback.
+    return {
+      action: "surface_error",
+      reason: params.failoverReason,
+    };
+  }
+  if (params.failoverReason === "timeout" && !params.harnessOwnsTransport) {
+    if (params.fallbackConfigured && params.failoverFailure) {
+      return {
+        action: "fallback_model",
+        reason: "timeout",
+      };
+    }
     return {
       action: "surface_error",
       reason: params.failoverReason,

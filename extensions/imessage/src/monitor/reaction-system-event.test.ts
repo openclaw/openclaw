@@ -34,6 +34,7 @@ describe("enqueueIMessageReactionSystemEvent", () => {
       {
         sessionKey: "agent:main:main",
         contextKey: "imessage:reaction:added:3:lobster-reply-guid:+15555550123:👎",
+        forceSenderIsOwnerFalse: true,
       },
     );
     expect(runtime.log).toHaveBeenCalledWith(

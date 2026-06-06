@@ -225,6 +225,36 @@ describe("resolveCommandsSystemPromptBundle", () => {
     expect(toolParams.spawnedBy).toBe("agent:target-parent");
   });
 
+  it("threads requestCompactionOpts when continuation.enabled is true", async () => {
+    const params = makeParams();
+    params.cfg = {
+      agents: { defaults: { continuation: { enabled: true } } },
+    } as HandleCommandsParams["cfg"];
+
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(vi.mocked(createOpenClawCodingTools)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestCompactionOpts: expect.objectContaining({
+          getContextUsage: expect.any(Function),
+          triggerCompaction: expect.any(Function),
+        }),
+      }),
+    );
+  });
+
+  it("omits requestCompactionOpts when continuation.enabled is not true", async () => {
+    const params = makeParams();
+
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(vi.mocked(createOpenClawCodingTools)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestCompactionOpts: undefined,
+      }),
+    );
+  });
+
   it("uses the resolved session key and forwards full-access block reasons", async () => {
     vi.mocked(resolveSandboxRuntimeStatus).mockImplementation(({ sessionKey }) => {
       expect(sessionKey).toBe("agent:target:default");

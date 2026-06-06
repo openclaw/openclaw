@@ -105,6 +105,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   enqueueSystemEvent(eventText, {
     sessionKey: route.sessionKey,
     contextKey: `${params.contextKeyPrefix}:${channelId}:${componentId}:${userId}`,
+    forceSenderIsOwnerFalse: true,
   });
 
   await ackComponentInteraction({

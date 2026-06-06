@@ -4,7 +4,12 @@
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
+import {
+  computeRequestCompactionContextUsage,
+  releaseQueuedCompactionTolerant,
+} from "../../auto-reply/reply/agent-runner-execution.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
+import type { FollowupRun } from "../../auto-reply/reply/queue/types.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import {
@@ -14,7 +19,9 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { runWithDiagnosticTraceparent } from "../../infra/diagnostic-trace-context.js";
 import { readErrorName } from "../../infra/errors.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -32,6 +39,7 @@ import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding } from "../cli-session.js";
+import type { RequestCompactionInvocation } from "../compaction-attribution.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
@@ -43,6 +51,7 @@ import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { acquireSessionWriteLock, resolveSessionWriteLockOptions } from "../session-write-lock.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
+import type { ContinueWorkRequest } from "../tools/continue-work-tool.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -141,7 +150,6 @@ function resolveProfileAuthFromStore(params: { agentDir: string; profileId: stri
   }
   const credential = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
-    externalCliProfileIds: [profileId],
   }).profiles[profileId];
   return { provider: credential?.provider, mode: credential?.type };
 }
@@ -192,7 +200,6 @@ function resolveHarnessAuthProfileSelection(params: {
 
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
-    externalCliProviderIds: [harnessAuthProvider],
   });
   const authProfileId = resolveAuthProfileOrder({
     cfg: params.config,
@@ -423,7 +430,7 @@ export async function persistCliTurnTranscript(params: {
   });
 }
 
-export function runAgentAttempt(params: {
+export async function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
   originalProvider: string;
@@ -591,67 +598,69 @@ export function runAgentAttempt(params: {
       nextCliSessionId: string | undefined,
       activeCliSessionBinding = cliSessionBinding,
     ) =>
-      runCliAgent({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        sessionEntry: params.sessionEntry,
-        agentId: params.sessionAgentId,
-        trigger: "user",
-        sessionFile: params.sessionFile,
-        workspaceDir: params.workspaceDir,
-        cwd: params.cwd,
-        config: params.cfg,
-        prompt: effectivePrompt,
-        provider: cliExecutionProvider,
-        model: params.modelOverride,
-        thinkLevel: params.resolvedThinkLevel,
-        timeoutMs: params.timeoutMs,
-        runId: params.runId,
-        extraSystemPrompt: params.opts.extraSystemPrompt,
-        inputProvenance: params.opts.inputProvenance,
-        cliSessionId: nextCliSessionId,
-        cliSessionBinding:
-          nextCliSessionId === activeCliSessionBinding?.sessionId
-            ? activeCliSessionBinding
-            : undefined,
-        authProfileId,
-        bootstrapPromptWarningSignaturesSeen,
-        bootstrapPromptWarningSignature,
-        images: params.isFallbackRetry ? undefined : params.opts.images,
-        imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
-        skillsSnapshot: params.skillsSnapshot,
-        messageChannel: params.messageChannel,
-        streamParams: params.opts.streamParams,
-        messageProvider: params.opts.messageProvider ?? params.messageChannel,
-        currentChannelId: params.runContext.currentChannelId,
-        currentThreadTs: params.runContext.currentThreadTs,
-        currentInboundAudio: params.runContext.currentInboundAudio,
-        agentAccountId: params.runContext.accountId,
-        senderIsOwner: params.opts.senderIsOwner,
-        toolsAllow: params.opts.toolsAllow,
-        cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
-        cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
-        ...(mutableCliSessionStore
-          ? {
-              onBeforeFreshCliSessionRetry: async (retry) => {
-                if (retry.sessionId !== activeCliSessionBinding?.sessionId) {
-                  return false;
-                }
+      runWithDiagnosticTraceparent(params.opts.traceparent, () =>
+        runCliAgent({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          sessionEntry: params.sessionEntry,
+          agentId: params.sessionAgentId,
+          trigger: "user",
+          sessionFile: params.sessionFile,
+          workspaceDir: params.workspaceDir,
+          cwd: params.cwd,
+          config: params.cfg,
+          prompt: effectivePrompt,
+          provider: cliExecutionProvider,
+          model: params.modelOverride,
+          thinkLevel: params.resolvedThinkLevel,
+          timeoutMs: params.timeoutMs,
+          runId: params.runId,
+          extraSystemPrompt: params.opts.extraSystemPrompt,
+          inputProvenance: params.opts.inputProvenance,
+          cliSessionId: nextCliSessionId,
+          cliSessionBinding:
+            nextCliSessionId === activeCliSessionBinding?.sessionId
+              ? activeCliSessionBinding
+              : undefined,
+          authProfileId,
+          bootstrapPromptWarningSignaturesSeen,
+          bootstrapPromptWarningSignature,
+          images: params.isFallbackRetry ? undefined : params.opts.images,
+          imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+          skillsSnapshot: params.skillsSnapshot,
+          messageChannel: params.messageChannel,
+          streamParams: params.opts.streamParams,
+          messageProvider: params.opts.messageProvider ?? params.messageChannel,
+          currentChannelId: params.runContext.currentChannelId,
+          currentThreadTs: params.runContext.currentThreadTs,
+          currentInboundAudio: params.runContext.currentInboundAudio,
+          agentAccountId: params.runContext.accountId,
+          senderIsOwner: params.opts.senderIsOwner,
+          toolsAllow: params.opts.toolsAllow,
+          cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
+          cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
+          ...(mutableCliSessionStore
+            ? {
+                onBeforeFreshCliSessionRetry: async (retry) => {
+                  if (retry.sessionId !== activeCliSessionBinding?.sessionId) {
+                    return false;
+                  }
 
-                log.warn(
-                  `CLI session failed, clearing before fresh retry: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(retry.reason)}`,
-                );
+                  log.warn(
+                    `CLI session failed, clearing before fresh retry: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(retry.reason)}`,
+                  );
 
-                params.sessionEntry =
-                  (await clearCliSessionInStore({
-                    provider: cliExecutionProvider,
-                    ...mutableCliSessionStore,
-                  })) ?? params.sessionEntry;
-                return true;
-              },
-            }
-          : {}),
-      });
+                  params.sessionEntry =
+                    (await clearCliSessionInStore({
+                      provider: cliExecutionProvider,
+                      ...mutableCliSessionStore,
+                    })) ?? params.sessionEntry;
+                  return true;
+                },
+              }
+            : {}),
+        }),
+      );
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
@@ -677,72 +686,341 @@ export function runAgentAttempt(params: {
     });
   }
 
-  return runEmbeddedAgent({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.sessionAgentId,
-    trigger: "user",
-    messageChannel: params.messageChannel,
-    messageProvider: params.opts.messageProvider ?? params.messageChannel,
-    agentAccountId: params.runContext.accountId,
-    messageTo: params.opts.replyTo ?? params.opts.to,
-    messageThreadId: params.opts.threadId,
-    groupId: params.runContext.groupId,
-    groupChannel: params.runContext.groupChannel,
-    groupSpace: params.runContext.groupSpace,
-    spawnedBy: params.spawnedBy,
-    currentChannelId: params.runContext.currentChannelId,
-    currentThreadTs: params.runContext.currentThreadTs,
-    currentInboundAudio: params.runContext.currentInboundAudio,
-    replyToMode: params.runContext.replyToMode,
-    hasRepliedRef: params.runContext.hasRepliedRef,
-    senderIsOwner: params.opts.senderIsOwner,
-    sessionFile: params.sessionFile,
-    workspaceDir: params.workspaceDir,
-    cwd: params.cwd,
-    config: params.cfg,
-    agentHarnessId: embeddedAgentHarnessOverride,
-    agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
-    skillsSnapshot: params.skillsSnapshot,
-    prompt: effectivePrompt,
-    images: params.isFallbackRetry ? undefined : params.opts.images,
-    imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
-    clientTools: params.opts.clientTools,
-    provider: embeddedAgentProvider,
-    model: params.modelOverride,
-    modelFallbacksOverride: params.modelFallbacksOverride,
-    authProfileId,
-    authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
-    thinkLevel: params.resolvedThinkLevel,
-    fastMode: params.fastMode,
-    verboseLevel: params.resolvedVerboseLevel,
-    bashElevated: params.opts.bashElevated,
-    timeoutMs: params.timeoutMs,
-    runId: params.runId,
-    lane: params.opts.lane,
-    abortSignal: params.opts.abortSignal,
-    extraSystemPrompt: params.opts.extraSystemPrompt,
-    bootstrapContextMode: params.opts.bootstrapContextMode,
-    bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
-    toolsAllow: params.opts.toolsAllow,
-    internalEvents: params.opts.internalEvents,
-    inputProvenance: params.opts.inputProvenance,
-    sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
-    disableMessageTool: params.opts.disableMessageTool,
-    streamParams: params.opts.streamParams,
-    agentDir: params.agentDir,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-    cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
-    modelRun: params.opts.modelRun,
-    promptMode: params.opts.promptMode,
-    disableTools: params.opts.modelRun === true,
-    onAgentEvent: params.onAgentEvent,
-    deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
-    suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
-    onUserMessagePersisted: params.onUserMessagePersisted,
-    bootstrapPromptWarningSignaturesSeen,
-    bootstrapPromptWarningSignature,
+  // --- continuation: spawn-init / turn-1 continueWorkOpts plumbing (#746) ---
+  // Construct the closure that captures continue_work tool requests fired
+  // during this attempt, then surface the runEmbeddedAgent result while
+  // post-processing the captured request to schedule the next-turn
+  // heartbeat-wake. Mirrors the followup-runner pattern at
+  // src/auto-reply/reply/followup-runner.ts (#892 cure). Without this wiring,
+  // openclaw-tools.ts:592 evaluates options?.continueWorkOpts as undefined on
+  // the spawn-init code path and continue_work never registers in the
+  // subagent's turn-1 tool-list — chicken-and-egg with the followup-runner
+  // cure that only fires on turn-2+.
+  const continuationEnabled = params.cfg?.agents?.defaults?.continuation?.enabled === true;
+  let attemptContinueWorkRequest: ContinueWorkRequest | undefined;
+  const continueWorkOpts = continuationEnabled
+    ? {
+        requestContinuation: (request: ContinueWorkRequest) => {
+          attemptContinueWorkRequest = request;
+        },
+      }
+    : undefined;
+
+  // --- continuation: spawn-init / turn-1 requestCompactionOpts plumbing (#917) ---
+  // Sister-of-#746 (half-symmetric-cure-class). PR #892 cured the
+  // continueWorkOpts gap at the followup-runner (turn-2+) path and the
+  // earlier spawn-init cure restored continueWorkOpts on turn-1, but the
+  // sibling closure for request_compaction was not constructed at the
+  // spawn-init / turn-1 path. Result: openclaw-tools.ts:609 evaluates
+  // options?.requestCompactionOpts as undefined on turn-1, the
+  // request_compaction tool never registers in the subagent's spawn-init
+  // tool-list, and a subagent that has been given continue_work capability
+  // (via #746 cure) can schedule its own next turn but cannot reclaim
+  // context mid-flight when pressure rises. Mirrors the followup-runner
+  // block at src/auto-reply/reply/agent-runner-execution.ts:2554-2585. Cohort
+  // substrate-of-record: figs `1511931252` direction-question +
+  // cael+rune+emeric cohort-cosign YES + frond karmaterminal/openclaw#917
+  // issue. Empirical: rune subagent `agent:main:subagent:53cd57ac` returned
+  // TOOL_NOT_IN_LIST at discord:1511936885; emeric R-RC-1 HONEST-LIMIT at
+  // openclaw-bootstrap commit 9684479; cael main-session contrast 1511935121
+  // (REGISTERED + REJECT-at-41%-below-threshold). #917 was filed during
+  // the 2026-06-03 PROOFS cycle on assembly head
+  // 2f71e4378b70ea43fb185edff1af14571eca826f when 4-of-6 prince seats
+  // cross-walked the R-CW-DELEGATE-SELF-CONTINUATION row and the missing
+  // sister tool surfaced empirically.
+  const requestCompactionOpts = continuationEnabled
+    ? {
+        sessionId: params.sessionId,
+        getContextUsage: () =>
+          computeRequestCompactionContextUsage({
+            entry: params.sessionEntry,
+            cfg: params.cfg,
+            provider: embeddedAgentProvider,
+            model: params.modelOverride,
+          }),
+        triggerCompaction: async (request: RequestCompactionInvocation) => {
+          try {
+            const { compactEmbeddedAgentSession } =
+              await import("../embedded-agent-runner/compact.queued.js");
+            const result = await compactEmbeddedAgentSession({
+              sessionId: params.sessionId,
+              runId: request.runId ?? params.runId,
+              sessionKey: params.sessionKey,
+              sessionFile: params.sessionFile,
+              workspaceDir: params.workspaceDir,
+              cwd: params.cwd,
+              config: params.cfg,
+              messageChannel: params.messageChannel,
+              messageProvider: params.opts.messageProvider ?? params.messageChannel,
+              agentAccountId: params.runContext.accountId,
+              provider: embeddedAgentProvider,
+              model: params.modelOverride,
+              authProfileId,
+              trigger: request.trigger,
+              diagId: request.diagId,
+              traceparent: request.traceparent,
+            });
+            if (result.ok && result.compacted) {
+              // Mirror the followup-runner triggerCompaction release
+              // (agent-runner-execution.ts:2591). A successful turn-1 /
+              // spawn-init volitional compaction must dispatch any staged
+              // `continue_delegate(mode="post-compaction")` work; without this
+              // the staged delegates stay queued and only the followup
+              // (turn-2+) path would ever drain them — the half-cure-gap codex
+              // flagged on #918's own cure-file. `releaseQueuedCompactionTolerant`
+              // degrades gracefully (logs + returns) when sessionKey/sessionStore
+              // are absent, so this is safe on the suppressVisibleSessionEffects
+              // path where both are undefined.
+              const releaseOriginatingTo = params.opts.replyTo ?? params.opts.to;
+              const releaseMessageProvider = params.opts.messageProvider ?? params.messageChannel;
+              const compactionReleaseFollowupRun: FollowupRun = {
+                prompt: effectivePrompt,
+                enqueuedAt: Date.now(),
+                ...(params.runContext.messageChannel
+                  ? { originatingChannel: params.runContext.messageChannel }
+                  : {}),
+                ...(releaseOriginatingTo ? { originatingTo: releaseOriginatingTo } : {}),
+                ...(params.runContext.accountId
+                  ? { originatingAccountId: params.runContext.accountId }
+                  : {}),
+                ...(params.opts.threadId != null
+                  ? { originatingThreadId: params.opts.threadId }
+                  : {}),
+                run: {
+                  agentId: params.sessionAgentId,
+                  agentDir: params.agentDir,
+                  sessionId: params.sessionId,
+                  ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                  sessionFile: params.sessionFile,
+                  workspaceDir: params.workspaceDir,
+                  ...(params.cwd ? { cwd: params.cwd } : {}),
+                  config: params.cfg,
+                  provider: embeddedAgentProvider,
+                  model: params.modelOverride,
+                  ...(releaseMessageProvider ? { messageProvider: releaseMessageProvider } : {}),
+                  ...(params.runContext.accountId
+                    ? { agentAccountId: params.runContext.accountId }
+                    : {}),
+                  timeoutMs: params.timeoutMs,
+                  blockReplyBreak: "message_end",
+                },
+              };
+              await releaseQueuedCompactionTolerant({
+                ...(params.sessionStore ? { activeSessionStore: params.sessionStore } : {}),
+                compactionResult: result,
+                followupRun: compactionReleaseFollowupRun,
+                getActiveSessionEntry: () => params.sessionEntry,
+                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                ...(params.storePath ? { storePath: params.storePath } : {}),
+                ...(request.traceparent ? { traceparent: request.traceparent } : {}),
+              });
+            }
+            return {
+              ok: result.ok,
+              compacted: result.compacted,
+              reason: result.reason,
+            };
+          } catch (err) {
+            return {
+              ok: false,
+              compacted: false,
+              reason: err instanceof Error ? err.message : String(err),
+            };
+          }
+        },
+      }
+    : undefined;
+
+  const embeddedRunResult = await runWithDiagnosticTraceparent(params.opts.traceparent, () =>
+    runEmbeddedAgent({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.sessionAgentId,
+      trigger: "user",
+      messageChannel: params.messageChannel,
+      messageProvider: params.opts.messageProvider ?? params.messageChannel,
+      agentAccountId: params.runContext.accountId,
+      messageTo: params.opts.replyTo ?? params.opts.to,
+      messageThreadId: params.opts.threadId,
+      groupId: params.runContext.groupId,
+      groupChannel: params.runContext.groupChannel,
+      groupSpace: params.runContext.groupSpace,
+      spawnedBy: params.spawnedBy,
+      currentChannelId: params.runContext.currentChannelId,
+      currentThreadTs: params.runContext.currentThreadTs,
+      currentInboundAudio: params.runContext.currentInboundAudio,
+      replyToMode: params.runContext.replyToMode,
+      hasRepliedRef: params.runContext.hasRepliedRef,
+      senderIsOwner: params.opts.senderIsOwner,
+      sessionFile: params.sessionFile,
+      workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
+      config: params.cfg,
+      agentHarnessId: embeddedAgentHarnessOverride,
+      agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
+      skillsSnapshot: params.skillsSnapshot,
+      prompt: effectivePrompt,
+      images: params.isFallbackRetry ? undefined : params.opts.images,
+      imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+      clientTools: params.opts.clientTools,
+      provider: embeddedAgentProvider,
+      model: params.modelOverride,
+      modelFallbacksOverride: params.modelFallbacksOverride,
+      authProfileId,
+      authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
+      thinkLevel: params.resolvedThinkLevel,
+      fastMode: params.fastMode,
+      verboseLevel: params.resolvedVerboseLevel,
+      bashElevated: params.opts.bashElevated,
+      timeoutMs: params.timeoutMs,
+      runId: params.runId,
+      lane: params.opts.lane,
+      abortSignal: params.opts.abortSignal,
+      extraSystemPrompt: params.opts.extraSystemPrompt,
+      bootstrapContextMode: params.opts.bootstrapContextMode,
+      bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
+      toolsAllow: params.opts.toolsAllow,
+      drainsContinuationDelegateQueue: params.opts.drainsContinuationDelegateQueue,
+      internalEvents: params.opts.internalEvents,
+      inputProvenance: params.opts.inputProvenance,
+      sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+      disableMessageTool: params.opts.disableMessageTool,
+      streamParams: params.opts.streamParams,
+      agentDir: params.agentDir,
+      allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+      cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
+      modelRun: params.opts.modelRun,
+      promptMode: params.opts.promptMode,
+      disableTools: params.opts.modelRun === true,
+      onAgentEvent: params.onAgentEvent,
+      deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
+      suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+      onUserMessagePersisted: params.onUserMessagePersisted,
+      bootstrapPromptWarningSignaturesSeen,
+      bootstrapPromptWarningSignature,
+      continueWorkOpts,
+      requestCompactionOpts,
+    }),
+  );
+
+  // Post-turn: if continue_work fired during this attempt, schedule the next
+  // turn via heartbeat-wake. Mirrors the followup-runner heartbeat-scheduler
+  // block; we keep this guarded by sessionKey + continuation.enabled and use
+  // dynamic imports to keep the static graph free of the continuation-runtime
+  // dependency on the spawn-init path.
+  if (attemptContinueWorkRequest && continuationEnabled && params.sessionKey) {
+    try {
+      await scheduleSpawnInitContinueWorkWake({
+        sessionKey: params.sessionKey,
+        sessionEntry: params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
+        runId: params.runId,
+        request: attemptContinueWorkRequest,
+        cfg: params.cfg,
+        runResult: embeddedRunResult,
+      });
+    } catch (err) {
+      // Persistence/scheduling failure must not break the attempt itself —
+      // mirrors followup-runner's defensive logging.
+      log.warn(
+        `[attempt-execution] failed to schedule continue_work wake for ${sanitizeForLog(params.sessionKey)}: ${sanitizeForLog(String(err))}`,
+      );
+    }
+  }
+
+  return embeddedRunResult;
+}
+
+/**
+ * Schedule a continue_work-triggered heartbeat-wake for the spawn-init /
+ * turn-1 path. Loads chain state, enforces maxChainLength + delay clamps,
+ * persists advancement, and arms the timer that fires requestHeartbeatNow.
+ * Behaviour mirrors the followup-runner block introduced by PR #892 for
+ * turn-2+ symmetry. Kept here as a local helper so the spawn-init path
+ * stays single-sourced for the cure.
+ */
+async function scheduleSpawnInitContinueWorkWake(params: {
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  runId: string;
+  request: ContinueWorkRequest;
+  cfg: OpenClawConfig;
+  runResult: EmbeddedAgentRunResult;
+}): Promise<void> {
+  const [
+    { resolveLiveContinuationRuntimeConfig, clampDelayMs },
+    {
+      loadContinuationChainState,
+      persistContinuationChainState,
+      retainContinuationTimerRef,
+      registerContinuationTimerHandle,
+      unregisterContinuationTimerHandle,
+    },
+    { enqueueSystemEvent },
+  ] = await Promise.all([
+    import("../../auto-reply/continuation/config.js"),
+    import("../../auto-reply/continuation/state.js"),
+    import("../../infra/system-events.js"),
+  ]);
+
+  const continuationConfig = resolveLiveContinuationRuntimeConfig(params.cfg);
+  const { maxChainLength } = continuationConfig;
+
+  const tailUsage = params.runResult.meta?.agentMeta?.usage;
+  const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
+  const chainState = loadContinuationChainState(params.sessionEntry, turnTokens);
+  const currentChainCount = chainState.currentChainCount;
+
+  if (currentChainCount >= maxChainLength) {
+    log.info(
+      `[attempt-execution] continue_work cap reached for ${sanitizeForLog(params.sessionKey)}: ${currentChainCount}/${maxChainLength}`,
+    );
+    return;
+  }
+
+  const nextChainCount = currentChainCount + 1;
+  // Treat an explicit zero-delay continue_work as a real 0 (clamped up to
+  // `minDelayMs`), matching what the continue_work tool reports via
+  // `clampDelayMs(delaySeconds * 1000, config)`. The prior `|| defaultDelayMs`
+  // expression treated 0 as falsy and substituted `defaultDelayMs` (15s),
+  // making an omitted/zero delay wake at 15s instead of the reported 5s
+  // minimum. Routed through the canonical `clampDelayMs` helper so the
+  // scheduler and the tool result can never drift again.
+  const requestedDelayMs = params.request.delaySeconds * 1000;
+  const clampedDelay = clampDelayMs(requestedDelayMs, continuationConfig);
+
+  persistContinuationChainState({
+    sessionEntry: params.sessionEntry,
+    count: nextChainCount,
+    startedAt: chainState.chainStartedAt,
+    tokens: chainState.accumulatedChainTokens,
   });
+
+  retainContinuationTimerRef(params.sessionKey);
+  const sessionKey = params.sessionKey;
+  const reason = params.request.reason;
+  const parentRunId = params.runId;
+  const timerHandle = setTimeout(() => {
+    try {
+      log.info(
+        `[attempt-execution] continue_work timer fired for session ${sanitizeForLog(sessionKey)}`,
+      );
+      enqueueSystemEvent(
+        `[continuation:wake] Turn ${nextChainCount}/${maxChainLength}. ` +
+          `The agent elected to continue working.` +
+          (reason ? ` Reason: ${reason}` : ""),
+        { sessionKey, trusted: true },
+      );
+      requestHeartbeatNow({
+        sessionKey,
+        reason: "continuation",
+        parentRunId,
+      });
+    } finally {
+      unregisterContinuationTimerHandle(sessionKey, timerHandle);
+    }
+  }, clampedDelay);
+  registerContinuationTimerHandle(sessionKey, timerHandle);
+  timerHandle.unref();
 }
 
 export function buildAcpResult(params: {

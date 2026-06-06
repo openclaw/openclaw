@@ -81,6 +81,22 @@ export async function resolveCommandsSystemPromptBundle(
     }
   })();
   const skillsPrompt = skillsSnapshot.snapshot.prompt ?? "";
+  // Continuation: register request_compaction tool when continuation is enabled
+  // so the /commands surface reflects the full RFC §2.1 tool inventory (matches
+  // tools-effective-inventory.ts pattern). Inventory-only path; runtime paths
+  // build their own requestCompactionOpts with live context-usage + trigger.
+  const continuationEnabled = params.cfg?.agents?.defaults?.continuation?.enabled === true;
+  const requestCompactionOpts = continuationEnabled
+    ? {
+        sessionId: "<inventory-only>",
+        getContextUsage: (): number | null => null,
+        triggerCompaction: async () => ({
+          ok: false as const,
+          compacted: false as const,
+          reason: "inventory-only path" as const,
+        }),
+      }
+    : undefined;
   const tools = (() => {
     try {
       return createOpenClawCodingTools({
@@ -100,6 +116,7 @@ export async function resolveCommandsSystemPromptBundle(
         senderE164: params.ctx.SenderE164,
         modelProvider: params.provider,
         modelId: params.model,
+        requestCompactionOpts,
       });
     } catch {
       return [];

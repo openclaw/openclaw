@@ -5,6 +5,7 @@ import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { ContinuationTrigger } from "../../auto-reply/types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -107,6 +108,12 @@ export type AgentCommandOpts = {
   abortSignal?: AbortSignal;
   lane?: string;
   runId?: string;
+  /** Structured lifecycle metadata for internally-triggered turns. */
+  continuationTrigger?: ContinuationTrigger;
+  /** When true, the run drains the pending continuation delegate queue after completion. */
+  drainsContinuationDelegateQueue?: boolean;
+  /** Inherited continuation trace context for this run. */
+  traceparent?: string;
   extraSystemPrompt?: string;
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";

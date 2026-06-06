@@ -997,4 +997,60 @@ describe("resolveEffectiveToolInventory", () => {
     });
     expect(createToolsOptions?.modelApi).toBe("openai-completions");
   });
+
+  it("threads requestCompactionOpts when continuation.enabled is true", async () => {
+    const createToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => [
+      mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
+    ]);
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal2 } =
+      await loadHarness({ createToolsMock });
+
+    resolveEffectiveToolInventoryLocal2({
+      cfg: { agents: { defaults: { continuation: { enabled: true } } } },
+    });
+
+    expect(createToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestCompactionOpts: expect.objectContaining({
+          getContextUsage: expect.any(Function),
+          triggerCompaction: expect.any(Function),
+        }),
+      }),
+    );
+  });
+
+  it("threads continueWorkOpts when continuation.enabled is true", async () => {
+    const createToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => [
+      mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
+    ]);
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal } = await loadHarness(
+      { createToolsMock },
+    );
+
+    resolveEffectiveToolInventoryLocal({
+      cfg: { agents: { defaults: { continuation: { enabled: true } } } },
+    });
+
+    expect(createToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continueWorkOpts: expect.objectContaining({
+          requestContinuation: expect.any(Function),
+        }),
+      }),
+    );
+  });
+
+  it("omits requestCompactionOpts when continuation.enabled is not true", async () => {
+    const createToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => [
+      mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
+    ]);
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal1 } =
+      await loadHarness({ createToolsMock });
+
+    resolveEffectiveToolInventoryLocal1({ cfg: {} });
+
+    const passed = createToolsMock.mock.calls[0]?.[0];
+    expect(passed?.requestCompactionOpts).toBeUndefined();
+    expect(passed?.continueWorkOpts).toBeUndefined();
+  });
 });

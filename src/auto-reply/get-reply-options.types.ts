@@ -5,6 +5,8 @@ import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcrip
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
 
+export type ContinuationTrigger = "work-wake" | "delegate-return";
+
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
@@ -56,6 +58,8 @@ export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
+  /** Parent run id when this run was spawned by a previous agent turn. */
+  parentRunId?: string;
   /** Stable provider prompt-cache affinity key; distinct from run id/idempotency. */
   promptCacheKey?: string;
   /** Abort signal for the underlying agent run. */
@@ -73,6 +77,13 @@ export type GetReplyOptions = {
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
   isHeartbeat?: boolean;
+  /**
+   * Structured trigger identifying why this turn exists.
+   * Used for wake classification instead of inferring from system-event queue text.
+   * - "work-wake": CONTINUE_WORK timer fired
+   * - "delegate-return": a delegate sub-agent completed and returned results
+   */
+  continuationTrigger?: ContinuationTrigger;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */

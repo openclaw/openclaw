@@ -6,7 +6,6 @@ import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
   resolveAgentConfig,
-  resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -17,6 +16,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -25,7 +25,10 @@ import {
   loadSessionStore,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
+  resolveSessionStoreEntry,
   type SessionEntry,
+  type SessionPostCompactionDelegate,
+  updateSessionStore,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
@@ -33,14 +36,27 @@ import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import {
+  emitContinuationCompactionReleasedSpan,
+  emitContinuationDelegateFireSpan,
+  emitContinuationDelegateSpan,
+  emitContinuationDisabledSpan,
+  emitContinuationWorkFireSpan,
+  emitContinuationWorkSpan,
+  resolveContinuationTraceparent,
+  startContinuationDelegateSpan,
+} from "../../infra/continuation-tracer.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import { generateChainId, generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
@@ -52,6 +68,26 @@ import {
   formatTokenCount,
   resolveModelCostConfig,
 } from "../../utils/usage-format.js";
+import {
+  addDelayedContinuationReservation,
+  consumePendingDelegates,
+  consumeStagedPostCompactionDelegates,
+  highestDelayedContinuationReservationHop,
+  pendingDelegateCount,
+  stagePostCompactionDelegate,
+  stagedPostCompactionDelegateCount,
+  takeDelayedContinuationReservation,
+} from "../continuation-delegate-store.js";
+import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
+import { checkContextPressure } from "../continuation/context-pressure.js";
+import { extractContinuationSignal } from "../continuation/signal.js";
+import {
+  registerContinuationTimerHandle,
+  retainContinuationTimerRef,
+  unregisterContinuationTimerHandle,
+} from "../continuation/state.js";
+import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
+import type { ChainState } from "../continuation/types.js";
 import {
   buildFallbackClearedNotice,
   buildFallbackNotice,
@@ -95,7 +131,10 @@ import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
-import { readPostCompactionContext } from "./post-compaction-context.js";
+import {
+  dispatchPostCompactionDelegates,
+  persistPendingPostCompactionDelegates,
+} from "./post-compaction-delegate-dispatch.js";
 import {
   shouldWarnAboutPrivateMessageToolFinal,
   warnPrivateMessageToolFinal,
@@ -1098,7 +1137,7 @@ function refreshSessionEntryFromStore(params: {
   }
 }
 
-export async function runReplyAgent(params: {
+export async function runReplyAgent(replyParams: {
   commandBody: string;
   transcriptCommandBody?: string;
   followupRun: FollowupRun;
@@ -1134,6 +1173,7 @@ export async function runReplyAgent(params: {
   typingMode: TypingMode;
   resetTriggered?: boolean;
   replyThreadingOverride?: TemplateContext["ReplyThreading"];
+  isContinuationWake?: boolean;
   replyOperation?: ReplyOperation;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
@@ -1168,7 +1208,7 @@ export async function runReplyAgent(params: {
     resetTriggered,
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
-  } = params;
+  } = replyParams;
 
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
@@ -1477,7 +1517,76 @@ export async function runReplyAgent(params: {
     }
   };
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
-  let preflightCompactionApplied;
+  let preflightCompactionApplied!: boolean;
+
+  const continuationFeatureEnabled = resolveLiveContinuationRuntimeConfig(cfg).enabled;
+  const postCompactionDelegatesToPreserve: SessionPostCompactionDelegate[] = [];
+
+  // Mint a stable `continuationChainId` (UUIDv7) on the 0->1 transition of
+  // `continuationChainCount`. Reuse the existing id for subsequent steps in the
+  // same chain so all spans emitted across the chain share a single
+  // correlation key.
+  const persistContinuationChainState = async (params: {
+    count: number;
+    startedAt: number;
+    tokens: number;
+    chainId?: string;
+  }): Promise<{ chainId: string | undefined }> => {
+    if (!sessionKey) {
+      return { chainId: undefined };
+    }
+    const previousCount = activeSessionEntry?.continuationChainCount ?? 0;
+    const previousChainId = activeSessionEntry?.continuationChainId;
+    const chainId =
+      params.chainId ??
+      (previousCount > 0 && previousChainId !== undefined ? previousChainId : generateChainId());
+    if (activeSessionEntry) {
+      activeSessionEntry.continuationChainCount = params.count;
+      activeSessionEntry.continuationChainStartedAt = params.startedAt;
+      activeSessionEntry.continuationChainTokens = params.tokens;
+      activeSessionEntry.continuationChainId = chainId;
+    }
+    if (activeSessionStore) {
+      const resolved = resolveSessionStoreEntry({ store: activeSessionStore, sessionKey });
+      const existingEntry = resolved.existing ?? activeSessionEntry;
+      if (existingEntry) {
+        activeSessionStore[resolved.normalizedKey] = {
+          ...existingEntry,
+          continuationChainCount: params.count,
+          continuationChainStartedAt: params.startedAt,
+          continuationChainTokens: params.tokens,
+          continuationChainId: chainId,
+        };
+        for (const legacyKey of resolved.legacyKeys) {
+          delete activeSessionStore[legacyKey];
+        }
+      }
+    }
+    if (storePath) {
+      try {
+        await updateSessionStore(storePath, (store) => {
+          const resolved = resolveSessionStoreEntry({ store, sessionKey });
+          if (resolved.existing) {
+            store[resolved.normalizedKey] = {
+              ...resolved.existing,
+              continuationChainCount: params.count,
+              continuationChainStartedAt: params.startedAt,
+              continuationChainTokens: params.tokens,
+              continuationChainId: chainId,
+            };
+            for (const legacyKey of resolved.legacyKeys) {
+              delete store[legacyKey];
+            }
+          }
+        });
+      } catch (err) {
+        defaultRuntime.log(
+          `Failed to persist continuation chain state for ${sessionKey}: ${String(err)}`,
+        );
+      }
+    }
+    return { chainId };
+  };
 
   try {
     await typingSignals.signalRunStart();
@@ -1616,6 +1725,53 @@ export async function runReplyAgent(params: {
       });
 
     replyOperation.setPhase("running");
+
+    // Trigger D: check context pressure before the agent's model call and
+    // inject a [system:context-pressure] event when a threshold band is
+    // crossed. Runs after setPhase("running") for state-tracking reasons,
+    // but unconditionally before the actual provider request below.
+    if (activeSessionEntry && sessionKey) {
+      const { contextPressureThreshold, earlyWarningBand } =
+        resolveLiveContinuationRuntimeConfig(cfg);
+      const contextWindowTokens =
+        resolveContextTokensForModel({
+          cfg,
+          provider: followupRun.run.provider,
+          model: defaultModel,
+          contextTokensOverride: agentCfgContextTokens,
+          fallbackContextTokens: activeSessionEntry.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+          allowAsyncLoad: false,
+        }) ?? DEFAULT_CONTEXT_TOKENS;
+      const pressureResult = checkContextPressure({
+        sessionEntry: activeSessionEntry,
+        sessionKey,
+        contextPressureThreshold,
+        contextWindowTokens,
+        earlyWarningBand,
+        postCompaction: preflightCompactionApplied,
+      });
+      if (pressureResult.fired && storePath) {
+        try {
+          await updateSessionStore(storePath, (store) => {
+            const resolved = resolveSessionStoreEntry({ store, sessionKey });
+            if (resolved.existing) {
+              store[resolved.normalizedKey] = {
+                ...resolved.existing,
+                lastContextPressureBand: pressureResult.band,
+              };
+              for (const legacyKey of resolved.legacyKeys) {
+                delete store[legacyKey];
+              }
+            }
+          });
+        } catch (err) {
+          defaultRuntime.log(
+            `context-pressure band persistence failed (non-fatal): ${String(err)}`,
+          );
+        }
+      }
+    }
+
     const runStartedAt = Date.now();
     await persistRestartRecoveryDeliveryContext();
     const runOutcome = await traceAgentPhase("reply.run_agent_turn", () =>
@@ -1704,6 +1860,29 @@ export async function runReplyAgent(params: {
         onTimeout: logVerbose,
       });
     }
+
+    // --- Continuation signal extraction (RFC §3.1) ---
+    // Tool-based `continue_work` flows via the closure `requestContinuation`
+    // callback in agent-runner-execution.ts and is surfaced on the run outcome
+    // as `runOutcome.continueWorkRequest`. Bracket signals (CONTINUE_WORK,
+    // CONTINUE_DELEGATE) live in the payload text and are parsed here.
+    const continueWorkRequest = runOutcome.continueWorkRequest;
+    const continuationExtraction = extractContinuationSignal({
+      payloads: payloadArray,
+      continueWorkRequest: continueWorkRequest
+        ? {
+            reason: continueWorkRequest.reason,
+            delaySeconds: continueWorkRequest.delaySeconds,
+            ...(continueWorkRequest.traceparent
+              ? { traceparent: continueWorkRequest.traceparent }
+              : {}),
+          }
+        : undefined,
+      enabled: continuationFeatureEnabled,
+      sessionKey,
+    });
+    const effectiveContinuationSignal = continuationExtraction.signal;
+    const continuationWorkReason = continuationExtraction.workReason;
 
     const usage = runResult.meta?.agentMeta?.usage;
     const promptTokens = runResult.meta?.agentMeta?.promptTokens;
@@ -1912,10 +2091,21 @@ export async function runReplyAgent(params: {
       );
     }
 
+    const hasQueuedDelegateWork =
+      continuationFeatureEnabled &&
+      sessionKey &&
+      (pendingDelegateCount(sessionKey) > 0 || stagedPostCompactionDelegateCount(sessionKey) > 0);
+
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
-    // keep the typing indicator stuck.
-    if (payloadArray.length === 0 && fallbackNoticePayloads.length === 0) {
+    // keep the typing indicator stuck. A tool-only continuation turn may have no visible
+    // text while still needing delegate consumption/persistence below.
+    if (
+      payloadArray.length === 0 &&
+      fallbackNoticePayloads.length === 0 &&
+      !hasQueuedDelegateWork &&
+      !effectiveContinuationSignal
+    ) {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
@@ -1962,6 +2152,11 @@ export async function runReplyAgent(params: {
     );
     const canDeliverStandaloneFallbackNotice =
       hasDeliveredBlockStream || successfulSideEffectDelivery;
+    // Track whether the agent reply was purely a continuation signal (stripped to empty).
+    // Used later to suppress verbose/usage augmentation that would break silent continuation.
+    const wasSilentContinuation =
+      replyPayloads.length === 0 && Boolean(effectiveContinuationSignal);
+
     if (
       replyPayloads.length === 0 ||
       (!hasReplyPayloadBeyondFallbackNotice && !canDeliverStandaloneFallbackNotice)
@@ -1970,7 +2165,12 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
-      return returnWithQueuedFollowupDrain(undefined);
+      // If the agent replied with only a continuation signal (e.g. bare CONTINUE_WORK),
+      // the signal was stripped and all payloads became empty. We still need to process
+      // the continuation below. Tool-only delegate turns also pass through here.
+      if (!effectiveContinuationSignal && !hasQueuedDelegateWork) {
+        return returnWithQueuedFollowupDrain(undefined);
+      }
     }
 
     const successfulCronAdds = runResult.successfulCronAdds ?? 0;
@@ -2130,20 +2330,29 @@ export async function runReplyAgent(params: {
         });
       }
 
-      // Inject post-compaction workspace context for the next agent turn
+      // Inject post-compaction workspace context for the next agent turn,
+      // and dispatch any staged continuation post-compaction delegates.
+      // The dispatch helper internally invokes readPostCompactionContext
+      // against followupRun.run.workspaceDir, so we don't call it again here.
       if (sessionKey) {
-        readPostCompactionContext(followupRun.run.workspaceDir, {
+        const releasedCount = activeSessionEntry?.pendingPostCompactionDelegates?.length ?? 0;
+        await dispatchPostCompactionDelegates({
           cfg,
-          agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
-        })
-          .then((contextContent) => {
-            if (contextContent) {
-              enqueueSystemEvent(contextContent, { sessionKey });
-            }
-          })
-          .catch(() => {
-            // Silent failure — post-compaction context is best-effort
-          });
+          compactionCount: count,
+          continuationSignalKind: effectiveContinuationSignal?.kind,
+          followupRun,
+          postCompactionDelegatesToPreserve,
+          sessionEntry: activeSessionEntry,
+          sessionKey,
+          sessionStore: activeSessionStore,
+          storePath,
+        });
+        emitContinuationCompactionReleasedSpan({
+          releasedCount,
+          compactionId: count,
+          traceparent: runOutcome.compactionTraceparent,
+          log: (message) => defaultRuntime.log(message),
+        });
       }
 
       if (verboseEnabled) {
@@ -2151,151 +2360,727 @@ export async function runReplyAgent(params: {
         prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
       }
     }
-    const prefixPayloads = [...prefixNotices];
+    // Skip verbose/usage augmentation for silent continuations — a bare
+    // CONTINUE_WORK should produce no user-visible output.
     const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
-    const rawUserText = isHookBlockedRun
-      ? runResult.meta?.finalPromptText
-      : (runResult.meta?.finalPromptText ??
-        sessionCtx.CommandBody ??
-        sessionCtx.RawBody ??
-        sessionCtx.BodyForAgent ??
-        sessionCtx.Body);
     const rawAssistantText = isHookBlockedRun
       ? undefined
       : (runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText);
-    const traceAuthorized = followupRun.run.traceAuthorized === true;
-    const executionTrace = mergeExecutionTrace({
-      fallbackAttempts,
-      executionTrace: runResult.meta?.executionTrace as TraceExecutionView | undefined,
-      provider: providerUsed,
-      model: modelUsed,
-      runner: isCliProvider(providerUsed, cfg) ? "cli" : "embedded",
-    });
-    const requestShaping = {
-      authMode:
-        runResult.meta?.requestShaping?.authMode ??
-        (cfg?.models?.providers && providerUsed in cfg.models.providers
-          ? (resolveModelAuthMode(providerUsed, cfg, undefined, {
-              workspaceDir: followupRun.run.workspaceDir,
-            }) ?? undefined)
-          : undefined),
-      thinking:
-        runResult.meta?.requestShaping?.thinking ??
-        normalizeOptionalString(followupRun.run.thinkLevel),
-      reasoning:
-        runResult.meta?.requestShaping?.reasoning ??
-        normalizeOptionalString(followupRun.run.reasoningLevel),
-      verbose:
-        runResult.meta?.requestShaping?.verbose ?? normalizeOptionalString(resolvedVerboseLevel),
-      trace:
-        runResult.meta?.requestShaping?.trace ??
-        normalizeOptionalString(activeSessionEntry?.traceLevel),
-      fallbackEligible:
-        runResult.meta?.requestShaping?.fallbackEligible ??
-        hasConfiguredModelFallbacks({
-          cfg,
-          agentId: followupRun.run.agentId,
-          sessionKey: followupRun.run.sessionKey,
-        }),
-      blockStreaming:
-        runResult.meta?.requestShaping?.blockStreaming ??
-        normalizeOptionalString(resolvedBlockStreamingBreak),
-    };
-    const promptSegments =
-      (runResult.meta?.promptSegments as TracePromptSegmentView[] | undefined) ??
-      derivePromptSegments(rawUserText);
-    const toolSummary = runResult.meta?.toolSummary as TraceToolSummaryView | undefined;
-    const completion =
-      (runResult.meta?.completion as TraceCompletionView | undefined) ??
-      (runResult.meta?.stopReason
-        ? {
-            stopReason: runResult.meta.stopReason,
-            finishReason: runResult.meta.stopReason,
-            ...(runResult.meta.stopReason.toLowerCase().includes("refusal")
-              ? { refusal: true }
-              : {}),
-          }
-        : undefined);
-    const contextManagement = {
-      ...(typeof activeSessionEntry?.compactionCount === "number"
-        ? { sessionCompactions: activeSessionEntry.compactionCount }
-        : {}),
-      ...(typeof runResult.meta?.contextManagement?.lastTurnCompactions === "number"
-        ? { lastTurnCompactions: runResult.meta.contextManagement.lastTurnCompactions }
-        : typeof runResult.meta?.agentMeta?.compactionCount === "number"
-          ? { lastTurnCompactions: runResult.meta.agentMeta.compactionCount }
-          : {}),
-      ...(runResult.meta?.contextManagement &&
-      typeof runResult.meta.contextManagement.preflightCompactionApplied === "boolean"
-        ? {
-            preflightCompactionApplied: runResult.meta.contextManagement.preflightCompactionApplied,
-          }
-        : preflightCompactionApplied
-          ? { preflightCompactionApplied }
-          : {}),
-      ...(runResult.meta?.contextManagement &&
-      typeof runResult.meta.contextManagement.postCompactionContextInjected === "boolean"
-        ? {
-            postCompactionContextInjected:
-              runResult.meta.contextManagement.postCompactionContextInjected,
-          }
-        : {}),
-    } satisfies TraceContextManagementView;
-    const sessionUsage =
-      traceAuthorized && activeSessionEntry?.traceLevel === "raw"
-        ? await accumulateSessionUsageFromTranscript({
-            sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
-            storePath,
-            sessionFile: followupRun.run.sessionFile,
-          })
-        : undefined;
-    const traceEnabledForSender =
-      traceAuthorized &&
-      (activeSessionEntry?.traceLevel === "on" || activeSessionEntry?.traceLevel === "raw");
-    const shouldAppendTracePayload = verboseEnabled || traceEnabledForSender;
-    let trailingPluginStatusPayload: ReplyPayload | undefined;
-    if (shouldAppendTracePayload) {
-      const pluginStatusPayload = buildInlinePluginStatusPayload({
-        entry: activeSessionEntry,
-        includeTraceLines: traceEnabledForSender,
+    if (!wasSilentContinuation) {
+      const prefixPayloads = [...prefixNotices];
+      const rawUserText = isHookBlockedRun
+        ? runResult.meta?.finalPromptText
+        : (runResult.meta?.finalPromptText ??
+          sessionCtx.CommandBody ??
+          sessionCtx.RawBody ??
+          sessionCtx.BodyForAgent ??
+          sessionCtx.Body);
+      const traceAuthorized = followupRun.run.traceAuthorized === true;
+      const executionTrace = mergeExecutionTrace({
+        fallbackAttempts,
+        executionTrace: runResult.meta?.executionTrace as TraceExecutionView | undefined,
+        provider: providerUsed,
+        model: modelUsed,
+        runner: isCliProvider(providerUsed, cfg) ? "cli" : "embedded",
       });
-      const rawTracePayload =
+      const requestShaping = {
+        authMode:
+          runResult.meta?.requestShaping?.authMode ??
+          (cfg?.models?.providers && providerUsed in cfg.models.providers
+            ? (resolveModelAuthMode(providerUsed, cfg, undefined, {
+                workspaceDir: followupRun.run.workspaceDir,
+              }) ?? undefined)
+            : undefined),
+        thinking:
+          runResult.meta?.requestShaping?.thinking ??
+          normalizeOptionalString(followupRun.run.thinkLevel),
+        reasoning:
+          runResult.meta?.requestShaping?.reasoning ??
+          normalizeOptionalString(followupRun.run.reasoningLevel),
+        verbose:
+          runResult.meta?.requestShaping?.verbose ?? normalizeOptionalString(resolvedVerboseLevel),
+        trace:
+          runResult.meta?.requestShaping?.trace ??
+          normalizeOptionalString(activeSessionEntry?.traceLevel),
+        fallbackEligible:
+          runResult.meta?.requestShaping?.fallbackEligible ??
+          hasConfiguredModelFallbacks({
+            cfg,
+            agentId: followupRun.run.agentId,
+            sessionKey: followupRun.run.sessionKey,
+          }),
+        blockStreaming:
+          runResult.meta?.requestShaping?.blockStreaming ??
+          normalizeOptionalString(resolvedBlockStreamingBreak),
+      };
+      const promptSegments =
+        (runResult.meta?.promptSegments as TracePromptSegmentView[] | undefined) ??
+        derivePromptSegments(rawUserText);
+      const toolSummary = runResult.meta?.toolSummary as TraceToolSummaryView | undefined;
+      const completion =
+        (runResult.meta?.completion as TraceCompletionView | undefined) ??
+        (runResult.meta?.stopReason
+          ? {
+              stopReason: runResult.meta.stopReason,
+              finishReason: runResult.meta.stopReason,
+              ...(runResult.meta.stopReason.toLowerCase().includes("refusal")
+                ? { refusal: true }
+                : {}),
+            }
+          : undefined);
+      const contextManagement = {
+        ...(typeof activeSessionEntry?.compactionCount === "number"
+          ? { sessionCompactions: activeSessionEntry.compactionCount }
+          : {}),
+        ...(typeof runResult.meta?.contextManagement?.lastTurnCompactions === "number"
+          ? { lastTurnCompactions: runResult.meta.contextManagement.lastTurnCompactions }
+          : typeof runResult.meta?.agentMeta?.compactionCount === "number"
+            ? { lastTurnCompactions: runResult.meta.agentMeta.compactionCount }
+            : {}),
+        ...(runResult.meta?.contextManagement &&
+        typeof runResult.meta.contextManagement.preflightCompactionApplied === "boolean"
+          ? {
+              preflightCompactionApplied:
+                runResult.meta.contextManagement.preflightCompactionApplied,
+            }
+          : preflightCompactionApplied
+            ? { preflightCompactionApplied }
+            : {}),
+        ...(runResult.meta?.contextManagement &&
+        typeof runResult.meta.contextManagement.postCompactionContextInjected === "boolean"
+          ? {
+              postCompactionContextInjected:
+                runResult.meta.contextManagement.postCompactionContextInjected,
+            }
+          : {}),
+      } satisfies TraceContextManagementView;
+      const sessionUsage =
         traceAuthorized && activeSessionEntry?.traceLevel === "raw"
-          ? buildInlineRawTracePayload({
-              entry: activeSessionEntry,
-              rawUserText,
-              rawAssistantText,
-              sessionUsage,
-              usage: runResult.meta?.agentMeta?.usage,
-              lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-              provider: providerUsed,
-              model: modelUsed,
-              contextLimit: contextTokensUsed,
-              promptTokens,
-              executionTrace,
-              requestShaping,
-              promptSegments,
-              toolSummary,
-              completion,
-              contextManagement,
+          ? await accumulateSessionUsageFromTranscript({
+              sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
+              storePath,
+              sessionFile: followupRun.run.sessionFile,
             })
           : undefined;
-      trailingPluginStatusPayload =
-        pluginStatusPayload && rawTracePayload
-          ? { text: `${pluginStatusPayload.text}\n\n${rawTracePayload.text}` }
-          : (pluginStatusPayload ?? rawTracePayload);
+      const traceEnabledForSender =
+        traceAuthorized &&
+        (activeSessionEntry?.traceLevel === "on" || activeSessionEntry?.traceLevel === "raw");
+      const shouldAppendTracePayload = verboseEnabled || traceEnabledForSender;
+      let trailingPluginStatusPayload: ReplyPayload | undefined;
+      if (shouldAppendTracePayload) {
+        const pluginStatusPayload = buildInlinePluginStatusPayload({
+          entry: activeSessionEntry,
+          includeTraceLines: traceEnabledForSender,
+        });
+        const rawTracePayload =
+          traceAuthorized && activeSessionEntry?.traceLevel === "raw"
+            ? buildInlineRawTracePayload({
+                entry: activeSessionEntry,
+                rawUserText,
+                rawAssistantText,
+                sessionUsage,
+                usage: runResult.meta?.agentMeta?.usage,
+                lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+                provider: providerUsed,
+                model: modelUsed,
+                contextLimit: contextTokensUsed,
+                promptTokens,
+                executionTrace,
+                requestShaping,
+                promptSegments,
+                toolSummary,
+                completion,
+                contextManagement,
+              })
+            : undefined;
+        trailingPluginStatusPayload =
+          pluginStatusPayload && rawTracePayload
+            ? { text: `${pluginStatusPayload.text}\n\n${rawTracePayload.text}` }
+            : (pluginStatusPayload ?? rawTracePayload);
+      }
+      if (prefixPayloads.length > 0) {
+        finalPayloads = [...prefixPayloads, ...finalPayloads];
+      }
+      if (trailingPluginStatusPayload) {
+        finalPayloads = [...finalPayloads, trailingPluginStatusPayload];
+      }
+      if (responseUsageLine) {
+        finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+      }
+      if (isHookBlockedRun) {
+        finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
+      }
     }
-    if (prefixPayloads.length > 0) {
-      finalPayloads = [...prefixPayloads, ...finalPayloads];
+
+    // Handle continuation signal (CONTINUE_WORK / CONTINUE_DELEGATE).
+    // `effectiveContinuationSignal` is either the parsed bracket signal or the
+    // structured continue_work tool request captured during the run.
+    let bracketTokensAccumulated = false;
+    if (effectiveContinuationSignal && sessionKey) {
+      const {
+        maxChainLength,
+        defaultDelayMs,
+        minDelayMs,
+        maxDelayMs,
+        costCapTokens,
+        crossSessionTargeting,
+      } = resolveLiveContinuationRuntimeConfig(cfg);
+
+      const currentChainCount = activeSessionEntry?.continuationChainCount ?? 0;
+      const allocatedChainHop = Math.max(
+        currentChainCount,
+        highestDelayedContinuationReservationHop(sessionKey),
+      );
+
+      if (allocatedChainHop >= maxChainLength) {
+        defaultRuntime.log(
+          `Continuation chain capped at ${maxChainLength} for session ${sessionKey}`,
+        );
+        enqueueSystemEvent(
+          `[continuation] Bracket continuation rejected: chain length ${maxChainLength} reached.`,
+          { sessionKey, trusted: true },
+        );
+        // Emit `continuation.disabled` at the bracket cap-gate reject.
+        // No mint-on-reject: the chain never advanced for this signal, so
+        // chainId passes through as-is. Delegate-only attrs conditional on
+        // signal.kind === "delegate".
+        const isDelegate = effectiveContinuationSignal.kind === "delegate";
+        const delegateMode = isDelegate
+          ? effectiveContinuationSignal.silentWake
+            ? "silent-wake"
+            : effectiveContinuationSignal.silent
+              ? "silent"
+              : "normal"
+          : undefined;
+        const delegateDelivery: "immediate" | "timer" | undefined = isDelegate
+          ? (effectiveContinuationSignal.delayMs ?? defaultDelayMs) > 0
+            ? "timer"
+            : "immediate"
+          : undefined;
+        emitContinuationDisabledSpan({
+          chainId: activeSessionEntry?.continuationChainId,
+          chainStepRemaining: Math.max(0, maxChainLength - allocatedChainHop),
+          disabledReason: "cap.chain",
+          signalKind: isDelegate ? "bracket-delegate" : "bracket-work",
+          delegateDelivery,
+          delegateMode,
+          log: defaultRuntime.log,
+        });
+      } else {
+        // Accumulate token usage for cost cap (input + output only, excludes
+        // cache reads/writes which inflate with inherited system prompt context).
+        const turnTokens = (usage?.input ?? 0) + (usage?.output ?? 0);
+        const previousChainTokens = activeSessionEntry?.continuationChainTokens ?? 0;
+        const accumulatedChainTokens = previousChainTokens + turnTokens;
+        if (costCapTokens > 0 && accumulatedChainTokens > costCapTokens) {
+          defaultRuntime.log(
+            `Continuation cost cap exceeded (${accumulatedChainTokens} > ${costCapTokens}) for session ${sessionKey}`,
+          );
+          enqueueSystemEvent(
+            `[continuation] Bracket continuation rejected: cost cap exceeded (${accumulatedChainTokens} > ${costCapTokens}).`,
+            { sessionKey, trusted: true },
+          );
+          const isDelegate = effectiveContinuationSignal.kind === "delegate";
+          const delegateMode = isDelegate
+            ? effectiveContinuationSignal.silentWake
+              ? "silent-wake"
+              : effectiveContinuationSignal.silent
+                ? "silent"
+                : "normal"
+            : undefined;
+          const delegateDelivery: "immediate" | "timer" | undefined = isDelegate
+            ? (effectiveContinuationSignal.delayMs ?? defaultDelayMs) > 0
+              ? "timer"
+              : "immediate"
+            : undefined;
+          emitContinuationDisabledSpan({
+            chainId: activeSessionEntry?.continuationChainId,
+            chainStepRemaining: Math.max(0, maxChainLength - allocatedChainHop),
+            disabledReason: "cap.cost",
+            signalKind: isDelegate ? "bracket-delegate" : "bracket-work",
+            delegateDelivery,
+            delegateMode,
+            log: defaultRuntime.log,
+          });
+        } else {
+          bracketTokensAccumulated = true;
+          const nextChainCount = allocatedChainHop + 1;
+          const chainStartedAt = activeSessionEntry?.continuationChainStartedAt ?? Date.now();
+          if (effectiveContinuationSignal.kind === "delegate") {
+            const delegateTask = effectiveContinuationSignal.task;
+            const delegateDelayMs = effectiveContinuationSignal.delayMs;
+            const rejectCrossSessionTargeting = (
+              targeting: {
+                targetSessionKey?: string;
+                targetSessionKeys?: readonly string[];
+                fanoutMode?: "tree" | "all";
+              },
+              details: {
+                plannedHop: number;
+                task: string;
+                delegateDelivery: "immediate" | "timer";
+                silent?: boolean;
+                silentWake?: boolean;
+              },
+            ): boolean => {
+              if (
+                crossSessionTargeting === "enabled" ||
+                !hasCrossSessionDelegateTargeting(targeting, sessionKey)
+              ) {
+                return false;
+              }
+              defaultRuntime.log(
+                `[continuation] Cross-session targeting rejected by policy for session ${sessionKey}`,
+              );
+              enqueueSystemEvent(
+                "[continuation] Delegate rejected: cross-session targeting is disabled by policy. " +
+                  'Use the default return target, targetSessionKey set to this session, or fanoutMode="tree".',
+                { sessionKey, trusted: true },
+              );
+              emitContinuationDisabledSpan({
+                chainId: activeSessionEntry?.continuationChainId,
+                chainStepRemaining: Math.max(0, maxChainLength - details.plannedHop),
+                disabledReason: "policy.cross_session_targeting",
+                signalKind: "bracket-delegate",
+                delegateDelivery: details.delegateDelivery,
+                delegateMode: details.silentWake
+                  ? "silent-wake"
+                  : details.silent
+                    ? "silent"
+                    : "normal",
+                reason: details.task,
+                log: (message) => defaultRuntime.log(message),
+              });
+              bracketTokensAccumulated = false;
+              return true;
+            };
+            const doSpawn = async (
+              plannedHop: number,
+              task: string,
+              options?: {
+                timerTriggered?: boolean;
+                silent?: boolean;
+                silentWake?: boolean;
+                startedAt?: number;
+                targetSessionKey?: string;
+                targetSessionKeys?: string[];
+                fanoutMode?: "tree" | "all";
+                traceparent?: string;
+              },
+            ) => {
+              let dispatchSpan: ReturnType<typeof startContinuationDelegateSpan> | undefined;
+              try {
+                if (
+                  rejectCrossSessionTargeting(
+                    {
+                      ...(options?.targetSessionKey
+                        ? { targetSessionKey: options.targetSessionKey }
+                        : {}),
+                      ...(options?.targetSessionKeys && options.targetSessionKeys.length > 0
+                        ? { targetSessionKeys: options.targetSessionKeys }
+                        : {}),
+                      ...(options?.fanoutMode ? { fanoutMode: options.fanoutMode } : {}),
+                    },
+                    {
+                      plannedHop,
+                      task,
+                      delegateDelivery: options?.timerTriggered ? "timer" : "immediate",
+                      ...(options?.silent ? { silent: options.silent } : {}),
+                      ...(options?.silentWake ? { silentWake: options.silentWake } : {}),
+                    },
+                  )
+                ) {
+                  return false;
+                }
+                const outboundTraceparent = resolveContinuationTraceparent(options?.traceparent);
+                const delegateMode = options?.silentWake
+                  ? "silent-wake"
+                  : options?.silent
+                    ? "silent"
+                    : "normal";
+                if (!options?.timerTriggered) {
+                  dispatchSpan = startContinuationDelegateSpan({
+                    chainId: undefined,
+                    chainStepRemaining: maxChainLength - plannedHop,
+                    delayMs: 0,
+                    delivery: "immediate",
+                    delegateMode,
+                    traceparent: outboundTraceparent,
+                    log: (message) => defaultRuntime.log(message),
+                  });
+                }
+                const spawnTraceparent = dispatchSpan?.traceparent?.() ?? outboundTraceparent;
+                const spawnResult = await spawnSubagentDirect(
+                  {
+                    task: `[continuation:chain-hop:${plannedHop}] Delegated task (turn ${plannedHop}/${maxChainLength}): ${task}`,
+                    ...(options?.silent ? { silentAnnounce: true } : {}),
+                    ...(options?.silentWake ? { silentAnnounce: true, wakeOnReturn: true } : {}),
+                    drainsContinuationDelegateQueue: true,
+                    ...(options?.targetSessionKey
+                      ? { continuationTargetSessionKey: options.targetSessionKey }
+                      : {}),
+                    ...(options?.targetSessionKeys && options.targetSessionKeys.length > 0
+                      ? { continuationTargetSessionKeys: options.targetSessionKeys }
+                      : {}),
+                    ...(options?.fanoutMode ? { continuationFanoutMode: options.fanoutMode } : {}),
+                    ...(spawnTraceparent ? { traceparent: spawnTraceparent } : {}),
+                  },
+                  {
+                    agentSessionKey: sessionKey,
+                    agentChannel: followupRun.originatingChannel ?? undefined,
+                    agentAccountId: followupRun.originatingAccountId ?? undefined,
+                    agentTo: followupRun.originatingTo ?? undefined,
+                    agentThreadId: followupRun.originatingThreadId ?? undefined,
+                  },
+                );
+                if (spawnResult.status === "accepted") {
+                  if (options?.timerTriggered) {
+                    defaultRuntime.log(
+                      `DELEGATE timer fired and spawned turn ${plannedHop}/${maxChainLength} for session ${sessionKey}: ${task}`,
+                    );
+                  }
+                  const { chainId: persistedChainId } = await persistContinuationChainState({
+                    count: Math.max(activeSessionEntry?.continuationChainCount ?? 0, plannedHop),
+                    startedAt: options?.startedAt ?? chainStartedAt,
+                    tokens: Math.max(
+                      accumulatedChainTokens,
+                      activeSessionEntry?.continuationChainTokens ?? 0,
+                    ),
+                  });
+                  if (dispatchSpan) {
+                    if (persistedChainId !== undefined) {
+                      dispatchSpan.setAttributes({ "chain.id": persistedChainId });
+                    }
+                    dispatchSpan.setStatus("OK");
+                  }
+                  enqueueSystemEvent(
+                    `[continuation:delegate-spawned] Spawned turn ${plannedHop}/${maxChainLength}: ${task}`,
+                    { sessionKey, trusted: true },
+                  );
+                  return true;
+                }
+                const reasonText = spawnResult.error ?? "delegation was not accepted.";
+                defaultRuntime.log(
+                  `DELEGATE spawn rejected (${spawnResult.status}) for session ${sessionKey} reason=${reasonText}`,
+                );
+                dispatchSpan?.setStatus("ERROR", reasonText);
+                enqueueSystemEvent(
+                  `[continuation] DELEGATE spawn ${spawnResult.status}: ${reasonText} Use sessions_spawn manually. Original task: ${task}`,
+                  { sessionKey, trusted: true },
+                );
+                return false;
+              } catch (err) {
+                dispatchSpan?.recordException(err);
+                dispatchSpan?.setStatus("ERROR", String(err));
+                defaultRuntime.log(
+                  `DELEGATE spawn failed for session ${sessionKey}: ${String(err)}`,
+                );
+                enqueueSystemEvent(
+                  `[continuation] DELEGATE spawn failed: ${String(err)}. Original task: ${task}`,
+                  { sessionKey, trusted: true },
+                );
+                return false;
+              } finally {
+                dispatchSpan?.end();
+              }
+            };
+
+            if (delegateDelayMs && delegateDelayMs > 0) {
+              const rejectedDelayedTarget = rejectCrossSessionTargeting(
+                {
+                  ...(effectiveContinuationSignal.targetSessionKey
+                    ? { targetSessionKey: effectiveContinuationSignal.targetSessionKey }
+                    : {}),
+                  ...(effectiveContinuationSignal.targetSessionKeys &&
+                  effectiveContinuationSignal.targetSessionKeys.length > 0
+                    ? { targetSessionKeys: effectiveContinuationSignal.targetSessionKeys }
+                    : {}),
+                  ...(effectiveContinuationSignal.fanoutMode
+                    ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
+                    : {}),
+                },
+                {
+                  plannedHop: nextChainCount,
+                  task: delegateTask,
+                  delegateDelivery: "timer",
+                  ...(effectiveContinuationSignal.silent
+                    ? { silent: effectiveContinuationSignal.silent }
+                    : {}),
+                  ...(effectiveContinuationSignal.silentWake
+                    ? { silentWake: effectiveContinuationSignal.silentWake }
+                    : {}),
+                },
+              );
+              if (!rejectedDelayedTarget) {
+                // Timed dispatch: spawn after delay. Timer does not survive
+                // gateway restart; durable timers are handled by a separate path.
+                const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, delegateDelayMs));
+                const outboundTraceparent = resolveContinuationTraceparent(
+                  effectiveContinuationSignal.traceparent,
+                );
+                const reservationId = generateSecureUuid();
+                addDelayedContinuationReservation(sessionKey, {
+                  id: reservationId,
+                  source: "bracket",
+                  task: delegateTask,
+                  createdAt: chainStartedAt,
+                  fireAt: Date.now() + clampedDelay,
+                  plannedHop: nextChainCount,
+                  silent: effectiveContinuationSignal.silent,
+                  silentWake: effectiveContinuationSignal.silentWake,
+                  ...(effectiveContinuationSignal.targetSessionKey
+                    ? { targetSessionKey: effectiveContinuationSignal.targetSessionKey }
+                    : {}),
+                  ...(effectiveContinuationSignal.targetSessionKeys &&
+                  effectiveContinuationSignal.targetSessionKeys.length > 0
+                    ? { targetSessionKeys: effectiveContinuationSignal.targetSessionKeys }
+                    : {}),
+                  ...(effectiveContinuationSignal.fanoutMode
+                    ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
+                    : {}),
+                  ...(outboundTraceparent ? { traceparent: outboundTraceparent } : {}),
+                });
+                const { chainId: persistedChainIdForTimer } = await persistContinuationChainState({
+                  count: currentChainCount,
+                  startedAt: chainStartedAt,
+                  tokens: accumulatedChainTokens,
+                });
+                // Emit `continuation.delegate.dispatch` at the timer-deferred
+                // enqueue seam (after persist, before `setTimeout` arms).
+                {
+                  const delegateMode = effectiveContinuationSignal.silentWake
+                    ? "silent-wake"
+                    : effectiveContinuationSignal.silent
+                      ? "silent"
+                      : "normal";
+                  emitContinuationDelegateSpan({
+                    chainId: persistedChainIdForTimer,
+                    chainStepRemaining: maxChainLength - nextChainCount,
+                    delayMs: clampedDelay,
+                    delivery: "timer",
+                    delegateMode,
+                    traceparent: outboundTraceparent,
+                    log: (message) => defaultRuntime.log(message),
+                  });
+                }
+                // Snapshot dispatch-time inputs for the fire-span emission
+                // inside the timer callback.
+                const fireDelegateMode: "normal" | "silent" | "silent-wake" =
+                  effectiveContinuationSignal.silentWake
+                    ? "silent-wake"
+                    : effectiveContinuationSignal.silent
+                      ? "silent"
+                      : "normal";
+                const chainStepRemainingAtDispatch = maxChainLength - nextChainCount;
+                retainContinuationTimerRef(sessionKey);
+                const armedAt = Date.now();
+                const timerHandle = setTimeout(() => {
+                  const fireDeferredMs = Date.now() - armedAt;
+                  emitContinuationDelegateFireSpan({
+                    chainId: persistedChainIdForTimer as string,
+                    chainStepRemainingAtDispatch,
+                    delegateMode: fireDelegateMode,
+                    delayMs: clampedDelay,
+                    fireDeferredMs,
+                    log: (message) => defaultRuntime.log(message),
+                  });
+                  try {
+                    const reservation = takeDelayedContinuationReservation(
+                      sessionKey,
+                      reservationId,
+                    );
+                    if (!reservation) {
+                      defaultRuntime.log(
+                        `DELEGATE timer fired but reservation already cleared for session ${sessionKey}`,
+                      );
+                      emitContinuationDisabledSpan({
+                        chainId: persistedChainIdForTimer,
+                        chainStepRemaining: chainStepRemainingAtDispatch,
+                        disabledReason: "reservation.missing",
+                        signalKind: "bracket-delegate",
+                        delegateDelivery: "timer",
+                        delegateMode: fireDelegateMode,
+                        log: (message) => defaultRuntime.log(message),
+                      });
+                      return;
+                    }
+                    void doSpawn(reservation.plannedHop, reservation.task, {
+                      timerTriggered: true,
+                      silent: reservation.silent,
+                      silentWake: reservation.silentWake,
+                      startedAt: reservation.createdAt,
+                      ...(reservation.targetSessionKey
+                        ? { targetSessionKey: reservation.targetSessionKey }
+                        : {}),
+                      ...(reservation.targetSessionKeys && reservation.targetSessionKeys.length > 0
+                        ? { targetSessionKeys: reservation.targetSessionKeys }
+                        : {}),
+                      ...(reservation.fanoutMode ? { fanoutMode: reservation.fanoutMode } : {}),
+                      ...(reservation.traceparent ? { traceparent: reservation.traceparent } : {}),
+                    });
+                  } finally {
+                    unregisterContinuationTimerHandle(sessionKey, timerHandle);
+                  }
+                }, clampedDelay);
+                registerContinuationTimerHandle(sessionKey, timerHandle);
+                timerHandle.unref();
+              }
+            } else {
+              await doSpawn(nextChainCount, delegateTask, {
+                silent: effectiveContinuationSignal.silent,
+                silentWake: effectiveContinuationSignal.silentWake,
+                startedAt: chainStartedAt,
+                ...(effectiveContinuationSignal.targetSessionKey
+                  ? { targetSessionKey: effectiveContinuationSignal.targetSessionKey }
+                  : {}),
+                ...(effectiveContinuationSignal.targetSessionKeys &&
+                effectiveContinuationSignal.targetSessionKeys.length > 0
+                  ? { targetSessionKeys: effectiveContinuationSignal.targetSessionKeys }
+                  : {}),
+                ...(effectiveContinuationSignal.fanoutMode
+                  ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
+                  : {}),
+                ...(effectiveContinuationSignal.traceparent
+                  ? { traceparent: effectiveContinuationSignal.traceparent }
+                  : {}),
+              });
+            }
+          } else {
+            const { chainId: persistedChainId } = await persistContinuationChainState({
+              count: nextChainCount,
+              startedAt: chainStartedAt,
+              tokens: accumulatedChainTokens,
+            });
+            // WORK: schedule a continuation turn after delay
+            const requestedDelay = effectiveContinuationSignal.delayMs ?? defaultDelayMs;
+            const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, requestedDelay));
+
+            // Emit `continuation.work` at the accept seam (after both
+            // cap-gates pass, after persistContinuationChainState has
+            // minted/stored continuationChainId for this chain).
+            emitContinuationWorkSpan({
+              chainId: persistedChainId,
+              chainStepRemaining: maxChainLength - nextChainCount,
+              delayMs: clampedDelay,
+              reason: continuationWorkReason,
+              traceparent: effectiveContinuationSignal.traceparent,
+              log: (message) => defaultRuntime.log(message),
+            });
+
+            retainContinuationTimerRef(sessionKey);
+            const persistedChainIdForWorkTimer = persistedChainId;
+            const workChainStepRemainingAtDispatch = maxChainLength - nextChainCount;
+            const workArmedAt = Date.now();
+            const timerHandle = setTimeout(() => {
+              try {
+                const workFireDeferredMs = Date.now() - workArmedAt;
+                emitContinuationWorkFireSpan({
+                  chainId: persistedChainIdForWorkTimer as string,
+                  chainStepRemainingAtDispatch: workChainStepRemainingAtDispatch,
+                  delayMs: clampedDelay,
+                  fireDeferredMs: workFireDeferredMs,
+                  reason: continuationWorkReason,
+                  log: (message) => defaultRuntime.log(message),
+                });
+                defaultRuntime.log(`WORK timer fired for session ${sessionKey}`);
+                enqueueSystemEvent(
+                  `[continuation:wake] Turn ${nextChainCount}/${maxChainLength}. ` +
+                    `Chain started at ${new Date(chainStartedAt).toISOString()}. ` +
+                    `Accumulated tokens: ${accumulatedChainTokens}. ` +
+                    `The agent elected to continue working.` +
+                    (continuationWorkReason ? ` Reason: ${continuationWorkReason}` : ""),
+                  { sessionKey, trusted: true },
+                );
+                requestHeartbeatNow({ sessionKey, reason: "continuation", parentRunId: runId });
+              } finally {
+                unregisterContinuationTimerHandle(sessionKey, timerHandle);
+              }
+            }, clampedDelay);
+            registerContinuationTimerHandle(sessionKey, timerHandle);
+            timerHandle.unref();
+          }
+        }
+      }
     }
-    if (trailingPluginStatusPayload) {
-      finalPayloads = [...finalPayloads, trailingPluginStatusPayload];
+
+    if (!autoCompactionCount && continuationFeatureEnabled && sessionKey) {
+      const stagedCompactionDelegates = consumeStagedPostCompactionDelegates(sessionKey);
+      if (stagedCompactionDelegates.length > 0) {
+        try {
+          await persistPendingPostCompactionDelegates({
+            sessionEntry: activeSessionEntry,
+            sessionStore: activeSessionStore,
+            sessionKey,
+            storePath,
+            delegates: stagedCompactionDelegates,
+          });
+        } catch (err) {
+          postCompactionDelegatesToPreserve.push(...stagedCompactionDelegates);
+          defaultRuntime.log(
+            `Failed to persist post-compaction delegates for ${sessionKey} (re-staged ${stagedCompactionDelegates.length}): ${String(err)}`,
+          );
+        }
+      }
     }
-    if (responseUsageLine) {
-      finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+
+    // Silent continuations should produce no user-visible output.
+    if (wasSilentContinuation) {
+      return returnWithQueuedFollowupDrain(undefined);
     }
-    if (isHookBlockedRun) {
-      finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
+
+    // Consume and dispatch tool-dispatched delegates (continue_delegate tool).
+    let toolDelegateDispatchResult:
+      | { dispatched: number; rejected: number; chainState: ChainState }
+      | undefined;
+    if (continuationFeatureEnabled && sessionKey) {
+      const turnTokens = bracketTokensAccumulated ? 0 : (usage?.input ?? 0) + (usage?.output ?? 0);
+      const { dispatchToolDelegates, loadContinuationChainState } =
+        await import("../continuation/lazy.runtime.js");
+      const dispatchChainState = loadContinuationChainState(activeSessionEntry, turnTokens);
+      const continuationRuntimeConfig = resolveLiveContinuationRuntimeConfig(cfg);
+      toolDelegateDispatchResult = await dispatchToolDelegates({
+        sessionKey,
+        chainState: dispatchChainState,
+        ctx: {
+          sessionKey,
+          agentChannel: followupRun.originatingChannel ?? undefined,
+          agentAccountId: followupRun.originatingAccountId ?? undefined,
+          agentTo: followupRun.originatingTo ?? undefined,
+          agentThreadId: followupRun.originatingThreadId ?? undefined,
+        },
+        maxChainLength: continuationRuntimeConfig.maxChainLength,
+        config: continuationRuntimeConfig,
+        reservedDelegateSlots: effectiveContinuationSignal?.kind === "delegate" ? 1 : 0,
+        // Pass a fresh-loader so the hedge timer re-loads the chain state
+        // from the persisted session entry at fire time.
+        loadFreshChainState: () => loadContinuationChainState(activeSessionEntry, 0),
+      });
+    }
+
+    // --- Chain state write-back (RFC §3.3) ---
+    // When delegates were dispatched this turn, persist the advanced chain
+    // state returned by `dispatchToolDelegates` rather than re-loading the
+    // unchanged pre-dispatch state. Without this the counter never advances
+    // across hops and `maxChainLength` enforcement breaks.
+    const toolDelegateChainStateChanged =
+      toolDelegateDispatchResult &&
+      (toolDelegateDispatchResult.dispatched > 0 || toolDelegateDispatchResult.rejected > 0);
+    if (toolDelegateChainStateChanged && sessionKey && activeSessionEntry) {
+      const { loadContinuationChainState } = await import("../continuation/lazy.runtime.js");
+      const turnTokens = bracketTokensAccumulated ? 0 : (usage?.input ?? 0) + (usage?.output ?? 0);
+      const nextState =
+        toolDelegateDispatchResult?.chainState ??
+        loadContinuationChainState(activeSessionEntry, turnTokens);
+      await persistContinuationChainState({
+        count: nextState.currentChainCount,
+        startedAt: nextState.chainStartedAt,
+        tokens: nextState.accumulatedChainTokens,
+        ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
+      });
+    }
+
+    if (finalPayloads.length === 0 && effectiveContinuationSignal) {
+      return returnWithQueuedFollowupDrain(undefined);
     }
 
     // Capture only policy-visible final payloads in session store to support
@@ -2443,6 +3228,15 @@ export async function runReplyAgent(params: {
     }
     blockReplyPipeline?.stop();
     typing.markRunComplete();
+    // Drain any stale delegates from a failed turn — they must not leak
+    // into the next successful turn for the same session.
+    if (sessionKey) {
+      consumePendingDelegates(sessionKey);
+      consumeStagedPostCompactionDelegates(sessionKey);
+      for (const delegate of postCompactionDelegatesToPreserve) {
+        stagePostCompactionDelegate(sessionKey, delegate);
+      }
+    }
     // Safety net: the dispatcher's onIdle callback normally fires
     // markDispatchIdle(), but if the dispatcher exits early, errors,
     // or the reply path doesn't go through it cleanly, the second

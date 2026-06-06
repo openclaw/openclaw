@@ -70,6 +70,8 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       prompt,
       provider,
       model,
+      // Slug generation is a one-off utility run with no delegate queue.
+      drainsContinuationDelegateQueue: false,
       timeoutMs,
       runId: `slug-gen-${Date.now()}`,
       cleanupBundleMcpOnRunEnd: true,

@@ -591,6 +591,9 @@ afterEach(() => {
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
   createMockFollowupRun({ run: { messageProvider } });
 
+// Continuation regression anchors: follow-up turns must keep continue_work,
+// continue_delegate, and drainsContinuationDelegateQueue wired through the
+// queued runner even after embedded-runner rename churn.
 function createQueuedRun(
   overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
@@ -3682,5 +3685,75 @@ describe("createFollowupRunner queued user message idempotency across fallback",
     expect(firstAttempt.suppressNextUserMessagePersistence).toBe(false);
     expect(secondAttempt.suppressNextUserMessagePersistence).toBe(false);
     expect(secondAttempt.suppressAssistantErrorPersistence).toBe(false);
+  });
+});
+
+describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
+  it("passes continueWorkOpts to runEmbeddedAgent when continuation.enabled=true", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude",
+      sessionKey: "agent:main:subagent:test-organ",
+    });
+    const queued = createQueuedRun({
+      run: {
+        sessionKey: "agent:main:subagent:test-organ",
+        config: {
+          agents: {
+            defaults: {
+              continuation: {
+                enabled: true,
+                maxChainLength: 200,
+                defaultDelayMs: 15000,
+                minDelayMs: 5000,
+                maxDelayMs: 86400000,
+                costCapTokens: 50000000,
+                maxDelegatesPerTurn: 500,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        drainsContinuationDelegateQueue: true,
+      },
+    });
+
+    await runner(queued);
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalled();
+    const callArgs = requireLastMockCallArg(runEmbeddedAgentMock, "runEmbeddedAgent");
+    expect(callArgs.continueWorkOpts).toBeDefined();
+    expect(typeof (callArgs.continueWorkOpts as any).requestContinuation).toBe("function");
+  });
+
+  it("does NOT pass continueWorkOpts when continuation is disabled", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude",
+      sessionKey: "agent:main:subagent:test-leaf",
+    });
+    const queued = createQueuedRun({
+      run: {
+        sessionKey: "agent:main:subagent:test-leaf",
+        config: {
+          agents: { defaults: {} },
+        } as OpenClawConfig,
+      },
+    });
+
+    await runner(queued);
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalled();
+    const callArgs = requireLastMockCallArg(runEmbeddedAgentMock, "runEmbeddedAgent");
+    expect(callArgs.continueWorkOpts).toBeUndefined();
   });
 });

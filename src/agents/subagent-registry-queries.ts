@@ -322,6 +322,31 @@ export function resolveRequesterForChildSessionFromRuns(
   };
 }
 
+export function listAncestorSessionKeysFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  sessionKey: string,
+): string[] {
+  const first = sessionKey.trim();
+  if (!first) {
+    return [];
+  }
+
+  const ancestors: string[] = [];
+  const visited = new Set<string>();
+  let current = first;
+  while (current && !visited.has(current)) {
+    ancestors.push(current);
+    visited.add(current);
+    const latest = findLatestRunForChildSession(runs, current);
+    const parent = latest?.requesterSessionKey.trim();
+    if (!parent || parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  return ancestors;
+}
+
 /** Returns whether post-completion announce should be skipped for a cleaned-up run. */
 export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,

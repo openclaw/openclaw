@@ -165,6 +165,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Slack DM from Alice: hi", {
       sessionKey: prepared.ctxPayload.SessionKey,
       contextKey: "slack:message:D123:1.000",
+      forceSenderIsOwnerFalse: true,
     });
   });
 

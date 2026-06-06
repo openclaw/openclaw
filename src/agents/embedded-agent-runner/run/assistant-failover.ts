@@ -51,6 +51,7 @@ export async function handleAssistantFailover(params: {
   idleTimedOut: boolean;
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
+  compactionFailureContext?: boolean;
   allowSameModelIdleTimeoutRetry: boolean;
   assistantProfileFailureReason: AuthProfileFailureReason | null;
   lastProfileId?: string;
@@ -205,6 +206,7 @@ export async function handleAssistantFailover(params: {
       idleTimedOut: params.idleTimedOut,
       timedOutDuringCompaction: params.timedOutDuringCompaction,
       timedOutDuringToolExecution: params.timedOutDuringToolExecution,
+      compactionFailureContext: params.compactionFailureContext,
       profileRotated: true,
     });
   }
@@ -263,6 +265,38 @@ export async function handleAssistantFailover(params: {
           status,
           rawError: params.lastAssistant?.errorMessage?.trim(),
           suspend: shouldSuspend,
+        }),
+      };
+    }
+    // Cross-provider timeout cure (upstream contract per #86134 / d6b7fe8615):
+    // when the current candidate times out with fallback configured and no
+    // concrete assistant failure to drive a failoverFailure throw above, drive
+    // the next-provider attempt via a FailoverError("LLM request timed out.")
+    // throw rather than letting the run resolve with a timeout payload that
+    // stalls the fallback chain. `lastAssistant` is already candidate-scoped
+    // upstream (sessionAssistantForCandidate) so it is undefined here for the
+    // cross-provider case — resolveAssistantFailoverErrorMessage will pick the
+    // timeout branch, not the stale prior-provider error message.
+    if (
+      !params.externalAbort &&
+      params.timedOut &&
+      !params.timedOutDuringCompaction &&
+      !params.timedOutDuringToolExecution &&
+      params.fallbackConfigured &&
+      !params.failoverFailure
+    ) {
+      const message = resolveAssistantFailoverErrorMessage(params);
+      const status = isTimeoutErrorMessage(message) ? 408 : undefined;
+      return {
+        action: "throw",
+        overloadProfileRotations,
+        error: new FailoverError(message, {
+          reason: "timeout",
+          provider: params.activeErrorContext.provider,
+          model: params.activeErrorContext.model,
+          profileId: params.lastProfileId,
+          status,
+          rawError: params.lastAssistant?.errorMessage?.trim(),
         }),
       };
     }

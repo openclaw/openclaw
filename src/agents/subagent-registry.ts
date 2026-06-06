@@ -73,6 +73,7 @@ import {
   markSubagentRunPausedAfterYield,
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-manager.js";
+import { configureSubagentRegistrySpawnRuntime } from "./subagent-registry-spawn-runtime.js";
 import {
   getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk,
@@ -91,6 +92,7 @@ import {
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
+export { listAncestorSessionKeys } from "./subagent-registry-announce-read.js";
 export {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -1215,6 +1217,11 @@ configureSubagentRegistrySteerRuntime({
   replaceSubagentRunAfterSteer: (params) => subagentRunManager.replaceSubagentRunAfterSteer(params),
   finalizeInterruptedSubagentRun: async (params) => await finalizeInterruptedSubagentRun(params),
 });
+configureSubagentRegistrySpawnRuntime({
+  countActiveRunsForSession: (requesterSessionKey) =>
+    countActiveRunsForSession(requesterSessionKey),
+  registerSubagentRun: (params) => registerSubagentRun(params),
+});
 
 export function markSubagentRunForSteerRestart(runId: string) {
   return subagentRunManager.markSubagentRunForSteerRestart(runId);
@@ -1273,12 +1280,16 @@ export const testing = {
     await sweepSubagentRuns();
   },
   setDepsForTest(overrides?: Partial<SubagentRegistryDeps>) {
-    subagentRegistryDeps = overrides
+    const nextDeps = overrides
       ? {
           ...defaultSubagentRegistryDeps,
           ...overrides,
         }
       : defaultSubagentRegistryDeps;
+    if (overrides?.persistSubagentRunsToDisk && !overrides.persistSubagentRunsToDiskOrThrow) {
+      nextDeps.persistSubagentRunsToDiskOrThrow = overrides.persistSubagentRunsToDisk;
+    }
+    subagentRegistryDeps = nextDeps;
   },
 } as const;
 
