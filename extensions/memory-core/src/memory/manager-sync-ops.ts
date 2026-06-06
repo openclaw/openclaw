@@ -305,8 +305,10 @@ export abstract class MemoryManagerSyncOps {
     // init's empty-model fallback so adapter defaults do not look mismatched.
     // Local embeddings report local.modelPath as the effective model, even when
     // memorySearch.model still holds the adapter default.
+    const configuredProviderId =
+      resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ?? this.settings.provider;
     const configuredModel =
-      this.settings.provider === "local" && this.settings.local.modelPath?.trim()
+      configuredProviderId === "local" && this.settings.local.modelPath?.trim()
         ? this.settings.local.modelPath.trim()
         : this.settings.model.trim() ||
           resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg);
@@ -314,9 +316,7 @@ export abstract class MemoryManagerSyncOps {
       this.settings.provider === "none"
         ? null
         : {
-            id:
-              resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
-              this.settings.provider,
+            id: configuredProviderId,
             model: configuredModel,
           };
     const provider = hasProviderOverride

@@ -74,6 +74,11 @@ vi.mock("./embeddings.js", () => {
       provider?: string;
       model?: string;
       local?: { modelPath?: string };
+      config?: {
+        models?: {
+          providers?: Record<string, { api?: string; baseUrl?: string; models?: unknown[] }>;
+        };
+      };
       outputDimensionality?: number;
     }) => {
       providerCalls.push({
@@ -89,12 +94,14 @@ vi.mock("./embeddings.js", () => {
           providerUnavailableReason: "No API key found for provider",
         };
       }
+      const resolvedProviderId =
+        options.config?.models?.providers?.[options.provider ?? ""]?.api ?? options.provider;
       const providerId =
-        options.provider === "gemini" ||
-        options.provider === "fallback-provider" ||
-        options.provider === "ollama" ||
-        options.provider === "local"
-          ? options.provider
+        resolvedProviderId === "gemini" ||
+        resolvedProviderId === "fallback-provider" ||
+        resolvedProviderId === "ollama" ||
+        resolvedProviderId === "local"
+          ? resolvedProviderId
           : "mock";
       const model =
         providerId === "local"
@@ -373,6 +380,10 @@ describe("memory index", () => {
     }
   }
 
+  const localProviderAliasConfig = {
+    "local-embedding-alias": { api: "local", baseUrl: "", models: [] },
+  } as unknown as NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
+
   async function getFtsSessionManager(params: {
     stateDirName: string;
     storeFileName: string;
@@ -537,32 +548,43 @@ describe("memory index", () => {
     }
   });
 
-  it("keeps status clean when local modelPath is the indexed model (#91001)", async () => {
-    const dbPath = path.join(workspaceDir, "index-local-model-path-status.sqlite");
-    const modelPath = "/models/embeddinggemma-300M-Q8_0.gguf";
-    const cfg = createCfg({
-      storePath: dbPath,
-      provider: "local",
-      local: { modelPath },
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
-    const indexManager = await getFreshManager(cfg);
-    await indexManager.sync({ reason: "test", force: true });
-    await indexManager.close?.();
-
-    const statusManager = await getFreshManager(cfg, "status");
-    try {
-      const status = statusManager.status();
-
-      expect(status.dirty).toBe(false);
-      expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
-      expect(status.custom?.indexIdentity).not.toMatchObject({
-        reason: expect.stringContaining("expected"),
+  it.each([
+    { name: "direct local provider", provider: "local", providerAliases: undefined },
+    {
+      name: "local provider alias",
+      provider: "local-embedding-alias",
+      providerAliases: localProviderAliasConfig,
+    },
+  ])(
+    "keeps status clean when local modelPath is the indexed model for $name (#91001)",
+    async ({ provider, providerAliases }) => {
+      const dbPath = path.join(workspaceDir, `index-${provider}-model-path-status.sqlite`);
+      const modelPath = "/models/embeddinggemma-300M-Q8_0.gguf";
+      const cfg = createCfg({
+        storePath: dbPath,
+        provider,
+        providerAliases,
+        local: { modelPath },
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
       });
-    } finally {
-      await statusManager.close?.();
-    }
-  });
+      const indexManager = await getFreshManager(cfg);
+      await indexManager.sync({ reason: "test", force: true });
+      await indexManager.close?.();
+
+      const statusManager = await getFreshManager(cfg, "status");
+      try {
+        const status = statusManager.status();
+
+        expect(status.dirty).toBe(false);
+        expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+        expect(status.custom?.indexIdentity).not.toMatchObject({
+          reason: expect.stringContaining("expected"),
+        });
+      } finally {
+        await statusManager.close?.();
+      }
+    },
+  );
 
   it("does not search stale rows when index metadata is missing", async () => {
     const dbPath = path.join(workspaceDir, "index-missing-meta-cutover.sqlite");
