@@ -74,5 +74,175 @@
   {
     "source": "Webhook",
     "target": "Webhook"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Prise en main",
+    "ignore_case": true
+  },
+  {
+    "source": "Quick Start",
+    "target": "Démarrage rapide",
+    "ignore_case": true
+  },
+  {
+    "source": "Install overview",
+    "target": "Vue d'ensemble de l'installation",
+    "ignore_case": true
+  },
+  {
+    "source": "SDK overview",
+    "target": "Vue d'ensemble du SDK",
+    "ignore_case": true
+  },
+  {
+    "source": "Model Providers",
+    "target": "Fournisseurs de modèles",
+    "ignore_case": true
+  },
+  {
+    "source": "Provider directory",
+    "target": "Répertoire des fournisseurs",
+    "ignore_case": true
+  },
+  {
+    "source": "Channel Routing",
+    "target": "Routage des canaux",
+    "ignore_case": true
+  },
+  {
+    "source": "Web tools",
+    "target": "Outils web",
+    "ignore_case": true
+  },
+  {
+    "source": "Secure file operations",
+    "target": "Opérations sécurisées sur les fichiers",
+    "ignore_case": true
+  },
+  {
+    "source": "Creating skills",
+    "target": "Créer des skills",
+    "ignore_case": true
+  },
+  {
+    "source": "Setup Wizard Reference",
+    "target": "Référence de l'assistant de configuration",
+    "ignore_case": true
+  },
+  {
+    "source": "CLI Setup Reference",
+    "target": "Référence de configuration de la CLI",
+    "ignore_case": true
+  },
+  {
+    "source": "macOS platform notes",
+    "target": "Notes sur la plateforme macOS",
+    "ignore_case": true
+  },
+  {
+    "source": "Linux server",
+    "target": "Serveur Linux",
+    "ignore_case": true
+  },
+  {
+    "source": "VPS hosting",
+    "target": "Hébergement VPS",
+    "ignore_case": true
+  },
+  {
+    "source": "Code mode",
+    "target": "Mode code",
+    "ignore_case": true
+  },
+  {
+    "source": "Overview",
+    "target": "Vue d'ensemble",
+    "ignore_case": true,
+    "whole_word": true
+  },
+  {
+    "source": "Platforms",
+    "target": "Plateformes",
+    "ignore_case": true
+  },
+  {
+    "source": "Models",
+    "target": "Modèles",
+    "ignore_case": true,
+    "whole_word": true
+  },
+  {
+    "source": "Sessions",
+    "target": "Sessions",
+    "ignore_case": true,
+    "whole_word": true
+  },
+  {
+    "source": "Status",
+    "target": "État",
+    "ignore_case": true,
+    "whole_word": true
+  },
+  {
+    "source": "Logging",
+    "target": "Journalisation",
+    "ignore_case": true
+  },
+  {
+    "source": "Settings",
+    "target": "Paramètres",
+    "ignore_case": true,
+    "whole_word": true
+  },
+  {
+    "source": "Credentials",
+    "target": "Identifiants",
+    "ignore_case": true,
+    "whole_word": true
+  },
+  {
+    "source": "Deployment",
+    "target": "Déploiement",
+    "ignore_case": true,
+    "whole_word": true
+  },
+  {
+    "source": "Channel",
+    "target": "Canal",
+    "ignore_case": true,
+    "whole_word": true
+  },
+  {
+    "source": "Channels",
+    "target": "Canaux",
+    "ignore_case": true,
+    "whole_word": true
+  },
+  {
+    "source": "Agent runtimes",
+    "target": "Environnements d'exécution des agents",
+    "ignore_case": true
+  },
+  {
+    "source": "Talk mode",
+    "target": "Mode vocal",
+    "ignore_case": true
+  },
+  {
+    "source": "Capability Cookbook",
+    "target": "Recueil de capacités",
+    "ignore_case": true
+  },
+  {
+    "source": "Steering queue",
+    "target": "File de pilotage",
+    "ignore_case": true
+  },
+  {
+    "source": "Steer",
+    "target": "Piloter",
+    "ignore_case": true,
+    "whole_word": true
   }
 ]
