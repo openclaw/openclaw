@@ -1,6 +1,7 @@
 // Node daemon tests cover node daemon command runtime behavior and errors.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { runNodeDaemonStatus } from "./daemon.js";
 
 const mocks = vi.hoisted(() => {
@@ -14,7 +15,7 @@ const mocks = vi.hoisted(() => {
     stop: vi.fn(),
     restart: vi.fn(),
     isLoaded: vi.fn(async () => true),
-    readCommand: vi.fn(async () => null),
+    readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(async () => null),
     readRuntime: vi.fn<() => Promise<GatewayServiceRuntime>>(async () => ({ status: "running" })),
   };
   return {
@@ -90,6 +91,28 @@ describe("runNodeDaemonStatus", () => {
     mocks.service.isLoaded.mockReset().mockResolvedValue(true);
     mocks.service.readCommand.mockReset().mockResolvedValue(null);
     mocks.service.readRuntime.mockReset().mockResolvedValue({ status: "running" });
+  });
+
+  it("omits service environment maps from JSON status", async () => {
+    mocks.service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "node", "run"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw",
+        PRIVATE_TEST_VALUE: "redacted-fixture",
+      },
+      environmentValueSources: {
+        PRIVATE_TEST_VALUE: "file",
+      },
+    });
+
+    await runNodeDaemonStatus({ json: true });
+
+    const payload = mocks.runtime.writeJson.mock.calls[0]?.[0] as {
+      service?: { command?: Record<string, unknown> };
+    };
+    expect(payload.service?.command).toEqual({
+      programArguments: ["openclaw", "node", "run"],
+    });
   });
 
   it("keeps missing service-unit status on stderr and prints recovery hints on stdout", async () => {

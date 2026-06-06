@@ -17,6 +17,7 @@ import {
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -56,6 +57,20 @@ type NodeDaemonLifecycleOptions = {
 type NodeDaemonStatusOptions = {
   json?: boolean;
 };
+
+function sanitizeNodeCommandForJson(
+  command: GatewayServiceCommandConfig | null,
+): Omit<GatewayServiceCommandConfig, "environment" | "environmentValueSources"> | null {
+  if (!command) {
+    return null;
+  }
+  const {
+    environment: _environment,
+    environmentValueSources: _environmentValueSources,
+    ...safeCommand
+  } = command;
+  return safeCommand;
+}
 
 function renderNodeServiceStartHints(): string[] {
   return buildPlatformServiceStartHints({
@@ -227,7 +242,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   const payload = {
     service: {
       ...buildDaemonServiceSnapshot(service, loaded),
-      command,
+      command: json ? sanitizeNodeCommandForJson(command) : command,
       runtime,
     },
   };
