@@ -506,7 +506,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("If several apply, choose the most specific.");
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
     expect(prompt).toContain(
-      "Docs are authoritative for OpenClaw self-knowledge: before answering how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `Read` or search local docs; never answer from AGENTS.md/project context, workspace/profile/memory notes, or `memory_search` first.",
+      "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `Read` or search local docs first; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
     );
   });
 
@@ -521,7 +521,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
     expect(prompt).toContain("Source: /tmp/openclaw");
     expect(prompt).toContain(
-      "Docs are authoritative for OpenClaw self-knowledge: before answering how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `read` or search local docs; never answer from AGENTS.md/project context, workspace/profile/memory notes, or `memory_search` first.",
+      "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `read` or search local docs first; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
     );
     expect(prompt).toContain("If docs are silent/stale, say so and inspect local source.");
   });
@@ -538,12 +538,12 @@ describe("buildAgentSystemPrompt", () => {
     const docsSection = prompt.slice(docsStart, nextSection);
 
     expect(prompt).toContain(
-      "Docs are authoritative for OpenClaw self-knowledge: before answering how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `read` or search local docs; never answer from AGENTS.md/project context, workspace/profile/memory notes, or `memory_search` first.",
+      "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `read` or search local docs first; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
     );
-    expect(docsSection.length).toBeLessThan(760);
+    expect(docsSection.length).toBeLessThan(840);
     expect(prompt).not.toContain("Self-knowledge rule: for questions about");
     expect(prompt).not.toContain("Treat questions about daily notes");
-    expect(prompt).not.toContain("Workspace/profile/memory notes and `memory_search`");
+    expect(prompt).not.toContain("never answer from AGENTS.md/project context");
   });
 
   it("falls back to public docs and GitHub source guidance when local docs are unavailable", () => {
@@ -554,7 +554,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Docs: https://docs.openclaw.ai");
     expect(prompt).toContain("Source: https://github.com/openclaw/openclaw");
     expect(prompt).toContain(
-      "Docs are authoritative for OpenClaw self-knowledge: before answering how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use the docs mirror when web tooling is available; never answer from AGENTS.md/project context, workspace/profile/memory notes, or `memory_search` first.",
+      "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use the docs mirror first when web tooling is available; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
     );
     expect(prompt).toContain("If docs are silent/stale, say so and inspect GitHub source.");
   });
