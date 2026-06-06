@@ -721,10 +721,23 @@ export function resolveChannelStreamingProgressCommentary(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = false,
 ): boolean {
-  const config = getChannelStreamingConfigObject(entry);
   if (resolveChannelPreviewStreamMode(entry, "partial") !== "progress") {
     return false;
   }
+  return resolveChannelStreamingProgressCommentaryEnabled(entry, defaultValue);
+}
+
+/**
+ * Like {@link resolveChannelStreamingProgressCommentary} but WITHOUT the progress-mode
+ * guard. The stream-off (#89890) accumulator runs while the effective stream mode is
+ * "off", yet the user has opted into `persistProgress` + `commentary` to receive the
+ * accumulated lane on final send; it reads the raw `commentary` opt-in directly.
+ */
+export function resolveChannelStreamingProgressCommentaryEnabled(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = false,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
   const progress = asObjectRecord(config?.progress);
   return asBoolean(progress?.commentary) ?? defaultValue;
 }

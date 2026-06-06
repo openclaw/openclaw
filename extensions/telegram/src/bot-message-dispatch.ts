@@ -34,6 +34,7 @@ import {
   resolveChannelStreamingPreviewNativeToolProgress,
   resolveChannelStreamingPreviewNativeToolProgressAllowFrom,
   resolveChannelStreamingPreviewToolProgress,
+  resolveChannelStreamingProgressCommentaryEnabled,
   resolveChannelStreamingProgressPersist,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -957,6 +958,7 @@ export const dispatchTelegramMessage = async ({
   const reasoningLane = lanes.reasoning;
   const streamToolProgressEnabled =
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
+  const persistedProgressLog: string[] = [];
   const nativeToolProgressDraft =
     streamToolProgressEnabled &&
     !isRoomEvent &&
@@ -1757,6 +1759,31 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
 
+                    const emitPersistedProgressSet = async (
+                      answerPayload: ReplyPayload,
+                    ): Promise<void> => {
+                      // Stream-OFF persist: no draft stream exists, so emit the accumulated
+                      // tool+commentary log as its OWN durable message(s) before the answer.
+                      // Never prepended, never truncated -- the durable delivery path chunks it
+                      // into a set when it exceeds the limit. Gated on !answerLane.stream so the
+                      // stream-ON path (which persists the live progress message in place) does
+                      // not double-emit. Awaited here so the set lands before the answer (barrier).
+                      if (
+                        !persistProgressEnabled ||
+                        answerLane.stream ||
+                        persistedProgressLog.length === 0
+                      ) {
+                        return;
+                      }
+                      const progressText = persistedProgressLog.join("\n");
+                      persistedProgressLog.length = 0;
+                      if (!progressText.trim()) {
+                        return;
+                      }
+                      await sendPayload(applyTextToPayload(answerPayload, progressText), {
+                        durable: true,
+                      });
+                    };
                     const deliverFinalAnswerText = async (
                       answerPayload: ReplyPayload,
                       text: string,
@@ -1776,6 +1803,8 @@ export const dispatchTelegramMessage = async ({
                       if (finalAnswerDelivered) {
                         return deliverPostFinalFollowUpText();
                       }
+                      // Stream-OFF persist: land the progress set before the answer (barrier).
+                      await emitPersistedProgressSet(answerPayload);
                       if (streamMode === "progress") {
                         return deliverProgressModeFinalAnswer(answerPayload, finalText);
                       }
@@ -2058,7 +2087,7 @@ export const dispatchTelegramMessage = async ({
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
                   allowProgressCallbacksWhenSourceDeliverySuppressed:
-                    !isRoomEvent && Boolean(answerLane.stream),
+                    !isRoomEvent && (Boolean(answerLane.stream) || persistProgressEnabled),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
                     const progressPromise = pushStreamToolProgress(
@@ -2074,6 +2103,15 @@ export const dispatchTelegramMessage = async ({
                       ),
                       { toolName, startImmediately: true },
                     );
+                    if (persistProgressEnabled && toolName) {
+                      const toolLine = formatChannelProgressDraftLineForEntry(telegramCfg, {
+                        event: "tool",
+                        name: toolName,
+                        phase: payload.phase,
+                        args: payload.args,
+                      });
+                      if (toolLine) persistedProgressLog.push(toolLine);
+                    }
                     if (statusReactionController && toolName) {
                       await statusReactionController.setTool(toolName);
                     }
@@ -2081,6 +2119,13 @@ export const dispatchTelegramMessage = async ({
                   },
                   onItemEvent: async (payload) => {
                     if (payload.kind === "preamble") {
+                      if (
+                        persistProgressEnabled &&
+                        resolveChannelStreamingProgressCommentaryEnabled(telegramCfg) &&
+                        payload.progressText
+                      ) {
+                        persistedProgressLog.push(`💭 ${payload.progressText}`);
+                      }
                       await progressDraft.pushCommentaryProgress(payload.progressText, {
                         itemId: payload.itemId,
                       });
