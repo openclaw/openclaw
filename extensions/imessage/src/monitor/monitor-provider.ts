@@ -66,7 +66,7 @@ import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
 import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
-import { combineIMessagePayloads } from "./coalesce.js";
+import { combineIMessagePayloads, shouldCombineIMessagePayloadBucket } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
@@ -376,12 +376,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           ? `chat:${msg.chat_id}`
           : (msg.chat_guid ?? msg.chat_identifier ?? "unknown");
 
-      // With coalesceSameSenderDms enabled, DMs key on chat:sender so two
-      // distinct user sends — `Dump` followed by a pasted URL that Apple
-      // delivers as a separate row — fall into the same bucket and merge
-      // into one agent turn. Group chats fall through to the legacy key so
-      // shouldDebounce can route them to the instant-dispatch path and
-      // preserve multi-user turn structure.
+      // With coalesceSameSenderDms enabled, DMs key on chat:sender so Apple's
+      // split text row and URL-balloon row land in the same bucket. The flush
+      // path still requires imsg's structural balloon metadata before merging.
+      // Group chats keep the legacy key to preserve multi-user turn structure.
       if (coalesceSameSenderDms && msg.is_group !== true) {
         return `imessage:${accountInfo.accountId}:dm:${conversationId}:${sender}`;
       }
@@ -398,11 +396,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         return false;
       }
 
-      // With coalesceSameSenderDms enabled, debounce DM messages aggressively
-      // (text, media, control commands) so split-sends — `Dump <URL>`,
-      // `Save 📎image caption`, and rapid floods — merge into one agent
-      // turn. Group chats keep instant dispatch so the bot stays responsive
-      // when multiple people are typing.
+      // Hold opt-in DMs long enough for a following URL-balloon row to arrive.
+      // Buckets without imsg's balloon_bundle_id marker flush as separate
+      // messages, so ordinary rapid DMs and older imsg builds are not merged
+      // from text shape alone.
       if (coalesceSameSenderDms) {
         return msg.is_group !== true;
       }
@@ -425,7 +422,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         return;
       }
 
-      const combined = combineIMessagePayloads(entries.map((e) => e.message));
+      const messages = entries.map((e) => e.message);
+      if (!shouldCombineIMessagePayloadBucket(messages)) {
+        for (const message of messages) {
+          await handleMessageNow(message);
+        }
+        return;
+      }
+
+      const combined = combineIMessagePayloads(messages);
       if (shouldLogVerbose()) {
         const text = combined.text ?? "";
         const preview = text.slice(0, 50);

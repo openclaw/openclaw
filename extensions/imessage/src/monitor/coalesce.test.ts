@@ -2,9 +2,12 @@
 import { describe, expect, it } from "vitest";
 import {
   combineIMessagePayloads,
+  hasIMessageUrlBalloonBundleID,
+  IMESSAGE_URL_BALLOON_BUNDLE_ID,
   MAX_COALESCED_ATTACHMENTS,
   MAX_COALESCED_ENTRIES,
   MAX_COALESCED_TEXT_CHARS,
+  shouldCombineIMessagePayloadBucket,
 } from "./coalesce.js";
 import type { IMessagePayload } from "./types.js";
 
@@ -21,6 +24,19 @@ const makePayload = (overrides: Partial<IMessagePayload> = {}): IMessagePayload 
 });
 
 describe("combineIMessagePayloads", () => {
+  it("recognizes URL balloon rows from imsg structural metadata", () => {
+    const text = makePayload({ text: "Dump" });
+    const balloon = makePayload({
+      text: "https://example.com/article",
+      balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
+    });
+
+    expect(hasIMessageUrlBalloonBundleID(text)).toBe(false);
+    expect(hasIMessageUrlBalloonBundleID(balloon)).toBe(true);
+    expect(shouldCombineIMessagePayloadBucket([text, balloon])).toBe(true);
+    expect(shouldCombineIMessagePayloadBucket([text, makePayload({ text: "ok" })])).toBe(false);
+  });
+
   it("throws on empty input", () => {
     expect(() => combineIMessagePayloads([])).toThrow(
       "combineIMessagePayloads: cannot combine empty payloads",
@@ -44,6 +60,7 @@ describe("combineIMessagePayloads", () => {
     const balloon = makePayload({
       id: 42,
       text: "https://example.com/article",
+      balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
       guid: "row-2",
       created_at: "2025-01-01T00:00:01.500Z",
     });
