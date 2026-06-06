@@ -1442,10 +1442,10 @@ export async function dispatchReplyFromConfig(
       // reply and recreate the message loss this fix exists to prevent (#86827).
       admission.activeOperation?.sessionId === sessionStoreEntry.entry?.sessionId &&
       // Only clear the proven stale leftover from the failed lifecycle. A
-      // sibling recovery turn that already cleared the leftover and admitted a
-      // fresh operation marks it `terminalRecovery`; force-failing that op would
-      // drop the very recovery turn this path exists to protect (concurrent
-      // visible turns can read the same terminal snapshot before it clears).
+      // freshly-admitted visible recovery op is marked `terminalRecovery` at the
+      // admission choke point below; force-failing that op would drop the very
+      // recovery turn this path exists to protect (concurrent visible turns can
+      // read the same terminal snapshot before it clears).
       !admission.activeOperation?.terminalRecovery
     ) {
       const cleared = forceClearReplyRunBySessionId(
@@ -1465,9 +1465,6 @@ export async function dispatchReplyFromConfig(
           upstreamAbortSignal: params.replyOptions?.abortSignal,
           waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
         });
-        if (admission.status === "owned") {
-          admission.operation.markTerminalRecovery();
-        }
       }
     }
     if (admission.status === "skipped") {
@@ -1493,6 +1490,20 @@ export async function dispatchReplyFromConfig(
         `dispatch-from-config: skipped reply operation admission for ${dispatchOperationSessionKey}; reason=${admission.reason}`,
       );
       return { status: "busy" };
+    }
+    // Mark every freshly-admitted visible recovery of a terminal session at this
+    // single choke point (both the clean no-stale admission and the
+    // re-admission after a sibling force-clear flow through here). The marker
+    // protects this op from being force-cleared by a concurrent sibling visible
+    // turn that reads the same terminal snapshot (#86827). Genuine stale
+    // leftovers from the original failed run never pass through this admission,
+    // so they stay unmarked and remain force-clearable.
+    if (
+      replyTurnKind === "visible" &&
+      isRecoverableTerminalSessionStatus(sessionStoreEntry.entry?.status) &&
+      operationSessionId === sessionStoreEntry.entry?.sessionId
+    ) {
+      admission.operation.markTerminalRecovery();
     }
     dispatchReplyOperation = admission.operation;
     dispatchReplyOperation.retainFailureUntilComplete();
