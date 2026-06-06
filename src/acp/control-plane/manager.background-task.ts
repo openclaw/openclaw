@@ -1,3 +1,4 @@
+import { isHubDelegatedAcpSessionEntry } from "@openclaw/acp-core";
 /** Mirrors child ACP turns into detached-task status for requester-facing progress. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -24,6 +25,7 @@ export type BackgroundTaskContext = {
   runId: string;
   label?: string;
   task: string;
+  hubDelegated?: boolean;
 };
 
 /** Produces the bounded task label shown for a child ACP background run. */
@@ -121,6 +123,7 @@ export function resolveBackgroundTaskContext(params: {
     runId: params.requestId,
     label: normalizeText(childEntry?.label),
     task: summarizeBackgroundTaskText(params.text),
+    hubDelegated: isHubDelegatedAcpSessionEntry(childEntry),
   };
 }
 
@@ -140,6 +143,7 @@ export function createBackgroundTaskRecord(
       label: context.label,
       task: context.task,
       startedAt,
+      ...(context.hubDelegated ? { notifyPolicy: "silent" as const } : {}),
     });
     if (!task) {
       logVerbose(

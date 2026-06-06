@@ -1,3 +1,8 @@
+import {
+  isHubDelegatedAcpSessionEntry,
+  resolveHubDelegatedAcpPolicy,
+  resolveHubDelegatedExpiry,
+} from "@openclaw/acp-core";
 // Reconciles stale or lost task registry records during maintenance passes.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -658,6 +663,9 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
   if (!isParentOwnedAcpSessionTask(task, acpEntry)) {
     return false;
   }
+  if (isHubDelegatedAcpSessionEntry(acpEntry.entry)) {
+    return false;
+  }
   if (acpEntry.acp.mode === "oneshot") {
     return true;
   }
@@ -677,6 +685,9 @@ function shouldCloseOrphanedParentOwnedAcpSession(acpEntry: AcpSessionStoreEntry
   }
   if (acpEntry.acp.mode === "oneshot") {
     return true;
+  }
+  if (isHubDelegatedAcpSessionEntry(acpEntry.entry)) {
+    return false;
   }
   return !hasActiveSessionBinding(sessionKey);
 }
@@ -722,6 +733,99 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
       taskId: task.taskId,
       error,
     });
+  }
+}
+
+async function clearHubDelegatedSessionMarker(acpEntry: AcpSessionStoreEntry): Promise<void> {
+  const { updateSessionStore } = await import("../config/sessions/store.js");
+  await updateSessionStore(
+    acpEntry.storePath,
+    (store) => {
+      const storeSessionKey = acpEntry.storeSessionKey;
+      const entry = store[storeSessionKey];
+      if (!entry?.hubDelegated) {
+        return entry ?? null;
+      }
+      const next = { ...entry };
+      delete next.hubDelegated;
+      store[storeSessionKey] = next;
+      return next;
+    },
+    {
+      skipMaintenance: true,
+      activeSessionKey: acpEntry.storeSessionKey,
+    },
+  );
+}
+
+async function cleanupExpiredHubDelegatedAcpSessions(): Promise<void> {
+  let acpSessions: AcpSessionStoreEntry[];
+  try {
+    acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({ clone: false });
+  } catch (error) {
+    log.warn("Failed to list ACP sessions during hub-delegate maintenance", { error });
+    return;
+  }
+  const seenSessionKeys = new Set<string>();
+  for (const acpEntry of acpSessions) {
+    const sessionKey = normalizeOptionalString(acpEntry.sessionKey);
+    if (!sessionKey || seenSessionKeys.has(sessionKey)) {
+      continue;
+    }
+    seenSessionKeys.add(sessionKey);
+    if (!isHubDelegatedAcpSessionEntry(acpEntry.entry) || !acpEntry.entry?.hubDelegated) {
+      continue;
+    }
+    const policy = resolveHubDelegatedAcpPolicy(acpEntry.cfg.acp?.delegate);
+    const expiry = resolveHubDelegatedExpiry({
+      entry: {
+        hubDelegated: acpEntry.entry.hubDelegated,
+        acp: acpEntry.acp,
+      },
+      policy,
+    });
+    if (!expiry.expired) {
+      continue;
+    }
+    const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;
+    if (!closeAcpSession) {
+      continue;
+    }
+    try {
+      await closeAcpSession({
+        cfg: acpEntry.cfg,
+        sessionKey,
+        reason: expiry.reason,
+      });
+    } catch (error) {
+      log.warn("Failed to close expired hub-delegated ACP session during task maintenance", {
+        sessionKey,
+        reason: expiry.reason,
+        error,
+      });
+      continue;
+    }
+    try {
+      await clearHubDelegatedSessionMarker(acpEntry);
+    } catch (error) {
+      log.warn("Failed to clear hub-delegated marker during task maintenance", {
+        sessionKey,
+        reason: expiry.reason,
+        error,
+      });
+    }
+    try {
+      await taskRegistryMaintenanceRuntime.unbindSessionBindings?.({
+        targetSessionKey: sessionKey,
+        reason: expiry.reason,
+      });
+    } catch (error) {
+      log.warn("Failed to unbind expired hub-delegated ACP session during task maintenance", {
+        sessionKey,
+        reason: expiry.reason,
+        error,
+      });
+    }
   }
 }
 
@@ -1187,6 +1291,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     }
   }
   await cleanupOrphanedParentOwnedAcpSessions();
+  await cleanupExpiredHubDelegatedAcpSessions();
   if (isPluginStateDatabaseOpen()) {
     try {
       sweepExpiredPluginStateEntries();

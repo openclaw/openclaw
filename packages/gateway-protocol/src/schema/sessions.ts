@@ -202,6 +202,15 @@ export const SessionsAbortParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Hub-delegated persistent ACP worker metadata stored on a session row. */
+export const HubDelegatedSessionMetaSchema = Type.Object(
+  {
+    ownerSessionKey: NonEmptyString,
+    createdAt: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
 /** Mutable per-session preferences and routing metadata. */
 export const SessionsPatchParamsSchema = Type.Object(
   {
@@ -230,6 +239,8 @@ export const SessionsPatchParamsSchema = Type.Object(
     execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    parentSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    hubDelegated: Type.Optional(Type.Union([HubDelegatedSessionMetaSchema, Type.Null()])),
     spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedCwd: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),

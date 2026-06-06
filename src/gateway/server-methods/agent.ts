@@ -2,6 +2,7 @@
 // and related session-aware RPC handlers used by UI and operator clients.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { requiresInternalAcpSessionEffects } from "@openclaw/acp-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -1147,8 +1148,15 @@ export const agentHandlers: GatewayRequestHandlers = {
     const preserveUserFacingSessionModelState =
       canUseInternalRuntimeHandoff &&
       shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance);
-    const sessionEffects = requestedInternalSessionEffects ? "internal" : request.sessionEffects;
-    const suppressVisibleSessionEffects = sessionEffects === "internal";
+    let sessionEffects = requestedInternalSessionEffects ? "internal" : request.sessionEffects;
+    let suppressVisibleSessionEffects = sessionEffects === "internal";
+    const applyMetadataForcedInternalSessionEffects = (entry?: SessionEntry) => {
+      if (!requiresInternalAcpSessionEffects(entry)) {
+        return;
+      }
+      sessionEffects = "internal";
+      suppressVisibleSessionEffects = true;
+    };
     const agentDedupeKeys = resolveAgentDedupeKeys({
       idempotencyKey: idem,
       execApprovalFollowupApprovalId,
@@ -1388,6 +1396,14 @@ export const agentHandlers: GatewayRequestHandlers = {
       resolveSessionStoreKey({ cfg, sessionKey: requestedSessionKey }) === "global"
         ? "global"
         : requestedSessionKey;
+    if (requestedSessionKey) {
+      applyMetadataForcedInternalSessionEffects(
+        loadSessionEntry(requestedSessionKey, {
+          clone: false,
+          ...(agentId ? { agentId } : {}),
+        }).entry,
+      );
+    }
     reservePreAcceptedAgentDedupe(preAcceptedReservedSessionKey, agentId);
 
     try {
@@ -1983,6 +1999,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         usableRequestedSessionId = patchBuild.usableRequestedSessionId;
         freshness = patchBuild.freshness;
         sessionEntry = mergeSessionEntry(entry, patchBuild.patch);
+        applyMetadataForcedInternalSessionEffects(sessionEntry);
         resolvedSessionId = sessionEntry?.sessionId ?? sessionId;
         const canonicalSessionKey = canonicalKey;
         resolvedSessionKey = canonicalSessionKey;
@@ -2316,7 +2333,10 @@ export const agentHandlers: GatewayRequestHandlers = {
           ? INTERNAL_MESSAGE_CHANNEL
           : resolvedChannel);
 
-      const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
+      const deliver =
+        request.deliver === true &&
+        resolvedChannel !== INTERNAL_MESSAGE_CHANNEL &&
+        !requiresInternalAcpSessionEffects(sessionEntry);
 
       const preRegistrationAbort = readGatewayDedupeEntry({
         dedupe: context.dedupe,
@@ -2807,7 +2827,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       dedupePromise.then((snapshot) => ({ source: "dedupe" as const, snapshot })),
     ]);
 
-    let snapshot: AgentWaitTerminalSnapshot | Awaited<ReturnType<typeof waitForAgentJob>> =
+    const snapshot: AgentWaitTerminalSnapshot | Awaited<ReturnType<typeof waitForAgentJob>> =
       first.snapshot;
     if (snapshot) {
       if (first.source === "lifecycle") {
@@ -2816,7 +2836,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         lifecycleAbortController.abort();
       }
     } else {
-      snapshot = first.source === "lifecycle" ? await dedupePromise : await lifecyclePromise;
+      // Both waiters share the same timeoutMs budget. Once one side times out,
+      // abort the loser instead of awaiting a long-running in-flight agent job.
       lifecycleAbortController.abort();
       dedupeAbortController.abort();
     }

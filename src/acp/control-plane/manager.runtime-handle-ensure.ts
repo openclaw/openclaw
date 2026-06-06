@@ -19,7 +19,11 @@ import type {
   SessionAcpMeta,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
-import { hasLegacyAcpIdentityProjection, resolveAcpAgentFromSessionKey } from "./manager.utils.js";
+import {
+  hasLegacyAcpIdentityProjection,
+  resolveAcpAgentFromSessionKey,
+  resolveCachedHandleReuseMaxIdleMs,
+} from "./manager.utils.js";
 import {
   normalizeRuntimeOptions,
   normalizeText,
@@ -46,8 +50,9 @@ export async function ensureManagerRuntimeHandle(params: {
   const thinking = normalizeText(runtimeOptions.thinking);
   const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
   const configSignature = resolveRuntimeConfigCacheKey(params.cfg);
-  const cached = params.runtimeHandles.get(params.sessionKey);
+  const cached = params.runtimeHandles.peek(params.sessionKey);
   if (cached) {
+    const now = Date.now();
     const backendMatches = !configuredBackend || cached.backend === configuredBackend;
     const agentMatches = cached.agent === agent;
     const modeMatches = cached.mode === mode;
@@ -57,7 +62,15 @@ export async function ensureManagerRuntimeHandle(params: {
       handle: cached.handle,
       meta: params.meta,
     });
+    const maxIdleMs = resolveCachedHandleReuseMaxIdleMs(params.cfg);
+    const cacheIdleMs = params.runtimeHandles.getCacheIdleMs(params.sessionKey, now);
+    const metaIdleMs = Math.max(0, now - params.meta.lastActivityAt);
+    const idleExceeded =
+      mode === "persistent" &&
+      maxIdleMs > 0 &&
+      Math.min(cacheIdleMs ?? Number.POSITIVE_INFINITY, metaIdleMs) >= maxIdleMs;
     if (
+      !idleExceeded &&
       backendMatches &&
       agentMatches &&
       modeMatches &&
@@ -70,6 +83,7 @@ export async function ensureManagerRuntimeHandle(params: {
         handle: cached.handle,
       }))
     ) {
+      params.runtimeHandles.touch(params.sessionKey);
       return {
         runtime: cached.runtime,
         handle: cached.handle,
@@ -78,7 +92,7 @@ export async function ensureManagerRuntimeHandle(params: {
     }
     await params.runtimeHandles.close({
       sessionKey: params.sessionKey,
-      reason: "runtime-handle-replaced",
+      reason: idleExceeded ? "runtime-handle-idle-stale" : "runtime-handle-replaced",
     });
   }
 
@@ -202,12 +216,7 @@ export async function ensureManagerRuntimeHandle(params: {
     await params.writeSessionMeta({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
-      mutate: (_current, entry) => {
-        if (!entry) {
-          return null;
-        }
-        return nextMeta;
-      },
+      mutate: () => nextMeta,
     });
   }
   params.runtimeHandles.set(params.sessionKey, {

@@ -2207,6 +2207,7 @@ export function buildGatewaySessionRow(params: {
   return {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
+    hubDelegated: entry?.hubDelegated,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     forkedFromParent: entry?.forkedFromParent,

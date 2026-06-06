@@ -5,6 +5,7 @@ export * from "./meta.js";
 export * from "./normalize-text.js";
 export * from "./numeric-options.js";
 export * from "./record-shared.js";
+export * from "./hub-delegated.js";
 export * from "./session-interaction-mode.js";
 export * from "./session-lineage-meta.js";
 export * from "./session.js";

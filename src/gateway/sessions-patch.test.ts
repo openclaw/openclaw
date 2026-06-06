@@ -677,6 +677,25 @@ describe("gateway sessions patch", () => {
     expect(entry.spawnedBy).toBe("agent:main:main");
   });
 
+  test("sets hubDelegated metadata for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: {
+          key: "agent:main:acp:child",
+          hubDelegated: {
+            ownerSessionKey: "agent:main:main",
+            createdAt: 1_700_000_000_000,
+          },
+        },
+      }),
+    );
+    expect(entry.hubDelegated).toEqual({
+      ownerSessionKey: "agent:main:main",
+      createdAt: 1_700_000_000_000,
+    });
+  });
+
   test("sets spawnedWorkspaceDir for subagent sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({

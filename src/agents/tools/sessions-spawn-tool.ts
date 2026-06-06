@@ -224,6 +224,12 @@ function createSessionsSpawnToolSchema(params: {
     ),
     ...(params.acpAvailable
       ? {
+          delegate: Type.Optional(
+            Type.Boolean({
+              description:
+                "ACP-only hub-delegated persistent worker without thread binding. Follow up via sessions_send(label=...); close with /acp delegate close. Omits label to auto-generate a UTC timestamp label (delegate-YYYYMMDD-HHMMSS).",
+            }),
+          ),
           resumeSessionId: Type.Optional(
             Type.String({
               description:
@@ -361,6 +367,15 @@ export function createSessionsSpawnTool(
         throw new Error('context="fork" is only supported for runtime="subagent".');
       }
       const thread = params.thread === true;
+      const delegate = runtime === "acp" && params.delegate === true;
+      if (delegate && thread) {
+        return jsonResult({
+          status: "error",
+          error:
+            "sessions_spawn(delegate=true) cannot be combined with thread=true. Use delegate for hub-relayed persistent workers.",
+          ...roleContext,
+        });
+      }
       const attachments = Array.isArray(params.attachments)
         ? (params.attachments as Array<{
             name: string;
@@ -393,6 +408,7 @@ export function createSessionsSpawnTool(
             thinking: thinkingOverrideRaw,
             cwd,
             mode: mode === "run" || mode === "session" ? mode : undefined,
+            delegate,
             thread,
             sandbox,
             streamTo,
@@ -420,7 +436,7 @@ export function createSessionsSpawnTool(
           const cfg = getRuntimeConfig();
           const trackedSpawnMode = resolveTrackedSpawnMode({
             requestedMode: result.mode,
-            threadRequested: thread,
+            threadRequested: thread || result.delegate === true,
           });
           const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
           const ownership = resolveSubagentSpawnOwnership({
@@ -448,7 +464,9 @@ export function createSessionsSpawnTool(
               task,
               taskName,
               cleanup: trackedCleanup,
-              label: label || undefined,
+              label:
+                (isSpawnAcpAcceptedResult(result) ? result.label : undefined) ??
+                (label || undefined),
               runTimeoutSeconds: result.runTimeoutSeconds,
               expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,

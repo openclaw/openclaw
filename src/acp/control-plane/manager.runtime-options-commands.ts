@@ -207,13 +207,10 @@ async function persistManagerRuntimeOptions(
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     mutate: (current, entry) => {
-      if (!entry) {
-        return null;
+      if (!entry || !current) {
+        return undefined;
       }
       const base = current;
-      if (!base) {
-        return null;
-      }
       return {
         backend: base.backend,
         agent: base.agent,

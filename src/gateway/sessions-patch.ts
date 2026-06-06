@@ -201,6 +201,52 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("parentSessionKey" in patch) {
+    const raw = patch.parentSessionKey;
+    if (raw === null) {
+      delete next.parentSessionKey;
+    } else if (raw !== undefined) {
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid parentSessionKey: empty");
+      }
+      if (existing?.parentSessionKey && existing.parentSessionKey !== trimmed) {
+        return invalid("parentSessionKey cannot be changed once set");
+      }
+      next.parentSessionKey = trimmed;
+    }
+  }
+
+  if ("hubDelegated" in patch) {
+    const raw = patch.hubDelegated;
+    if (raw === null) {
+      delete next.hubDelegated;
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("hubDelegated is only supported for subagent:* or acp:* sessions");
+      }
+      const ownerSessionKey = normalizeOptionalString(raw.ownerSessionKey) ?? "";
+      if (!ownerSessionKey) {
+        return invalid("invalid hubDelegated.ownerSessionKey: empty");
+      }
+      if (
+        typeof raw.createdAt !== "number" ||
+        !Number.isFinite(raw.createdAt) ||
+        raw.createdAt < 0
+      ) {
+        return invalid("invalid hubDelegated.createdAt");
+      }
+      const existingOwner = normalizeOptionalString(existing?.hubDelegated?.ownerSessionKey);
+      if (existingOwner && existingOwner !== ownerSessionKey) {
+        return invalid("hubDelegated owner cannot be changed once set");
+      }
+      next.hubDelegated = {
+        ownerSessionKey,
+        createdAt: Math.floor(raw.createdAt),
+      };
+    }
+  }
+
   if ("spawnedWorkspaceDir" in patch) {
     const raw = patch.spawnedWorkspaceDir;
     if (raw === null) {

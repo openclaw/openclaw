@@ -4,6 +4,7 @@ read_when:
   - Running coding harnesses through ACP
   - Setting up conversation-bound ACP sessions on messaging channels
   - Binding a message-channel conversation to a persistent ACP session
+  - Delegating persistent ACP workers from a hub session without thread binding
   - Troubleshooting ACP backend, plugin wiring, or completion delivery
   - Operating /acp commands from chat
 title: "ACP agents"
@@ -33,7 +34,8 @@ directly to existing OpenClaw channel conversations, use
 | You want to…                                                                                    | Use this                              | Notes                                                                                                                                                                                         |
 | ----------------------------------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Bind or control Codex in the current conversation                                               | `/codex bind`, `/codex threads`       | Native Codex app-server path when the `codex` plugin is enabled; includes bound chat replies, image forwarding, model/fast/permissions, stop, and steer controls. ACP is an explicit fallback |
-| Run Claude Code, Gemini CLI, explicit Codex ACP, or another external harness _through_ OpenClaw | This page                             | Chat-bound sessions, `/acp spawn`, `sessions_spawn({ runtime: "acp" })`, background tasks, runtime controls                                                                                   |
+| Run Claude Code, Gemini CLI, explicit Codex ACP, or another external harness _through_ OpenClaw | This page                             | Chat-bound sessions, `/acp spawn`, `sessions_spawn({ runtime: "acp" })`, hub-delegated persistent workers, background tasks, runtime controls                                                 |
+| Keep a named ACP worker alive from WebChat or another hub and follow up by label                | This page — Hub-delegated workers     | `sessions_spawn({ delegate: true, label })`, `sessions_send(label=...)`, `sessions_list({ delegated: true })`, `/acp delegate ...`                                                            |
 | Expose an OpenClaw Gateway session _as_ an ACP server for an editor or client                   | [`openclaw acp`](/cli/acp)            | Bridge mode. IDE/client talks ACP to OpenClaw over stdio/WebSocket                                                                                                                            |
 | Reuse a local AI CLI as a text-only fallback model                                              | [CLI Backends](/gateway/cli-backends) | Not ACP. No OpenClaw tools, no ACP controls, no harness runtime                                                                                                                               |
 
@@ -195,6 +197,7 @@ Quick `/acp` flow from chat:
     - "Run this as a one-shot Claude Code ACP session and summarize the result."
     - "Use Gemini CLI for this task in a thread, then keep follow-ups in that same thread."
     - "Run Codex through ACP in a background thread."
+    - "Start a named Codex worker from this chat and keep it alive so I can follow up later by label."
 
     OpenClaw picks `runtime: "acp"`, resolves the harness `agentId`,
     binds to the current conversation or thread when supported, and
@@ -536,7 +539,18 @@ Two ways to start an ACP session:
   defaults, while real access errors are returned.
 </ParamField>
 <ParamField path="label" type="string">
-  Operator-facing label used in session/banner text.
+  Operator-facing label used in session/banner text. Optional for
+  `delegate: true`; when omitted, OpenClaw auto-generates a UTC timestamp
+  label such as `delegate-20260605-143022` so follow-ups can use
+  `sessions_send(label=...)`.
+</ParamField>
+<ParamField path="delegate" type="boolean" default="false">
+  ACP-only hub-delegated persistent worker. Keeps the harness session
+  alive after the first task without binding a channel thread. The hub
+  agent follows up with `sessions_send(label=...)` and operators close
+  workers with `/acp delegate close <label>`. `label` is optional; omit
+  it to auto-generate a UTC timestamp label. Cannot be combined with
+  `thread: true` or `mode: "run"`.
 </ParamField>
 <ParamField path="resumeSessionId" type="string">
   Resume an existing ACP session instead of creating a new one. The
@@ -580,6 +594,95 @@ overrides.
   per-model `agents.defaults.models["provider/model"].params.thinking`
   for the selected model.
 </ParamField>
+
+## Hub-delegated persistent workers
+
+Use hub-delegated workers when a **hub session** (for example WebChat,
+WeChat, or another main chat surface) should keep a named external
+harness alive without creating a Discord/Telegram thread binding.
+
+Typical flow:
+
+1. The hub agent spawns a persistent ACP worker with a stable label.
+2. The worker runs the first task and stays active.
+3. Later turns use `sessions_send` against that label.
+4. The operator closes the worker with `/acp delegate close <label>` when
+   done.
+
+```json
+{
+  "runtime": "acp",
+  "delegate": true,
+  "label": "repo-fix",
+  "agentId": "codex",
+  "task": "Fix the failing tests in src/foo and summarize what changed."
+}
+```
+
+Follow-up from the same hub session:
+
+```json
+{
+  "label": "repo-fix",
+  "message": "Also add a regression test for the edge case we discussed."
+}
+```
+
+List owned workers:
+
+```json
+{
+  "delegated": true
+}
+```
+
+### When to use delegate vs thread bind
+
+| Shape                             | Use when                                                               | Follow-up path                                                  | Close path                        |
+| --------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------- | --------------------------------- |
+| `delegate: true`                  | Hub chat should relay to a named harness worker; no child thread/topic | `sessions_send(label=...)` from the owning hub session          | `/acp delegate close <label>`     |
+| `thread: true`, `mode: "session"` | The work should stay visible in a bound channel thread/topic           | Messages in that thread/topic                                   | `/acp close` on the bound session |
+| `mode: "run"`                     | One-shot background work with task completion back to the parent       | Parent task announce; optional `sessions_send` without A2A echo | Automatic after completion        |
+
+Rules:
+
+- `label` is optional for `delegate: true`. When omitted, OpenClaw assigns
+  a UTC timestamp label such as `delegate-20260605-143022` and returns it
+  in the spawn result.
+- Explicit labels must be unique among your active hub-delegated workers;
+  reuse fails until you close the old worker.
+- `delegate: true` cannot be combined with `thread: true` or
+  `mode: "run"`.
+- Hub-delegated workers stay parent-owned background sessions. OpenClaw
+  skips the agent-to-agent (A2A) follow-up loop for parent
+  `sessions_send` calls into those workers because the parent already
+  owns the result channel.
+- Initial spawn progress can still stream to the hub with
+  `streamTo: "parent"`, but hub-delegated workers do not publish
+  routine child output back to the visible channel unless the hub agent
+  relays it.
+
+### Operator commands
+
+| Command                        | What it does                                            | Example                         |
+| ------------------------------ | ------------------------------------------------------- | ------------------------------- |
+| `/acp delegate list`           | List hub-delegated workers owned by the current session | `/acp delegate list`            |
+| `/acp delegate status <label>` | Show state and idle/max-age expiry for one worker       | `/acp delegate status repo-fix` |
+| `/acp delegate close <label>`  | Close one owned worker                                  | `/acp delegate close repo-fix`  |
+
+There is no agent-tool close path for hub-delegated workers in the
+current release; use `/acp delegate close`.
+
+### Lifecycle defaults
+
+Hub-delegated workers auto-close when idle or when they reach a hard
+max age. Defaults:
+
+- `acp.delegate.idleHours`: `72`
+- `acp.delegate.maxAgeHours`: `168`
+
+Set either value to `0` to disable that limit. See
+[ACP config](/gateway/configuration-reference#acp).
 
 ## Spawn bind and thread modes
 
@@ -672,13 +775,17 @@ background work. The delivery path depends on that shape.
     see and message an ACP target, for example under broad
     `tools.sessions.visibility` settings.
 
-    OpenClaw skips the A2A follow-up only when the requester is the
-    parent of its own parent-owned one-shot ACP child. In that case,
-    running A2A on top of task completion can wake the parent with the
-    child's result, forward the parent's reply back into the child, and
-    create a parent/child echo loop. The `sessions_send` result reports
-    `delivery.status="skipped"` for that owned-child case because the
-    completion path is already responsible for the result.
+    OpenClaw skips the A2A follow-up when the requester is the parent of
+    its own parent-owned ACP child and the child is either:
+
+    - a one-shot ACP spawn (`mode: "run"`), or
+    - a hub-delegated persistent worker (`delegate: true`).
+
+    In those cases, running A2A on top of the parent-owned result path
+    can wake the parent with the child's result, forward the parent's
+    reply back into the child, and create a parent/child echo loop. The
+    `sessions_send` result reports `delivery.status="skipped"` because
+    the parent already owns the completion channel.
 
   </Accordion>
   <Accordion title="Resume an existing session">
@@ -770,23 +877,26 @@ If no target resolves, OpenClaw returns a clear error
 
 ## ACP controls
 
-| Command              | What it does                                              | Example                                                       |
-| -------------------- | --------------------------------------------------------- | ------------------------------------------------------------- |
-| `/acp spawn`         | Create ACP session; optional current bind or thread bind. | `/acp spawn codex --bind here --cwd /repo`                    |
-| `/acp cancel`        | Cancel in-flight turn for target session.                 | `/acp cancel agent:codex:acp:<uuid>`                          |
-| `/acp steer`         | Send steer instruction to running session.                | `/acp steer --session support inbox prioritize failing tests` |
-| `/acp close`         | Close session and unbind thread targets.                  | `/acp close`                                                  |
-| `/acp status`        | Show backend, mode, state, runtime options, capabilities. | `/acp status`                                                 |
-| `/acp set-mode`      | Set runtime mode for target session.                      | `/acp set-mode plan`                                          |
-| `/acp set`           | Generic runtime config option write.                      | `/acp set model openai/gpt-5.4`                               |
-| `/acp cwd`           | Set runtime working directory override.                   | `/acp cwd /Users/user/Projects/repo`                          |
-| `/acp permissions`   | Set approval policy profile.                              | `/acp permissions strict`                                     |
-| `/acp timeout`       | Set runtime timeout (seconds).                            | `/acp timeout 120`                                            |
-| `/acp model`         | Set runtime model override.                               | `/acp model anthropic/claude-opus-4-6`                        |
-| `/acp reset-options` | Remove session runtime option overrides.                  | `/acp reset-options`                                          |
-| `/acp sessions`      | List recent ACP sessions from store.                      | `/acp sessions`                                               |
-| `/acp doctor`        | Backend health, capabilities, actionable fixes.           | `/acp doctor`                                                 |
-| `/acp install`       | Print deterministic install and enable steps.             | `/acp install`                                                |
+| Command                | What it does                                              | Example                                                       |
+| ---------------------- | --------------------------------------------------------- | ------------------------------------------------------------- |
+| `/acp spawn`           | Create ACP session; optional current bind or thread bind. | `/acp spawn codex --bind here --cwd /repo`                    |
+| `/acp cancel`          | Cancel in-flight turn for target session.                 | `/acp cancel agent:codex:acp:<uuid>`                          |
+| `/acp steer`           | Send steer instruction to running session.                | `/acp steer --session support inbox prioritize failing tests` |
+| `/acp close`           | Close session and unbind thread targets.                  | `/acp close`                                                  |
+| `/acp delegate list`   | List hub-delegated workers owned by this session.         | `/acp delegate list`                                          |
+| `/acp delegate status` | Show one hub-delegated worker by label.                   | `/acp delegate status repo-fix`                               |
+| `/acp delegate close`  | Close one hub-delegated worker by label.                  | `/acp delegate close repo-fix`                                |
+| `/acp status`          | Show backend, mode, state, runtime options, capabilities. | `/acp status`                                                 |
+| `/acp set-mode`        | Set runtime mode for target session.                      | `/acp set-mode plan`                                          |
+| `/acp set`             | Generic runtime config option write.                      | `/acp set model openai/gpt-5.4`                               |
+| `/acp cwd`             | Set runtime working directory override.                   | `/acp cwd /Users/user/Projects/repo`                          |
+| `/acp permissions`     | Set approval policy profile.                              | `/acp permissions strict`                                     |
+| `/acp timeout`         | Set runtime timeout (seconds).                            | `/acp timeout 120`                                            |
+| `/acp model`           | Set runtime model override.                               | `/acp model anthropic/claude-opus-4-6`                        |
+| `/acp reset-options`   | Remove session runtime option overrides.                  | `/acp reset-options`                                          |
+| `/acp sessions`        | List recent ACP sessions from store.                      | `/acp sessions`                                               |
+| `/acp doctor`          | Backend health, capabilities, actionable fixes.           | `/acp doctor`                                                 |
+| `/acp install`         | Print deterministic install and enable steps.             | `/acp install`                                                |
 
 `/acp status` shows the effective runtime options plus runtime-level and
 backend-level session identifiers. Unsupported-control errors surface

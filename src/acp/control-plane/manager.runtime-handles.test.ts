@@ -1,5 +1,5 @@
 /** Tests ACP runtime handle caching, reuse, re-ensure, and eviction behavior. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AcpRuntimeError,
   AcpSessionManager,
@@ -146,6 +146,93 @@ describe("AcpSessionManager runtime handles", () => {
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
     expect(runtimeState.getStatus).toHaveBeenCalledTimes(3);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-ensures cached runtime handles when getStatus returns an empty status payload", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getStatus
+      .mockResolvedValueOnce({
+        summary: "status=alive",
+        details: { status: "alive" },
+      })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({
+        summary: "status=alive",
+        details: { status: "alive" },
+      });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "second",
+      mode: "prompt",
+      requestId: "r2",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.getStatus).toHaveBeenCalledTimes(3);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-ensures cached persistent runtime handles after the reuse idle cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const baseTime = new Date("2026-06-06T10:00:00.000Z");
+      vi.setSystemTime(baseTime);
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockReturnValue({
+        sessionKey: "agent:codex:acp:session-1",
+        storeSessionKey: "agent:codex:acp:session-1",
+        acp: readySessionMeta({ lastActivityAt: baseTime.getTime() }),
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
+
+      vi.setSystemTime(baseTime.getTime() + 11 * 60 * 1000);
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      });
+
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+      expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+      expectRecordFields(mockCallArg(runtimeState.close), {
+        reason: "runtime-handle-idle-stale",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("re-ensures cached runtime handles when persisted ACP session identity changes", async () => {

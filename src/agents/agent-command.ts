@@ -1,3 +1,4 @@
+import { requiresInternalAcpSessionEffects } from "@openclaw/acp-core";
 /** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -807,9 +808,10 @@ async function agentCommandInternal(
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
-  const suppressVisibleSessionEffects = opts.sessionEffects === "internal";
   const preserveUserFacingSessionModelState = opts.preserveUserFacingSessionModelState === true;
   const prepared = await prepareAgentCommandExecution(opts, runtime);
+  const suppressVisibleSessionEffects =
+    opts.sessionEffects === "internal" || requiresInternalAcpSessionEffects(prepared.sessionEntry);
   const {
     body,
     transcriptBody,
@@ -836,11 +838,11 @@ async function agentCommandInternal(
     agentDir,
     runId,
     acpManager,
-    acpResolution,
     pluginsEnabled,
     manifestMetadataSnapshot,
     modelManifestContext,
   } = prepared;
+  let acpResolution = prepared.acpResolution;
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
   let trackedRestartRecoveryDeliveryContext = false;
@@ -857,6 +859,19 @@ async function agentCommandInternal(
       });
       if (sendPolicy === "deny") {
         throw new Error("send blocked by session policy");
+      }
+    }
+
+    if (!isRawModelRun && acpResolution?.kind === "stale" && sessionKey) {
+      const repaired = await acpManager.repairMissingSessionMetadata({
+        cfg,
+        sessionKey,
+      });
+      if (repaired) {
+        acpResolution = acpManager.resolveSession({
+          cfg,
+          sessionKey,
+        });
       }
     }
 
@@ -1009,8 +1024,6 @@ async function agentCommandInternal(
         throw acpError;
       }
 
-      attemptExecutionRuntime.emitAcpLifecycleEnd({ runId });
-
       const finalTextRaw = visibleTextAccumulator.finalizeRaw();
       const finalText = visibleTextAccumulator.finalize();
       try {
@@ -1066,6 +1079,10 @@ async function agentCommandInternal(
           `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
         );
       }
+
+      // Waited inter-session callers (sessions_send) read chat.history after lifecycle end.
+      // Emit end only after transcript persistence so the new assistant turn is visible.
+      attemptExecutionRuntime.emitAcpLifecycleEnd({ runId });
 
       const result = attemptExecutionRuntime.buildAcpResult({
         payloadText: finalText,

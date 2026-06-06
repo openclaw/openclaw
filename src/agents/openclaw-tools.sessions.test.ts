@@ -1848,6 +1848,90 @@ describe("sessions tools", () => {
     expect(calls.some((call) => call.method === "send")).toBe(false);
   });
 
+  it("sessions_send skips A2A ping-pong for hub-delegated ACP delegates without sqlite acp metadata", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:openclaw-weixin:direct:o9cq806y9qtmkjteaum8nyfvjtl8@im.wechat";
+    const targetKey = "agent:claude:acp:delegate-child";
+    let historyCallCount = 0;
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? {
+            sessionId: "child-session",
+            updatedAt: 1,
+            spawnedBy: requesterKey,
+            parentSessionKey: requesterKey,
+            hubDelegated: {
+              ownerSessionKey: requesterKey,
+              createdAt: 1,
+            },
+            label: "delegate-child",
+          }
+        : undefined,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-child", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        historyCallCount += 1;
+        return {
+          messages:
+            historyCallCount === 1
+              ? []
+              : [
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: "child reply" }],
+                    timestamp: 20,
+                  },
+                ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "openclaw-weixin",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call-hub-delegated-acp", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    const waitedDetails = sessionsSendDetails(waited.details);
+    expect(waitedDetails.status).toBe("ok");
+    expect(waitedDetails.reply).toBe("child reply");
+    expect(waitedDetails.delivery?.status).toBe("skipped");
+    expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
+    const replyPromptAgentCalls = calls.filter(
+      (call) =>
+        call.method === "agent" &&
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
+          "Agent-to-agent reply step",
+        ),
+    );
+    expect(replyPromptAgentCalls).toStrictEqual([]);
+    expect(
+      calls.some(
+        (call) =>
+          call.method === "agent" &&
+          (call.params as { message?: string })?.message === "Agent-to-agent announce step.",
+      ),
+    ).toBe(false);
+  });
+
   it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;

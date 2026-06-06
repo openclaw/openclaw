@@ -85,6 +85,7 @@ export type GatewaySessionRow = {
   endedAt?: number;
   runtimeMs?: number;
   parentSessionKey?: string;
+  hubDelegated?: SessionEntry["hubDelegated"];
   childSessions?: string[];
   responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;

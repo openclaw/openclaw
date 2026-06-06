@@ -12,15 +12,15 @@ orchestrate sub-agents.
 
 ## Available tools
 
-| Tool               | What it does                                                                |
-| ------------------ | --------------------------------------------------------------------------- |
-| `sessions_list`    | List sessions with optional filters (kind, label, agent, recency, preview)  |
-| `sessions_history` | Read the transcript of a specific session                                   |
-| `sessions_send`    | Send a message to another session and optionally wait                       |
-| `sessions_spawn`   | Spawn an isolated sub-agent session for background work                     |
-| `sessions_yield`   | End the current turn and wait for follow-up sub-agent results               |
-| `subagents`        | List spawned sub-agent status for this session                              |
-| `session_status`   | Show a `/status`-style card and optionally set a per-session model override |
+| Tool               | What it does                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| `sessions_list`    | List sessions with optional filters (kind, label, agent, recency, preview, delegated) |
+| `sessions_history` | Read the transcript of a specific session                                             |
+| `sessions_send`    | Send a message to another session and optionally wait                                 |
+| `sessions_spawn`   | Spawn an isolated sub-agent session for background work                               |
+| `sessions_yield`   | End the current turn and wait for follow-up sub-agent results                         |
+| `subagents`        | List spawned sub-agent status for this session                                        |
+| `session_status`   | Show a `/status`-style card and optionally set a per-session model override           |
 
 These tools are still subject to the active tool profile and allow/deny
 policy. `tools.profile: "coding"` includes the full session orchestration
@@ -47,8 +47,9 @@ effective tool list.
 
 `sessions_list` returns sessions with their key, agentId, kind, channel, model,
 token counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
-`node`), exact `label`, exact `agentId`, search text, or recency
-(`activeMinutes`). When you need mailbox-style triage, it can also ask for a
+`node`), exact `label`, exact `agentId`, search text, recency
+(`activeMinutes`), or `delegated: true` to list only hub-delegated ACP workers
+owned by the current session. When you need mailbox-style triage, it can also ask for a
 visibility-scoped derived title, a last-message preview snippet, or bounded recent
 messages on each row. Derived titles and previews are produced only for sessions
 the caller can already see under the configured session tool visibility policy, so
@@ -94,6 +95,8 @@ the response:
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return
   immediately.
 - **Wait for reply:** set a timeout and get the response inline.
+- **Hub-delegated workers:** target an owned worker by `label` instead of
+  `sessionKey` after `sessions_spawn({ runtime: "acp", delegate: true, label })`.
 
 Thread-scoped chat sessions, such as Slack or Discord keys ending in
 `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel
@@ -154,6 +157,10 @@ Key options:
 - `runtime: "subagent"` (default) or `"acp"` for external harness agents.
 - `model` and `thinking` overrides for the child session.
 - `thread: true` to bind the spawn to a chat thread (Discord, Slack, etc.).
+- `delegate: true` with `runtime: "acp"` to keep a named hub-delegated ACP
+  worker alive without thread binding; `label` is optional and auto-generated
+  when omitted. Follow up with `sessions_send(label=...)` and close with
+  `/acp delegate close <label>`.
 - `sandbox: "require"` to enforce sandboxing on the child.
 - `context: "fork"` for native sub-agents when the child needs the current
   requester transcript; omit it or use `context: "isolated"` for a clean child.

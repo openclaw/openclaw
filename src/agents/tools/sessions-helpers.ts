@@ -59,6 +59,9 @@ export type SessionListRow = {
   derivedTitle?: string;
   lastMessagePreview?: string;
   parentSessionKey?: string;
+  hubDelegated?: boolean;
+  idleExpiresAt?: number;
+  maxAgeExpiresAt?: number;
   deliveryContext?: SessionListDeliveryContext;
   updatedAt?: number | null;
   sessionId?: string;

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isParentOwnedBackgroundAcpSession,
   isRequesterParentOfBackgroundAcpSession,
+  requiresInternalAcpSessionEffects,
 } from "./session-interaction-mode.js";
 
 const parentKey = "agent:main:main";
@@ -17,6 +18,15 @@ describe("isParentOwnedBackgroundAcpSession", () => {
     expect(
       isParentOwnedBackgroundAcpSession({
         acp: { mode: "persistent" } as never,
+        spawnedBy: parentKey,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns parent-owned-background for hub-delegated sessions without sqlite acp metadata", () => {
+    expect(
+      isParentOwnedBackgroundAcpSession({
+        hubDelegated: { ownerSessionKey: parentKey, createdAt: 1 },
         spawnedBy: parentKey,
       }),
     ).toBe(true);
@@ -57,12 +67,51 @@ describe("isParentOwnedBackgroundAcpSession", () => {
   });
 });
 
+describe("requiresInternalAcpSessionEffects", () => {
+  it("returns true for hub-delegated ACP child sessions", () => {
+    expect(
+      requiresInternalAcpSessionEffects({
+        hubDelegated: { ownerSessionKey: parentKey, createdAt: 1 },
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true for parent-owned background ACP sessions", () => {
+    expect(
+      requiresInternalAcpSessionEffects({
+        acp: { mode: "oneshot" },
+        spawnedBy: parentKey,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for interactive ACP sessions", () => {
+    expect(
+      requiresInternalAcpSessionEffects({
+        acp: { mode: "persistent" },
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("isRequesterParentOfBackgroundAcpSession", () => {
   const backgroundEntry = {
     acp: { mode: "oneshot" } as never,
     spawnedBy: parentKey,
     parentSessionKey: parentKey,
   };
+
+  it("returns true when requester matches hubDelegated owner", () => {
+    expect(
+      isRequesterParentOfBackgroundAcpSession(
+        {
+          hubDelegated: { ownerSessionKey: parentKey, createdAt: 1 },
+          spawnedBy: parentKey,
+        },
+        parentKey,
+      ),
+    ).toBe(true);
+  });
 
   it("returns true when requester matches spawnedBy", () => {
     expect(

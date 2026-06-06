@@ -226,6 +226,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
   "acp.runtime.installCommand":
     "Optional operator install/setup command shown by `/acp install` and `/acp doctor` when ACP backend wiring is missing.",
+  "acp.delegate":
+    "Lifecycle defaults for hub-delegated persistent ACP workers spawned from parent sessions without thread binding.",
+  "acp.delegate.idleHours":
+    "Inactivity window in hours before hub-delegated ACP sessions auto-close (default: 72). Set 0 to disable idle expiry.",
+  "acp.delegate.maxAgeHours":
+    "Hard max age in hours from creation before hub-delegated ACP sessions auto-close (default: 168). Set 0 to disable max-age expiry.",
   commitments:
     "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs.",
   "commitments.enabled":

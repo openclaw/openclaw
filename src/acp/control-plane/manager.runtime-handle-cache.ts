@@ -35,6 +35,22 @@ export class ManagerRuntimeHandleCache {
     return this.runtimeCache.get(normalizeActorKey(sessionKey));
   }
 
+  peek(sessionKey: string): CachedRuntimeState | null {
+    return this.runtimeCache.peek(normalizeActorKey(sessionKey));
+  }
+
+  touch(sessionKey: string): void {
+    this.runtimeCache.get(normalizeActorKey(sessionKey));
+  }
+
+  getCacheIdleMs(sessionKey: string, now = Date.now()): number | null {
+    const lastTouchedAt = this.runtimeCache.getLastTouchedAt(normalizeActorKey(sessionKey));
+    if (lastTouchedAt == null) {
+      return null;
+    }
+    return Math.max(0, now - lastTouchedAt);
+  }
+
   set(sessionKey: string, state: CachedRuntimeState): void {
     this.runtimeCache.set(normalizeActorKey(sessionKey), state);
   }
@@ -193,13 +209,17 @@ export class ManagerRuntimeHandleCache {
 
 function isRuntimeStatusUnavailable(status: AcpRuntimeStatus | undefined): boolean {
   if (!status) {
-    return false;
+    return true;
   }
   const detailsStatus = normalizeLowercaseStringOrEmpty(status.details?.status);
+  const summary = status.summary?.trim() ?? "";
+  if (!detailsStatus && !summary) {
+    return true;
+  }
   if (detailsStatus === "dead" || detailsStatus === "no-session") {
     return true;
   }
-  const summaryMatch = status.summary?.match(/\bstatus=([^\s]+)/i);
+  const summaryMatch = summary.match(/\bstatus=([^\s]+)/i);
   const summaryStatus = normalizeLowercaseStringOrEmpty(summaryMatch?.[1]);
   return summaryStatus === "dead" || summaryStatus === "no-session";
 }

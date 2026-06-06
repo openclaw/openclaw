@@ -92,13 +92,10 @@ async function clearPersistedRuntimeResumeState(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     mutate: (current, entry) => {
-      if (!entry) {
-        return null;
+      if (!entry || !current) {
+        return undefined;
       }
       const base = current;
-      if (!base) {
-        return null;
-      }
       const currentIdentity = resolveSessionIdentityFromMeta(base);
       if (!currentIdentity?.acpxSessionId && !currentIdentity?.agentSessionId) {
         return base;
@@ -143,13 +140,10 @@ export async function discardPersistedManagerRuntimeState(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     mutate: (current, entry) => {
-      if (!entry) {
-        return null;
+      if (!entry || !current) {
+        return undefined;
       }
       const base = current;
-      if (!base) {
-        return null;
-      }
       const currentIdentity = resolveSessionIdentityFromMeta(base);
       const nextIdentity = currentIdentity
         ? {

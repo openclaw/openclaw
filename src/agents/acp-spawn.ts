@@ -2,6 +2,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import {
+  isHubDelegatedAcpSessionEntry,
+  resolveHubDelegatedAutoLabel,
+  type HubDelegatedSessionMeta,
+} from "@openclaw/acp-core";
+import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
 } from "@openclaw/acp-core/runtime/session-identifiers";
@@ -11,6 +16,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { hasPersistedAcpSessionMetadata } from "../acp/control-plane/manager.repair-missing-metadata.js";
 import type { AcpTurnAttachment } from "../acp/control-plane/manager.types.js";
 import {
   cleanupFailedAcpSpawn,
@@ -47,6 +53,7 @@ import {
 } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import { loadSessionStore } from "../config/sessions/store.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
@@ -129,6 +136,8 @@ export type SpawnAcpParams = {
   runTimeoutSeconds?: number;
   cwd?: string;
   mode?: SpawnAcpMode;
+  /** Hub-delegated persistent worker without channel thread binding. */
+  delegate?: boolean;
   thread?: boolean;
   sandbox?: SpawnAcpSandboxMode;
   streamTo?: SpawnAcpStreamTarget;
@@ -189,6 +198,9 @@ export const ACP_SPAWN_ERROR_CODES = [
   "agent_forbidden",
   "cwd_resolution_failed",
   "thread_binding_invalid",
+  "delegate_thread_conflict",
+  "delegate_requester_required",
+  "delegate_label_conflict",
   "spawn_failed",
   "dispatch_failed",
 ] as const;
@@ -198,6 +210,8 @@ type SpawnAcpResultFields = {
   childSessionKey?: string;
   runId?: string;
   mode?: SpawnAcpMode;
+  delegate?: boolean;
+  label?: string;
   runTimeoutSeconds?: number;
   inlineDelivery?: boolean;
   streamLogPath?: string;
@@ -227,6 +241,10 @@ export const ACP_SPAWN_ACCEPTED_NOTE =
   "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";
 export const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
+export const ACP_SPAWN_DELEGATE_ACCEPTED_NOTE =
+  "Hub-delegated ACP session stays active after this task; follow up via sessions_send(label=...) and close with /acp delegate close <label>.";
+
+// Deferred agent-tools follow-up: hub-delegated close stays on /acp delegate close for MVP.
 
 export function resolveAcpSpawnRuntimePolicyError(params: {
   cfg: OpenClawConfig;
@@ -348,12 +366,52 @@ function resolvePlacementWithoutChannelPlugin(params: {
 function resolveSpawnMode(params: {
   requestedMode?: SpawnAcpMode;
   threadRequested: boolean;
+  delegateRequested?: boolean;
 }): SpawnAcpMode {
+  if (params.delegateRequested) {
+    return "session";
+  }
   if (params.requestedMode === "run" || params.requestedMode === "session") {
     return params.requestedMode;
   }
   // Thread-bound spawns should default to persistent sessions.
   return params.threadRequested ? "session" : "run";
+}
+
+function findHubDelegateLabelConflict(params: {
+  cfg: OpenClawConfig;
+  ownerSessionKey: string;
+  label: string;
+}): string | undefined {
+  const ownerSessionKey = normalizeOptionalString(params.ownerSessionKey);
+  const label = normalizeOptionalString(params.label);
+  if (!ownerSessionKey || !label) {
+    return undefined;
+  }
+  for (const agentId of resolveConfiguredAcpSubagentTargetIds(params.cfg)) {
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+    const store = loadSessionStore(storePath);
+    for (const [sessionKey, entry] of Object.entries(store)) {
+      if (
+        isHubDelegatedAcpSessionEntry(entry) &&
+        entry.hubDelegated.ownerSessionKey === ownerSessionKey &&
+        normalizeOptionalString(entry.label) === label
+      ) {
+        return sessionKey;
+      }
+    }
+  }
+  return undefined;
+}
+
+function resolveAcceptedSpawnNote(params: {
+  delegateRequested: boolean;
+  spawnMode: SpawnAcpMode;
+}): string {
+  if (params.delegateRequested) {
+    return ACP_SPAWN_DELEGATE_ACCEPTED_NOTE;
+  }
+  return params.spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE;
 }
 
 function resolveAcpSessionMode(mode: SpawnAcpMode): AcpRuntimeSessionMode {
@@ -1195,6 +1253,7 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   spawnMode: SpawnAcpMode;
   requestThreadBinding: boolean;
   effectiveStreamToParent: boolean;
+  hubDelegated: boolean;
   requester: AcpSpawnRequesterState;
   binding: SessionBindingRecord | null;
 }): AcpSpawnBootstrapDeliveryPlan {
@@ -1247,8 +1306,12 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   // Background run-mode spawns should stay internal and report back through
   // the parent task lifecycle notifier instead of letting the child ACP
   // session write raw output directly into the originating channel.
+  // Hub-delegated workers stay internal; hub relays via sessions_send instead.
   const useInlineDelivery =
-    hasDeliveryTarget && !params.effectiveStreamToParent && params.spawnMode === "session";
+    !params.hubDelegated &&
+    hasDeliveryTarget &&
+    !params.effectiveStreamToParent &&
+    params.spawnMode === "session";
 
   return {
     useInlineDelivery,
@@ -1293,6 +1356,31 @@ export async function spawnAcpDirect(
   }
 
   const requestThreadBinding = params.thread === true;
+  const delegateRequested = params.delegate === true;
+  let spawnLabel = normalizeOptionalString(params.label);
+  if (delegateRequested && requestThreadBinding) {
+    return createAcpSpawnFailure({
+      status: "error",
+      errorCode: "delegate_thread_conflict",
+      error:
+        'sessions_spawn(delegate=true) cannot be combined with thread=true. Use delegate for hub-relayed persistent workers, or { mode: "session", thread: true } on a thread-capable channel.',
+    });
+  }
+  if (delegateRequested && params.mode === "run") {
+    return createAcpSpawnFailure({
+      status: "error",
+      errorCode: "spawn_failed",
+      error:
+        'sessions_spawn(delegate=true) requires a persistent delegate worker; omit mode="run".',
+    });
+  }
+  if (delegateRequested && !requesterInternalKey) {
+    return createAcpSpawnFailure({
+      status: "error",
+      errorCode: "delegate_requester_required",
+      error: "sessions_spawn(delegate=true) requires an active requester session context.",
+    });
+  }
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -1330,15 +1418,45 @@ export async function spawnAcpDirect(
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
+    delegateRequested,
   });
-  if (spawnMode === "session" && !requestThreadBinding) {
+  if (spawnMode === "session" && !requestThreadBinding && !delegateRequested) {
     return createAcpSpawnFailure({
       status: "error",
       errorCode: "thread_required",
       error:
         'sessions_spawn(runtime="acp", mode="session") requires thread=true so the ACP session can stay bound to a channel thread. ' +
-        'Retry with { mode: "session", thread: true } on a channel that exposes threads (e.g. Discord, Slack, Telegram topics), or use mode="run" for one-shot work.',
+        'Retry with { mode: "session", thread: true } on a channel that exposes threads (e.g. Discord, Slack, Telegram topics), use delegate=true for hub-relayed persistent workers, or use mode="run" for one-shot work.',
     });
+  }
+  if (delegateRequested) {
+    const explicitDelegateLabel = spawnLabel;
+    spawnLabel =
+      spawnLabel ??
+      resolveHubDelegatedAutoLabel({
+        hasLabelConflict: (label) =>
+          Boolean(
+            findHubDelegateLabelConflict({
+              cfg,
+              ownerSessionKey: requesterInternalKey,
+              label,
+            }),
+          ),
+      });
+    if (explicitDelegateLabel) {
+      const conflictingKey = findHubDelegateLabelConflict({
+        cfg,
+        ownerSessionKey: requesterInternalKey,
+        label: spawnLabel,
+      });
+      if (conflictingKey) {
+        return createAcpSpawnFailure({
+          status: "error",
+          errorCode: "delegate_label_conflict",
+          error: `An active hub-delegated session with label "${spawnLabel}" already exists (${conflictingKey}). Close it with /acp delegate close ${spawnLabel} before reusing the label.`,
+        });
+      }
+    }
   }
 
   const targetAgentResult = resolveTargetAcpAgentId({
@@ -1468,20 +1586,30 @@ export async function spawnAcpDirect(
   let binding: SessionBindingRecord | null = null;
   let sessionCreated = false;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
+  const hubDelegatedMeta: HubDelegatedSessionMeta | undefined =
+    delegateRequested && requesterInternalKey
+      ? {
+          ownerSessionKey: requesterInternalKey,
+          createdAt: Date.now(),
+        }
+      : undefined;
   try {
     await callGateway({
       method: "sessions.patch",
       params: {
         key: sessionKey,
         spawnedBy: requesterInternalKey,
+        ...(hubDelegatedMeta ? { parentSessionKey: requesterInternalKey } : {}),
+        ...(hubDelegatedMeta ? { hubDelegated: hubDelegatedMeta } : {}),
         ...subagentEnvelopeState.childSessionPatch,
         ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
         ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
-        ...(params.label ? { label: params.label } : {}),
+        ...(spawnLabel ? { label: spawnLabel } : {}),
       },
       timeoutMs: 10_000,
     });
     sessionCreated = true;
+    invalidateSessionStoreCache(resolveStorePath(cfg.session?.store, { agentId: targetAgentId }));
     const initializedSession = await initializeAcpSpawnRuntime({
       cfg,
       sessionKey,
@@ -1493,12 +1621,21 @@ export async function spawnAcpDirect(
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;
 
+    if (
+      !hasPersistedAcpSessionMetadata({
+        cfg,
+        sessionKey,
+      })
+    ) {
+      throw new Error(`Could not persist ACP metadata for ${sessionKey}.`);
+    }
+
     if (preparedBinding) {
       ({ binding } = await bindPreparedAcpThread({
         cfg,
         sessionKey,
         targetAgentId,
-        label: params.label,
+        label: spawnLabel,
         preparedBinding,
         initializedRuntime: initializedSession,
       }));
@@ -1523,9 +1660,11 @@ export async function spawnAcpDirect(
     spawnMode,
     requestThreadBinding,
     effectiveStreamToParent,
+    hubDelegated: delegateRequested,
     requester: requesterState,
     binding,
   });
+  const acceptedNote = resolveAcceptedSpawnNote({ delegateRequested, spawnMode });
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   const streamLogPath =
@@ -1580,10 +1719,11 @@ export async function spawnAcpDirect(
         threadId: deliveryPlan.threadId,
         idempotencyKey: childIdem,
         deliver: deliveryPlan.useInlineDelivery,
+        ...(delegateRequested ? { sessionEffects: "internal" as const } : {}),
         lane: AGENT_LANE_SUBAGENT,
         acpTurnSource: "manual_spawn",
         timeout: runTimeoutSeconds,
-        label: params.label || undefined,
+        label: spawnLabel || undefined,
         ...(gatewayAttachments ? { attachments: gatewayAttachments } : {}),
       },
       timeoutMs: 10_000,
@@ -1637,11 +1777,12 @@ export async function spawnAcpDirect(
         requesterOrigin: requesterState.origin,
         childSessionKey: sessionKey,
         runId: childRunId,
-        label: params.label,
+        label: spawnLabel,
         task: params.task,
         preferMetadata: true,
         deliveryStatus: requesterInternalKey ? "pending" : "parent_missing",
         startedAt: Date.now(),
+        ...(delegateRequested ? { notifyPolicy: "silent" as const } : {}),
       });
       if (!task) {
         log.warn("Failed to persist background task for ACP spawn", {
@@ -1661,9 +1802,11 @@ export async function spawnAcpDirect(
       childSessionKey: sessionKey,
       runId: childRunId,
       mode: spawnMode,
+      delegate: delegateRequested || undefined,
       runTimeoutSeconds,
+      ...(spawnLabel ? { label: spawnLabel } : {}),
       ...(streamLogPath ? { streamLogPath } : {}),
-      note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+      note: acceptedNote,
     };
   }
 
@@ -1676,11 +1819,12 @@ export async function spawnAcpDirect(
       requesterOrigin: requesterState.origin,
       childSessionKey: sessionKey,
       runId: childRunId,
-      label: params.label,
+      label: spawnLabel,
       task: params.task,
       preferMetadata: true,
       deliveryStatus: requesterInternalKey ? "pending" : "parent_missing",
       startedAt: Date.now(),
+      ...(delegateRequested ? { notifyPolicy: "silent" as const } : {}),
     });
     if (!task) {
       log.warn("Failed to persist background task for ACP spawn", {
@@ -1701,8 +1845,10 @@ export async function spawnAcpDirect(
     childSessionKey: sessionKey,
     runId: childRunId,
     mode: spawnMode,
+    delegate: delegateRequested || undefined,
     runTimeoutSeconds,
+    ...(spawnLabel ? { label: spawnLabel } : {}),
     ...(deliveryPlan.useInlineDelivery ? { inlineDelivery: true } : {}),
-    note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+    note: acceptedNote,
   };
 }
