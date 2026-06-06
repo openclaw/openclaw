@@ -45,6 +45,11 @@ import {
   normalizeProviderStarted,
 } from "../../agents/run-timeout-attribution.js";
 import {
+  AGENT_SESSION_LANE_BUSY_CODE,
+  formatAgentSessionLaneBusyMessage,
+  isAgentSessionLaneBusyError,
+} from "../../agents/session-lane-busy.js";
+import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
@@ -951,7 +956,10 @@ function dispatchAgentRunFromGateway(params: {
     })
     .catch((err: unknown) => {
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
-      const renderedErr = formatForLog(err);
+      const laneBusy = isAgentSessionLaneBusyError(err);
+      const renderedErr = laneBusy
+        ? formatAgentSessionLaneBusyMessage(err.details)
+        : formatForLog(err);
       if (taskTracked) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
@@ -966,6 +974,7 @@ function dispatchAgentRunFromGateway(params: {
         runId: params.runId,
         status: aborted ? ("timeout" as const) : ("error" as const),
         summary: aborted ? "aborted" : renderedErr,
+        ...(laneBusy ? { errorCode: AGENT_SESSION_LANE_BUSY_CODE, laneWait: err.details } : {}),
         ...(aborted ? { stopReason, timeoutPhase: "gateway_draining" as const } : {}),
       };
       setGatewayDedupeEntries({
@@ -973,14 +982,14 @@ function dispatchAgentRunFromGateway(params: {
         keys: params.dedupeKeys,
         entry: {
           ts: Date.now(),
-          ok: aborted,
+          ok: aborted || laneBusy,
           payload,
-          ...(aborted ? {} : { error }),
+          ...(aborted || laneBusy ? {} : { error }),
         },
       });
-      params.respond(aborted, payload, aborted ? undefined : error, {
+      params.respond(aborted || laneBusy, payload, aborted || laneBusy ? undefined : error, {
         runId: params.runId,
-        ...(aborted ? {} : { error: formatForLog(err) }),
+        ...(aborted || laneBusy ? {} : { error: formatForLog(err) }),
       });
     })
     .finally(() => {
@@ -2520,6 +2529,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               messageChannel: originMessageChannel,
               runId,
               lane: request.lane,
+              failOnSessionLaneWait: dispatchTaskTrackingMode === "cli",
               modelRun: request.modelRun === true,
               promptMode: request.promptMode,
               extraSystemPrompt: request.extraSystemPrompt,

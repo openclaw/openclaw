@@ -1278,6 +1278,35 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("renders session lane busy gateway replies and exits non-zero", async () => {
+    await withTempStore(async () => {
+      callGateway.mockResolvedValue({
+        runId: "idem-1",
+        status: "error",
+        errorCode: "LANE_WAIT_EXCEEDED",
+        summary: "busy",
+        laneWait: {
+          lane: "session:agent:hana:main",
+          waitedMs: 150_804,
+          warnAfterMs: 2_000,
+          queueAhead: 1,
+          activeAhead: 1,
+          activeNow: 0,
+          queueBehind: 0,
+        },
+        result: { payloads: [] },
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Error: session lane busy (lane=session:agent:hana:main, waitedMs=150804ms, queueAhead=1, activeAhead=1, activeNow=0, queueBehind=0)\nSuggestion: wait for the current task to complete and retry.",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.log).not.toHaveBeenCalledWith("busy");
+    });
+  });
+
   it("surfaces duplicate in-flight gateway runs without pretending a reply arrived", async () => {
     await withTempStore(async () => {
       callGateway.mockResolvedValue({

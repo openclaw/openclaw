@@ -5,7 +5,7 @@ import {
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import type { CommandQueueEnqueueOptions, CommandQueueWaitInfo } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
@@ -69,7 +69,8 @@ type QueueEntry = {
   activeAheadAtEnqueue: number;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
-  onWait?: (waitMs: number, queuedAhead: number) => void;
+  onWait?: CommandQueueEnqueueOptions["onWait"];
+  rejectOnWait?: CommandQueueEnqueueOptions["rejectOnWait"];
 };
 
 type LaneState = {
@@ -341,11 +342,28 @@ function drainLane(lane: string) {
       while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
         const entry = state.queue.shift() as QueueEntry;
         const waitedMs = Date.now() - entry.enqueuedAt;
+        let waitRejection: unknown;
         if (waitedMs >= entry.warnAfterMs) {
+          const waitInfo: CommandQueueWaitInfo = {
+            lane,
+            waitedMs,
+            warnAfterMs: entry.warnAfterMs,
+            queueAhead: entry.queuedAheadAtEnqueue,
+            activeAhead: entry.activeAheadAtEnqueue,
+            activeNow: state.activeTaskIds.size,
+            queueBehind: state.queue.length,
+          };
           try {
-            entry.onWait?.(waitedMs, entry.queuedAheadAtEnqueue);
+            entry.onWait?.(waitedMs, entry.queuedAheadAtEnqueue, waitInfo);
           } catch (err) {
             diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
+          }
+          if (entry.rejectOnWait) {
+            try {
+              waitRejection = entry.rejectOnWait(waitInfo);
+            } catch (err) {
+              waitRejection = err;
+            }
           }
           diag.warn(
             `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${entry.queuedAheadAtEnqueue} ` +
@@ -353,6 +371,10 @@ function drainLane(lane: string) {
           );
         }
         logLaneDequeue(lane, waitedMs, state.queue.length);
+        if (waitRejection !== undefined) {
+          entry.reject(waitRejection);
+          continue;
+        }
         const taskId = getQueueState().nextTaskId++;
         const taskGeneration = state.generation;
         state.activeTaskIds.add(taskId);
@@ -446,6 +468,7 @@ export function enqueueCommandInLane<T>(
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
       onWait: opts?.onWait,
+      rejectOnWait: opts?.rejectOnWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
     drainLane(cleaned);

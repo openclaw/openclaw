@@ -7,6 +7,7 @@ import {
   registerExecApprovalFollowupRuntimeHandoff,
   resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { AgentSessionLaneBusyError } from "../../agents/session-lane-busy.js";
 import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
@@ -3532,6 +3533,56 @@ describe("gateway agent handler", () => {
         expect(context.dedupe.get("agent:task-registry-agent-run-provider-timeout")?.ok).toBe(
           false,
         );
+      });
+    });
+  });
+
+  it("returns structured lane-busy final replies for CLI agent runs", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-lane-busy-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      const laneBusyError = new AgentSessionLaneBusyError({
+        lane: "session:agent:hana:main",
+        waitedMs: 150_804,
+        warnAfterMs: 2_000,
+        queueAhead: 1,
+        activeAhead: 1,
+        activeNow: 0,
+        queueBehind: 0,
+      });
+      mocks.agentCommand.mockRejectedValueOnce(laneBusyError);
+      const context = makeContext();
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run-lane-busy",
+        },
+        { context, reqId: "task-registry-agent-run-lane-busy" },
+      );
+
+      await waitForAssertion(() => {
+        expectRecordFields(findTaskByRunId("task-registry-agent-run-lane-busy"), {
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "failed",
+        });
+        const dedupeEntry = context.dedupe.get("agent:task-registry-agent-run-lane-busy");
+        expect(dedupeEntry?.ok).toBe(true);
+        const payload = expectRecordFields(dedupeEntry?.payload, {
+          runId: "task-registry-agent-run-lane-busy",
+          status: "error",
+          errorCode: "LANE_WAIT_EXCEEDED",
+        });
+        expectStringFieldContains(payload, "summary", "Error: session lane busy");
+        expectRecordFields(payload.laneWait, {
+          lane: "session:agent:hana:main",
+          waitedMs: 150_804,
+          queueAhead: 1,
+          activeAhead: 1,
+        });
       });
     });
   });

@@ -226,6 +226,7 @@ describe("command queue", () => {
       const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
       const calls: string[] = [];
       let queuedAhead: number | null = null;
+      let waitInfo: { activeAhead?: number; queueBehind?: number } | null = null;
 
       const background = enqueueCommandInLane(
         CommandLane.Main,
@@ -244,8 +245,9 @@ describe("command queue", () => {
         {
           priority: "foreground",
           warnAfterMs: 5,
-          onWait: (_ms, ahead) => {
+          onWait: (_ms, ahead, info) => {
             queuedAhead = ahead;
+            waitInfo = info;
           },
         },
       );
@@ -258,6 +260,7 @@ describe("command queue", () => {
 
       expect(calls).toEqual(["foreground", "background"]);
       expect(queuedAhead).toBe(0);
+      expect(waitInfo).toMatchObject({ activeAhead: 1, queueBehind: 1 });
       const waitWarning = diagnosticMocks.diag.warn.mock.calls.find(
         ([message]) =>
           typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
@@ -281,6 +284,7 @@ describe("command queue", () => {
   it("invokes onWait callback when a task waits past the threshold", async () => {
     let waited: number | null = null;
     let queuedAhead: number | null = null;
+    let waitInfo: { lane?: string; queueAhead?: number; activeAhead?: number } | null = null;
 
     vi.useFakeTimers();
     try {
@@ -291,9 +295,10 @@ describe("command queue", () => {
 
       const second = enqueueCommand(async () => {}, {
         warnAfterMs: 5,
-        onWait: (ms, ahead) => {
+        onWait: (ms, ahead, info) => {
           waited = ms;
           queuedAhead = ahead;
+          waitInfo = info;
         },
       });
 
@@ -304,11 +309,51 @@ describe("command queue", () => {
       expect(typeof waited).toBe("number");
       expect(waited).toBeGreaterThanOrEqual(5);
       expect(queuedAhead).toBe(0);
+      expect(waitInfo).toMatchObject({ lane: CommandLane.Main, queueAhead: 0, activeAhead: 1 });
       const waitWarning = diagnosticMocks.diag.warn.mock.calls.find(
         ([message]) =>
           typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
       );
       expect(waitWarning?.[0]).toContain("queueAhead=0 activeAhead=1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("can reject a waited entry with structured wait facts", async () => {
+    vi.useFakeTimers();
+    try {
+      const lane = `reject-wait-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      setCommandLaneConcurrency(lane, 1);
+      const blocker = createDeferred();
+      const calls: string[] = [];
+
+      const first = enqueueCommandInLane(lane, async () => {
+        await blocker.promise;
+        calls.push("first");
+        return "first";
+      });
+      const second = enqueueCommandInLane(lane, async () => "second", {
+        warnAfterMs: 5,
+        rejectOnWait: (info) =>
+          new Error(
+            `busy lane=${info.lane} waitedMs=${info.waitedMs} queueAhead=${info.queueAhead} activeAhead=${info.activeAhead}`,
+          ),
+      });
+      const third = enqueueCommandInLane(lane, async () => {
+        calls.push("third");
+        return "third";
+      });
+
+      await vi.advanceTimersByTimeAsync(6);
+      blocker.resolve();
+
+      await expect(first).resolves.toBe("first");
+      await expect(second).rejects.toThrow(
+        new RegExp(`busy lane=${lane} waitedMs=\\d+ queueAhead=0 activeAhead=1`),
+      );
+      await expect(third).resolves.toBe("third");
+      expect(calls).toEqual(["first", "third"]);
     } finally {
       vi.useRealTimers();
     }

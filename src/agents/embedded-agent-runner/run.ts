@@ -100,6 +100,7 @@ import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { AgentSessionLaneBusyError } from "../session-lane-busy.js";
 import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
@@ -508,7 +509,17 @@ export async function runEmbeddedAgent(
       : enqueueCommandInLane(globalLane, task, withLaneTimeout(globalOpts));
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
+    const sessionOpts: CommandQueueEnqueueOptions = {
+      ...opts,
+      priority: sessionQueuePriority,
+      ...(params.failOnSessionLaneWait === true
+        ? {
+            warnAfterMs: opts?.warnAfterMs ?? params.timeoutMs,
+            rejectOnWait: (info) =>
+              opts?.rejectOnWait?.(info) ?? new AgentSessionLaneBusyError(info),
+          }
+        : {}),
+    };
     return params.enqueue
       ? params.enqueue(task, sessionOpts)
       : enqueueCommandInLane(sessionLane, task, sessionOpts);

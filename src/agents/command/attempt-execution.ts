@@ -720,6 +720,7 @@ export function runAgentAttempt(params: {
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lane: params.opts.lane,
+    failOnSessionLaneWait: params.opts.failOnSessionLaneWait,
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
