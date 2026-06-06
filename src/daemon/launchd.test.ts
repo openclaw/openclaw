@@ -55,6 +55,7 @@ const state = vi.hoisted(() => ({
   files: new Map<string, string>(),
   fileModes: new Map<string, number>(),
   fileWrites: [] as Array<{ path: string; data: string }>,
+  externalVolume: false,
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   scheduleDetachedLaunchdRestartHandoff: vi.fn<
@@ -282,6 +283,11 @@ vi.mock("node:fs/promises", async () => {
     }),
     stat: vi.fn(async (p: string) => {
       const key = p;
+      // Simulate external volume: "/" is dev 1, everything else is dev 99.
+      // isExternalVolumePath compares root dev against target dev.
+      if (state.externalVolume) {
+        return { mode: 0o755, dev: key === "/" ? 1 : 99 };
+      }
       if (state.dirs.has(key)) {
         return { mode: state.dirModes.get(key) ?? 0o777 };
       }
@@ -352,6 +358,7 @@ beforeEach(() => {
   state.files.clear();
   state.fileModes.clear();
   state.fileWrites.length = 0;
+  state.externalVolume = false;
   cleanStaleGatewayProcessesSync.mockReset();
   cleanStaleGatewayProcessesSync.mockReturnValue([]);
   inspectPortUsage.mockReset();
@@ -1901,5 +1908,40 @@ describe("resolveLaunchAgentPlistPath", () => {
         OPENCLAW_LAUNCHD_LABEL: "../evil/label",
       }),
     ).toThrow("Invalid launchd label");
+  });
+});
+
+describe("external APFS volume fallback", () => {
+  it("bootstraps from boot-volume plist when home is on an external volume", async () => {
+    state.externalVolume = true;
+    const env = { ...createDefaultLaunchdEnv(), USER: "test" };
+    const stdout = new PassThrough();
+    await installLaunchAgent({
+      env,
+      stdout,
+      programArguments: defaultProgramArguments,
+    });
+    // The boot-volume plist should be written alongside the home-dir plist.
+    const bootPlist = "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist";
+    expect(state.files.has(bootPlist)).toBe(true);
+    // Bootstrap should use the boot-volume path, not the external home path.
+    const bootstrapCall = state.launchctlCalls.find(
+      (c) => c[0] === "bootstrap" && c[2] === bootPlist,
+    );
+    expect(bootstrapCall).toBeDefined();
+  });
+  it("does not write boot-volume plist when home is on the root volume", async () => {
+    // externalVolume is false by default; all stat calls return the same dev.
+    const env = { ...createDefaultLaunchdEnv(), USER: "test" };
+    const stdout = new PassThrough();
+    await installLaunchAgent({
+      env,
+      stdout,
+      programArguments: defaultProgramArguments,
+    });
+    // The home-dir plist is at /Users/test/Library/LaunchAgents — same device.
+    // No separate boot-volume plist should be written.
+    const homePlist = "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist";
+    expect(state.fileWrites.filter((w) => w.path === homePlist)).toHaveLength(1);
   });
 });

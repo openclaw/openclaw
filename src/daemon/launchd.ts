@@ -48,6 +48,33 @@ const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
 const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
 const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
 
+/** Detect whether a path resides on a different volume than the root filesystem. */
+async function isExternalVolumePath(targetPath: string): Promise<boolean> {
+  try {
+    const [rootStat, targetStat] = await Promise.all([fs.stat("/"), fs.stat(targetPath)]);
+    return rootStat.dev !== targetStat.dev;
+  } catch {
+    // If stat fails, conservatively assume same volume.
+    return false;
+  }
+}
+
+/**
+ * Resolve the LaunchAgents directory on the boot volume.
+ * When $HOME is on an external APFS volume, launchd refuses to bootstrap
+ * plists from that volume (error 5: I/O error). This returns the equivalent
+ * path on the root volume so bootstrap can succeed.
+ */
+function resolveBootVolumeLaunchAgentsDir(env: Record<string, string | undefined>): string {
+  const username = normalizeLowercaseStringOrEmpty(env.USER);
+  if (!username) {
+    // Cannot determine boot-volume home without USER; fall back to root
+    // LaunchAgents which is shared across all users.
+    return "/Library/LaunchAgents";
+  }
+  return `/Users/${username}/Library/LaunchAgents`;
+}
+
 export type StaleOpenClawUpdateLaunchdJob = {
   label: string;
   pid?: number;
@@ -895,7 +922,6 @@ async function writeLaunchAgentPlist({
     programArguments,
     environment,
   });
-
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const plist = buildLaunchAgentPlist({
     label,
@@ -908,7 +934,22 @@ async function writeLaunchAgentPlist({
   });
   await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
   await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
-  return { plistPath, stdoutPath };
+  // When $HOME is on an external APFS volume, launchd refuses to bootstrap
+  // plists from that volume (error 5). Write a copy to the boot volume so
+  // activateLaunchAgent can bootstrap from there instead.
+  const externalHome = await isExternalVolumePath(home);
+  let bootVolumePlistPath: string | undefined;
+  if (externalHome) {
+    const bootDir = resolveBootVolumeLaunchAgentsDir(env);
+    await ensureSecureDirectory(bootDir);
+    bootVolumePlistPath = path.posix.join(bootDir, `${label}.plist`);
+    await fs.writeFile(bootVolumePlistPath, plist, {
+      encoding: "utf8",
+      mode: LAUNCH_AGENT_PLIST_MODE,
+    });
+    await fs.chmod(bootVolumePlistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+  }
+  return { plistPath, stdoutPath, bootVolumePlistPath };
 }
 
 export async function stageLaunchAgent({
@@ -927,17 +968,27 @@ export async function stageLaunchAgent({
   return { plistPath };
 }
 
-async function activateLaunchAgent(params: { env: GatewayServiceEnv; plistPath: string }) {
+async function activateLaunchAgent(params: {
+  env: GatewayServiceEnv;
+  plistPath: string;
+  bootVolumePlistPath?: string;
+}) {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: params.env });
-
+  // Use the boot-volume plist for bootstrap when available — launchd cannot
+  // bootstrap from external APFS volumes (error 5: I/O error).
+  const bootstrapPath = params.bootVolumePlistPath ?? params.plistPath;
   await execLaunchctl(["bootout", domain, params.plistPath]);
   await execLaunchctl(["unload", params.plistPath]);
+  if (params.bootVolumePlistPath) {
+    await execLaunchctl(["bootout", domain, params.bootVolumePlistPath]);
+    await execLaunchctl(["unload", params.bootVolumePlistPath]);
+  }
   // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
   await bootstrapLaunchAgentOrThrow({
     domain,
     serviceTarget: `${domain}/${label}`,
-    plistPath: params.plistPath,
+    plistPath: bootstrapPath,
     actionHint: "openclaw gateway install --force",
   });
 }
@@ -945,19 +996,22 @@ async function activateLaunchAgent(params: { env: GatewayServiceEnv; plistPath: 
 export async function installLaunchAgent(
   args: GatewayServiceInstallArgs,
 ): Promise<{ plistPath: string }> {
-  const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
-  await activateLaunchAgent({ env: args.env, plistPath });
+  const { plistPath, stdoutPath, bootVolumePlistPath } = await writeLaunchAgentPlist(args);
+  await activateLaunchAgent({ env: args.env, plistPath, bootVolumePlistPath });
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
   // real listener startup past setup's health deadline.
-  writeFormattedLines(
-    args.stdout,
-    [
-      { label: "Installed LaunchAgent", value: plistPath },
-      { label: "Logs", value: stdoutPath },
-    ],
-    { leadingBlankLine: true },
-  );
+  const installInfo: Array<{ label: string; value: string }> = [
+    { label: "Installed LaunchAgent", value: plistPath },
+    { label: "Logs", value: stdoutPath },
+  ];
+  if (bootVolumePlistPath) {
+    installInfo.push({
+      label: "Boot-volume plist",
+      value: bootVolumePlistPath,
+    });
+  }
+  writeFormattedLines(args.stdout, installInfo, { leadingBlankLine: true });
   return { plistPath };
 }
 
