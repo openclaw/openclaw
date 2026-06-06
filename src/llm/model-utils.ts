@@ -80,12 +80,19 @@ function compatExplicitlySupportsExtendedThinkingLevel(
   mapped: unknown,
   supportedEfforts: Set<string>,
 ): boolean {
+  const normalizedMapped = normalizeReasoningEffort(mapped);
+
+  if (level === "max") {
+    // Runtime transports currently serialize the OpenClaw `max` level as provider `xhigh`.
+    // Keep `max` hidden unless compat metadata explicitly opts into that safe alias.
+    return normalizedMapped === "xhigh" && supportedEfforts.has("xhigh");
+  }
+
   if (supportedEfforts.has(level)) {
     return true;
   }
 
-  const normalizedMapped = normalizeReasoningEffort(mapped);
-  return level === "max" && normalizedMapped === "xhigh" && supportedEfforts.has("xhigh");
+  return false;
 }
 
 function compatSupportsThinkingLevel<TApi extends Api>(

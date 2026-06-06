@@ -98,7 +98,7 @@ describe("model thinking levels", () => {
     expect(clampThinkingLevel(model, "max")).toBe("high");
   });
 
-  it("exposes max only when compat metadata explicitly supports max", () => {
+  it("exposes max only when compat metadata explicitly maps max to xhigh", () => {
     const model = {
       ...baseModel,
       compat: {
@@ -120,6 +120,19 @@ describe("model thinking levels", () => {
       "max",
     ]);
     expect(clampThinkingLevel(model, "max")).toBe("max");
+  });
+
+  it("keeps provider-native max hidden without an explicit xhigh alias map", () => {
+    const model = {
+      ...baseModel,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "max"],
+      },
+    } satisfies TestOpenAICompletionsModel;
+
+    expect(getSupportedThinkingLevels(model)).toEqual(["off", "minimal", "low", "medium", "high"]);
+    expect(clampThinkingLevel(model, "max")).toBe("high");
   });
 
   it("keeps xhigh hidden for reasoning models without explicit extended support", () => {
