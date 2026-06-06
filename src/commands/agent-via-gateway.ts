@@ -6,6 +6,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { readAcosProvenanceFromEnv } from "../acos/provenance.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -84,6 +85,8 @@ type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+  acosProvenance?: unknown;
+  diagnosticMode?: boolean;
 };
 
 type AgentCliSignal = "SIGINT" | "SIGTERM";
@@ -704,6 +707,8 @@ async function agentViaGatewayCommand(
             timeout: timeoutSeconds,
             lane: opts.lane,
             extraSystemPrompt: opts.extraSystemPrompt,
+            acosProvenance: opts.acosProvenance,
+            diagnosticMode: opts.diagnosticMode,
             idempotencyKey,
           },
           expectFinal: true,
@@ -831,10 +836,12 @@ export async function agentCliCommand(
 ) {
   protectJsonStdout(opts);
   const dispatchOpts = await normalizeSessionKeyOptsForDispatch(opts);
+  const acosProvenance = dispatchOpts.acosProvenance ?? readAcosProvenanceFromEnv();
   validateExplicitSessionKeyForDispatch(dispatchOpts);
-  const gatewayDispatchOpts = dispatchOpts.runId
-    ? dispatchOpts
-    : { ...dispatchOpts, runId: randomIdempotencyKey() };
+  const gatewayDispatchOpts = {
+    ...(dispatchOpts.runId ? dispatchOpts : { ...dispatchOpts, runId: randomIdempotencyKey() }),
+    acosProvenance,
+  };
   const signalBridge = createAgentCliSignalBridge(resolveAgentCliProcessLike(deps));
   const localOpts = {
     ...gatewayDispatchOpts,
@@ -843,6 +850,8 @@ export async function agentCliCommand(
     cleanupBundleMcpOnRunEnd: true,
     cleanupCliLiveSessionOnRunEnd: true,
     abortSignal: signalBridge.signal,
+    acosProvenance,
+    diagnosticMode: gatewayDispatchOpts.diagnosticMode,
   };
   try {
     if (dispatchOpts.local === true) {

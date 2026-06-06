@@ -1073,6 +1073,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       cleanupBundleMcpOnRunEnd?: boolean;
       label?: string;
       inputProvenance?: InputProvenance;
+      acosProvenance?: unknown;
+      diagnosticMode?: boolean;
       workspaceDir?: string;
       voiceWakeTrigger?: string;
     };
@@ -2528,6 +2530,8 @@ export const agentHandlers: GatewayRequestHandlers = {
               acpTurnSource: request.acpTurnSource,
               internalEvents: request.internalEvents,
               inputProvenance,
+              acosProvenance: request.acosProvenance,
+              diagnosticMode: request.diagnosticMode,
               sessionEffects,
               skipInitialSessionTouch: skipAgentInitialSessionTouch,
               preserveUserFacingSessionModelState,

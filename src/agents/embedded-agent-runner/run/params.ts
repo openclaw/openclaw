@@ -157,6 +157,7 @@ export type RunEmbeddedAgentParams = {
     ExecToolDefaults,
     "host" | "security" | "ask" | "node" | "notifyOnExit" | "notifyOnExitEmptySuccess"
   >;
+  acosProvenance?: unknown;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
   /**

@@ -1,6 +1,7 @@
 /** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { assertAcosControlledActionAllowed } from "../acos/provenance.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
@@ -2222,6 +2223,12 @@ export async function agentCommand(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
+  assertAcosControlledActionAllowed({
+    action: "agent_turn",
+    provenance: opts.acosProvenance ?? opts,
+    diagnosticMode: opts.diagnosticMode,
+    mutating: true,
+  });
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   return await withLocalGatewayRequestScope(
     {
@@ -2251,6 +2258,12 @@ export async function agentCommandFromIngress(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
+  assertAcosControlledActionAllowed({
+    action: "gateway_agent_turn",
+    provenance: opts.acosProvenance ?? opts,
+    diagnosticMode: opts.diagnosticMode,
+    mutating: true,
+  });
   if (typeof opts.allowModelOverride !== "boolean") {
     throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
   }

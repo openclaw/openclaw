@@ -20,6 +20,7 @@ Pass at least one session selector:
 Related:
 
 - Agent send tool: [Agent send](/tools/agent-send)
+- ACOS controlled mode: [ACOS controlled mode](/acos-controlled-mode)
 
 ## Options
 
@@ -68,6 +69,7 @@ openclaw agent --agent ops --message "Run locally" --local
 - For Gateway-backed runs, `SIGTERM` and `SIGINT` interrupt the waiting CLI request. If the Gateway has already accepted the run, the CLI also sends `chat.abort` for that accepted run id before exiting. Local `--local` runs and embedded fallback runs receive the same abort signal, but do not send `chat.abort`. If a duplicate `--run-id` reaches the Gateway while the original agent run is still active, the duplicate response reports `status: "in_flight"` and the non-JSON CLI prints a stderr diagnostic instead of an empty reply. For external cron/systemd wrappers, keep an outer hard-kill backstop such as `timeout -k 60 600 openclaw agent ...` so the supervisor can still reap the process if shutdown cannot drain.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), not resolved secret plaintext.
 - Marker writes are source-authoritative: OpenClaw persists markers from the active source config snapshot, not from resolved runtime secret values.
+- When [ACOS controlled mode](/acos-controlled-mode) is enabled, direct `openclaw agent` execution, `--local`, and embedded Gateway fallback require ACOS task provenance. Diagnostic mode remains non-mutating only.
 
 ## JSON delivery status
 

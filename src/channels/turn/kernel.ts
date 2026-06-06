@@ -1,3 +1,4 @@
+import { assertAcosControlledActionAllowed } from "../../acos/provenance.js";
 // Channel turn kernel for normalized inbound event dispatch, history, and delivery.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
@@ -480,6 +481,12 @@ async function runPreparedChannelTurnCoreInTrace<
   if (botLoopDrop) {
     clearPendingHistoryAfterTurn(params.history);
     return botLoopDrop;
+  }
+  if (admission.kind === "dispatch") {
+    assertAcosControlledActionAllowed({
+      action: "channel_agent_turn",
+      mutating: true,
+    });
   }
   emit({
     ...params,

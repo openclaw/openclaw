@@ -858,6 +858,7 @@ export function createOpenClawCodingTools(options?: {
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
+          acosProvenance: options?.exec?.acosProvenance,
         });
   options?.recordToolPrepStage?.("shell-tools");
   const pluginToolAllowlist = collectExplicitAllowlist([

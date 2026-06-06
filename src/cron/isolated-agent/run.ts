@@ -1,5 +1,6 @@
 /** Orchestrates isolated cron agent turn setup, execution, delivery, and cleanup. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { assertAcosControlledActionAllowed } from "../../acos/provenance.js";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -1229,6 +1230,10 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
+  assertAcosControlledActionAllowed({
+    action: "cron_agent_turn",
+    mutating: true,
+  });
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
   const abortReason = () => {

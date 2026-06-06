@@ -7,6 +7,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
+import { assertAcosControlledActionAllowed } from "../acos/provenance.js";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
@@ -79,6 +80,7 @@ type ApplyPatchOptions = {
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
   signal?: AbortSignal;
+  acosProvenance?: unknown;
 };
 
 const applyPatchSchema = Type.Object({
@@ -89,7 +91,12 @@ const applyPatchSchema = Type.Object({
 
 /** Create the agent tool wrapper for applying patch-envelope input. */
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
+  options: {
+    cwd?: string;
+    sandbox?: SandboxApplyPatchConfig;
+    workspaceOnly?: boolean;
+    acosProvenance?: unknown;
+  } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
@@ -118,6 +125,7 @@ export function createApplyPatchTool(
         sandbox,
         workspaceOnly,
         signal,
+        acosProvenance: options.acosProvenance,
       });
 
       return {
@@ -133,6 +141,12 @@ export async function applyPatch(
   input: string,
   options: ApplyPatchOptions,
 ): Promise<ApplyPatchResult> {
+  assertAcosControlledActionAllowed({
+    action: "apply_patch",
+    provenance: options.acosProvenance,
+    mutating: true,
+    requiresApproval: true,
+  });
   const parsed = parsePatchText(input);
   if (parsed.hunks.length === 0) {
     throw new Error("No files were modified.");

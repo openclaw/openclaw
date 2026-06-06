@@ -1178,6 +1178,7 @@ export async function runEmbeddedAttempt(
               ...params.execOverrides,
               config: params.config,
               elevated: params.bashElevated,
+              acosProvenance: params.acosProvenance,
             },
             sandbox,
             messageProvider: resolveAttemptToolPolicyMessageProvider(params),

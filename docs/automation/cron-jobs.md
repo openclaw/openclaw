@@ -10,6 +10,8 @@ sidebarTitle: "Scheduled tasks"
 
 Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at the right time, and can deliver output back to a chat channel or webhook endpoint.
 
+When [ACOS controlled mode](/acos-controlled-mode) is enabled, cron-created isolated agent turns require ACOS task provenance. Existing stored agent-turn jobs are also rejected at execution time unless launched with valid ACOS provenance.
+
 ## Quick start
 
 <Steps>

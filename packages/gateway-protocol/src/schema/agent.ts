@@ -215,6 +215,8 @@ export const AgentParamsSchema = Type.Object(
     internalRuntimeHandoffId: Type.Optional(NonEmptyString),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
+    acosProvenance: Type.Optional(Type.Unknown()),
+    diagnosticMode: Type.Optional(Type.Boolean()),
     suppressPromptPersistence: Type.Optional(Type.Boolean()),
     sessionEffects: Type.Optional(Type.Union([Type.Literal("visible"), Type.Literal("internal")])),
     sourceReplyDeliveryMode: Type.Optional(

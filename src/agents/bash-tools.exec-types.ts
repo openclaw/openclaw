@@ -67,6 +67,7 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  acosProvenance?: unknown;
 };
 
 /** Outcome passed to approval follow-up factories after approved async exec. */

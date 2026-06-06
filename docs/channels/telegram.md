@@ -7,6 +7,8 @@ title: "Telegram"
 
 Production-ready for bot DMs and groups via grammY. Long polling is the default mode; webhook mode is optional.
 
+When [ACOS controlled mode](/acos-controlled-mode) is enabled, Telegram inbound messages cannot start agent turns without ACOS task provenance. The bot can still reject unmanaged execution with a clear controlled-mode error or handle non-mutating status surfaces.
+
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Default DM policy for Telegram is pairing.

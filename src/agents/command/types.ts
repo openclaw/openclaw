@@ -48,6 +48,10 @@ export type AgentRunContext = {
 /** Full trusted option surface for running an agent command. */
 export type AgentCommandOpts = {
   message: string;
+  /** ACOS task provenance required when OpenClaw runs in ACOS-controlled mode. */
+  acosProvenance?: unknown;
+  /** Explicit non-mutating diagnostic mode; ignored for mutating actions. */
+  diagnosticMode?: boolean;
   /** User-visible transcript body; defaults to message and excludes runtime-only context. */
   transcriptMessage?: string;
   /** Optional image attachments for multimodal messages. */

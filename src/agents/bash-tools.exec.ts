@@ -12,6 +12,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { assertAcosControlledActionAllowed } from "../acos/provenance.js";
 import { buildCommandPayloadCandidates } from "../infra/command-analysis/risks.js";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import {
@@ -1478,6 +1479,12 @@ export function createExecTool(
         return markResolveExecEnvPrepared(execParams, state);
       })(),
     execute: async (_toolCallId, args, signal, onUpdate) => {
+      assertAcosControlledActionAllowed({
+        action: "shell_exec",
+        provenance: defaults?.acosProvenance,
+        mutating: true,
+        requiresApproval: true,
+      });
       const params = isResolveExecEnvPrepared(args as ExecToolArgs)
         ? stripMalformedXmlArgValueSuffixFromKeys(
             args as ExecToolArgs,
