@@ -1882,6 +1882,71 @@ output="$(run_logged_print_heartbeat plugins-run 08 bash -c 'printf "captured co
     }
   });
 
+  it("normalizes zero-padded Docker E2E stats heartbeat intervals", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-stats-zero-heartbeat-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+
+docker_e2e_docker_cmd() {
+  case "$1" in
+    inspect) return 0 ;;
+    stats) printf '{"MemUsage":"1MiB / 2MiB","CPUPerc":"0.1%%"}\\n'; return 0 ;;
+    *) return 0 ;;
+  esac
+}
+
+sleep() {
+  SECONDS=$((SECONDS + \${1%%.*}))
+  command sleep 0.01
+}
+
+stats_log="$TMPDIR/stats.log"
+run_log="$TMPDIR/run.log"
+sampler_log="$TMPDIR/sampler.log"
+printf "container output\\n" >"$run_log"
+
+(
+  command sleep 30
+) &
+docker_pid="$!"
+
+docker_e2e_sample_stats_until_exit demo "$docker_pid" "$stats_log" "$run_log" "Docker stats" 08 >"$sampler_log" 2>&1 &
+sampler_pid="$!"
+
+for _ in {1..200}; do
+  if grep -q "Docker stats still running (8s elapsed," "$sampler_log"; then
+    break
+  fi
+  if ! kill -0 "$sampler_pid" 2>/dev/null; then
+    break
+  fi
+  command sleep 0.01
+done
+
+kill "$docker_pid" 2>/dev/null || true
+wait "$docker_pid" 2>/dev/null || true
+wait "$sampler_pid"
+output="$(cat "$sampler_log")"
+
+[[ "$output" = *"Docker stats still running (8s elapsed,"* ]]
+[[ "$output" != *"value too great for base"* ]]
+[[ -s "$stats_log" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("includes procps in the shared Docker E2E image for process watchdogs", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
 
@@ -1932,6 +1997,22 @@ output="$(run_logged_print_heartbeat plugins-run 08 bash -c 'printf "captured co
       );
       expect(runner, path).not.toContain(`${resourceAssertion}\n\nexit "$run_status"`);
     }
+  });
+
+  it("forwards every kitchen-sink RPC runtime env knob into Docker", () => {
+    const runner = readFileSync(KITCHEN_SINK_RPC_DOCKER_E2E_PATH, "utf8");
+    const walk = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mjs", "utf8");
+    const consumed = new Set(
+      [...walk.matchAll(/\b(?:env|process\.env)\.(OPENCLAW_KITCHEN_SINK_[A-Z0-9_]+)/gu)].map(
+        (match) => match[1],
+      ),
+    );
+    const forwarded = new Set(
+      [...runner.matchAll(/\b(OPENCLAW_KITCHEN_SINK_[A-Z0-9_]+)\b/gu)].map((match) => match[1]),
+    );
+    const missing = [...consumed].filter((envName) => !forwarded.has(envName)).toSorted();
+
+    expect(missing).toEqual([]);
   });
 
   it("bounds kitchen-sink plugin CLI commands inside the Docker sweep", () => {

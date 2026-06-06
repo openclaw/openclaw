@@ -3,6 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 function numericCount(value) {
+  if (typeof value !== "number") {
+    return undefined;
+  }
   const count = Number(value);
   return Number.isFinite(count) ? count : undefined;
 }
@@ -16,15 +19,21 @@ export function evaluateToleratedPartialKovaReport(report) {
     return { ok: false, reason: `gate verdict was ${JSON.stringify(gate.verdict)}` };
   }
 
-  const blockingCount = numericCount(gate.blockingCount ?? 0);
-  if (blockingCount === undefined || blockingCount !== 0) {
+  const blockingCount = numericCount(gate.blockingCount);
+  if (blockingCount === undefined) {
+    return { ok: false, reason: "missing blocking count" };
+  }
+  if (blockingCount !== 0) {
     return { ok: false, reason: `blocking count was ${JSON.stringify(gate.blockingCount)}` };
   }
 
   const baselineRegressionCount = numericCount(
-    report?.baseline?.comparison?.regressionCount ?? report?.gate?.baseline?.regressionCount ?? 0,
+    report?.baseline?.comparison?.regressionCount ?? report?.gate?.baseline?.regressionCount,
   );
-  if (baselineRegressionCount === undefined || baselineRegressionCount !== 0) {
+  if (baselineRegressionCount === undefined) {
+    return { ok: false, reason: "missing baseline regression count" };
+  }
+  if (baselineRegressionCount !== 0) {
     return {
       ok: false,
       reason: `baseline regression count was ${JSON.stringify(baselineRegressionCount)}`,

@@ -71,6 +71,22 @@ describe("scripts/kova-ci-summary", () => {
         groups: [
           {
             metrics: {
+              cpuPercentMax: {
+                count: 1,
+                max: 12,
+                median: 12,
+                p95: 12,
+                title: "CPU max",
+                unit: "%",
+              },
+              resourcePeakGatewayRssMb: {
+                count: 1,
+                max: 256,
+                median: 256,
+                p95: 256,
+                title: "Gateway RSS",
+                unit: "MB",
+              },
               timeToHealthReadyMs: {
                 count: 1,
                 max: 30,
@@ -94,5 +110,77 @@ describe("scripts/kova-ci-summary", () => {
     expect(result.status).toBe(0);
     expect(output).toContain("- Statuses: pass: 1");
     expect(output).toContain("| gateway | clean | Health ready | 20 ms | 30 ms | 30 ms |");
+    expect(output).toContain("| gateway | clean | Gateway RSS | 256 MB | 256 MB | 256 MB |");
+    expect(output).toContain("| gateway | clean | CPU max | 12 % | 12 % | 12 % |");
+  });
+
+  it("rejects performance summaries without resource metrics", () => {
+    const { result } = runSummary({
+      performance: {
+        repeat: 1,
+        groups: [
+          {
+            metrics: {
+              timeToHealthReadyMs: {
+                count: 1,
+                max: 30,
+                median: 20,
+                p95: 30,
+                title: "Health ready",
+                unit: "ms",
+              },
+            },
+            scenario: "gateway",
+            state: "clean",
+          },
+        ],
+      },
+      records: [{ scenario: "gateway", state: "clean", status: "pass" }],
+      summary: { statuses: { pass: 1 } },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "invalid Kova report: missing sampled RSS metric in performance groups",
+    );
+  });
+
+  it("rejects performance summaries without CPU metrics", () => {
+    const { result } = runSummary({
+      performance: {
+        repeat: 1,
+        groups: [
+          {
+            metrics: {
+              resourcePeakGatewayRssMb: {
+                count: 1,
+                max: 256,
+                median: 256,
+                p95: 256,
+                title: "Gateway RSS",
+                unit: "MB",
+              },
+              timeToHealthReadyMs: {
+                count: 1,
+                max: 30,
+                median: 20,
+                p95: 30,
+                title: "Health ready",
+                unit: "ms",
+              },
+            },
+            scenario: "gateway",
+            state: "clean",
+          },
+        ],
+      },
+      records: [{ scenario: "gateway", state: "clean", status: "pass" }],
+      summary: { statuses: { pass: 1 } },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "invalid Kova report: missing sampled CPU metric in performance groups",
+    );
   });
 });

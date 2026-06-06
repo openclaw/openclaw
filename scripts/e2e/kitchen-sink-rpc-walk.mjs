@@ -1110,10 +1110,12 @@ export function assertKitchenSinkSearchInvokeResult(payload) {
   if (payload?.ok !== true || payload?.source !== "plugin") {
     throw new Error(`Kitchen Sink search tool invoke failed: ${JSON.stringify(payload)}`);
   }
-  const text = JSON.stringify(payload.output ?? payload);
-  if (!text.includes("Kitchen Sink image fixture")) {
+  const output = assertObjectPayload(payload.output, "Kitchen Sink search tool output");
+  const results = Array.isArray(output.results) ? output.results : [];
+  const hasFixture = results.some((entry) => entry?.title === "Kitchen Sink image fixture");
+  if (!hasFixture) {
     throw new Error(
-      `Kitchen Sink search tool output missed expected fixture: ${text.slice(0, 1000)}`,
+      `Kitchen Sink search tool output missed expected fixture: ${JSON.stringify(output).slice(0, 1000)}`,
     );
   }
 }
@@ -1122,10 +1124,14 @@ export function assertKitchenSinkTextInvokeResult(payload) {
   if (payload?.ok !== true || payload?.source !== "plugin") {
     throw new Error(`Kitchen Sink text tool invoke failed: ${JSON.stringify(payload)}`);
   }
-  const text = JSON.stringify(payload.output ?? payload);
-  if (!text.includes("tool:kitchen_sink_text") || !text.includes("Kitchen Sink")) {
+  const output = assertObjectPayload(payload.output, "Kitchen Sink text tool output");
+  if (
+    output.route !== "tool:kitchen_sink_text" ||
+    typeof output.text !== "string" ||
+    !output.text.includes("Kitchen Sink")
+  ) {
     throw new Error(
-      `Kitchen Sink text tool output missed expected fixture: ${text.slice(0, 1000)}`,
+      `Kitchen Sink text tool output missed expected fixture: ${JSON.stringify(output).slice(0, 1000)}`,
     );
   }
 }

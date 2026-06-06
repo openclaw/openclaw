@@ -413,6 +413,40 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
+  it("rejects unreadable config during plugin uninstall proof", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
+    const home = path.join(root, "home");
+    const scratchRoot = path.join(root, "scratch");
+    const removedInstallPath = path.join(home, ".openclaw", "extensions", "demo-plugin-tgz");
+
+    try {
+      writeJson(path.join(scratchRoot, "plugins2-uninstalled.json"), { plugins: [] });
+      writeFileSync(
+        path.join(scratchRoot, "plugins2-install-path.txt"),
+        removedInstallPath,
+        "utf8",
+      );
+      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
+        installRecords: {},
+      });
+      writeFileSync(path.join(home, ".openclaw", "openclaw.json"), "{ malformed\n", "utf8");
+
+      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+        },
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("failed to read OpenClaw config");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("times out stalled ClawHub package metadata requests", async () => {
     const server = createServer((_request, _response) => {});
     await new Promise<void>((resolve) => {

@@ -731,6 +731,24 @@ describe("kitchen-sink RPC command catalog assertions", () => {
       }),
     ).toThrow("Kitchen Sink text tool output missed expected fixture");
   });
+
+  it("rejects tool invocation canaries outside the structured result fields", () => {
+    expect(() =>
+      assertKitchenSinkSearchInvokeResult({
+        ok: true,
+        source: "plugin",
+        output: { note: "prompt mentioned Kitchen Sink image fixture" },
+      }),
+    ).toThrow("Kitchen Sink search tool output missed expected fixture");
+
+    expect(() =>
+      assertKitchenSinkTextInvokeResult({
+        ok: true,
+        source: "plugin",
+        output: { text: "Kitchen Sink prompt echoed tool:kitchen_sink_text" },
+      }),
+    ).toThrow("Kitchen Sink text tool output missed expected fixture");
+  });
 });
 
 describe("kitchen-sink RPC diagnostics assertions", () => {

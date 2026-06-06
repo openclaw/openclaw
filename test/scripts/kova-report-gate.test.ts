@@ -47,6 +47,46 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
     ).toEqual({ ok: false, reason: "missing status summary" });
   });
 
+  it("rejects partial reports without explicit blocking counts", () => {
+    expect(
+      evaluateToleratedPartialKovaReport(
+        partialReport({
+          gate: { verdict: "PARTIAL" },
+        }),
+      ),
+    ).toEqual({ ok: false, reason: "missing blocking count" });
+  });
+
+  it("rejects partial reports with malformed zero-like blocking counts", () => {
+    expect(
+      evaluateToleratedPartialKovaReport(
+        partialReport({
+          gate: { blockingCount: "", verdict: "PARTIAL" },
+        }),
+      ),
+    ).toEqual({ ok: false, reason: "missing blocking count" });
+  });
+
+  it("rejects partial reports without explicit baseline regression counts", () => {
+    expect(
+      evaluateToleratedPartialKovaReport(
+        partialReport({
+          baseline: {},
+        }),
+      ),
+    ).toEqual({ ok: false, reason: "missing baseline regression count" });
+  });
+
+  it("rejects partial reports with malformed zero-like baseline regression counts", () => {
+    expect(
+      evaluateToleratedPartialKovaReport(
+        partialReport({
+          baseline: { comparison: { regressionCount: null } },
+        }),
+      ),
+    ).toEqual({ ok: false, reason: "missing baseline regression count" });
+  });
+
   it("rejects partial reports without PASS records", () => {
     expect(
       evaluateToleratedPartialKovaReport(
