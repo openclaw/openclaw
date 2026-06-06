@@ -42,14 +42,23 @@ function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoice
 
 function makeRealtimeProvider(
   createBridge: RealtimeVoiceProviderPlugin["createBridge"],
+  overrides: Partial<RealtimeVoiceProviderPlugin> = {},
 ): RealtimeVoiceProviderPlugin {
   return {
     id: "openai",
     label: "OpenAI",
     isConfigured: () => true,
     createBridge,
+    ...overrides,
   };
 }
+
+const PROVIDER_BARGE_IN_CAPABILITIES = {
+  transports: ["gateway-relay"],
+  inputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+  outputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+  supportsBargeIn: true,
+} satisfies NonNullable<RealtimeVoiceProviderPlugin["capabilities"]>;
 
 function makeHandler(
   overrides?: Partial<VoiceCallRealtimeConfig>,
@@ -754,7 +763,9 @@ describe("RealtimeCallHandler path routing", () => {
       manager: {
         getCallByProviderCallId: vi.fn((): CallRecord => call),
       },
-      realtimeProvider: makeRealtimeProvider(createBridge),
+      realtimeProvider: makeRealtimeProvider(createBridge, {
+        capabilities: PROVIDER_BARGE_IN_CAPABILITIES,
+      }),
     });
     const server = await startRealtimeServer(handler);
 
@@ -772,6 +783,15 @@ describe("RealtimeCallHandler path routing", () => {
         });
 
         callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+        expect(
+          (
+            call.metadata?.recentTalkEvents as
+              | Array<{
+                  type: string;
+                }>
+              | undefined
+          )?.some((event) => event.type === "turn.cancelled"),
+        ).toBe(false);
         callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
 
         await waitForRealtimeTest(() => {

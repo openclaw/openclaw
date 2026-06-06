@@ -669,6 +669,7 @@ export class RealtimeCallHandler {
     const speechDetector = new RealtimeMulawSpeechStartDetector({
       requiredLoudChunks: BARGE_IN_REQUIRED_LOUD_CHUNKS,
     });
+    const providerHandlesBargeIn = this.realtimeProvider.capabilities?.supportsBargeIn === true;
     const session = createRealtimeVoiceBridgeSession({
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
@@ -890,7 +891,9 @@ export class RealtimeCallHandler {
         console.log(
           `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );
-        cancelOutputAudioForBargeIn("local", "local-barge-in");
+        if (!providerHandlesBargeIn) {
+          cancelOutputAudioForBargeIn("local", "local-barge-in");
+        }
       }
       emitTalkEvent({
         type: "input.audio.delta",
