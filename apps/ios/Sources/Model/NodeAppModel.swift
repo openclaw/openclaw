@@ -2790,6 +2790,8 @@ extension NodeAppModel {
         self.activeGatewayConnectConfig = nil
         self.gatewayConnected = true
         self.setOperatorConnected(false)
+        UserDefaults.standard.set(false, forKey: "talk.enabled")
+        UserDefaults.standard.set(false, forKey: "talk.background.enabled")
         self.talkMode.updateGatewayConnected(false)
         self.talkMode.setEnabled(false)
         self.talkMode.statusText = "Demo mode only"

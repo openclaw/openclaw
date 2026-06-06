@@ -42,9 +42,9 @@ extension SettingsProTab {
                 self.diagnosticCheckRow(
                     icon: "antenna.radiowaves.left.and.right",
                     title: "Gateway Link",
-                    detail: self.appModel.gatewayDisplayStatusText,
-                    value: self.gatewayConnected ? "online" : "offline",
-                    color: self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+                    detail: self.gatewayStatusDetail,
+                    value: self.gatewayStatusValue,
+                    color: self.gatewayStatusColor)
                 Divider().padding(.leading, 60)
                 self.diagnosticCheckRow(
                     icon: "dot.radiowaves.left.and.right",
@@ -56,9 +56,9 @@ extension SettingsProTab {
                 self.diagnosticCheckRow(
                     icon: "waveform",
                     title: "Talk Config",
-                    detail: self.appModel.talkMode.gatewayTalkTransportLabel,
-                    value: self.appModel.talkMode.gatewayTalkConfigLoaded ? "loaded" : "missing",
-                    color: self.appModel.talkMode.gatewayTalkConfigLoaded ? OpenClawBrand.ok : .secondary)
+                    detail: self.gatewayTalkConfigDetail,
+                    value: self.gatewayTalkConfigValue,
+                    color: self.gatewayTalkConfigColor)
                 Divider().padding(.leading, 60)
                 self.diagnosticCheckRow(
                     icon: "bell",
@@ -132,6 +132,7 @@ extension SettingsProTab {
     }
 
     func reconnectGateway() async {
+        guard !self.appModel.isAppleReviewDemoModeEnabled else { return }
         guard !self.isReconnectingGateway else { return }
         self.isReconnectingGateway = true
         defer { self.isReconnectingGateway = false }
@@ -153,16 +154,18 @@ extension SettingsProTab {
         self.isRefreshingGateway = true
         defer { self.isRefreshingGateway = false }
 
-        self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
-        self.gatewayController.restartDiscovery()
-        await self.appModel.refreshGatewayOverviewIfConnected()
+        if !self.appModel.isAppleReviewDemoModeEnabled {
+            self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+            self.gatewayController.restartDiscovery()
+            await self.appModel.refreshGatewayOverviewIfConnected()
+        }
         let notificationSettings = await UNUserNotificationCenter.current().notificationSettings()
         self.applyNotificationStatus(notificationSettings.authorizationStatus)
 
         let issueCount = SettingsDiagnostics.issueCount(
-            gatewayConnected: self.gatewayConnected,
+            gatewayConnected: self.gatewayDiagnosticConnected,
             discoveredGatewayCount: self.gatewayController.gateways.count,
-            talkConfigLoaded: self.appModel.talkMode.gatewayTalkConfigLoaded,
+            talkConfigLoaded: self.gatewayDiagnosticTalkConfigLoaded,
             notificationStatusText: self.notificationStatusText)
         self.diagnosticsIssueCount = issueCount
         self.diagnosticsLastRunText = SettingsDiagnostics.timestamp(Date())
@@ -620,7 +623,53 @@ extension SettingsProTab {
     }
 
     var gatewayConnected: Bool {
-        GatewayStatusBuilder.build(appModel: self.appModel) == .connected
+        !self.appModel.isAppleReviewDemoModeEnabled &&
+            GatewayStatusBuilder.build(appModel: self.appModel) == .connected
+    }
+
+    var gatewayStatusDetail: String {
+        if self.appModel.isAppleReviewDemoModeEnabled { return "Apple Review demo mode" }
+        return self.gatewayConnected ? "Connected" : self.appModel.gatewayDisplayStatusText
+    }
+
+    var gatewayStatusValue: String {
+        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
+        return self.gatewayConnected ? "online" : "offline"
+    }
+
+    var gatewayStatusColor: Color {
+        if self.appModel.isAppleReviewDemoModeEnabled { return OpenClawBrand.accent }
+        return self.gatewayConnected ? OpenClawBrand.ok : .secondary
+    }
+
+    var gatewayDiagnosticConnected: Bool {
+        self.appModel.isAppleReviewDemoModeEnabled || self.gatewayConnected
+    }
+
+    var gatewayDiagnosticTalkConfigLoaded: Bool {
+        self.appModel.isAppleReviewDemoModeEnabled || self.appModel.talkMode.gatewayTalkConfigLoaded
+    }
+
+    var approvalEmptyDetail: String {
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "Live gateway requests are disabled in demo mode."
+        }
+        return self.gatewayConnected ? "Gateway requests will appear here." : "Connect to the gateway."
+    }
+
+    var gatewayTalkConfigDetail: String {
+        if self.appModel.isAppleReviewDemoModeEnabled { return "Demo mode only" }
+        return self.appModel.talkMode.gatewayTalkTransportLabel
+    }
+
+    var gatewayTalkConfigValue: String {
+        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
+        return self.appModel.talkMode.gatewayTalkConfigLoaded ? "loaded" : "missing"
+    }
+
+    var gatewayTalkConfigColor: Color {
+        if self.appModel.isAppleReviewDemoModeEnabled { return .secondary }
+        return self.appModel.talkMode.gatewayTalkConfigLoaded ? OpenClawBrand.ok : .secondary
     }
 
     var gatewayAddress: String {
@@ -679,6 +728,7 @@ extension SettingsProTab {
     }
 
     var diagnosticsHealthValue: String {
+        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
         if self.gatewayConnected { return "ready" }
         if self.gatewayController.gateways.isEmpty { return "check" }
         return "partial"

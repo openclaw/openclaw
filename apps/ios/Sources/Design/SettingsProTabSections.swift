@@ -60,14 +60,14 @@ extension SettingsProTab {
         HStack(spacing: 12) {
             ProIconBadge(
                 systemName: "antenna.radiowaves.left.and.right",
-                color: self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+                color: self.gatewayStatusColor)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("Connection")
                     .font(.subheadline.weight(.semibold))
-                Text(self.gatewayConnected ? "Connected" : self.appModel.gatewayDisplayStatusText)
+                Text(self.gatewayStatusDetail)
                     .font(.caption)
-                    .foregroundStyle(self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+                    .foregroundStyle(self.gatewayStatusColor)
             }
 
             Spacer(minLength: 8)
@@ -100,7 +100,8 @@ extension SettingsProTab {
                 title: "Reconnect",
                 icon: "arrow.triangle.2.circlepath",
                 color: OpenClawBrand.warn,
-                isBusy: self.isReconnectingGateway)
+                isBusy: self.isReconnectingGateway,
+                isDisabled: self.appModel.isAppleReviewDemoModeEnabled)
             {
                 Task { await self.reconnectGateway() }
             }
@@ -234,9 +235,9 @@ extension SettingsProTab {
             self.detailStatusCard(
                 icon: "antenna.radiowaves.left.and.right",
                 title: "Gateway",
-                detail: self.gatewayConnected ? "Connected" : self.appModel.gatewayDisplayStatusText,
-                value: self.gatewayConnected ? "online" : "offline",
-                color: self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+                detail: self.gatewayStatusDetail,
+                value: self.gatewayStatusValue,
+                color: self.gatewayStatusColor)
 
             self.detailListCard {
                 self.detailRow("Address", value: self.gatewayAddress)
@@ -335,8 +336,7 @@ extension SettingsProTab {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("No approvals waiting")
                                 .font(.subheadline.weight(.semibold))
-                            Text(self
-                                .gatewayConnected ? "Gateway requests will appear here." : "Connect to the gateway.")
+                            Text(self.approvalEmptyDetail)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
@@ -390,7 +390,7 @@ extension SettingsProTab {
                 title: "Health Check",
                 detail: "Run app, permission, and gateway-adjacent checks without editing setup.",
                 value: self.diagnosticsHealthValue,
-                color: self.gatewayConnected ? OpenClawBrand.ok : OpenClawBrand.warn)
+                color: self.gatewayDiagnosticConnected ? OpenClawBrand.ok : OpenClawBrand.warn)
 
             ProCard(radius: SettingsLayout.cardRadius) {
                 self.gatewayActionButton(
@@ -504,6 +504,7 @@ extension SettingsProTab {
         icon: String,
         color: Color,
         isBusy: Bool,
+        isDisabled: Bool = false,
         action: @escaping () -> Void) -> some View
     {
         Button(action: action) {
@@ -525,7 +526,7 @@ extension SettingsProTab {
             }
         }
         .buttonStyle(.plain)
-        .disabled(isBusy)
+        .disabled(isBusy || isDisabled)
     }
 
     func toggleCard(
@@ -764,8 +765,13 @@ extension SettingsProTab {
                     self.appModel.setVoiceWakeEnabled(enabled)
                 }
                 self.settingsToggle("Talk Mode", isOn: self.$talkEnabled) { enabled in
+                    guard !self.appModel.isAppleReviewDemoModeEnabled else {
+                        self.talkEnabled = false
+                        return
+                    }
                     self.appModel.setTalkEnabled(enabled)
                 }
+                .disabled(self.appModel.isAppleReviewDemoModeEnabled)
                 Picker("Speech Language", selection: self.$talkSpeechLocale) {
                     ForEach(TalkSpeechLocale.supportedOptions()) { option in
                         Text(option.label).tag(option.id)
