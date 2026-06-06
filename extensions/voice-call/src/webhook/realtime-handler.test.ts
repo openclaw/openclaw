@@ -885,7 +885,15 @@ describe("RealtimeCallHandler path routing", () => {
       const ws = await connectWs(server.url);
       const outboundMessages: Array<Record<string, unknown>> = [];
       ws.on("message", (data) => {
-        outboundMessages.push(JSON.parse(data.toString()) as Record<string, unknown>);
+        const messageText =
+          typeof data === "string"
+            ? data
+            : Buffer.isBuffer(data)
+              ? data.toString("utf8")
+              : Array.isArray(data)
+                ? Buffer.concat(data).toString("utf8")
+                : Buffer.from(data).toString("utf8");
+        outboundMessages.push(JSON.parse(messageText) as Record<string, unknown>);
       });
       try {
         ws.send(
