@@ -769,6 +769,91 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams).not.toHaveProperty("workspaceDir");
   });
 
+  it("resolves provider-qualified model=inherit from the active requester model context", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          return { runId: "run-inherit" };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "inherit requester model",
+        model: "inherit",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        modelProvider: "openrouter",
+        modelId: "openrouter/auto",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "run-inherit",
+      modelApplied: true,
+      resolvedModel: "openrouter/auto",
+      resolvedProvider: "openrouter",
+    });
+    expectPersistedRuntimeModel({
+      persistedStore,
+      sessionKey: /^agent:main:subagent:/,
+      provider: "openrouter",
+      model: "auto",
+    });
+  });
+
+  it("resolves provider-qualified model=inherit from persisted requester state", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:main:main": {
+        modelProvider: "openrouter",
+        model: "openrouter/auto",
+      },
+    });
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "inherit persisted requester model",
+        model: "inherit",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+      resolvedModel: "openrouter/auto",
+      resolvedProvider: "openrouter",
+    });
+    expectPersistedRuntimeModel({
+      persistedStore,
+      sessionKey: /^agent:main:subagent:/,
+      provider: "openrouter",
+      model: "auto",
+    });
+  });
+
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent") {

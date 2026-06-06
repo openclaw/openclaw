@@ -21,6 +21,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  shouldResolveInheritedSubagentModel,
   resolveSubagentConfiguredModelSelection,
   resolveSubagentSpawnModelSelection,
   resolveThinkingDefault,
@@ -2848,6 +2849,67 @@ describe("resolveSubagentConfiguredModelSelection", () => {
       runtimeSource: "model",
     });
   });
+
+  it("resolves subagent inherit config from the requester model when provided", () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "research",
+            model: { primary: "anthropic/claude-opus-4-6" },
+            subagents: { model: "inherit" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentConfiguredModelSelection({
+        cfg,
+        agentId: "research",
+        inheritedModel: "openai/gpt-5.4",
+      }),
+    ).toBe("openai/gpt-5.4");
+  });
+
+  it("keeps a configured subagent alias named inherit as a concrete model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": { alias: "inherit" },
+          },
+        },
+        list: [
+          {
+            id: "research",
+            model: { primary: "anthropic/claude-opus-4-6" },
+            subagents: { model: "inherit" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentConfiguredModelSelection({
+        cfg,
+        agentId: "research",
+        inheritedModel: "anthropic/claude-sonnet-4-6",
+      }),
+    ).toBe("openai/gpt-5.4");
+  });
+
+  it("does not expose the inherit sentinel as a concrete configured model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          subagents: { model: "inherit" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBeUndefined();
+  });
 });
 
 describe("resolveSubagentSpawnModelSelection", () => {
@@ -2867,6 +2929,100 @@ describe("resolveSubagentSpawnModelSelection", () => {
     expect(
       resolveSubagentSpawnModelSelection({ cfg, agentId: "main", modelOverride: "opus" }),
     ).toBe("anthropic/claude-opus-4-6");
+  });
+
+  it("keeps explicit inherit unresolved when no requester model is available", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "research",
+        modelOverride: "inherit",
+      }),
+    ).toBe("inherit");
+  });
+
+  it("resolves explicit inherit from the requester model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "research",
+        modelOverride: "inherit",
+        inheritedModel: "openai/gpt-5.4",
+      }),
+    ).toBe("openai/gpt-5.4");
+  });
+
+  it("keeps an explicit alias named inherit as a concrete model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "openai/gpt-5.4": { alias: "inherit" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "research",
+        modelOverride: "inherit",
+        inheritedModel: "anthropic/claude-sonnet-4-6",
+      }),
+    ).toBe("openai/gpt-5.4");
+    expect(
+      shouldResolveInheritedSubagentModel({
+        cfg,
+        agentId: "research",
+        modelOverride: "inherit",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps a configured subagent alias named inherit as a concrete spawn model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "openai/gpt-5.4": { alias: "inherit" },
+          },
+          subagents: { model: "inherit" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "research",
+        inheritedModel: "anthropic/claude-sonnet-4-6",
+      }),
+    ).toBe("openai/gpt-5.4");
+    expect(
+      shouldResolveInheritedSubagentModel({
+        cfg,
+        agentId: "research",
+      }),
+    ).toBe(false);
   });
 
   it("resolves bare configured aliases with the target agent runtime default provider", () => {
