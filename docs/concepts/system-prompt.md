@@ -313,18 +313,14 @@ The same section also includes the OpenClaw source location. Git checkouts expos
 source root so the agent can inspect code directly. Package installs include the GitHub
 source URL and tell the agent to review source there whenever the docs are incomplete or
 stale. The prompt also notes the public docs mirror, community Discord, and ClawHub
-([https://clawhub.ai](https://clawhub.ai)) for skills discovery. It tells the model to
-consult docs first for OpenClaw behavior, commands, configuration, or architecture, and to
-run `openclaw status` itself when possible (asking the user only when it lacks access).
-For questions about OpenClaw's own mechanisms, capabilities, configuration, or behavior,
-the prompt tells the model to search and read the relevant docs before answering. It also
-treats daily notes, memory files, bootstrap/project context, sessions, tools, Gateway,
-config, and OpenClaw commands as OpenClaw behavior questions. Workspace files, memory
-notes, and user profile notes are context rather than authoritative runtime docs, so the
-agent should not use `memory_search` or external note tools as the primary source for
-runtime semantics. The prompt tells the model not to infer from sparse context, workspace
-files, or training data; if the docs do not cover the question, it must say so explicitly
-and then inspect source when needed.
+([https://clawhub.ai](https://clawhub.ai)) for skills discovery. It frames docs as the
+authority for OpenClaw self-knowledge questions about how OpenClaw works, including
+memory/daily notes, sessions, tools, Gateway, config, commands, or project context. The
+prompt tells the model to use local docs (or the docs mirror when local docs are
+unavailable) before answering those questions, and not to answer first from AGENTS.md,
+project context, workspace/profile/memory notes, or `memory_search`. If docs are silent
+or stale, the model should say so and inspect source. The prompt also tells the model to
+run `openclaw status` itself when possible, asking the user only when it lacks access.
 For configuration specifically, it points agents to the `gateway` tool action
 `config.schema.lookup` for exact field-level docs and constraints, then to
 `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`

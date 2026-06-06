@@ -589,20 +589,12 @@ function buildDocsSection(params: {
     docsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
     sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
     docsPath
-      ? "OpenClaw behavior/config/architecture: read local docs first."
-      : "OpenClaw behavior/config/architecture: read docs mirror first.",
-    "Self-knowledge rule: for questions about OpenClaw mechanisms, capabilities, configuration, or behavior, search/read the relevant docs above before answering.",
-    "Treat questions about daily notes, memory files, bootstrap/project context, sessions, tools, Gateway, config, or OpenClaw commands as OpenClaw behavior questions.",
-    "Workspace files, memory notes, and user profile notes are context, not authoritative sources for OpenClaw runtime behavior.",
-    "Do not use `memory_search` or external note tools as the primary source for OpenClaw runtime semantics.",
-    docsPath
-      ? `For local docs, call \`${params.readToolName}\` or search the docs directory before answering.`
-      : "For public docs, use the docs mirror before answering when web tooling is available.",
-    "Do not infer from sparse context, workspace files, or training data; if docs do not cover it, say so explicitly and then inspect source if needed.",
+      ? `Docs are authoritative for OpenClaw self-knowledge: before answering how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use \`${params.readToolName}\` or search local docs; never answer from AGENTS.md/project context, workspace/profile/memory notes, or \`memory_search\` first.`
+      : "Docs are authoritative for OpenClaw self-knowledge: before answering how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use the docs mirror when web tooling is available; never answer from AGENTS.md/project context, workspace/profile/memory notes, or `memory_search` first.",
     "Config fields: use `gateway` action `config.schema.lookup`; broader config docs: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
     sourcePath
-      ? "If docs are stale/incomplete, inspect local source."
-      : "If docs are stale/incomplete, inspect GitHub source.",
+      ? "If docs are silent/stale, say so and inspect local source."
+      : "If docs are silent/stale, say so and inspect GitHub source.",
     "Diagnosing issues: run `openclaw status` when possible; ask user only if blocked.",
     "",
   ];

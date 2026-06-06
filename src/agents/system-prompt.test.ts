@@ -505,7 +505,9 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain("If several apply, choose the most specific.");
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
-    expect(prompt).toContain("OpenClaw behavior/config/architecture: read local docs first.");
+    expect(prompt).toContain(
+      "Docs are authoritative for OpenClaw self-knowledge: before answering how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `Read` or search local docs; never answer from AGENTS.md/project context, workspace/profile/memory notes, or `memory_search` first.",
+    );
   });
 
   it("includes docs guidance when docsPath is provided", () => {
@@ -518,36 +520,30 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Documentation");
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
     expect(prompt).toContain("Source: /tmp/openclaw");
-    expect(prompt).toContain("OpenClaw behavior/config/architecture: read local docs first.");
     expect(prompt).toContain(
-      "Self-knowledge rule: for questions about OpenClaw mechanisms, capabilities, configuration, or behavior, search/read the relevant docs above before answering.",
+      "Docs are authoritative for OpenClaw self-knowledge: before answering how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `read` or search local docs; never answer from AGENTS.md/project context, workspace/profile/memory notes, or `memory_search` first.",
     );
-    expect(prompt).toContain(
-      "Do not infer from sparse context, workspace files, or training data; if docs do not cover it, say so explicitly and then inspect source if needed.",
-    );
-    expect(prompt).toContain(
-      "For local docs, call `read` or search the docs directory before answering.",
-    );
-    expect(prompt).toContain("If docs are stale/incomplete, inspect local source.");
+    expect(prompt).toContain("If docs are silent/stale, say so and inspect local source.");
   });
 
-  it("classifies daily notes and memory files as OpenClaw behavior questions", () => {
+  it("keeps self-knowledge docs guidance concise and authoritative", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       docsPath: "/tmp/openclaw/docs",
       sourcePath: "/tmp/openclaw",
       toolNames: ["read", "memory_search"],
     });
+    const docsStart = prompt.indexOf("## Documentation");
+    const nextSection = prompt.indexOf("\n## ", docsStart + 1);
+    const docsSection = prompt.slice(docsStart, nextSection);
 
     expect(prompt).toContain(
-      "Treat questions about daily notes, memory files, bootstrap/project context, sessions, tools, Gateway, config, or OpenClaw commands as OpenClaw behavior questions.",
+      "Docs are authoritative for OpenClaw self-knowledge: before answering how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `read` or search local docs; never answer from AGENTS.md/project context, workspace/profile/memory notes, or `memory_search` first.",
     );
-    expect(prompt).toContain(
-      "Workspace files, memory notes, and user profile notes are context, not authoritative sources for OpenClaw runtime behavior.",
-    );
-    expect(prompt).toContain(
-      "Do not use `memory_search` or external note tools as the primary source for OpenClaw runtime semantics.",
-    );
+    expect(docsSection.length).toBeLessThan(760);
+    expect(prompt).not.toContain("Self-knowledge rule: for questions about");
+    expect(prompt).not.toContain("Treat questions about daily notes");
+    expect(prompt).not.toContain("Workspace/profile/memory notes and `memory_search`");
   });
 
   it("falls back to public docs and GitHub source guidance when local docs are unavailable", () => {
@@ -558,15 +554,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Docs: https://docs.openclaw.ai");
     expect(prompt).toContain("Source: https://github.com/openclaw/openclaw");
     expect(prompt).toContain(
-      "Self-knowledge rule: for questions about OpenClaw mechanisms, capabilities, configuration, or behavior, search/read the relevant docs above before answering.",
+      "Docs are authoritative for OpenClaw self-knowledge: before answering how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use the docs mirror when web tooling is available; never answer from AGENTS.md/project context, workspace/profile/memory notes, or `memory_search` first.",
     );
-    expect(prompt).toContain(
-      "Do not infer from sparse context, workspace files, or training data; if docs do not cover it, say so explicitly and then inspect source if needed.",
-    );
-    expect(prompt).toContain(
-      "For public docs, use the docs mirror before answering when web tooling is available.",
-    );
-    expect(prompt).toContain("If docs are stale/incomplete, inspect GitHub source.");
+    expect(prompt).toContain("If docs are silent/stale, say so and inspect GitHub source.");
   });
 
   it("includes workspace notes when provided", () => {
