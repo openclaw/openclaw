@@ -49,6 +49,9 @@ function formatSkillStatus(skill: SkillStatusEntry): string {
   if (skill.blockedByAgentFilter) {
     return theme.warn(decorativePrefix("🚫", "excluded"));
   }
+  if (skill.blockedByPlatform) {
+    return theme.warn(decorativePrefix("🚫", "incompatible"));
+  }
   if (skill.eligible) {
     return theme.success("✓ ready");
   }
@@ -117,7 +120,7 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
 /** Render skill discovery status as sanitized JSON or a terminal table. */
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
   const isReadyForAgent = (skill: SkillStatusEntry) =>
-    skill.eligible && !skill.blockedByAgentFilter;
+    skill.eligible && !skill.blockedByAgentFilter && !skill.blockedByPlatform;
   const skills = opts.eligible ? report.skills.filter(isReadyForAgent) : report.skills;
 
   if (opts.json) {
@@ -132,6 +135,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         disabled: s.disabled,
         blockedByAllowlist: s.blockedByAllowlist,
         blockedByAgentFilter: s.blockedByAgentFilter,
+        blockedByPlatform: s.blockedByPlatform,
         modelVisible: s.modelVisible,
         userInvocable: s.userInvocable,
         commandVisible: s.commandVisible,
