@@ -1,0 +1,118 @@
+{
+  "id": "openclaw-governance",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "OpenClaw Governance",
+  "description": "Optional signed AIBOM audit log, DLP scanner, and per-call cost ledger. Backported from Nexus chokepoint governance for personal/local use.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Globally toggle the governance plugin. Defaults to true when the plugin is loaded."
+      },
+      "storeDir": {
+        "type": "string",
+        "description": "Override the default ~/.openclaw/governance directory for the SQLite store and signing keys."
+      },
+      "aibom": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "signingAlgorithm": {
+            "type": "string",
+            "enum": ["ed25519"]
+          }
+        }
+      },
+      "dlp": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "defaultAction": {
+            "type": "string",
+            "enum": ["log", "warn", "redact", "block"],
+            "description": "Default action when a DLP entity is found. Defaults to log."
+          },
+          "entities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "US_SSN",
+                "CREDIT_CARD",
+                "EMAIL_ADDRESS",
+                "PHONE_NUMBER",
+                "US_PASSPORT",
+                "IBAN_CODE",
+                "IP_ADDRESS",
+                "US_DRIVER_LICENSE"
+              ]
+            }
+          },
+          "perChannel": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": ["log", "warn", "redact", "block"]
+            },
+            "description": "Map of channel id to DLP action override."
+          }
+        }
+      },
+      "cost": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "estimateFromChars": {
+            "type": "boolean",
+            "description": "When usage data is unavailable, estimate token counts from output character length."
+          },
+          "pricesPerMillion": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "inputUsd": { "type": "number", "minimum": 0 },
+                "outputUsd": { "type": "number", "minimum": 0 }
+              }
+            },
+            "description": "Per-model pricing overrides keyed by provider/model. Numbers are USD per million tokens."
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enable Governance",
+      "help": "Globally enable the AIBOM/DLP/cost ledger plugin."
+    },
+    "storeDir": {
+      "label": "Store Directory",
+      "help": "Optional override of the default ~/.openclaw/governance store directory."
+    },
+    "aibom.enabled": {
+      "label": "Enable AIBOM",
+      "help": "Record a signed AIBOM entry per agent turn."
+    },
+    "dlp.enabled": {
+      "label": "Enable DLP",
+      "help": "Scan prompts and assistant responses for sensitive entities."
+    },
+    "dlp.defaultAction": {
+      "label": "DLP Default Action",
+      "help": "Default action for matched entities. Per-channel overrides take precedence."
+    },
+    "cost.enabled": {
+      "label": "Enable Cost Ledger",
+      "help": "Persist per-turn cost ledger entries with session/skill/channel attribution."
+    }
+  }
+}
