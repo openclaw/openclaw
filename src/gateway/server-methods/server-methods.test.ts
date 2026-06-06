@@ -3442,7 +3442,12 @@ describe("exec approval handlers", () => {
     const { manager, handlers, forwarder, respond, context } =
       createForwardingExecApprovalFixture();
     const expireSpy = vi.spyOn(manager, "expire");
-    forwarder.handleRequested.mockRejectedValueOnce(new Error("approval delivery failed"));
+    let rejectDelivery: (err: Error) => void = () => {};
+    forwarder.handleRequested.mockReturnValueOnce(
+      new Promise<boolean>((_, reject) => {
+        rejectDelivery = reject;
+      }),
+    );
 
     const requestPromise = requestExecApproval({
       handlers,
@@ -3469,6 +3474,9 @@ describe("exec approval handlers", () => {
 
     expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
     expect(expireSpy).not.toHaveBeenCalled();
+
+    rejectDelivery(new Error("approval delivery failed"));
+    await Promise.resolve();
 
     manager.resolve("approval-forwarding-failed", "allow-once");
     await requestPromise;
