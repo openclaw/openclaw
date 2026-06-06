@@ -116,6 +116,75 @@ describe("resolveBuildAllStep", () => {
     });
   });
 
+  it.each([
+    {
+      name: "routes TypeScript stripping through tsx when native stripping is unavailable",
+      step: getBuildAllStep("write-plugin-sdk-entry-dts"),
+      expectedArgs: ["--import", "tsx", "scripts/write-plugin-sdk-entry-dts.ts"],
+    },
+    {
+      name: "forwards extra TypeScript script args through the tsx fallback",
+      step: {
+        label: "custom-typescript-step",
+        kind: "node",
+        args: ["--experimental-strip-types", "scripts/custom.ts", "--check"],
+      },
+      expectedArgs: ["--import", "tsx", "scripts/custom.ts", "--check"],
+    },
+    {
+      name: "passes through non-TypeScript-strip node args",
+      step: {
+        label: "custom-node-step",
+        kind: "node",
+        args: ["scripts/custom.mjs"],
+      },
+      expectedArgs: ["scripts/custom.mjs"],
+    },
+    {
+      name: "passes through non-TypeScript files using strip-types",
+      step: {
+        label: "custom-js-step",
+        kind: "node",
+        args: ["--experimental-strip-types", "scripts/custom.mjs"],
+      },
+      expectedArgs: ["--experimental-strip-types", "scripts/custom.mjs"],
+    },
+  ])("$name", ({ step, expectedArgs }) => {
+    const result = resolveBuildAllStep(step, {
+      nodeExecPath: "/custom/node",
+      env: { FOO: "bar" },
+      nodeSupportsTypeScript: false,
+    });
+
+    expect(result).toEqual({
+      command: "/custom/node",
+      args: expectedArgs,
+      options: {
+        stdio: "inherit",
+        env: { FOO: "bar" },
+      },
+    });
+  });
+
+  it("keeps native TypeScript stripping when the node binary supports it", () => {
+    const step = getBuildAllStep("write-plugin-sdk-entry-dts");
+
+    const result = resolveBuildAllStep(step, {
+      nodeExecPath: "/custom/node",
+      env: { FOO: "bar" },
+      nodeSupportsTypeScript: true,
+    });
+
+    expect(result).toEqual({
+      command: "/custom/node",
+      args: ["--experimental-strip-types", "scripts/write-plugin-sdk-entry-dts.ts"],
+      options: {
+        stdio: "inherit",
+        env: { FOO: "bar" },
+      },
+    });
+  });
+
   it("can route pnpm script steps through direct node entrypoints", () => {
     const step = getBuildAllStep("plugins:assets:build");
 
