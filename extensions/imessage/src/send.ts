@@ -25,7 +25,7 @@ import {
 } from "./approval-reactions.js";
 import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
-import { extractMarkdownFormatRuns } from "./markdown-format.js";
+import { extractMarkdownFormatRuns, type IMessageFormatRange } from "./markdown-format.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
 import {
@@ -451,16 +451,25 @@ async function resolveFallbackSentMessageGuid(params: {
   return null;
 }
 
+function isIMessageApprovalPromptMessage(message: string): boolean {
+  return Boolean(message.trim()) && Boolean(extractIMessageApprovalPromptBinding(message));
+}
+
 function shouldRecoverApprovalPromptGuid(params: {
   message: string;
   filePath?: string;
   replyToId?: string | null;
 }): boolean {
+  return !params.filePath && !params.replyToId && isIMessageApprovalPromptMessage(params.message);
+}
+
+function canCheckSentMessageAfterRpcTimeout(params: {
+  dbPath?: string;
+  resolveSentMessageGuidImpl?: IMessageSendOpts["resolveSentMessageGuidImpl"];
+}): boolean {
   return (
-    !params.filePath &&
-    !params.replyToId &&
-    Boolean(params.message.trim()) &&
-    Boolean(extractIMessageApprovalPromptBinding(params.message))
+    Boolean(params.resolveSentMessageGuidImpl) ||
+    canResolveLatestSentMessageGuidFromChatDb(params.dbPath)
   );
 }
 
@@ -723,6 +732,61 @@ async function resolveAttachmentChatTarget(params: {
   return stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
 }
 
+async function trySendRichTextForTarget(params: {
+  target: ReturnType<typeof parseIMessageTarget>;
+  service?: IMessageService;
+  message: string;
+  replyToId?: string;
+  formatRanges?: readonly IMessageFormatRange[];
+  runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
+}): Promise<Record<string, unknown> | null> {
+  if (!params.message.trim()) {
+    return null;
+  }
+  let chatTarget: string | null;
+  try {
+    chatTarget = await resolveAttachmentChatTarget({
+      target: params.target,
+      service: params.service,
+      runCliJson: params.runCliJson,
+    });
+  } catch (error) {
+    if (isAttachmentCommandFallbackError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  if (!chatTarget) {
+    return null;
+  }
+
+  const args = ["send-rich", "--chat", chatTarget, "--text", params.message];
+  if (params.replyToId) {
+    args.push("--reply-to", params.replyToId);
+  }
+  if (params.formatRanges?.length) {
+    args.push("--format", JSON.stringify(params.formatRanges));
+  }
+
+  try {
+    const result = await params.runCliJson(args);
+    const failure = resolveIMessageCliFailure(result);
+    if (failure) {
+      const error = new Error(failure);
+      if (isAttachmentCommandFallbackError(error)) {
+        return null;
+      }
+      throw error;
+    }
+    return result;
+  } catch (error) {
+    if (isAttachmentCommandFallbackError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 async function trySendAttachmentForTarget(params: {
   accountId: string;
   dbPath?: string;
@@ -978,6 +1042,14 @@ export async function sendMessageIMessage(
       ? await opts.createClient({ cliPath, dbPath })
       : await createIMessageRpcClient({ cliPath, dbPath }));
   const shouldClose = !opts.client;
+  let closedClient = false;
+  const stopOwnedClient = async () => {
+    if (!shouldClose || closedClient) {
+      return;
+    }
+    closedClient = true;
+    await client.stop();
+  };
   let result: Record<string, unknown>;
   const sendStartedAtMs = Date.now();
   try {
@@ -986,18 +1058,23 @@ export async function sendMessageIMessage(
         timeoutMs,
       });
     } catch (error) {
-      if (filePath || resolvedReplyToId || !isIMessageRpcSendTimeout(error)) {
+      if (filePath || !isIMessageRpcSendTimeout(error)) {
         throw error;
       }
       if (
-        !shouldRecoverApprovalPromptGuid({
-          message,
-          filePath,
-          replyToId: resolvedReplyToId,
+        !canCheckSentMessageAfterRpcTimeout({
+          dbPath: chatDbLookupPath,
+          resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
         })
       ) {
         throw error;
       }
+
+      const canUseSendRichFallback = shouldClose && !isIMessageApprovalPromptMessage(message);
+      if (canUseSendRichFallback) {
+        await stopOwnedClient();
+      }
+
       const recoveredGuid = await resolveFallbackSentMessageGuid({
         dbPath: chatDbLookupPath,
         target,
@@ -1005,10 +1082,24 @@ export async function sendMessageIMessage(
         sentAfterMs: sendStartedAtMs,
         resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
       });
-      if (!recoveredGuid) {
+      if (recoveredGuid) {
+        result = { guid: recoveredGuid, status: "sent" };
+      } else if (!canUseSendRichFallback) {
         throw error;
+      } else {
+        const richFallbackResult = await trySendRichTextForTarget({
+          target,
+          service,
+          message,
+          ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
+          formatRanges: formatted.ranges,
+          runCliJson,
+        });
+        if (!richFallbackResult) {
+          throw error;
+        }
+        result = richFallbackResult;
       }
-      result = { guid: recoveredGuid, status: "sent" };
     }
     const resolvedId = resolveMessageId(result);
     const messageId =
@@ -1097,8 +1188,6 @@ export async function sendMessageIMessage(
       }),
     };
   } finally {
-    if (shouldClose) {
-      await client.stop();
-    }
+    await stopOwnedClient();
   }
 }

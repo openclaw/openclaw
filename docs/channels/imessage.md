@@ -803,6 +803,31 @@ openclaw channels status --probe --channel imessage
 
   </Accordion>
 
+  <Accordion title="Messages send but inbound iMessages do not arrive">
+    First prove whether the message reached the local Mac. If `chat.db` does not change, OpenClaw cannot receive the message even when `imsg status --json` reports a healthy bridge.
+
+```bash
+imsg chats --limit 10 --json
+imsg watch --chat-id <chat-id> --json
+sqlite3 ~/Library/Messages/chat.db \
+  "select datetime(max(date)/1000000000 + 978307200, 'unixepoch', 'localtime'), max(ROWID) from message;"
+```
+
+    If phone-sent messages create no new rows, repair the macOS Messages and Apple Push layer before changing OpenClaw config. A one-shot service refresh is often enough:
+
+```bash
+launchctl kickstart -k system/com.apple.apsd
+launchctl kickstart -k gui/$(id -u)/com.apple.CommCenter
+launchctl kickstart -k gui/$(id -u)/com.apple.identityservicesd
+launchctl kickstart -k gui/$(id -u)/com.apple.imagent
+imsg launch
+openclaw gateway restart
+```
+
+    Send a fresh iMessage from the phone and confirm a new `chat.db` row or `imsg watch` event before debugging OpenClaw sessions. Do not run this as a periodic bridge-relaunch loop; repeated `imsg launch` plus gateway restarts during active work can interrupt deliveries and strand in-flight channel runs.
+
+  </Accordion>
+
   <Accordion title="DMs are ignored">
     Check:
 
