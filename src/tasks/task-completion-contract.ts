@@ -24,7 +24,7 @@ const FOLLOW_UP_PLANNING_PREFIX_PATTERN =
 // deliberately strong (section headers, past-tense completion verbs, explicit
 // pass outcomes, check glyphs) so genuine narration is not swallowed.
 const COMPLETION_RESULT_MARKER_PATTERN =
-  /(?:(?:^|[\s(\[*_>\u2022-])(?:result|results|report|summary|outcome|conclusion|finding|findings|verification|verified|deliverable|proof|status|changes?|recommendation|backup|rollback|files?\s+changed)\s*[:\-\u2013\u2014])|\b(?:done|completed|finished|fixed|patched|resolved|deployed|landed|merged|implemented|confirmed)\b|\b(?:tests?|build|lint|checks?|syntax)\s+(?:passed|succeeded|green)\b|[\u2713\u2714\u2705]/i;
+  /(?:(?:^|[\s([*_>\u2022-])(?:result|results|report|summary|outcome|conclusion|finding|findings|verification|verified|deliverable|proof|status|changes?|recommendation|backup|rollback|files?\s+changed)\s*[:\-\u2013\u2014])|\b(?:done|completed|finished|fixed|patched|resolved|deployed|landed|merged|implemented|confirmed)\b|\b(?:tests?|build|lint|checks?|syntax)\s+(?:passed|succeeded|green)\b|[\u2713\u2714\u2705]/i;
 
 function containsCompletionResultMarker(value: string): boolean {
   return COMPLETION_RESULT_MARKER_PATTERN.test(value);
