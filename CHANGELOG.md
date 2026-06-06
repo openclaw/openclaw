@@ -1980,7 +1980,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Agents/compaction: keep reset and compaction hook provider context stable, avoid inferring providers from non-channel session keys, and clear stale token and cost cache fields when compaction reports zero remaining tokens. Fixes #69269; refs #69286 and #69287. Thanks @de1tydev and @RrcioElise.
 - Browser/chrome-mcp: read Chrome DevTools MCP screenshot output from the extension-suffixed path, fixing ENOENT on screenshot capture. Fixes #77222. (#74685) Thanks @barbarhan.
 
 - macOS/launchd: set generated Gateway LaunchAgent plists to `ProcessType=Interactive` so the gateway keeps timely execution during idle periods. Fixes #58061; refs #62294 and closed duplicate #66992. (#62308) Thanks @bryanpearson and @zssggle-rgb.

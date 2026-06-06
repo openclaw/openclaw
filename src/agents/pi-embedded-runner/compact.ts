@@ -1207,7 +1207,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             sessionKey: params.sessionKey,
             sessionAgentId,
             workspaceDir: effectiveWorkspace,
-            messageProvider: resolvedMessageProvider,
+            messageProvider: hookMessageProvider,
             metrics: beforeHookMetrics,
             onHookMessages: params.onCompactionHookMessages,
           });
@@ -1386,7 +1386,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             hookSessionKey,
             missingSessionKey,
             workspaceDir: effectiveWorkspace,
-            messageProvider: resolvedMessageProvider,
+            messageProvider: hookMessageProvider,
             messageCountAfter,
             tokensAfter,
             compactedCount,
