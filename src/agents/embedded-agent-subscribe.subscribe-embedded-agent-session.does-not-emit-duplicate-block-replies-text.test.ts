@@ -115,7 +115,7 @@ describe("subscribeEmbeddedAgentSession", () => {
   it("populates assistantTexts when non-streaming message_end content is a plain string", () => {
     const { session, emit } = createStubSessionHarness();
 
-    const subscription = subscribeEmbeddedPiSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session,
       runId: "run",
       blockReplyChunking: { minChars: 50, maxChars: 200 },
