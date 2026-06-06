@@ -174,6 +174,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
           }
           const isSourceReplyProof = opts.message === "message tool only source reply proof";
           const isXaiLimitProof = opts.message === "xai limit proof";
+          const isPythonDunderProof = opts.message === "python dunder proof";
           setTimeout(() => {
             if (isXaiLimitProof) {
               this.onEvent?.({
@@ -207,7 +208,25 @@ async function writeTuiPtyFixtureScript(dir: string) {
               ? assistantMessageFromSourceReplyPayloads(sourceReplyPayloads)
               : {
                   role: "assistant",
-                  content: [{ type: "text", text: "PTY_RESPONSE: " + opts.message }],
+                  content: [
+                    {
+                      type: "text",
+                      text: isPythonDunderProof
+                        ? [
+                            'Use __name__ == "__main__" before calling __init__().',
+                            "",
+                            "\`\`\`python",
+                            'if __name__ == "__main__":',
+                            "    __init__()",
+                            "def is_palindrome(s: str) -> bool:",
+                            "    return True",
+                            "\`\`\`",
+                            "",
+                            "Inline \`__name__\` and \`is_palindrome\` stay literal.",
+                          ].join("\\n")
+                        : "PTY_RESPONSE: " + opts.message,
+                    },
+                  ],
                   timestamp: Date.now(),
                 };
             this.onEvent?.({
@@ -408,6 +427,26 @@ describe.sequential("TUI PTY harness", () => {
         (entry) =>
           entry.method === "sourceReplyMetadata" &&
           objectFieldEquals(entry, "text", "VISIBLE_TUI_SOURCE_REPLY_PROOF"),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "renders Python dunder identifiers through the terminal markdown path",
+    async () => {
+      await fixture.run.write("python dunder proof\r");
+      await fixture.run.waitForOutput('Use __name__ == "__main__" before calling __init__().');
+      await fixture.run.waitForOutput('if __name__ == "__main__":');
+      await fixture.run.waitForOutput("def is_palindrome(s: str) -> bool:");
+      await fixture.run.waitForOutput("Inline ");
+      await fixture.run.waitForOutput("__name__");
+      await fixture.run.waitForOutput("is_palindrome");
+      await fixture.run.waitForOutput("stay literal.");
+      expect(fixture.run.output()).not.toContain('Use name == "main"');
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" && objectFieldEquals(entry, "message", "python dunder proof"),
       );
     },
     TEST_TIMEOUT_MS,

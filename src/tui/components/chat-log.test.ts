@@ -75,6 +75,100 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(1);
   });
 
+  it("renders Python underscore identifiers without markdown emphasis loss", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.finalizeAssistant(
+      [
+        'Use __name__ == "__main__" before calling __init__().',
+        "",
+        "```python",
+        'if __name__ == "__main__":',
+        "    __init__()",
+        "def is_palindrome(s: str) -> bool:",
+        "    return True",
+        "```",
+        "",
+        "Inline `__name__` and `is_palindrome` stay literal.",
+        "Markdown **bold** still renders.",
+      ].join("\n"),
+      "run-python",
+    );
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain('Use __name__ == "__main__" before calling __init__().');
+    expect(rendered).toContain('if __name__ == "__main__":');
+    expect(rendered).toContain("    __init__()");
+    expect(rendered).toContain("def is_palindrome(s: str) -> bool:");
+    expect(rendered).toContain("Inline __name__ and is_palindrome stay literal.");
+    expect(rendered).toContain("Markdown bold still renders.");
+    expect(rendered).not.toContain('Use name == "main"');
+  });
+
+  it("does not escape underscore identifiers inside longer fenced code blocks", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.finalizeAssistant(
+      [
+        "````markdown",
+        "```python",
+        'if __name__ == "__main__":',
+        "    __init__()",
+        "```",
+        "````",
+        "",
+        "Use __name__ after the nested example.",
+      ].join("\n"),
+      "run-long-fence",
+    );
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain('if __name__ == "__main__":');
+    expect(rendered).toContain("    __init__()");
+    expect(rendered).toContain("Use __name__ after the nested example.");
+    expect(rendered).not.toContain("\\_\\_init\\_\\_");
+  });
+
+  it("keeps underscore markdown emphasis available outside code identifiers", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.finalizeAssistant(
+      "Markdown __bold__, __name__, and _italic_ still render.",
+      "run-emphasis",
+    );
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("Markdown bold, name, and italic still render.");
+    expect(rendered).not.toContain("__bold__");
+    expect(rendered).not.toContain("__name__");
+    expect(rendered).not.toContain("_italic_");
+  });
+
+  it("preserves common Python dunder method names in prose", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.finalizeAssistant(
+      "Implement __enter__, __exit__, __repr__, __fspath__, __length_hint__, and __getnewargs_ex__.",
+      "run-dunder-methods",
+    );
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain(
+      "Implement __enter__, __exit__, __repr__, __fspath__, __length_hint__, and __getnewargs_ex__.",
+    );
+    expect(rendered).not.toContain("Implement enter, exit, repr, fspath");
+  });
+
+  it("does not escape underscores inside raw HTML-like tags", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.finalizeAssistant(
+      ['<my_component prop_name="x">', '<div prop_name="x">__name__</div>'].join("\n"),
+      "run-html",
+    );
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain('<my_component prop_name="x">');
+    expect(rendered).toContain('<div prop_name="x">__name__</div>');
+    expect(rendered).not.toContain("my\\_component");
+    expect(rendered).not.toContain("prop\\_name");
+  });
+
   it("reserves assistant position without clearing existing streamed text", () => {
     const chatLog = new ChatLog(40);
     chatLog.startAssistant("partial", "run-active");
