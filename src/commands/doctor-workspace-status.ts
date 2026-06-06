@@ -3,6 +3,8 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { detectPluginVersionDrift } from "../plugins/plugin-version-drift.js";
 import {
   buildPluginCompatibilityWarnings,
   buildPluginRegistrySnapshotReport,
@@ -10,6 +12,7 @@ import {
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
+import { VERSION } from "../version.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
 
 function noteFlowRecoveryHints() {
@@ -54,7 +57,7 @@ function noteFlowRecoveryHints() {
 }
 
 /** Emits workspace, skills, plugin, and TaskFlow recovery status notes for doctor. */
-export function noteWorkspaceStatus(cfg: OpenClawConfig) {
+export async function noteWorkspaceStatus(cfg: OpenClawConfig, opts?: { env?: NodeJS.ProcessEnv }) {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const legacyWorkspace = detectLegacyWorkspaceDirs({ workspaceDir });
   if (legacyWorkspace.legacyDirs.length > 0) {
@@ -123,6 +126,33 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
       return `- ${prefix}${plugin}: ${diag.message}${source}`;
     });
     note(lines.join("\n"), "Plugin diagnostics");
+  }
+
+  // Plugin version drift detection — best-effort, non-fatal.
+  // Reuses the same drift detector as `openclaw gateway status --deep`.
+  if (opts?.env) {
+    try {
+      const installRecords = await loadInstalledPluginIndexInstallRecords({
+        env: opts.env,
+      });
+      const drift = detectPluginVersionDrift({
+        gatewayVersion: VERSION,
+        installRecords,
+        config: cfg,
+      });
+      if (drift.drifts.length > 0) {
+        const lines = [
+          `${drift.drifts.length} active official plugin${drift.drifts.length === 1 ? "" : "s"} not on gateway ${drift.gatewayVersion}`,
+          ...drift.drifts.map(
+            (d) => `- ${d.pluginId}: ${d.installedVersion} -> expected ${d.gatewayVersion}`,
+          ),
+          `Fix: ${formatCliCommand("openclaw plugins update <plugin-id>")} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
+        ];
+        note(lines.join("\n"), "Plugin version drift");
+      }
+    } catch {
+      // Install records unavailable — skip drift detection silently.
+    }
   }
 
   noteFlowRecoveryHints();

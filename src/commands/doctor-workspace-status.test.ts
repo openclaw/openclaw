@@ -66,7 +66,7 @@ async function runNoteWorkspaceStatusForTest(
   );
 
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-  noteWorkspaceStatus({});
+  await noteWorkspaceStatus({});
   return noteSpy;
 }
 

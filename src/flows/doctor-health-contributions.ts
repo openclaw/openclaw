@@ -728,7 +728,7 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
 
 async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
-  noteWorkspaceStatus(ctx.cfg);
+  await noteWorkspaceStatus(ctx.cfg, { env: ctx.env });
 }
 
 async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
