@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### New
+
+- Plugins/Amazon: add unified Amazon AWS services plugin with Polly TTS, Transcribe STT, and Nova Sonic realtime voice. All services authenticate via the standard AWS IAM credential chain. Thanks @wirjo.
+
 ### Changes
 
 - Memory/dreaming: add a grounded REM backfill lane with historical `rem-harness --path`, diary commit/reset flows, cleaner durable-fact extraction, and live short-term promotion integration so old daily notes can replay into Dreams and durable memory without a second memory stack. Thanks @mbelinky.
