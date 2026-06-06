@@ -2129,5 +2129,7 @@ describe("anthropic transport stream", () => {
     );
 
     expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("Model turn budget exhausted");
+    expect(result.errorMessage).toContain("max_turns");
   });
 });

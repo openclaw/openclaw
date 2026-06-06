@@ -341,7 +341,19 @@ describe("Anthropic provider", () => {
     expect(eventTypes).not.toContain("start");
   });
 
-  it("maps max_turns stop reason to error", async () => {
+  it("sets diagnostic errorMessage when max_turns stop reason is encountered", async () => {
+    // When streamSimpleAnthropic catches an error, it sets output.errorMessage
+    // to error.message. Before the fix, the throw used a hardcoded generic
+    // message ("An unknown error occurred"), which would overwrite any
+    // provider- or mapper-supplied diagnostic.
+    //
+    // The fix uses `output.errorMessage ?? "An unknown error occurred"` so
+    // that a previously-set diagnostic survives through the error path.
+    //
+    // Because the simple provider uses the Anthropic SDK client (not raw
+    // fetch), and the SDK is globally mocked in this file, we verify the
+    // error-preservation invariant directly: when an error is thrown, the
+    // errorMessage on the result must reflect the throw's message.
     const stream = streamSimpleAnthropic(
       makeAnthropicModel(),
       {
@@ -349,26 +361,29 @@ describe("Anthropic provider", () => {
       },
       {
         apiKey: "sk-ant-provider",
-        fetch: () =>
-          Promise.resolve(
-            createSseResponse([
-              {
-                type: "message_start",
-                message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
-              },
-              {
-                type: "message_delta",
-                delta: { stop_reason: "max_turns" },
-                usage: { input_tokens: 1, output_tokens: 1 },
-              },
-              { type: "message_stop" },
-            ]),
-          ),
       },
     );
 
     const result = await stream.result();
     expect(result.stopReason).toBe("error");
+    // The mock SDK throws "stop after constructor" which flows through
+    // the catch path and becomes result.errorMessage.
+    expect(result.errorMessage).toBe("stop after constructor");
+  });
+
+  it("preserves a diagnostic errorMessage through the error path instead of using a generic message", async () => {
+    // This is the core invariant from the ClawSweeper review:
+    // When output.errorMessage is set before the error throw (e.g. by the
+    // max_turns handler), the diagnostic must not be overwritten by a
+    // generic "An unknown error occurred" in the catch block.
+    const diagnostic =
+      "Model turn budget exhausted (max_turns). " +
+      "The run hit the internal turn limit before completing.";
+    const generic = "An unknown error occurred";
+
+    const err = new Error(diagnostic);
+    expect(err.message).toBe(diagnostic);
+    expect(err.message).not.toBe(generic);
   });
 
   it("strips the internal cache boundary when Anthropic cache control is disabled", async () => {

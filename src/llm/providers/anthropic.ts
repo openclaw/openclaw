@@ -678,6 +678,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         } else if (event.type === "message_delta") {
           if (event.delta.stop_reason) {
             output.stopReason = mapStopReason(event.delta.stop_reason);
+            if (event.delta.stop_reason === "max_turns") {
+              output.errorMessage =
+                "Model turn budget exhausted (max_turns). " +
+                "The run hit the internal turn limit before completing.";
+            }
           }
           // Only update usage fields if present (not null).
           // Preserves input_tokens from message_start when proxies omit it in message_delta.
@@ -708,7 +713,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       }
 
       if (output.stopReason === "aborted" || output.stopReason === "error") {
-        throw new Error("An unknown error occurred");
+        throw new Error(output.errorMessage ?? "An unknown error occurred");
       }
 
       stream.push({ type: "done", reason: output.stopReason, message: output });
