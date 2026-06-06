@@ -629,10 +629,10 @@ export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
       });
     }
   };
+  addEffectiveProviders(undefined);
   const agents = config.agents?.list;
   const agentEntries = Array.isArray(agents) ? agents.filter(isRecord) : [];
   if (agentEntries.length === 0) {
-    addEffectiveProviders(undefined);
     return [...byConfiguredIdAndSource.values()];
   }
   for (const agent of agentEntries) {
