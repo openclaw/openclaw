@@ -87,6 +87,7 @@ export type RealtimeVoiceProviderCapabilities = {
   outputAudioFormats: RealtimeVoiceAudioFormat[];
   supportsBrowserSession?: boolean;
   supportsBargeIn?: boolean;
+  /** True when the provider emits a server speech-start event as the authoritative barge-in signal. */
   emitsSpeechStartedEvent?: boolean;
   supportsToolCalls?: boolean;
   supportsVideoFrames?: boolean;
