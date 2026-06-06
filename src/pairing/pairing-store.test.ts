@@ -60,6 +60,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  vi.useRealTimers();
   clearPairingAllowFromReadCacheForTest();
   nextRandomInt = 0;
   randomIntSpy ??= vi.spyOn(crypto, "randomInt") as unknown as MockInstance<RandomIntSync>;

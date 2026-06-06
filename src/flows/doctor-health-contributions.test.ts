@@ -106,10 +106,14 @@ vi.mock("../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
 }));
 
-vi.mock("../utils.js", () => ({
-  isRecord: mocks.isRecord,
-  shortenHomePath: mocks.shortenHomePath,
-}));
+vi.mock("../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
+  return {
+    ...actual,
+    isRecord: mocks.isRecord,
+    shortenHomePath: mocks.shortenHomePath,
+  };
+});
 
 vi.mock("../cli/command-format.js", () => ({
   formatCliCommand: mocks.formatCliCommand,
