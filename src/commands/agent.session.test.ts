@@ -45,6 +45,11 @@ function writeSessionStoreSeed(
   fs.writeFileSync(storePath, JSON.stringify(sessions));
 }
 
+function canonicalPath(filePath: string): string {
+  // macOS temp paths may appear as /var/... or /private/var/... depending on resolution path.
+  return fs.realpathSync.native(filePath);
+}
+
 async function withCrossAgentResumeFixture(
   run: (params: { sessionId: string; sessionKey: string; cfg: OpenClawConfig }) => Promise<void>,
 ): Promise<void> {
@@ -313,13 +318,13 @@ describe("agent session resolution", () => {
         storePath: resolution.storePath,
         agentId: "main",
       });
-      expect(resolvedTranscript.sessionFile).toBe(sessionFile);
+      expect(canonicalPath(resolvedTranscript.sessionFile)).toBe(canonicalPath(sessionFile));
 
       const persisted = loadSessionStore(resolution.storePath, { skipCache: true })[
         resolution.sessionKey
       ];
       expect(persisted?.sessionId).toBe(sessionId);
-      expect(persisted?.sessionFile).toBe(sessionFile);
+      expect(canonicalPath(persisted?.sessionFile ?? "")).toBe(canonicalPath(sessionFile));
       expect(persisted?.status).toBe("done");
       expect(persisted?.startedAt).toBe(registryUpdatedAt - 1_000);
       expect(persisted?.endedAt).toBe(registryUpdatedAt - 100);

@@ -1,5 +1,5 @@
 // Memory Core plugin module implements mmr behavior.
-import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
+import { jaccardSimilarity, tokenize } from "./tokenize.js";
 
 /**
  * Maximal Marginal Relevance (MMR) re-ranking.
