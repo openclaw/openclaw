@@ -3,7 +3,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
@@ -251,6 +251,13 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
 type ModelRegistryOptions = {
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   workspaceDir?: string;
+  /**
+   * Default/main agent directory whose generated plugin model catalogs are used as a
+   * read-through fallback for this (secondary) agent. Mirrors auth-profile read-through:
+   * model discovery only runs for the default agent at gateway startup, so secondary
+   * agents would otherwise have empty plugin catalogs and fail with "Unknown model".
+   */
+  inheritedAgentDir?: string;
 };
 
 function mergeCompat(
@@ -303,6 +310,7 @@ export class ModelRegistry {
   private loadError: string | undefined = undefined;
   readonly authStorage: AuthStorage;
   private modelsJsonPath: string | undefined;
+  private inheritedAgentDir: string | undefined;
   private pluginMetadataSnapshot: PluginModelCatalogMetadataSnapshot | undefined;
 
   private constructor(
@@ -312,6 +320,7 @@ export class ModelRegistry {
   ) {
     this.authStorage = authStorage;
     this.modelsJsonPath = modelsJsonPath;
+    this.inheritedAgentDir = options.inheritedAgentDir;
     this.pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
       ...(options.pluginMetadataSnapshot
         ? { pluginMetadataSnapshot: options.pluginMetadataSnapshot }
@@ -392,6 +401,13 @@ export class ModelRegistry {
       catalogPluginId?: string;
       includePluginCatalogs?: boolean;
       requireGeneratedCatalog?: boolean;
+      /**
+       * Providers the local agent already owns. Used when loading inherited (default-agent)
+       * catalogs so inheritance is a pure per-provider gap-fill: excluded providers register
+       * no request config, no per-model headers, and contribute no models. The local agent's
+       * configuration is never read or overwritten across the agent boundary.
+       */
+      excludeProviders?: ReadonlySet<string>;
     } = {
       includePluginCatalogs: true,
     },
@@ -437,14 +453,21 @@ export class ModelRegistry {
       this.validateConfig(configForUse);
 
       for (const [providerName, providerConfig] of Object.entries(configForUse.providers)) {
+        if (options.excludeProviders?.has(providerName)) {
+          continue;
+        }
         if ((providerConfig.models ?? []).length > 0) {
           this.storeProviderRequestConfig(providerName, providerConfig);
         }
       }
 
-      const models = this.parseModels(configForUse);
+      const models = this.parseModels(configForUse, options.excludeProviders);
       if (options.includePluginCatalogs !== false) {
-        for (const pluginCatalog of listPluginModelCatalogFiles(dirname(modelsJsonPath))) {
+        const localAgentDir = dirname(modelsJsonPath);
+
+        // Load this agent's OWN plugin catalogs first so its full local state (models +
+        // provider request config + per-model headers) is established before inheritance.
+        for (const pluginCatalog of listPluginModelCatalogFiles(localAgentDir)) {
           const pluginResult = this.loadCustomModels(pluginCatalog.path, {
             catalogPluginId: pluginCatalog.pluginId,
             includePluginCatalogs: false,
@@ -454,6 +477,47 @@ export class ModelRegistry {
             return pluginResult;
           }
           models.push(...pluginResult.models);
+        }
+
+        // Read-through inheritance from the default/main agent. Model discovery only runs
+        // for the default agent at gateway startup, so a freshly created secondary agent
+        // has no local plugin-catalog models and would otherwise fail with "Unknown model".
+        //
+        // Inheritance is per-PROVIDER: a provider the local agent already has any model for
+        // is fully local-owned and never inherited. Provider request config (baseUrl, api,
+        // auth, headers) is per-provider with a single slot, so blending a local model with
+        // an inherited sibling under the same provider would force one shared
+        // credential/transport across agents — a cross-agent boundary violation. Local
+        // always wins.
+        if (this.inheritedAgentDir && resolve(this.inheritedAgentDir) !== resolve(localAgentDir)) {
+          // Providers the local agent already owns (configured via root models.json or a
+          // local plugin catalog). These are excluded from inherited loading entirely, so
+          // local-wins never depends on write order and the inherited catalog can neither
+          // read nor overwrite local request config/headers.
+          const localProviders = new Set(models.map((entry) => entry.provider));
+          const seen = new Set(models.map((entry) => `${entry.provider}/${entry.id}`));
+
+          for (const pluginCatalog of listPluginModelCatalogFiles(this.inheritedAgentDir)) {
+            const inheritedResult = this.loadCustomModels(pluginCatalog.path, {
+              catalogPluginId: pluginCatalog.pluginId,
+              includePluginCatalogs: false,
+              requireGeneratedCatalog: true,
+              excludeProviders: localProviders,
+            });
+            // A broken inherited catalog must never break the local agent.
+            if (inheritedResult.error) {
+              continue;
+            }
+            // Excluded providers contributed no models, config, or headers above, so what
+            // remains is a pure gap-fill of providers the local agent does not have.
+            for (const inheritedModel of inheritedResult.models) {
+              const key = `${inheritedModel.provider}/${inheritedModel.id}`;
+              if (!seen.has(key)) {
+                seen.add(key);
+                models.push(inheritedModel);
+              }
+            }
+          }
         }
       }
 
@@ -517,10 +581,13 @@ export class ModelRegistry {
     }
   }
 
-  private parseModels(config: ModelsConfig): Model[] {
+  private parseModels(config: ModelsConfig, excludeProviders?: ReadonlySet<string>): Model[] {
     const models: Model[] = [];
 
     for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+      if (excludeProviders?.has(providerName)) {
+        continue;
+      }
       const modelDefs = providerConfig.models ?? [];
       if (modelDefs.length === 0) {
         continue;

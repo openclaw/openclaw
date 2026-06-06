@@ -91,6 +91,11 @@ function discoveryFingerprint(
     modelsJson: fileFingerprint(path.join(params.agentDir, "models.json")),
     pluginMetadata: pluginMetadataFingerprint(params.pluginMetadataSnapshot),
     pluginModelCatalogs: pluginModelCatalogFingerprint(params.agentDir),
+    // Secondary agents read through to the default agent's plugin catalogs, so changes to
+    // those inherited catalogs must invalidate this agent's cached discovery snapshot.
+    inheritedPluginModelCatalogs: inheritedAuthDir
+      ? pluginModelCatalogFingerprint(inheritedAuthDir)
+      : undefined,
   });
 }
 
@@ -137,12 +142,20 @@ function discoverFreshAgentStores(
   agentDir: string,
   options: Pick<DiscoverCachedAgentStoresOptions, "config" | "workspaceDir">,
   pluginMetadataSnapshot: PluginMetadataSnapshot | undefined,
+  inheritedAgentDir: string | undefined,
 ): DiscoveryStores {
   const authStorage = discoverAuthStorage(agentDir);
+  // Only inherit when the default agent dir is genuinely distinct, so the default agent
+  // never reads through to itself.
+  const inheritDir =
+    inheritedAgentDir && path.resolve(inheritedAgentDir) !== path.resolve(agentDir)
+      ? inheritedAgentDir
+      : undefined;
   const modelRegistry = discoverModels(authStorage, agentDir, {
     ...(options.config ? { config: options.config } : {}),
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+    ...(inheritDir ? { inheritedAgentDir: inheritDir } : {}),
   });
   return { authStorage, modelRegistry };
 }
@@ -162,6 +175,7 @@ export function discoverCachedAgentStores(
       agentDir,
       options,
       resolvePluginMetadataSnapshotForDiscovery(options),
+      inheritedAuthDir,
     );
   }
   const pluginMetadataSnapshot = resolvePluginMetadataSnapshotForDiscovery(options);
@@ -177,7 +191,12 @@ export function discoverCachedAgentStores(
     };
   }
 
-  const stores = discoverFreshAgentStores(agentDir, options, pluginMetadataSnapshot);
+  const stores = discoverFreshAgentStores(
+    agentDir,
+    options,
+    pluginMetadataSnapshot,
+    inheritedAuthDir,
+  );
   DISCOVERY_STORE_CACHE.set(cacheKey, {
     authStorage: stores.authStorage,
     fingerprint,
