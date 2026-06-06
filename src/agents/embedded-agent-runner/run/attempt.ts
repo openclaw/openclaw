@@ -2017,6 +2017,8 @@ export async function runEmbeddedAttempt(
         onMessagePersisted: () => {
           sessionLockController.refreshAfterOwnedSessionWrite();
         },
+        withCompactionPersistence: (append, validateAppend) =>
+          sessionLockController.withOwnedSessionFileWrite(append, validateAppend),
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
         },
