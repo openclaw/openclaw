@@ -622,16 +622,14 @@ export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
       });
     }
   };
-  // Defaults baseline covers the default agent and every agent that does not
-  // override memorySearch.
-  addEffectiveProviders(undefined);
   const agents = config.agents?.list;
-  if (Array.isArray(agents)) {
-    for (const agent of agents) {
-      if (isRecord(agent)) {
-        addEffectiveProviders(isRecord(agent.memorySearch) ? agent.memorySearch : undefined);
-      }
-    }
+  const agentEntries = Array.isArray(agents) ? agents.filter(isRecord) : [];
+  if (agentEntries.length === 0) {
+    addEffectiveProviders(undefined);
+    return [...byConfiguredIdAndSource.values()];
+  }
+  for (const agent of agentEntries) {
+    addEffectiveProviders(isRecord(agent.memorySearch) ? agent.memorySearch : undefined);
   }
   return [...byConfiguredIdAndSource.values()];
 }
