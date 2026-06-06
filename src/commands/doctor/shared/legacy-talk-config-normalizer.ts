@@ -32,6 +32,11 @@ function buildLegacyRealtimeTalkCompat(
   if (Object.keys(compat).length === 0) {
     return undefined;
   }
+  // When migrating legacy flat voice field into realtime block,
+  // also seed speakerVoice so the realtime canonical form is complete.
+  if (compat.voice !== undefined && compat.speakerVoice === undefined) {
+    compat.speakerVoice = compat.voice;
+  }
   if (normalizedTalk.provider !== undefined) {
     compat.provider = normalizedTalk.provider;
   }
@@ -39,6 +44,30 @@ function buildLegacyRealtimeTalkCompat(
     compat.providers = normalizedTalk.providers;
   }
   return normalizeTalkSection({ realtime: compat } as OpenClawConfig["talk"])?.realtime;
+}
+
+/**
+ * Produce a stable JSON representation with sorted keys.
+ * Used as secondary comparison to prevent spurious normalization
+ * when isDeepStrictEqual detects a difference that disappears after
+ * JSON round-trip (e.g. derived field defaults like speakerVoice).
+ */
+function stableJson(value: unknown): string {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(value, function replacer(_key, val) {
+    if (val !== null && typeof val === "object" && !Array.isArray(val)) {
+      if (seen.has(val as object)) {
+        return val;
+      }
+      seen.add(val as object);
+      const sorted: Record<string, unknown> = {};
+      for (const k of Object.keys(val).toSorted()) {
+        sorted[k] = (val as Record<string, unknown>)[k];
+      }
+      return sorted;
+    }
+    return val;
+  });
 }
 
 /** Normalize legacy Talk provider/realtime fields into current talk.providers and talk.realtime. */
@@ -66,7 +95,17 @@ export function normalizeLegacyTalkConfig(cfg: OpenClawConfig, changes: string[]
       ...normalizedTalk.realtime,
     };
   }
-  if (Object.keys(normalizedTalk).length === 0 || isDeepStrictEqual(normalizedTalk, rawTalk)) {
+  if (Object.keys(normalizedTalk).length === 0) {
+    return cfg;
+  }
+  // Skip normalization when objects are identical (covers key-order differences).
+  // But also guard against derived fields that differ in JS memory yet serialize
+  // to the same on-disk bytes — a deep-equal difference that JSON round-trips away
+  // would still cause repeat doctor suggestions (#90446).
+  if (isDeepStrictEqual(normalizedTalk, rawTalk)) {
+    return cfg;
+  }
+  if (stableJson(normalizedTalk) === stableJson(rawTalk)) {
     return cfg;
   }
 
