@@ -184,6 +184,7 @@ into Windows.
 Inside WSL:
 
 ```bash
+sudo apt-get install -y dbus-x11
 sudo loginctl enable-linger "$(whoami)"
 openclaw gateway install
 ```
