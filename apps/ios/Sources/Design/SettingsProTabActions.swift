@@ -220,6 +220,14 @@ extension SettingsProTab {
             return false
         }
 
+        if AppleReviewDemoMode.isSetupCode(raw) {
+            self.stagedGatewaySetupLink = nil
+            self.setupCode = ""
+            self.setupStatusText = "Apple Review demo mode enabled."
+            self.appModel.enterAppleReviewDemoMode()
+            return false
+        }
+
         guard let link = raw.isEmpty ? stagedLink : GatewayConnectDeepLink.fromSetupInput(raw) else {
             self.setupStatusText = "Setup code not recognized or uses an insecure ws:// gateway URL."
             return false
@@ -270,6 +278,15 @@ extension SettingsProTab {
         self.applyGatewayLink(link)
         self.setupStatusText = "QR loaded. Connecting to \(link.host):\(link.port)..."
         Task { await self.connectAfterScannedGatewayLink() }
+    }
+
+    func handleScannedSetupCode(_ code: String) {
+        guard AppleReviewDemoMode.isSetupCode(code) else { return }
+        self.showQRScanner = false
+        self.setupCode = ""
+        self.stagedGatewaySetupLink = nil
+        self.setupStatusText = "Apple Review demo mode enabled."
+        self.appModel.enterAppleReviewDemoMode()
     }
 
     func connectAfterScannedGatewayLink() async {
