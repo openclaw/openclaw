@@ -1094,6 +1094,7 @@ export async function sendChatMessage(
   setChatError(state, null);
   reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
     clearRunStatus: true,
+    clearLocalTerminalReconcile: true,
   });
   const runId = generateUUID();
   state.chatRunId = runId;
@@ -1117,10 +1118,23 @@ export async function sendChatMessage(
       );
     } else if (isNonTerminalAgentRunStatus(ack.status)) {
       state.chatRunId = ack.runId;
+    } else {
+      // Terminal non-"ok" acks (timeout = abort, error) are finished lifecycle
+      // signals. Clear the optimistic local run too; otherwise a missed/racing
+      // broadcast can leave the composer stuck active on the generated run id.
+      reconcileChatRunLifecycle(
+        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          outcome: "interrupted",
+          sessionStatus: ack.status === "error" ? "failed" : "killed",
+          runId: ack.runId,
+          sessionKey: state.sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          armLocalTerminalReconcile: ack.runId === runId,
+        },
+      );
     }
-    // Terminal non-"ok" acks (timeout = abort, error) are not adopted: the
-    // abort/error broadcast already drove the lifecycle, so re-adopting would
-    // resurrect a finished run. Issue #84176.
     return ack.status === "ok" ? ack.runId : runId;
   } catch (err) {
     const error = formatConnectError(err);

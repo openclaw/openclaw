@@ -1032,6 +1032,7 @@ async function sendQueuedChatMessage(
     setChatError(host, null);
     reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       clearRunStatus: true,
+      clearLocalTerminalReconcile: true,
     });
   }
 
@@ -1097,10 +1098,26 @@ async function sendQueuedChatMessage(
           (host as ChatHost & { chatStreamStartedAt?: number | null }).chatStreamStartedAt =
             startedAt;
         }
+      } else {
+        // Terminal non-"ok" acks (timeout = abort, error) are finished lifecycle
+        // signals. Clear the optimistic visible run too; otherwise a missed/racing
+        // broadcast can leave the composer stuck active on the generated run id.
+        reconcileChatRunLifecycle(
+          host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+          {
+            outcome: "interrupted",
+            sessionStatus: ack.status === "error" ? "failed" : "killed",
+            runId: ack.runId,
+            sessionKey,
+            clearLocalRun: true,
+            clearChatStream: true,
+            clearToolStream: true,
+            clearSideResultTerminalRuns: true,
+            publishRunStatus: false,
+            armLocalTerminalReconcile: ack.runId === runId,
+          },
+        );
       }
-      // Terminal non-"ok" acks (timeout = abort, error) are NOT adopted here:
-      // broadcastChatAborted / the error broadcast already drove the lifecycle,
-      // so re-adopting would resurrect a finished run. Issue #84176.
     }
     if (prepared.refreshSessions) {
       const refreshTarget = {

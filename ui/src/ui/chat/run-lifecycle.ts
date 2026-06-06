@@ -60,6 +60,7 @@ type ReconcileOptions = {
   clearToolStream?: boolean;
   clearSideResultTerminalRuns?: boolean;
   clearRunStatus?: boolean;
+  clearLocalTerminalReconcile?: boolean;
   publishRunStatus?: boolean;
   armLocalTerminalReconcile?: boolean;
 };
@@ -192,6 +193,9 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   }
   if (options.clearSideResultTerminalRuns) {
     host.chatSideResultTerminalRuns?.clear();
+  }
+  if (options.clearLocalTerminalReconcile) {
+    host.lastLocalTerminalReconcile = null;
   }
   if (options.clearToolStream && canResetToolStream(host)) {
     resetToolStream(host);

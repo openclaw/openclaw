@@ -1349,9 +1349,93 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    const runId = String(payload.idempotencyKey);
+    const runState = host as ChatHost & {
+      chatStreamStartedAt?: number | null;
+      lastLocalTerminalReconcile?: unknown;
+    };
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(runState.chatStreamStartedAt).toBeNull();
+    expect(runState.lastLocalTerminalReconcile).toMatchObject({
+      phase: "interrupted",
+      runId,
+      sessionKey: "agent:main",
+      sessionStatus: "killed",
+    });
     // /reset sets refreshSessions=true; a terminal timeout ack describes an
     // already-finished run, so the chat-state event that would clear a deferred
     // refresh never arrives. Seeding it would leak an entry, so it is skipped.
+    expect(host.refreshSessionsAfterChat.size).toBe(0);
+  });
+
+  it("clears the local run as failed for a terminal error ack on a refreshing send (#84176)", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "error" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/reset",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    const runId = String(payload.idempotencyKey);
+    const runState = host as ChatHost & {
+      chatStreamStartedAt?: number | null;
+      lastLocalTerminalReconcile?: unknown;
+    };
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(runState.chatStreamStartedAt).toBeNull();
+    expect(runState.lastLocalTerminalReconcile).toMatchObject({
+      phase: "interrupted",
+      runId,
+      sessionKey: "agent:main",
+      sessionStatus: "failed",
+    });
+    expect(host.refreshSessionsAfterChat.size).toBe(0);
+  });
+
+  it("clears stale local terminal reconcile on a mismatched terminal timeout ack (#84176)", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { runId: "gateway-aborted-run", status: "timeout" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/reset",
+      sessionKey: "agent:main",
+    });
+    const runState = host as ChatHost & { lastLocalTerminalReconcile?: unknown };
+    runState.lastLocalTerminalReconcile = {
+      phase: "done",
+      runId: "old-run",
+      sessionKey: "agent:main",
+      sessionStatus: "done",
+      occurredAt: Date.now(),
+    };
+
+    await handleSendChat(host);
+
+    expect(host.chatRunId).toBeNull();
+    expect(runState.lastLocalTerminalReconcile ?? null).toBeNull();
     expect(host.refreshSessionsAfterChat.size).toBe(0);
   });
 

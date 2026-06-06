@@ -1936,18 +1936,97 @@ describe("sendChatMessage", () => {
     });
   });
 
-  it("does not adopt a run when the send acks a terminal timeout (#84176)", async () => {
-    const request = vi.fn().mockResolvedValue({ runId: "gateway-aborted-run", status: "timeout" });
+  it("clears the local run when the send acks a terminal timeout (#84176)", async () => {
+    const request = vi.fn((_method: string, params: { idempotencyKey: string }) =>
+      Promise.resolve({ runId: params.idempotencyKey, status: "timeout" }),
+    );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
     });
 
+    const result = await sendChatMessage(state, "aborted before dispatch");
+
+    expect(result).toMatch(UUID_V4_RE);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    const runState = state as ChatState & {
+      chatRunStatus?: unknown;
+      lastLocalTerminalReconcile?: unknown;
+    };
+    expect(runState.chatRunStatus).toMatchObject({
+      phase: "interrupted",
+      runId: result,
+      sessionKey: "main",
+    });
+    expect(runState.lastLocalTerminalReconcile).toMatchObject({
+      phase: "interrupted",
+      runId: result,
+      sessionKey: "main",
+      sessionStatus: "killed",
+    });
+  });
+
+  it("clears the local run as failed when the send acks a terminal error (#84176)", async () => {
+    const request = vi.fn((_method: string, params: { idempotencyKey: string }) =>
+      Promise.resolve({ runId: params.idempotencyKey, status: "error" }),
+    );
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "failed before dispatch");
+
+    expect(result).toMatch(UUID_V4_RE);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    const runState = state as ChatState & {
+      chatRunStatus?: unknown;
+      lastLocalTerminalReconcile?: unknown;
+    };
+    expect(runState.chatRunStatus).toMatchObject({
+      phase: "interrupted",
+      runId: result,
+      sessionKey: "main",
+    });
+    expect(runState.lastLocalTerminalReconcile).toMatchObject({
+      phase: "interrupted",
+      runId: result,
+      sessionKey: "main",
+      sessionStatus: "failed",
+    });
+  });
+
+  it("does not adopt a mismatched terminal timeout ack as an active run (#84176)", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "gateway-aborted-run", status: "timeout" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+    const runState = state as ChatState & {
+      chatRunStatus?: unknown;
+      lastLocalTerminalReconcile?: unknown;
+    };
+    runState.lastLocalTerminalReconcile = {
+      phase: "done",
+      runId: "old-run",
+      sessionKey: "main",
+      sessionStatus: "done",
+      occurredAt: Date.now(),
+    };
+
     await sendChatMessage(state, "aborted before dispatch");
 
-    // Terminal ack must NOT be adopted as an active run: broadcastChatAborted
-    // already drove the lifecycle, so re-adopting would resurrect a finished run.
-    expect(state.chatRunId).not.toBe("gateway-aborted-run");
+    expect(state.chatRunId).toBeNull();
+    expect(runState.chatRunStatus).toMatchObject({
+      phase: "interrupted",
+      runId: "gateway-aborted-run",
+      sessionKey: "main",
+    });
+    expect(runState.lastLocalTerminalReconcile ?? null).toBeNull();
   });
 
   it("normalizeChatSendAck preserves terminal statuses and coerces unknown ones (#84176)", () => {
