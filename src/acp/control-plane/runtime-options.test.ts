@@ -40,4 +40,11 @@ describe("buildRuntimeConfigOptionPairs timeout advertisement", () => {
       ["thinking", "high"],
     ]);
   });
+
+  it("maps fast mode to backend-advertised aliases", () => {
+    expect(buildRuntimeConfigOptionPairs({ fastMode: false })).toEqual([["fast_mode", "false"]]);
+    expect(buildRuntimeConfigOptionPairs({ fastMode: true }, ["fast-mode"])).toEqual([
+      ["fast-mode", "true"],
+    ]);
+  });
 });

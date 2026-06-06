@@ -951,6 +951,28 @@ describe("spawnAcpDirect", () => {
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
   });
 
+  it("passes fast mode overrides into ACP session initialization", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        fastMode: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const initInput = expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        fastMode: false,
+      },
+    });
+    expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
+  });
+
   it("applies existing subagent model and model-profile thinking defaults to ACP runtime options", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),

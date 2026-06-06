@@ -45,7 +45,11 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
-import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
+import type {
+  AcpSessionRuntimeOptions,
+  SessionAcpMeta,
+  SessionEntry,
+} from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -997,11 +1001,10 @@ function validateAcpResumeSessionOwnership(params: {
   };
 }
 
-type AcpSpawnRuntimeOptions = {
-  model?: string;
-  thinking?: string;
-  timeoutSeconds?: number;
-};
+type AcpSpawnRuntimeOptions = Pick<
+  AcpSessionRuntimeOptions,
+  "model" | "thinking" | "timeoutSeconds" | "fastMode"
+>;
 
 function resolveAcpRuntimeTimeoutSeconds(runTimeoutSeconds?: number): number | undefined {
   if (!runTimeoutSeconds) {
@@ -1017,6 +1020,7 @@ function resolveAcpSpawnRuntimeOptions(params: {
   model?: string;
   thinking?: string;
   runTimeoutSeconds?: number;
+  fastMode?: boolean;
 }): { ok: true; runtimeOptions?: AcpSpawnRuntimeOptions } | { ok: false; error: string } {
   const policyAgentId = params.configAgentId ?? params.targetAgentId;
   const model = resolveConfiguredSubagentSpawnModelSelection({
@@ -1052,11 +1056,12 @@ function resolveAcpSpawnRuntimeOptions(params: {
 
   const timeoutSeconds = resolveAcpRuntimeTimeoutSeconds(params.runTimeoutSeconds);
   const runtimeOptions =
-    model || thinking || timeoutSeconds
+    model || thinking || timeoutSeconds || typeof params.fastMode === "boolean"
       ? {
           ...(model ? { model } : {}),
           ...(thinking ? { thinking } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
+          ...(typeof params.fastMode === "boolean" ? { fastMode: params.fastMode } : {}),
         }
       : undefined;
   return { ok: true, runtimeOptions };
@@ -1409,6 +1414,7 @@ export async function spawnAcpDirect(
     model: params.model,
     thinking: params.thinking,
     runTimeoutSeconds,
+    fastMode: params.fastMode,
   });
   if (!runtimeOptionsResult.ok) {
     return createAcpSpawnFailure({

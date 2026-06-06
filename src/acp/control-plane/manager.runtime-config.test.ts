@@ -403,6 +403,7 @@ describe("AcpSessionManager runtime config", () => {
           thinking: "high",
           permissionProfile: "strict",
           timeoutSeconds: 120,
+          fastMode: false,
         },
       },
     });
@@ -434,6 +435,10 @@ describe("AcpSessionManager runtime config", () => {
     expectMockCallFields(runtimeState.setConfigOption, {
       key: "timeout",
       value: "120",
+    });
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "fast_mode",
+      value: "false",
     });
   });
 
@@ -606,7 +611,7 @@ describe("AcpSessionManager runtime config", () => {
     const runtimeState = createRuntime();
     runtimeState.getCapabilities.mockResolvedValue({
       controls: ["session/set_config_option", "session/status"],
-      configOptionKeys: ["model", "thought_level", "permissions", "timeout_seconds"],
+      configOptionKeys: ["model", "thought_level", "permissions", "timeout_seconds", "fast-mode"],
     });
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -622,6 +627,7 @@ describe("AcpSessionManager runtime config", () => {
           thinking: "high",
           permissionProfile: "strict",
           timeoutSeconds: 120,
+          fastMode: true,
         },
       },
     });
@@ -646,6 +652,10 @@ describe("AcpSessionManager runtime config", () => {
     expectMockCallFields(runtimeState.setConfigOption, {
       key: "timeout_seconds",
       value: "120",
+    });
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "fast-mode",
+      value: "true",
     });
     expectNoMockCallFields(runtimeState.setConfigOption, {
       key: "thinking",
