@@ -245,9 +245,10 @@ describe("runParallelMcpSearch", () => {
         result: { content: [{ type: "text", text: JSON.stringify({ results: [] }) }] },
       }),
     );
-    // A long caller id (>100 chars) accepted by the tool schema must be used as
+    // The MCP client is a dumb transport: an already-normalized caller id (the
+    // provider runtime caps it at the free MCP's 100-char limit) is forwarded as
     // sent, so the MCP session, cache key, and reported id stay in agreement.
-    const callerSessionId = "s".repeat(150);
+    const callerSessionId = `sess-${"a".repeat(40)}`;
     const response = await runParallelMcpSearch({
       searchQueries: ["x"],
       maxResults: 5,

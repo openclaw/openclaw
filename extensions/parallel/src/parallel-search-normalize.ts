@@ -17,7 +17,11 @@ const PARALLEL_MAX_SEARCH_COUNT = 40;
 const PARALLEL_MAX_SEARCH_QUERY_CHARS = 200;
 const PARALLEL_MAX_OBJECTIVE_CHARS = 5000;
 const PARALLEL_MAX_SEARCH_QUERIES = 5;
-const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
+// Paid v1 REST accepts session ids up to 1000 chars, but the free Search MCP
+// `tools/list` schema caps session_id at 100. Each runtime passes its own limit
+// (and advertises it in the tool schema) so callers never send an out-of-contract id.
+export const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
+export const PARALLEL_FREE_SESSION_ID_MAX_LENGTH = 100;
 const PARALLEL_CLIENT_MODEL_MAX_LENGTH = 100;
 
 export type ParallelSearchResult = {
@@ -39,9 +43,12 @@ export function resolveParallelSearchCount(value: number): number {
   return Math.max(1, Math.min(PARALLEL_MAX_SEARCH_COUNT, Math.floor(value)));
 }
 
-export function normalizeParallelSessionId(value: string | undefined): string | undefined {
+export function normalizeParallelSessionId(
+  value: string | undefined,
+  maxLength: number,
+): string | undefined {
   const trimmed = normalizeOptionalString(value);
-  return trimmed && trimmed.length <= PARALLEL_SESSION_ID_MAX_LENGTH ? trimmed : undefined;
+  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
 }
 
 export function normalizeParallelObjective(value: string | undefined): string | undefined {

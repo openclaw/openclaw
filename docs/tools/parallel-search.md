@@ -110,9 +110,11 @@ Results to return (1-40).
 </ParamField>
 
 <ParamField path="session_id" type="string">
-Optional Parallel session id (max 1000 chars). Pass the `sessionId` from a
-previous Parallel result on follow-up searches that are part of the same task
-so Parallel can group related calls and improve subsequent results.
+Optional Parallel session id (max 1000 chars on `parallel`; the free
+`parallel-free` Search MCP caps it at 100). Pass the `sessionId` from a previous
+Parallel result on follow-up searches that are part of the same task so Parallel
+can group related calls and improve subsequent results. An id past the limit is
+dropped and a fresh one is generated.
 </ParamField>
 
 <ParamField path="client_model" type="string">

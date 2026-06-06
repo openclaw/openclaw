@@ -20,6 +20,7 @@ import {
   normalizeParallelObjective,
   normalizeParallelSearchQueries,
   normalizeParallelSessionId,
+  PARALLEL_FREE_SESSION_ID_MAX_LENGTH,
   resolveParallelSearchCount,
   stripParallelGeneratedSessionId,
 } from "./parallel-search-normalize.js";
@@ -50,7 +51,10 @@ export async function executeParallelFreeWebSearchProviderTool(
     readNumberParam(args, "count", { integer: true }) ??
     (typeof searchConfig?.maxResults === "number" ? searchConfig.maxResults : undefined);
   const count = resolveParallelSearchCount(requestedCount ?? DEFAULT_SEARCH_COUNT);
-  const sessionId = normalizeParallelSessionId(readStringParam(args, "session_id"));
+  const sessionId = normalizeParallelSessionId(
+    readStringParam(args, "session_id"),
+    PARALLEL_FREE_SESSION_ID_MAX_LENGTH,
+  );
   const clientModel = normalizeParallelClientModel(readStringParam(args, "client_model"));
   const cacheKey = buildParallelCacheKey({
     endpoint: PARALLEL_MCP_SEARCH_URL,

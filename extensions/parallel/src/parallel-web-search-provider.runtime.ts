@@ -26,6 +26,7 @@ import {
   normalizeParallelResults,
   normalizeParallelSearchQueries,
   normalizeParallelSessionId,
+  PARALLEL_SESSION_ID_MAX_LENGTH,
   type ParallelSearchResponse,
   resolveParallelSearchCount,
   stripParallelGeneratedSessionId,
@@ -197,7 +198,10 @@ export async function executeParallelWebSearchProviderTool(
   // Always pass max_results so Parallel matches the openclaw web_search default
   // of 5 instead of Parallel's own default of 10.
   const count = resolveParallelSearchCount(requestedCount ?? DEFAULT_SEARCH_COUNT);
-  const sessionId = normalizeParallelSessionId(readStringParam(args, "session_id"));
+  const sessionId = normalizeParallelSessionId(
+    readStringParam(args, "session_id"),
+    PARALLEL_SESSION_ID_MAX_LENGTH,
+  );
   const clientModel = normalizeParallelClientModel(readStringParam(args, "client_model"));
   const cacheKey = buildParallelCacheKey({
     endpoint,

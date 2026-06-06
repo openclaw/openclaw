@@ -71,6 +71,18 @@ describe("parallel-free web search provider", () => {
     expect(provider.autoDetectOrder).toBe(76);
   });
 
+  it("advertises the free MCP's tighter 100-char session_id cap in its tool schema", () => {
+    const provider = createParallelFreeWebSearchProvider();
+    const tool = provider.createTool({ config: {}, searchConfig: {} });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const sessionIdParam = (
+      tool.parameters as { properties: Record<string, { maxLength?: number }> }
+    ).properties.session_id;
+    expect(sessionIdParam.maxLength).toBe(100);
+  });
+
   it("searches via the free MCP and brands the result, with no API key", async () => {
     // No PARALLEL_API_KEY needed — the free path ignores keys entirely.
     vi.stubEnv("PARALLEL_API_KEY", "par-should-be-ignored"); // pragma: allowlist secret
@@ -106,6 +118,29 @@ describe("parallel-free web search provider", () => {
     expect(Array.isArray(result.results)).toBe(true);
     expect((result.results as unknown[]).length).toBe(1);
     vi.unstubAllEnvs();
+  });
+
+  it("drops an over-limit caller session id and mints one within the free MCP's 100-char cap", async () => {
+    pushHandshake({ search_id: "s1", results: [] });
+    const provider = createParallelFreeWebSearchProvider();
+    const tool = provider.createTool({ config: {}, searchConfig: {} });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    await tool.execute({
+      objective: "session cap check",
+      search_queries: ["session cap"],
+      session_id: "x".repeat(150),
+    });
+
+    const toolsCallArgs = (
+      JSON.parse(endpointMockState.calls[2].init.body as string).params as Record<string, unknown>
+    ).arguments as Record<string, unknown>;
+    const sentSessionId = toolsCallArgs.session_id as string;
+    // The 150-char caller id is out-of-contract for the free MCP; it is dropped
+    // and replaced by a generated id that stays within the advertised 100-char cap.
+    expect(sentSessionId).not.toBe("x".repeat(150));
+    expect(sentSessionId.length).toBeLessThanOrEqual(100);
   });
 
   it("returns a structured error when search_queries is missing", async () => {
