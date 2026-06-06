@@ -135,6 +135,41 @@ class MicCaptureManagerTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun terminalGatewaySendDoesNotAcceptDelayedOldRunEvents() =
+    runTest {
+      val manager =
+        createManager(
+          scope = this,
+          sendToGateway = { _, onRunIdKnown ->
+            onRunIdKnown("run-terminal")
+            null
+          },
+        )
+
+      manager.onGatewayConnectionChanged(true)
+      manager.submitTranscribedMessage("terminal ack message")
+      runCurrent()
+
+      assertNull(privateField<String?>(manager, "pendingRunId"))
+      assertEquals(false, manager.isSending.value)
+
+      manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-terminal", text = "stale reply"))
+      advanceUntilIdle()
+
+      assertEquals(
+        listOf(VoiceConversationRole.User),
+        manager.conversation.value.map { it.role },
+      )
+      assertEquals(
+        "terminal ack message",
+        manager.conversation.value
+          .single()
+          .text,
+      )
+    }
+
+  @Test
   fun pcm16FramesAreEncodedAsPcmuFrames() {
     val manager = createManager()
     val method = manager.javaClass.getDeclaredMethod("pcm16ToPcmu", ByteArray::class.java)

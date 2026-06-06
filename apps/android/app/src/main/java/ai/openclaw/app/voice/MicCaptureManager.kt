@@ -497,6 +497,7 @@ class MicCaptureManager(
           removeFirstQueuedMessage()
           publishQueue()
           _isSending.value = false
+          pendingRunId = null
           pendingAssistantEntryId = null
           sendQueuedIfIdle()
         } else {
