@@ -482,16 +482,16 @@ function collectConfiguredVoiceProviderIds(config: OpenClawConfig): ConfiguredVo
   };
 }
 
-// Sentinel memory embedding provider ids that do not map to a plugin-owned
-// memoryEmbeddingProviders contract: "auto" resolves at runtime, "local" uses
-// core/local embeddings, and "none" disables provider-backed embeddings.
+// Explicit memory provider startup only pulls plugin-owned remote/custom
+// providers into Gateway boot. Missing/"auto" stays lazy, "local" is covered by
+// the selected memory slot, and "none" disables provider-backed embeddings.
 const MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS: ReadonlySet<string> = new Set([
   "auto",
   "local",
   "none",
 ]);
 
-function normalizeConfiguredMemoryEmbeddingProviderId(value: unknown): string | undefined {
+function normalizeExplicitMemoryEmbeddingProviderId(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -509,35 +509,17 @@ function readMemorySearchEnabled(
   return typeof enabled === "boolean" ? enabled : undefined;
 }
 
-/**
- * Resolve the effective memory embedding provider id for a single agent by
- * merging its `memorySearch` override over `agents.defaults.memorySearch`,
- * mirroring `resolveMemorySearchConfig` inheritance
- * (`override?.enabled ?? defaults?.enabled ?? true`,
- * `override?.provider ?? defaults?.provider`). Returns undefined when effective
- * memory search is disabled, so an inherited-disabled default is not re-pulled
- * into startup by a per-agent override that only sets `provider`. Sentinel ids
- * ("auto"/"local"/"none") also resolve to undefined.
- */
-function resolveEffectiveMemoryEmbeddingProviderId(
-  defaults: Record<string, unknown> | undefined,
-  override: Record<string, unknown> | undefined,
-): string | undefined {
-  const enabled = readMemorySearchEnabled(override) ?? readMemorySearchEnabled(defaults) ?? true;
-  if (!enabled) {
-    return undefined;
-  }
-  return normalizeConfiguredMemoryEmbeddingProviderId(override?.provider ?? defaults?.provider);
-}
+export type MemoryEmbeddingStartupProviderSource = "provider" | "fallback";
 
-type ConfiguredMemoryEmbeddingProvider = {
-  /** Raw `memorySearch.provider` id as configured (normalized). */
+export type ConfiguredMemoryEmbeddingStartupProviderOwner = {
+  /** Raw memory-search provider id as configured (normalized). */
   configuredId: string;
   /**
    * Adapter ids a plugin can own for this provider: the configured id plus its
    * `models.providers.<id>.api` owner when a custom provider maps to one.
    */
   ownerIds: ReadonlySet<string>;
+  source: MemoryEmbeddingStartupProviderSource;
 };
 
 /**
@@ -563,41 +545,76 @@ function resolveMemoryEmbeddingProviderOwnerIds(
   return ownerIds;
 }
 
+function resolveEffectiveMemoryEmbeddingProviderEntries(
+  defaults: Record<string, unknown> | undefined,
+  override: Record<string, unknown> | undefined,
+): Array<{
+  configuredId: string;
+  source: MemoryEmbeddingStartupProviderSource;
+}> {
+  const enabled = readMemorySearchEnabled(override) ?? readMemorySearchEnabled(defaults) ?? true;
+  if (!enabled) {
+    return [];
+  }
+  const entries: Array<{
+    configuredId: string;
+    source: MemoryEmbeddingStartupProviderSource;
+  }> = [];
+  const provider = normalizeExplicitMemoryEmbeddingProviderId(
+    override?.provider ?? defaults?.provider,
+  );
+  if (provider) {
+    entries.push({ configuredId: provider, source: "provider" });
+  }
+  const fallback = normalizeExplicitMemoryEmbeddingProviderId(
+    override?.fallback ?? defaults?.fallback ?? "none",
+  );
+  if (fallback) {
+    entries.push({ configuredId: fallback, source: "fallback" });
+  }
+  return entries;
+}
+
 /**
- * Collect explicitly configured `agents.*.memorySearch.provider` entries with
- * the adapter ids each resolves to. Enablement and provider are resolved with
- * the same defaults->override inheritance as runtime memory search, so
- * inherited-disabled blocks and sentinel values ("auto"/"local"/"none") are
- * ignored.
+ * Collect explicit memory embedding provider owners required by startup. The
+ * resolver mirrors runtime memory-search inheritance for enablement, primary
+ * provider, and fallback provider, then maps custom `models.providers` ids to
+ * their API-owner adapter ids.
  */
-function collectConfiguredMemoryEmbeddingProviders(
+export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
   config: OpenClawConfig,
-): ConfiguredMemoryEmbeddingProvider[] {
-  const byConfiguredId = new Map<string, ConfiguredMemoryEmbeddingProvider>();
+): ConfiguredMemoryEmbeddingStartupProviderOwner[] {
+  const byConfiguredIdAndSource = new Map<string, ConfiguredMemoryEmbeddingStartupProviderOwner>();
   const defaultsBlock = config.agents?.defaults?.memorySearch;
   const defaults = isRecord(defaultsBlock) ? defaultsBlock : undefined;
-  const addEffectiveProvider = (override: Record<string, unknown> | undefined) => {
-    const configuredId = resolveEffectiveMemoryEmbeddingProviderId(defaults, override);
-    if (!configuredId || byConfiguredId.has(configuredId)) {
-      return;
+  const addEffectiveProviders = (override: Record<string, unknown> | undefined) => {
+    for (const { configuredId, source } of resolveEffectiveMemoryEmbeddingProviderEntries(
+      defaults,
+      override,
+    )) {
+      const key = `${source}\0${configuredId}`;
+      if (byConfiguredIdAndSource.has(key)) {
+        continue;
+      }
+      byConfiguredIdAndSource.set(key, {
+        configuredId,
+        ownerIds: new Set(resolveMemoryEmbeddingProviderOwnerIds(configuredId, config)),
+        source,
+      });
     }
-    byConfiguredId.set(configuredId, {
-      configuredId,
-      ownerIds: new Set(resolveMemoryEmbeddingProviderOwnerIds(configuredId, config)),
-    });
   };
   // Defaults baseline covers the default agent and every agent that does not
   // override memorySearch.
-  addEffectiveProvider(undefined);
+  addEffectiveProviders(undefined);
   const agents = config.agents?.list;
   if (Array.isArray(agents)) {
     for (const agent of agents) {
       if (isRecord(agent)) {
-        addEffectiveProvider(isRecord(agent.memorySearch) ? agent.memorySearch : undefined);
+        addEffectiveProviders(isRecord(agent.memorySearch) ? agent.memorySearch : undefined);
       }
     }
   }
-  return [...byConfiguredId.values()];
+  return [...byConfiguredIdAndSource.values()];
 }
 
 /**
@@ -609,7 +626,7 @@ export function collectConfiguredMemoryEmbeddingProviderIds(
   config: OpenClawConfig,
 ): ReadonlySet<string> {
   const providerIds = new Set<string>();
-  for (const provider of collectConfiguredMemoryEmbeddingProviders(config)) {
+  for (const provider of collectConfiguredMemoryEmbeddingStartupProviderOwners(config)) {
     for (const ownerId of provider.ownerIds) {
       providerIds.add(ownerId);
     }
@@ -624,11 +641,11 @@ export function collectConfiguredMemoryEmbeddingProviderIds(
  * custom providers warn when their API-owner plugin is missing but stay quiet
  * once that plugin loads.
  */
-export function collectUnregisteredConfiguredMemoryEmbeddingProviderIds(params: {
+export function collectUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   config: OpenClawConfig;
   registeredProviderIds: ReadonlySet<string>;
-}): string[] {
-  const configured = collectConfiguredMemoryEmbeddingProviders(params.config);
+}): Array<{ configuredId: string; source: MemoryEmbeddingStartupProviderSource }> {
+  const configured = collectConfiguredMemoryEmbeddingStartupProviderOwners(params.config);
   if (configured.length === 0) {
     return [];
   }
@@ -639,8 +656,12 @@ export function collectUnregisteredConfiguredMemoryEmbeddingProviderIds(params: 
   );
   return configured
     .filter((provider) => ![...provider.ownerIds].some((ownerId) => registered.has(ownerId)))
-    .map((provider) => provider.configuredId)
-    .toSorted((left, right) => left.localeCompare(right));
+    .map((provider) => ({ configuredId: provider.configuredId, source: provider.source }))
+    .toSorted(
+      (left, right) =>
+        left.configuredId.localeCompare(right.configuredId) ||
+        left.source.localeCompare(right.source),
+    );
 }
 
 function addPluginConfigEntryIds(

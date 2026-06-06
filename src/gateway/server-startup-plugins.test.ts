@@ -472,9 +472,42 @@ describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  function customOllamaConfig(): OpenClawConfig {
+  it("warns when a configured memory embedding fallback is not registered", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "openai", fallback: "ollama" } } },
+      } as OpenClawConfig,
+      pluginRegistry: registry(["openai"]),
+      log,
+    });
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(String(log.warn.mock.calls[0]?.[0])).toContain('memorySearch.fallback="ollama"');
+  });
+
+  it("does not warn when the configured memory embedding fallback is registered", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "openai", fallback: "ollama" } } },
+      } as OpenClawConfig,
+      pluginRegistry: registry(["openai", "ollama"]),
+      log,
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  function customOllamaConfig(source: "provider" | "fallback" = "provider"): OpenClawConfig {
+    const memorySearch =
+      source === "provider"
+        ? { provider: "ollama-5080" }
+        : { provider: "openai", fallback: "ollama-5080" };
     return {
-      agents: { defaults: { memorySearch: { provider: "ollama-5080" } } },
+      agents: { defaults: { memorySearch } },
       models: {
         providers: {
           "ollama-5080": {
@@ -487,19 +520,23 @@ describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
     } as OpenClawConfig;
   }
 
-  it("does not warn for custom providers whose api-owner plugin is registered", async () => {
-    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
-      await import("./server-startup-plugins.js");
-    const log = createLog();
-    // memorySearch.provider="ollama-5080" resolves to api owner "ollama"; the
-    // registered owner satisfies the contract, so the custom id must stay quiet.
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: customOllamaConfig(),
-      pluginRegistry: registry(["ollama"]),
-      log,
-    });
-    expect(log.warn).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["provider", "memorySearch.provider"] as const,
+    ["fallback", "memorySearch.fallback"] as const,
+  ])(
+    "does not warn for custom %s entries whose api-owner plugin is registered",
+    async (source, _path) => {
+      const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+        await import("./server-startup-plugins.js");
+      const log = createLog();
+      warnUnregisteredConfiguredMemoryEmbeddingProviders({
+        config: customOllamaConfig(source),
+        pluginRegistry: registry(["openai", "ollama"]),
+        log,
+      });
+      expect(log.warn).not.toHaveBeenCalled();
+    },
+  );
 
   it("warns for custom providers whose api-owner plugin is not registered", async () => {
     const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
@@ -514,6 +551,19 @@ describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
     expect(String(log.warn.mock.calls[0]?.[0])).toContain('memorySearch.provider="ollama-5080"');
   });
 
+  it("warns for custom fallbacks whose api-owner plugin is not registered", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: customOllamaConfig("fallback"),
+      pluginRegistry: registry(["openai"]),
+      log,
+    });
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(String(log.warn.mock.calls[0]?.[0])).toContain('memorySearch.fallback="ollama-5080"');
+  });
+
   it("does not warn for sentinel or disabled memory search providers", async () => {
     const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
       await import("./server-startup-plugins.js");
@@ -521,8 +571,13 @@ describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
     warnUnregisteredConfiguredMemoryEmbeddingProviders({
       config: {
         agents: {
-          defaults: { memorySearch: { provider: "local" } },
-          list: [{ id: "muted", memorySearch: { enabled: false, provider: "openai" } }],
+          defaults: { memorySearch: { provider: "local", fallback: "auto" } },
+          list: [
+            {
+              id: "muted",
+              memorySearch: { enabled: false, provider: "openai", fallback: "ollama" },
+            },
+          ],
         },
       } as OpenClawConfig,
       pluginRegistry: registry([]),

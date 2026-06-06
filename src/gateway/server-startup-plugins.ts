@@ -2,7 +2,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { collectUnregisteredConfiguredMemoryEmbeddingProviderIds } from "../plugins/channel-plugin-ids.js";
+import { collectUnregisteredConfiguredMemoryEmbeddingProviders } from "../plugins/channel-plugin-ids.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
@@ -207,13 +207,14 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   const registeredProviderIds = new Set(
     (params.pluginRegistry.memoryEmbeddingProviders ?? []).map((entry) => entry.provider.id),
   );
-  const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviderIds({
+  const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
     config: params.config,
     registeredProviderIds,
   });
-  for (const providerId of unregistered) {
+  for (const provider of unregistered) {
+    const path = `memorySearch.${provider.source}`;
     params.log.warn(
-      `memorySearch.provider="${providerId}" is configured, but no loaded plugin registered memory embedding provider "${providerId}". Semantic memory recall will fall back to keyword/FTS-only search. Ensure the plugin that provides "${providerId}" is installed and enabled.`,
+      `${path}="${provider.configuredId}" is configured, but no loaded plugin registered a memory embedding provider that can serve "${provider.configuredId}". Semantic memory recall will fall back to keyword/FTS-only search. Ensure the plugin that provides "${provider.configuredId}" is installed and enabled.`,
     );
   }
 }

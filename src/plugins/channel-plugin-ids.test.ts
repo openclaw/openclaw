@@ -952,6 +952,18 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "openai", "memory-core"],
     ],
     [
+      "includes the owning plugin for a configured memory embedding fallback at startup",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "ollama", fallback: "openai" },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "ollama", "memory-core"],
+    ],
+    [
       "includes the owning plugin for a per-agent memory embedding provider at startup",
       {
         channels: {},
@@ -985,12 +997,33 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "ollama", "memory-core"],
     ],
     [
+      "includes the api-owner plugin for a custom models.providers memory embedding fallback at startup",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "openai", fallback: "ollama-5080" },
+          },
+        },
+        models: {
+          providers: {
+            "ollama-5080": {
+              api: "ollama",
+              baseUrl: "http://gpu-box.local:11435",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "ollama", "memory-core"],
+    ],
+    [
       "ignores sentinel memory embedding providers that no plugin owns",
       {
         channels: {},
         agents: {
           defaults: {
-            memorySearch: { provider: "local" },
+            memorySearch: { provider: "local", fallback: "auto" },
           },
         },
       } as OpenClawConfig,
@@ -1002,7 +1035,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         channels: {},
         agents: {
           defaults: {
-            memorySearch: { enabled: false, provider: "openai" },
+            memorySearch: { enabled: false, provider: "openai", fallback: "ollama" },
           },
         },
       } as OpenClawConfig,
@@ -1042,7 +1075,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           defaults: {
             memorySearch: { enabled: false },
           },
-          list: [{ id: "researcher", memorySearch: { provider: "openai" } }],
+          list: [{ id: "researcher", memorySearch: { provider: "openai", fallback: "ollama" } }],
         },
       } as OpenClawConfig,
       ["browser", "memory-core"],
@@ -1053,12 +1086,12 @@ describe("resolveGatewayStartupPluginIds", () => {
         channels: {},
         agents: {
           defaults: {
-            memorySearch: { enabled: false, provider: "openai" },
+            memorySearch: { enabled: false, provider: "openai", fallback: "ollama" },
           },
           list: [{ id: "researcher", memorySearch: { enabled: true } }],
         },
       } as OpenClawConfig,
-      ["browser", "openai", "memory-core"],
+      ["browser", "openai", "ollama", "memory-core"],
     ],
     [
       "keeps the default-agent memory embedding provider when one agent disables memory search",
@@ -1698,7 +1731,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         config: {
           agents: {
             defaults: {
-              memorySearch: { provider: "openai" },
+              memorySearch: { provider: "openai", fallback: "ollama" },
             },
           },
           channels: {},
@@ -1712,7 +1745,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         env: createPluginPlanningTestEnv(),
         index,
       }),
-    ).toEqual(["browser", "openai"]);
+    ).toEqual(["browser", "ollama", "openai"]);
   });
 
   it("uses installed-index model support for restrictive startup shorthand model scopes", () => {
