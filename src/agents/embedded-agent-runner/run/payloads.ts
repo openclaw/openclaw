@@ -131,6 +131,7 @@ function normalizeReplyTextForComparison(text: string): string {
 function shouldIncludeToolErrorDetails(params: {
   lastToolError: ToolErrorSummary;
   isCronTrigger?: boolean;
+  isHeartbeatTrigger?: boolean;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): boolean {
@@ -139,8 +140,9 @@ function shouldIncludeToolErrorDetails(params: {
   }
   return (
     isExecLikeToolName(params.lastToolError.toolName) &&
-    params.lastToolError.timedOut === true &&
-    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))
+    (params.isHeartbeatTrigger === true ||
+      (params.lastToolError.timedOut === true &&
+        (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))))
   );
 }
 
@@ -161,6 +163,7 @@ function resolveToolErrorWarningPolicy(params: {
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   isCronTrigger?: boolean;
+  isHeartbeatTrigger?: boolean;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
@@ -221,6 +224,7 @@ export function buildEmbeddedRunPayloads(params: {
   lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
+  isHeartbeatTrigger?: boolean;
   sessionKey: string;
   provider?: string;
   model?: string;
@@ -521,6 +525,7 @@ export function buildEmbeddedRunPayloads(params: {
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       isCronTrigger: params.isCronTrigger,
+      isHeartbeatTrigger: params.isHeartbeatTrigger,
       sessionKey: params.sessionKey,
       verboseLevel: params.verboseLevel,
     });
