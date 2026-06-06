@@ -927,6 +927,9 @@ export async function runPreparedCliAgent(
               ...(rawText ? { finalAssistantRawText: rawText } : {}),
             }
           : {}),
+        ...(resultParams.output.syntheticPlaceholder
+          ? { terminalReplyKind: "synthetic-placeholder" as const }
+          : {}),
         systemPromptReport: context.systemPromptReport,
         ...(yielded ? { yielded: true, livenessState: "paused" as const, stopReason } : {}),
         executionTrace: {

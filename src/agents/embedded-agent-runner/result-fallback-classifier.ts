@@ -195,6 +195,13 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (hasCommittedOutboundDeliveryEvidence(params.result)) {
     return null;
   }
+  if (params.result.meta.terminalReplyKind === "synthetic-placeholder") {
+    return {
+      message: `${params.provider}/${params.model} ended with a synthetic placeholder and no visible assistant reply`,
+      reason: "format",
+      code: "empty_result",
+    };
+  }
   if (params.result.meta.error?.kind === "hook_block") {
     // Hook blocks intentionally suppress normal agent output. Retrying on another model would
     // bypass a policy decision rather than recover a malformed model result.

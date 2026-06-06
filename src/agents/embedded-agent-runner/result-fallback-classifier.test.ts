@@ -404,4 +404,39 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
     expect(result).toBeNull();
   });
+
+  it("classifies synthetic-placeholder terminal replies as fallback-worthy for claude-cli", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "Claude-Opus-4.7",
+      result: {
+        meta: {
+          durationMs: 42,
+          terminalReplyKind: "synthetic-placeholder",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message:
+        "claude-cli/Claude-Opus-4.7 ended with a synthetic placeholder and no visible assistant reply",
+      reason: "format",
+      code: "empty_result",
+    });
+  });
+
+  it("keeps explicit silent terminal replies out of fallback", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai",
+      model: "gpt-5.5",
+      result: {
+        meta: {
+          durationMs: 42,
+          finalAssistantVisibleText: "NO_REPLY",
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
 });
