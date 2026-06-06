@@ -16,6 +16,7 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "../../../agents/tool-schema-projection.js";
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
+import { buildInventoryContinuationToolOpts } from "../../../agents/tools/continuation-inventory-opts.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -161,6 +162,9 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
         modelContextWindowTokens: runtimeModelContext.modelContextWindowTokens,
         allowGatewaySubagentBinding: true,
         toolPolicyAuditLogLevel: "debug",
+        ...buildInventoryContinuationToolOpts(
+          params.cfg.agents?.defaults?.continuation?.enabled === true,
+        ),
       });
     } catch (error) {
       warnings.push(

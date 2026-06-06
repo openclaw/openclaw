@@ -12,6 +12,7 @@ import type { AgentTool } from "../../agents/runtime/index.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
+import { buildInventoryContinuationToolOpts } from "../../agents/tools/continuation-inventory-opts.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
@@ -81,22 +82,9 @@ export async function resolveCommandsSystemPromptBundle(
     }
   })();
   const skillsPrompt = skillsSnapshot.snapshot.prompt ?? "";
-  // Continuation: register request_compaction tool when continuation is enabled
-  // so the /commands surface reflects the full RFC §2.1 tool inventory (matches
-  // tools-effective-inventory.ts pattern). Inventory-only path; runtime paths
-  // build their own requestCompactionOpts with live context-usage + trigger.
-  const continuationEnabled = params.cfg?.agents?.defaults?.continuation?.enabled === true;
-  const requestCompactionOpts = continuationEnabled
-    ? {
-        sessionId: "<inventory-only>",
-        getContextUsage: (): number | null => null,
-        triggerCompaction: async () => ({
-          ok: false as const,
-          compacted: false as const,
-          reason: "inventory-only path" as const,
-        }),
-      }
-    : undefined;
+  const continuationToolOpts = buildInventoryContinuationToolOpts(
+    params.cfg?.agents?.defaults?.continuation?.enabled === true,
+  );
   const tools = (() => {
     try {
       return createOpenClawCodingTools({
@@ -116,7 +104,7 @@ export async function resolveCommandsSystemPromptBundle(
         senderE164: params.ctx.SenderE164,
         modelProvider: params.provider,
         modelId: params.model,
-        requestCompactionOpts,
+        ...continuationToolOpts,
       });
     } catch {
       return [];
