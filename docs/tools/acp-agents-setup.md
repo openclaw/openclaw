@@ -317,6 +317,197 @@ OpenClaw defaults to `permissionMode=approve-reads` and `nonInteractivePermissio
 If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions degrade gracefully instead of crashing.
 </Warning>
 
+## ACP-specific bootstrap customization
+
+When a Codex ACP session runs through the acpx backend, the model's delivery
+model differs from native Codex CLI:
+
+- **Intermediate narration** ("I'm reading X...", "Now checking Y...") is
+  delivered to the channel as the agent generates it mid-turn.
+- **The final deliverable** (review, file path, answer, summary) must be
+  generated as a trailing text block after all tool calls complete. If the
+  turn ends at a tool-result boundary with no trailing text, the deliverable
+  is silently lost — it was never generated, not merely undelivered.
+
+This distinction matters because ACP users have no terminal to watch; they see
+only what the agent explicitly delivers. In native Codex CLI, every generated
+token is immediately visible. In ACP mode, the closing message is the only
+evidence the task finished.
+
+### CODEX_HOME/BOOTSTRAP.md — the ACP-only injection point
+
+When the acpx backend launches Codex, it sets `CODEX_HOME` to a
+deployment-managed directory. Codex loads `$CODEX_HOME/BOOTSTRAP.md` for every
+ACP session and does not use this file for native Codex CLI sessions. This
+makes it the correct location for behavioral rules that apply only to ACP mode,
+without touching the host Codex CLI bootstrap at `~/.codex/BOOTSTRAP.md`.
+
+### Recommended turn-completion rules
+
+The following rules address the most common ACP-mode failure pattern: the agent
+completes work internally but never generates the closing user-facing message.
+Add them to `$CODEX_HOME/BOOTSTRAP.md`:
+
+```markdown
+## ACP Session: Turn Completion Rules
+
+You are running as an ACP agent delivering output to a channel. This changes
+the delivery model compared to native Codex CLI:
+
+- Intermediate narration texts are delivered to the channel as you generate
+  them mid-turn.
+- Your final deliverable must be generated as a trailing text block after all
+  tool calls complete. If your turn ends at a tool-result boundary with no
+  trailing text, the deliverable is silently lost.
+
+### Hard rules
+
+1. Always close the turn with a user-facing message. After your last tool
+   call, generate a text block that delivers the result: the answer, the file
+   path, the findings, or a clear summary. Do not stop generating at the
+   tool-result boundary.
+
+2. When interrupted mid-deliverable, complete it first. If a new user message
+   arrives while a deliverable is pending, send the result before answering
+   the follow-up. Exception: the follow-up explicitly cancels the task.
+
+3. "Task complete" means the result was delivered, not just that the work was
+   done. If uncertain whether a result was sent, treat it as unsent and send
+   it now.
+```
+
+<Note>
+These rules are placed in `$CODEX_HOME/BOOTSTRAP.md` rather than the shared
+host bootstrap so they load only for ACP sessions. Native Codex CLI sessions
+are unaffected.
+</Note>
+
+## Host-bridge tools
+
+ACP sessions run inside the OpenClaw gateway container. The container does not
+have systemd, so `systemctl` and other host-only binaries are unavailable by
+default. The host-bridge pattern makes them available transparently via the
+bind-mounted `.openclaw/bin/` directory and an SSH tunnel to the host.
+
+### How it works
+
+`~/.openclaw/bin/` is inside the bind-mounted workspace, so its contents
+survive container restarts. Tool-call subshells in the codex-acp agent use
+non-login `bash -c`, which inherits the container's vanilla
+`PATH=/usr/local/bin:/usr/bin:/bin` and never sources profile files. To make shims visible in that environment, `launch.sh` symlinks each shim
+into `/usr/local/bin/` at session start and also exports the directory for
+the codex-acp process itself:
+
+```bash
+# In launch.sh (runs before codex-acp starts)
+export PATH="/home/node/.openclaw/bin:${PATH}"
+# Seed ~/.profile for any login-shell contexts
+grep -q "openclaw/bin" ~/.profile 2>/dev/null || \
+  echo 'export PATH="/home/node/.openclaw/bin:${PATH}"' >> ~/.profile
+# Symlink into /usr/local/bin so non-login bash -c tool calls find the shim.
+docker exec -u root openclaw-openclaw-gateway-1 \
+  ln -sf /home/node/.openclaw/bin/systemctl /usr/local/bin/systemctl 2>/dev/null || true
+```
+
+The symlink at `/usr/local/bin/systemctl` lives on the container's
+ephemeral filesystem and is lost on container or host restart. This does
+not break the fix: `launch.sh` is in the bind-mount and runs before
+codex-acp starts on every new ACP session, so the symlink is always
+recreated before the agent makes its first tool call. The fix is
+self-healing and durable across new sessions, container restarts, and
+host restarts.
+
+A named shim at `~/.openclaw/bin/systemctl` proxies every `systemctl` call
+to the host via SSH. An SSH key pair is stored in `~/.openclaw/ssh/` (also
+bind-mounted) and the public key is authorized on the host `ubuntu` user.
+The SSH client binary and its dependencies are bundled in
+`~/.openclaw/bin/ssh-bundle/` so they survive container restarts even though
+they are not installed in the base image:
+
+```
+~/.openclaw/bin/
+  systemctl              # shim — proxies to host via SSH
+  ssh-bundle/
+    ssh                  # openssh client binary
+    ssh-keygen           # used for key setup
+    libcrypto.so.3       # bundled deps not in the base image
+    libssl.so.3
+    libgssapi_krb5.so.2
+    libkrb5.so.3
+    libk5crypto.so.3
+    libkrb5support.so.0
+~/.openclaw/ssh/
+  id_ed25519_hostbridge       # private key (rw, bind-mounted)
+  id_ed25519_hostbridge.pub   # public key
+```
+
+The shim uses `host.docker.internal` (mapped to the host gateway via
+`extra_hosts` in `docker-compose.yml`) and sets `XDG_RUNTIME_DIR`
+automatically so `systemctl --user` commands resolve to the correct host
+user session:
+
+```bash
+#!/bin/bash
+SSH_BUNDLE="/home/node/.openclaw/bin/ssh-bundle"
+SSH_KEY="/home/node/.openclaw/ssh/id_ed25519_hostbridge"
+exec env LD_LIBRARY_PATH="${SSH_BUNDLE}:${LD_LIBRARY_PATH}" \
+  "${SSH_BUNDLE}/ssh" \
+  -i "${SSH_KEY}" \
+  -o StrictHostKeyChecking=no \
+  -o BatchMode=yes \
+  -o ConnectTimeout=5 \
+  ubuntu@host.docker.internal \
+  "XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl $(printf '%q ' "$@")"
+```
+
+### Initial setup
+
+This is a one-time setup when first deploying the codex-acp integration.
+Run the following on the host to populate the bundle and generate the key:
+
+```bash
+# 1. Install openssh-client temporarily (apt cache must be fresh)
+docker exec -u root openclaw-openclaw-gateway-1 apt-get update -qq
+docker exec -u root openclaw-openclaw-gateway-1 \
+  apt-get install -y --no-install-recommends openssh-client -qq
+
+# 2. Create bundle directory and copy binary + deps
+docker exec -u root openclaw-openclaw-gateway-1 bash -c '
+  mkdir -p /home/node/.openclaw/bin/ssh-bundle
+  cp /usr/bin/ssh /usr/bin/ssh-keygen /home/node/.openclaw/bin/ssh-bundle/
+  for lib in libcrypto.so.3 libssl.so.3 libgssapi_krb5.so.2 \
+             libkrb5.so.3 libk5crypto.so.3 libkrb5support.so.0; do
+    cp /lib/aarch64-linux-gnu/$lib /home/node/.openclaw/bin/ssh-bundle/
+  done
+  chown -R node:node /home/node/.openclaw/bin
+'
+
+# 3. Generate the SSH key pair as the node user
+docker exec -u node openclaw-openclaw-gateway-1 bash -c '
+  mkdir -p /home/node/.openclaw/ssh && chmod 700 /home/node/.openclaw/ssh
+  LD_LIBRARY_PATH=/home/node/.openclaw/bin/ssh-bundle \
+    /home/node/.openclaw/bin/ssh-bundle/ssh-keygen \
+    -t ed25519 -f /home/node/.openclaw/ssh/id_ed25519_hostbridge \
+    -N "" -C "openclaw-acp-hostbridge"
+  cat /home/node/.openclaw/ssh/id_ed25519_hostbridge.pub
+'
+
+# 4. Authorize the printed public key on the host
+echo "<paste public key here>" >> ~/.ssh/authorized_keys
+```
+
+<Note>
+The library paths above use `aarch64-linux-gnu` for ARM64 hosts. On x86-64
+hosts, replace with `x86_64-linux-gnu`.
+</Note>
+
+### Adding new host-bridge tools
+
+Any executable placed in `~/.openclaw/bin/` is automatically available to
+ACP sessions. Follow the same pattern for other host-only binaries: bundle
+any non-baseline shared libraries alongside the binary in a subdirectory
+and set `LD_LIBRARY_PATH` in a wrapper shim if needed.
+
 ## Related
 
 - [ACP agents](/tools/acp-agents) — overview, operator runbook, concepts

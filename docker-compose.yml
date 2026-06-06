@@ -50,6 +50,19 @@ services:
       - /usr/lib/node_modules/@zilliz:/usr/lib/node_modules/@zilliz:ro
       - /usr/bin/claude-context-mcp:/usr/local/bin/claude-context-mcp:ro
       - /home/ubuntu/godwind-team-docker/openclaw:/home/ubuntu/godwind-team-docker/openclaw:ro
+      # Mirror host Codex CLI — mounted at TWO paths:
+      #   1. /home/node/.codex  — resolves tilde paths (~/.codex/...) inside the container
+      #   2. /home/ubuntu/.codex — resolves @-import absolute paths from the host AGENTS.md
+      #      (e.g. @/home/ubuntu/.codex/BOOTSTRAP.md) so no path rewriting is needed.
+      # Both mounts are read-only; mutable state (sessions, history) stays in acpx-codex-home/.
+      - /home/ubuntu/.codex:/home/node/.codex:ro
+      - /home/ubuntu/.codex:/home/ubuntu/.codex:ro
+      # auth.json rw overlays — token refreshes must write back to host.
+      # File-level :rw overrides the parent directory :ro mount for this specific file.
+      - /home/ubuntu/.codex/auth.json:/home/node/.codex/auth.json:rw
+      - /home/ubuntu/.codex/auth.json:/home/ubuntu/.codex/auth.json:rw
+      # auth.json also at CODEX_HOME so Codex finds OAuth tokens at the expected path.
+      - /home/ubuntu/.codex/auth.json:/home/node/.openclaw/acpx-codex-home/auth.json:rw
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
