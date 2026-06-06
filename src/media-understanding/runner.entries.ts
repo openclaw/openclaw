@@ -41,6 +41,7 @@ import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
+import { OPENAI_AUDIO_TRANSCRIPTIONS_API } from "./openai-audio-api.js";
 import { extractGeminiResponse } from "./output-extract.js";
 import { normalizeMediaExecutionProviderId } from "./provider-id.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
@@ -444,17 +445,14 @@ type ProviderExecutionAuth =
       providerConfig?: ModelProviderConfig;
     };
 
-const OPENAI_AUDIO_TRANSCRIPTIONS_API = "openai-audio-transcriptions";
-
 function resolveProviderExecutionAuthModelApi(params: {
   capability: MediaUnderstandingCapability;
   providerId: string;
-  providerConfig?: ModelProviderConfig;
 }): string | undefined {
   if (params.capability === "audio" && params.providerId === "openai") {
     return OPENAI_AUDIO_TRANSCRIPTIONS_API;
   }
-  return typeof params.providerConfig?.api === "string" ? params.providerConfig.api : undefined;
+  return undefined;
 }
 
 async function resolveProviderExecutionAuth(params: {
@@ -470,7 +468,6 @@ async function resolveProviderExecutionAuth(params: {
   const modelApi = resolveProviderExecutionAuthModelApi({
     capability: params.capability,
     providerId: params.providerId,
-    providerConfig,
   });
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
