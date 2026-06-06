@@ -342,7 +342,7 @@ describe("resolveModelAuthLabel", () => {
     expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
   });
 
-  it("prefers models.json custom keys over env when providers share a baseUrl (#82020)", () => {
+  it("keeps env labels ahead of late custom-key fallbacks when runtime uses env (#82020)", () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {},
@@ -363,8 +363,8 @@ describe("resolveModelAuthLabel", () => {
       cfg: {},
     });
 
-    expect(label).toBe("api-key (models.json)");
-    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
+    expect(label).toBe("api-key (env: ZAI_API_KEY)");
+    expect(mocks.resolveUsableCustomProviderApiKey).not.toHaveBeenCalled();
   });
 
   it("does not report incompatible per-entry profile references as literal models.json keys", () => {
