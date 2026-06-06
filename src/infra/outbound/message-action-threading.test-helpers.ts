@@ -52,8 +52,10 @@ export function createOutboundThreadingMock() {
           currentChannelId?: string;
           currentChannelProvider?: string;
           currentMessageId?: string | number;
+          currentThreadTs?: string;
           replyToMode?: "off" | "first" | "all" | "batched";
           hasRepliedRef?: { value: boolean };
+          sameChannelThreadRequired?: boolean;
         };
       },
     ) => {
@@ -87,13 +89,17 @@ export function createOutboundThreadingMock() {
         return undefined;
       }
 
-      const currentMessageId = context.toolContext?.currentMessageId;
-      if (currentMessageId == null) {
+      const replyToMode = context.toolContext?.replyToMode ?? "off";
+      if (replyToMode === "off" || replyToMode === "batched") {
         return undefined;
       }
 
-      const replyToMode = context.toolContext?.replyToMode ?? "off";
-      if (replyToMode === "off" || replyToMode === "batched") {
+      const currentThreadId = context.toolContext?.sameChannelThreadRequired
+        ? context.toolContext.currentThreadTs
+        : undefined;
+      const currentMessageId = context.toolContext?.currentMessageId;
+      const replyTargetId = currentThreadId ?? currentMessageId;
+      if (replyTargetId == null) {
         return undefined;
       }
 
@@ -108,7 +114,7 @@ export function createOutboundThreadingMock() {
       }
 
       const resolvedReplyToId =
-        typeof currentMessageId === "number" ? String(currentMessageId) : currentMessageId.trim();
+        typeof replyTargetId === "number" ? String(replyTargetId) : replyTargetId.trim();
       if (!resolvedReplyToId) {
         return undefined;
       }

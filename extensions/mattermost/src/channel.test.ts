@@ -269,6 +269,7 @@ describe("mattermostPlugin", () => {
         currentMessageId: "post-id",
         replyToMode: "all",
         hasRepliedRef,
+        sameChannelThreadRequired: true,
       });
     });
 

@@ -98,13 +98,17 @@ export function resolveAndApplyOutboundReplyToId(
     return undefined;
   }
 
-  const currentMessageId = context.toolContext?.currentMessageId;
-  if (currentMessageId == null) {
+  const mode = context.toolContext?.replyToMode ?? "off";
+  if (mode === "off" || mode === "batched") {
     return undefined;
   }
 
-  const mode = context.toolContext?.replyToMode ?? "off";
-  if (mode === "off" || mode === "batched") {
+  const currentThreadId = context.toolContext?.sameChannelThreadRequired
+    ? context.toolContext.currentThreadTs
+    : undefined;
+  const currentMessageId = context.toolContext?.currentMessageId;
+  const replyTargetId = currentThreadId ?? currentMessageId;
+  if (replyTargetId == null) {
     return undefined;
   }
 
@@ -120,7 +124,7 @@ export function resolveAndApplyOutboundReplyToId(
   }
 
   const resolvedReplyToId =
-    typeof currentMessageId === "number" ? String(currentMessageId) : currentMessageId.trim();
+    typeof replyTargetId === "number" ? String(replyTargetId) : replyTargetId.trim();
   if (!resolvedReplyToId) {
     return undefined;
   }

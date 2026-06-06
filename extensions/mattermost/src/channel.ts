@@ -805,6 +805,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         currentMessageId: context.CurrentMessageId,
         replyToMode: effectiveReplyToMode,
         hasRepliedRef,
+        sameChannelThreadRequired: threadId !== undefined,
       };
     },
   },

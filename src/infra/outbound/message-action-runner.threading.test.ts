@@ -220,6 +220,29 @@ describe("message action threading helpers", () => {
     expect(actionParams.replyTo).toBe("msg-42");
   });
 
+  it("prefers the current thread root over currentMessageId when same-channel thread context is required", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "mattermost",
+      target: "town-square",
+      message: "hi",
+    };
+
+    const resolved = resolveAndApplyOutboundReplyToId(actionParams, {
+      channel: "mattermost",
+      toolContext: {
+        currentChannelId: "town-square",
+        currentChannelProvider: "mattermost",
+        currentThreadTs: "root-post-id",
+        currentMessageId: "latest-reply-id",
+        replyToMode: "all",
+        sameChannelThreadRequired: true,
+      },
+    });
+
+    expect(resolved).toBe("root-post-id");
+    expect(actionParams.replyTo).toBe("root-post-id");
+  });
+
   it("skips inherited reply ids for explicit top-level sends", () => {
     const actionParams: Record<string, unknown> = {
       channel: "workspace",

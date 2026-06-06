@@ -1188,6 +1188,7 @@ describe("runMessageAction plugin dispatch", () => {
         ok: true,
         presentation: params.presentation ?? null,
         message: params.message ?? null,
+        replyTo: params.replyTo ?? null,
       }),
     );
 
@@ -1259,6 +1260,56 @@ describe("runMessageAction plugin dispatch", () => {
         {
           ok: true,
           presentation,
+        },
+        "result payload",
+      );
+    });
+
+    it("passes the thread root through the normal send runner when same-channel thread context is required", async () => {
+      const cfg = {
+        channels: {
+          cardchat: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await runMessageAction({
+        cfg,
+        action: "send",
+        params: {
+          channel: "cardchat",
+          target: "channel:test-card",
+          message: "thread reply",
+        },
+        toolContext: {
+          currentChannelId: "channel:test-card",
+          currentChannelProvider: "cardchat",
+          currentThreadTs: "thread-root-id",
+          currentMessageId: "latest-reply-id",
+          replyToMode: "all",
+          sameChannelThreadRequired: true,
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(result.handledBy).toBe("plugin");
+      const pluginCall = readFirstPluginCall(handleAction);
+      expectRecordFields(
+        readRecordField(pluginCall, "params", "plugin params"),
+        {
+          replyTo: "thread-root-id",
+          message: "thread reply",
+        },
+        "plugin params",
+      );
+      expectRecordFields(
+        readRecordField(result, "payload", "result payload"),
+        {
+          ok: true,
+          message: "thread reply",
+          replyTo: "thread-root-id",
         },
         "result payload",
       );
