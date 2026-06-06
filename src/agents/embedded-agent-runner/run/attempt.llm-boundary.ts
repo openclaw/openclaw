@@ -17,6 +17,7 @@ type LlmBoundaryOptions = {
     timestamp: number;
     text: string;
     alternateText?: string;
+    runtimeTimestamp?: number;
   };
 };
 
@@ -404,6 +405,19 @@ function messageContentMatchesCurrentUserText(
   return firstTextBlock ? matchesText(firstTextBlock.text) : false;
 }
 
+function messageRuntimeTimestampMatchesCurrentUserOverride(
+  runtimeTimestamp: unknown,
+  override: NonNullable<LlmBoundaryOptions["currentUserTimestampOverride"]>,
+): boolean {
+  if (typeof override.runtimeTimestamp === "number") {
+    return runtimeTimestamp === override.runtimeTimestamp;
+  }
+  if (typeof runtimeTimestamp === "number" && Number.isFinite(runtimeTimestamp)) {
+    override.runtimeTimestamp = runtimeTimestamp;
+  }
+  return true;
+}
+
 function stripHistoricalInboundMetadataFromUserMessages(
   messages: AgentMessage[],
   options: LlmBoundaryOptions | undefined,
@@ -417,11 +431,15 @@ function stripHistoricalInboundMetadataFromUserMessages(
     const content = (message as { content?: unknown }).content;
     const isActive = index === activeUserMessageIndex;
     const override = options?.currentUserTimestampOverride;
+    const runtimeTimestamp = (message as { timestamp?: unknown }).timestamp;
     const useCurrentUserTimestampOverride =
-      isActive && override !== undefined && messageContentMatchesCurrentUserText(content, override);
+      isActive &&
+      override !== undefined &&
+      messageContentMatchesCurrentUserText(content, override) &&
+      messageRuntimeTimestampMatchesCurrentUserOverride(runtimeTimestamp, override);
     const messageTimestamp = useCurrentUserTimestampOverride
       ? override.timestamp
-      : (message as { timestamp?: unknown }).timestamp;
+      : runtimeTimestamp;
 
     // Historical turns strip inbound metadata blocks (Conversation info, Sender
     // info, etc.); the active turn keeps its metadata for the current request.

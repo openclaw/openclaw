@@ -170,6 +170,48 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(output[0]?.content).toBe(`${expectedPrefix}queued ask`);
   });
 
+  it("does not apply the prepared timestamp override to repeated queued text", () => {
+    const preparedTimestamp = 1717570800000;
+    const firstRuntimeTimestamp = 1717570805000;
+    const queuedTimestamp = 1717574460000;
+    const options = {
+      timezone: "UTC",
+      currentUserTimestampOverride: {
+        timestamp: preparedTimestamp,
+        text: "same ask",
+      },
+    };
+    const firstOutput = normalizeMessagesForLlmBoundary(
+      [
+        {
+          role: "user",
+          content: [{ type: "text", text: "same ask" }],
+          timestamp: firstRuntimeTimestamp,
+        },
+      ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      options,
+    ) as unknown as Array<{ content?: string }>;
+    const queuedOutput = normalizeMessagesForLlmBoundary(
+      [
+        {
+          role: "user",
+          content: [{ type: "text", text: "same ask" }],
+          timestamp: queuedTimestamp,
+        },
+      ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      options,
+    ) as unknown as Array<{ content?: string }>;
+
+    const preparedPrefix = buildTimestampPrefix(new Date(preparedTimestamp), {
+      timezone: "UTC",
+    });
+    const queuedPrefix = buildTimestampPrefix(new Date(queuedTimestamp), {
+      timezone: "UTC",
+    });
+    expect(firstOutput[0]?.content).toBe(`${preparedPrefix}same ask`);
+    expect(queuedOutput[0]?.content).toBe(`${queuedPrefix}same ask`);
+  });
+
   it("does not stamp when no timezone is supplied (form/metadata normalization only)", () => {
     const input = [
       {
