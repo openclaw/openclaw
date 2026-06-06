@@ -197,6 +197,13 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMed
     recursive: options.recursive ?? true,
     pruneEmptyDirs: options.pruneEmptyDirs,
   });
+  // Reconcile outbound trusted-html provenance rows against the post-prune
+  // filesystem so trust metadata cannot outlive the staged file it referred to.
+  // The fs-safe file-store pruner has no per-file callback; sweeping rows
+  // whose realpath no longer resolves to a regular file keeps the table in
+  // lockstep without forking pruneExpired.
+  const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
+  await pruneStaleTrustedGeneratedHtmlMarkers();
 }
 
 function looksLikeUrl(src: string) {

@@ -356,9 +356,11 @@ async function hasTrustedGeneratedHtmlMarker(resolvedFilePath: string): Promise<
  * file. The row keys on the realpath of the staged file so a later host-read
  * lookup can recognize it as a trusted source. Callers must have already
  * verified the source was trusted before staging.
+ *
+ * Provenance rows are pruned in lockstep with the staged file by
+ * pruneStaleTrustedGeneratedHtmlMarkers, which runs from the media-store
+ * retention pass (src/media/store.ts cleanOldMedia).
  */
-// Rows accumulate per stage until a media-store retention pass deletes both the
-// staged file and its provenance row in lockstep.
 export async function markTrustedGeneratedHtmlPath(filePath: string): Promise<void> {
   const resolvedFilePath = await realpath(filePath);
   const now = Date.now();
@@ -380,6 +382,56 @@ export async function markTrustedGeneratedHtmlPath(filePath: string): Promise<vo
             created_at_ms: now,
           }),
         ),
+    );
+  });
+}
+
+/**
+ * Deletes the trusted-generated-html provenance row for `resolvedFilePath`, if
+ * present. Best-effort: a missing row is not an error. Callers should pass the
+ * realpath that was used to write the row (i.e. resolved before any unlink).
+ */
+export function clearTrustedGeneratedHtmlMarker(resolvedFilePath: string): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+        .deleteFrom("outbound_media_provenance")
+        .where("realpath", "=", resolvedFilePath),
+    );
+  });
+}
+
+/**
+ * Reconciles the outbound-media provenance table against the filesystem,
+ * deleting rows whose `realpath` no longer points to a regular file. Used by
+ * the media-store retention pass so trust metadata cannot outlive the staged
+ * file the row referred to.
+ */
+export async function pruneStaleTrustedGeneratedHtmlMarkers(): Promise<void> {
+  const { db } = openOpenClawStateDatabase();
+  const result = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+      .selectFrom("outbound_media_provenance")
+      .select("realpath"),
+  );
+  const stale: string[] = [];
+  for (const row of result.rows) {
+    const info = await lstat(row.realpath).catch(() => undefined);
+    if (!info?.isFile() || info.isSymbolicLink()) {
+      stale.push(row.realpath);
+    }
+  }
+  if (stale.length === 0) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(({ db: writeDb }) => {
+    executeSqliteQuerySync(
+      writeDb,
+      getNodeSqliteKysely<OutboundProvenanceDatabase>(writeDb)
+        .deleteFrom("outbound_media_provenance")
+        .where("realpath", "in", stale),
     );
   });
 }
