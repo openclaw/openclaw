@@ -169,6 +169,31 @@ describe("TTS core", () => {
     expect(result.outputLength).toBe(result.summary.length);
   });
 
+  it("preserves inline mentions of text_to_summarize tags", async () => {
+    const { config, deps } = createSummarizeTextFixture([
+      {
+        type: "text",
+        text: "The docs mention `<text_to_summarize>` as a literal prompt marker. The release moves to Friday.",
+      },
+    ]);
+
+    const result = await summarizeText(
+      {
+        text: "Long text that should be summarized for speech.",
+        targetLength: 120,
+        cfg: {},
+        config,
+        timeoutMs: 10_000,
+      },
+      deps,
+    );
+
+    expect(result.summary).toBe(
+      "The docs mention `<text_to_summarize>` as a literal prompt marker. The release moves to Friday.",
+    );
+    expect(result.outputLength).toBe(result.summary.length);
+  });
+
   it("strips echoed summarization prompt instructions before returning summaries for speech", async () => {
     const { config, deps } = createSummarizeTextFixture([
       {

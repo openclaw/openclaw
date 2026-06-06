@@ -75,7 +75,7 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
 }
 
 const TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE =
-  /<\s*text_to_summarize\b[^>]*>[\s\S]*?(?:<\s*\/\s*text_to_summarize\s*>|$)/gi;
+  /(?:^|\r?\n)[ \t]*<\s*text_to_summarize\b[^>]*>[\s\S]*?(?:\r?\n[ \t]*<\s*\/\s*text_to_summarize\s*>|$)/gi;
 const SUMMARY_PROMPT_INSTRUCTIONS_ECHO_RE =
   /^you are an assistant that summarizes texts concisely while keeping the most important information\.\s+summarize the text to approximately \d+ characters\.\s+maintain the original tone and style\.\s+reply only with the summary, without additional explanations\.\s*/i;
 const USER_SUMMARY_PROMPT_ECHO_RE = /^the user (?:wants|asks|asked|requested) me to summarize\b/i;
