@@ -121,7 +121,7 @@ enum TalkModeGatewayConfigParser {
         let mode = Self.firstString(realtime, keys: ["mode"])?.lowercased()
         guard mode == "realtime" else { return nil }
         let transport = Self.firstString(realtime, keys: ["transport"])?.lowercased()
-        guard transport == nil || transport == "gateway-relay" else { return nil }
+        guard transport == "gateway-relay" else { return nil }
         let brain = Self.firstString(realtime, keys: ["brain"])?.lowercased()
         guard brain == nil || brain == "agent-consult" else { return nil }
 

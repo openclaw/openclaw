@@ -113,4 +113,34 @@ struct TalkModeGatewayConfigTests {
 
         #expect(parsed.realtimeRelayConfig == nil)
     }
+
+    @Test func `ignores realtime config without explicit gateway relay transport`() {
+        let snapshot = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: [
+                "talk": AnyCodable([
+                    "realtime": [
+                        "mode": "realtime",
+                        "provider": "relay-provider",
+                    ],
+                ]),
+            ],
+            issues: nil)
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            snapshot: snapshot,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultSilenceTimeoutMs: TalkDefaults.silenceTimeoutMs,
+            envVoice: nil,
+            sagVoice: nil,
+            envApiKey: nil)
+
+        #expect(parsed.realtimeRelayConfig == nil)
+    }
 }
