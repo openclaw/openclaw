@@ -408,7 +408,12 @@ describe("context notice", () => {
         },
         200_000,
       ),
-    ).toBeNull();
+    ).toEqual(
+      expect.objectContaining({
+        stale: true,
+        detail: "~190k / 200k",
+      }),
+    );
   });
 });
 
