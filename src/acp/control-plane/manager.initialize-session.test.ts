@@ -4,6 +4,7 @@ import {
   AcpSessionManager,
   baseCfg,
   createRuntime,
+  expectNoMockCallFields,
   expectRecordFields,
   expectRejectedRecord,
   extractRuntimeOptionsFromUpserts,
@@ -11,6 +12,7 @@ import {
   installAcpSessionManagerTestLifecycle,
   mockCallArg,
   readySessionMeta,
+  type SessionAcpMeta,
   type OpenClawConfig,
 } from "./manager.test-helpers.js";
 
@@ -97,6 +99,76 @@ describe("AcpSessionManager initializeSession", () => {
       sessionKey: "agent:codex:acp:session-a",
       model: "openai/gpt-5.4",
       thinking: "high",
+    });
+  });
+
+  it("does not reapply startup runtime options as config controls on first turn", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    let currentMeta: SessionAcpMeta | undefined;
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey =
+        (paramsUnknown as { sessionKey?: string }).sessionKey ?? "agent:opencode:acp:session-a";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, currentMeta ? { acp: currentMeta } : undefined);
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionKey: "agent:opencode:acp:session-a",
+        storeSessionKey: "agent:opencode:acp:session-a",
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:opencode:acp:session-a",
+      agent: "opencode",
+      mode: "persistent",
+      runtimeOptions: {
+        model: "deepseek/deepseek-v4-pro",
+        thinking: "high",
+      },
+    });
+
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:opencode:acp:session-a",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      sessionKey: "agent:opencode:acp:session-a",
+      model: "deepseek/deepseek-v4-pro",
+      thinking: "high",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
+      key: "model",
+      value: "deepseek/deepseek-v4-pro",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
+      key: "thinking",
+      value: "high",
     });
   });
 

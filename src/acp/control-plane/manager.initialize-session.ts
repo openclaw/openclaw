@@ -18,6 +18,7 @@ import type {
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 import {
+  buildRuntimeControlSignature,
   normalizeRuntimeOptions,
   normalizeText,
   validateRuntimeOptionPatch,
@@ -122,6 +123,7 @@ export async function runManagerInitializeSession(params: {
     mode: input.mode,
     cwd: effectiveCwd,
     configSignature: resolveRuntimeConfigCacheKey(input.cfg),
+    appliedControlSignature: buildRuntimeControlSignature(effectiveRuntimeOptions),
   });
   return {
     runtime,
