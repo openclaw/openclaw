@@ -14,6 +14,7 @@ import { logDebug, logWarn } from "../logger.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
+  resolveMcpLoopbackYieldContextCacheKey,
   resolveMcpLoopbackYieldHandler,
   setActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
@@ -190,10 +191,14 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const onYield = resolveMcpLoopbackYieldHandler(requestContext.sessionId);
+        const yieldContextCacheKey = resolveMcpLoopbackYieldContextCacheKey(
+          requestContext.sessionId,
+        );
         const scopedTools = toolCache.resolve({
           cfg,
           sessionKey: requestContext.sessionKey,
           ...(requestContext.sessionId ? { sessionId: requestContext.sessionId } : {}),
+          ...(yieldContextCacheKey ? { yieldContextCacheKey } : {}),
           ...(onYield ? { onYield } : {}),
           messageProvider: requestContext.messageProvider,
           currentChannelId: requestContext.currentChannelId,

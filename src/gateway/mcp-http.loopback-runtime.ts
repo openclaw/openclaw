@@ -2,6 +2,7 @@
 type McpLoopbackYieldContext = {
   yielded: boolean;
   message?: string;
+  cacheKey: string;
 };
 
 type McpLoopbackRuntime = {
@@ -11,11 +12,16 @@ type McpLoopbackRuntime = {
 };
 
 let activeRuntime: McpLoopbackRuntime | undefined;
+let nextYieldContextSequence = 0;
 const activeYieldContexts = new Map<string, McpLoopbackYieldContext>();
 
 /** Register yield state for the CLI run that owns a loopback MCP session id. */
 export function registerMcpLoopbackYieldContext(sessionId: string): McpLoopbackYieldContext {
-  const context: McpLoopbackYieldContext = { yielded: false };
+  nextYieldContextSequence += 1;
+  const context: McpLoopbackYieldContext = {
+    yielded: false,
+    cacheKey: `${sessionId}:${nextYieldContextSequence}`,
+  };
   activeYieldContexts.set(sessionId, context);
   return context;
 }
@@ -35,6 +41,15 @@ export function resolveMcpLoopbackYieldHandler(
     context.yielded = true;
     context.message = message;
   };
+}
+
+export function resolveMcpLoopbackYieldContextCacheKey(
+  sessionId: string | undefined,
+): string | undefined {
+  if (!sessionId) {
+    return undefined;
+  }
+  return activeYieldContexts.get(sessionId)?.cacheKey;
 }
 
 /** Clear yield state without removing a newer run that reused the same session id. */
