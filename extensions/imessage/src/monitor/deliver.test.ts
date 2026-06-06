@@ -31,7 +31,6 @@ let createIMessageEchoCachingSend: typeof import("./deliver.js").createIMessageE
 describe("deliverReplies", () => {
   const IMESSAGE_TEST_CFG = { channels: { imessage: { accounts: { default: {} } } } };
   const runtime = { log: vi.fn(), error: vi.fn() } as unknown as RuntimeEnv;
-  const client = {} as Awaited<ReturnType<typeof import("../client.js").createIMessageRpcClient>>;
 
   beforeAll(async () => {
     ({ createIMessageEchoCachingSend, deliverReplies } = await import("./deliver.js"));
@@ -48,14 +47,13 @@ describe("deliverReplies", () => {
     vi.resetModules();
   });
 
-  it("propagates payload replyToId through all text chunks", async () => {
+  it("sends monitor text chunks without reusing the watch rpc client", async () => {
     chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
 
     await deliverReplies({
       cfg: IMESSAGE_TEST_CFG,
       replies: [{ text: "first|second", replyToId: "reply-1" }],
       target: "chat_id:10",
-      client,
       accountId: "default",
       runtime,
       maxBytes: 4096,
@@ -70,7 +68,6 @@ describe("deliverReplies", () => {
         {
           config: IMESSAGE_TEST_CFG,
           maxBytes: 4096,
-          client,
           accountId: "default",
           replyToId: "reply-1",
         },
@@ -81,7 +78,6 @@ describe("deliverReplies", () => {
         {
           config: IMESSAGE_TEST_CFG,
           maxBytes: 4096,
-          client,
           accountId: "default",
           replyToId: "reply-1",
         },
@@ -100,7 +96,6 @@ describe("deliverReplies", () => {
         },
       ],
       target: "chat_id:20",
-      client,
       accountId: "acct-2",
       runtime,
       maxBytes: 8192,
@@ -116,7 +111,6 @@ describe("deliverReplies", () => {
           config: IMESSAGE_TEST_CFG,
           mediaUrl: "https://example.com/a.jpg",
           maxBytes: 8192,
-          client,
           accountId: "acct-2",
           replyToId: "reply-2",
         },
@@ -128,7 +122,6 @@ describe("deliverReplies", () => {
           config: IMESSAGE_TEST_CFG,
           mediaUrl: "https://example.com/b.jpg",
           maxBytes: 8192,
-          client,
           accountId: "acct-2",
           replyToId: "reply-2",
         },
@@ -139,7 +132,6 @@ describe("deliverReplies", () => {
   it("records durable outbound sends in the sent-message cache", async () => {
     const remember = vi.fn();
     const send = createIMessageEchoCachingSend({
-      client,
       accountId: "acct-5",
       sentMessageCache: { remember },
     });
@@ -160,7 +152,6 @@ describe("deliverReplies", () => {
         {
           config: IMESSAGE_TEST_CFG,
           accountId: "acct-ignored",
-          client,
         },
       ],
     ]);
@@ -173,7 +164,6 @@ describe("deliverReplies", () => {
   it("sanitizes durable outbound text before sending", async () => {
     const remember = vi.fn();
     const send = createIMessageEchoCachingSend({
-      client,
       accountId: "acct-6",
       sentMessageCache: { remember },
     });
@@ -194,7 +184,6 @@ describe("deliverReplies", () => {
         {
           config: IMESSAGE_TEST_CFG,
           accountId: "acct-ignored",
-          client,
         },
       ],
     ]);
@@ -218,7 +207,6 @@ describe("deliverReplies", () => {
       cfg: IMESSAGE_TEST_CFG,
       replies: [{ text: "first|second" }],
       target: "chat_id:30",
-      client,
       accountId: "acct-3",
       runtime,
       maxBytes: 2048,
@@ -250,7 +238,6 @@ describe("deliverReplies", () => {
       cfg: IMESSAGE_TEST_CFG,
       replies: [{ mediaUrls: ["https://example.com/a.jpg"] }],
       target: "chat_id:40",
-      client,
       accountId: "acct-4",
       runtime,
       maxBytes: 2048,
