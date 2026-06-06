@@ -121,4 +121,52 @@ describe("list-prod-store-packages", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("recma-jsx@1.0.1");
   });
+
+  it("drops lockfile packages whose os/cpu metadata excludes the build platform", () => {
+    const cwd = makeTempRepoRoot(tempDirs, "openclaw-prod-store-packages-");
+    writeFileSync(
+      join(cwd, "pnpm-lock.yaml"),
+      [
+        "lockfileVersion: '10.0'",
+        "",
+        "packages:",
+        "  portable-pkg@1.0.0:",
+        "    resolution: {integrity: sha512-test}",
+        "  matching-os-pkg@1.0.0:",
+        "    resolution: {integrity: sha512-test}",
+        `    os: [${process.platform}]`,
+        "  foreign-os-pkg@1.0.0:",
+        "    resolution: {integrity: sha512-test}",
+        "    os: [__nonexistent_os__]",
+        "  foreign-cpu-pkg@1.0.0:",
+        "    resolution: {integrity: sha512-test}",
+        "    cpu: [__nonexistent_cpu__]",
+        "  negated-other-os-pkg@1.0.0:",
+        "    resolution: {integrity: sha512-test}",
+        "    os: ['!__nonexistent_os__']",
+        `  negated-this-os-pkg@1.0.0:`,
+        "    resolution: {integrity: sha512-test}",
+        `    os: ['!${process.platform}']`,
+        "  any-os-pkg@1.0.0:",
+        "    resolution: {integrity: sha512-test}",
+        "    os: [any]",
+        "",
+        "snapshots: {}",
+        "",
+      ].join("\n"),
+    );
+    const result = runListProdStorePackages({ dependencies: {} }, cwd);
+
+    expect(result.status).toBe(0);
+    const specs = result.stdout.split("\n").filter(Boolean);
+    // Kept: no constraint, matching os, all-negation that doesn't deny us, "any".
+    expect(specs).toContain("portable-pkg@1.0.0");
+    expect(specs).toContain("matching-os-pkg@1.0.0");
+    expect(specs).toContain("negated-other-os-pkg@1.0.0");
+    expect(specs).toContain("any-os-pkg@1.0.0");
+    // Dropped: non-matching positive os/cpu, or a negation that denies us.
+    expect(specs).not.toContain("foreign-os-pkg@1.0.0");
+    expect(specs).not.toContain("foreign-cpu-pkg@1.0.0");
+    expect(specs).not.toContain("negated-this-os-pkg@1.0.0");
+  });
 });
