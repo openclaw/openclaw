@@ -14,11 +14,19 @@ import { createSandboxFsBridgeFromResolver } from "./host-sandbox-fs-bridge.js";
 function createUnsafeMountedBridge(params: {
   root: string;
   agentHostRoot: string;
+  skillsHostRoot?: string;
   workspaceContainerRoot?: string;
 }): SandboxFsBridge {
   const root = path.resolve(params.root);
   const agentHostRoot = path.resolve(params.agentHostRoot);
+  const skillsHostRoot = params.skillsHostRoot ? path.resolve(params.skillsHostRoot) : undefined;
   const workspaceContainerRoot = params.workspaceContainerRoot ?? "/workspace";
+  const skillsContainerRoot = path.posix.join(
+    workspaceContainerRoot,
+    ".openclaw",
+    "sandbox-skills",
+    "skills",
+  );
 
   const resolvePath = (filePath: string, cwd?: string): SandboxResolvedPath => {
     // Intentionally unsafe: simulate a sandbox FS bridge that maps /agent/* into a host path
@@ -29,6 +37,9 @@ function createUnsafeMountedBridge(params: {
             agentHostRoot,
             filePath === "/agent" || filePath === "/agent/" ? "" : filePath.slice("/agent/".length),
           )
+        : skillsHostRoot &&
+            (filePath === skillsContainerRoot || filePath.startsWith(`${skillsContainerRoot}/`))
+          ? path.join(skillsHostRoot, filePath.slice(skillsContainerRoot.length + 1))
         : path.isAbsolute(filePath)
           ? filePath
           : path.resolve(cwd ?? root, filePath);
@@ -54,17 +65,22 @@ function createUnsafeMountedBridge(params: {
 export function createUnsafeMountedSandbox(params: {
   sandboxRoot: string;
   agentRoot: string;
+  skillsWorkspaceDir?: string;
   workspaceAccess?: "none" | "ro" | "rw";
   workspaceContainerRoot?: string;
 }): SandboxContext {
   const bridge = createUnsafeMountedBridge({
     root: params.sandboxRoot,
     agentHostRoot: params.agentRoot,
+    skillsHostRoot: params.skillsWorkspaceDir
+      ? path.join(params.skillsWorkspaceDir, "skills")
+      : undefined,
     workspaceContainerRoot: params.workspaceContainerRoot,
   });
   return createAgentToolsSandboxContext({
     workspaceDir: params.sandboxRoot,
     agentWorkspaceDir: params.agentRoot,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
     workspaceAccess: params.workspaceAccess ?? "rw",
     fsBridge: bridge,
     tools: { allow: [], deny: [] },
@@ -72,21 +88,34 @@ export function createUnsafeMountedSandbox(params: {
 }
 
 export async function withUnsafeMountedSandboxHarness(
-  run: (ctx: { sandboxRoot: string; agentRoot: string; sandbox: SandboxContext }) => Promise<void>,
-  options?: { workspaceAccess?: "none" | "ro" | "rw" },
+  run: (ctx: {
+    sandboxRoot: string;
+    agentRoot: string;
+    skillsWorkspaceDir?: string;
+    sandbox: SandboxContext;
+  }) => Promise<void>,
+  options?: {
+    includeSkillsWorkspace?: boolean;
+    skillsWorkspaceDir?: string;
+    workspaceAccess?: "none" | "ro" | "rw";
+  },
 ) {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-mounts-"));
   const sandboxRoot = path.join(stateDir, "sandbox");
   const agentRoot = path.join(stateDir, "agent");
+  const skillsWorkspaceDir =
+    options?.skillsWorkspaceDir ??
+    (options?.includeSkillsWorkspace ? path.join(stateDir, "skills-state") : undefined);
   await fs.mkdir(sandboxRoot, { recursive: true });
   await fs.mkdir(agentRoot, { recursive: true });
   const sandbox = createUnsafeMountedSandbox({
     sandboxRoot,
     agentRoot,
+    skillsWorkspaceDir,
     workspaceAccess: options?.workspaceAccess,
   });
   try {
-    await run({ sandboxRoot, agentRoot, sandbox });
+    await run({ sandboxRoot, agentRoot, skillsWorkspaceDir, sandbox });
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true });
   }

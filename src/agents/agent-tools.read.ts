@@ -515,7 +515,7 @@ function mapContainerPathToRoot(params: {
     return { filePath: params.filePath, matched: false };
   }
 
-  const normalizedCandidate = candidate.replace(/\\/g, "/");
+  const normalizedCandidate = path.posix.normalize(candidate.replace(/\\/g, "/"));
   if (normalizedCandidate === normalizedRoot) {
     return { filePath: path.resolve(params.root), matched: true };
   }
@@ -779,28 +779,32 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           normalizedRecord[key] = filePath;
         }
         let guardedRoot = root;
-        const workspaceMapping = mapContainerPathToRoot({
-          filePath,
-          root,
-          containerRoot: options?.containerWorkdir,
-        });
-        let sandboxPath = workspaceMapping.filePath;
-        if (!workspaceMapping.matched) {
-          for (const mount of options?.additionalContainerMounts ?? []) {
-            const mountMapping = mapContainerPathToRoot({
-              filePath,
-              root: mount.hostRoot,
-              containerRoot: mount.containerRoot,
-            });
-            if (mountMapping.matched) {
-              guardedRoot = path.resolve(mount.hostRoot);
-              sandboxPath = mountMapping.filePath;
-              break;
-            }
+        let workspaceMapping: ReturnType<typeof mapContainerPathToRoot> | undefined;
+        let sandboxPath = filePath;
+        for (const mount of [...(options?.additionalContainerMounts ?? [])].toSorted(
+          (a, b) => b.containerRoot.length - a.containerRoot.length,
+        )) {
+          const mountMapping = mapContainerPathToRoot({
+            filePath,
+            root: mount.hostRoot,
+            containerRoot: mount.containerRoot,
+          });
+          if (mountMapping.matched) {
+            guardedRoot = path.resolve(mount.hostRoot);
+            sandboxPath = mountMapping.filePath;
+            break;
           }
         }
+        if (guardedRoot === root) {
+          workspaceMapping = mapContainerPathToRoot({
+            filePath,
+            root,
+            containerRoot: options?.containerWorkdir,
+          });
+          sandboxPath = workspaceMapping.filePath;
+        }
         const additionalRoots =
-          guardedRoot === root && !workspaceMapping.matched ? (options?.additionalRoots ?? []) : [];
+          guardedRoot === root && !workspaceMapping?.matched ? (options?.additionalRoots ?? []) : [];
         let sandboxResult: Awaited<ReturnType<typeof assertSandboxPathWithinAnyRoot>>;
         try {
           sandboxResult = await assertSandboxPathWithinAnyRoot({

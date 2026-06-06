@@ -3,6 +3,7 @@
  *
  * Creates remote workspace copies, builds remote exec specs, and exposes a backend-neutral filesystem bridge.
  */
+import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -40,6 +41,7 @@ type ResolvedSshRuntimePaths = {
   runtimeRootDir: string;
   remoteWorkspaceDir: string;
   remoteAgentWorkspaceDir: string;
+  remoteSkillsWorkspaceDir: string;
 };
 
 /** SSH backend lifecycle hooks for probing and removing remote sandbox copies. */
@@ -220,6 +222,7 @@ class SshSandboxBackendImpl {
         ]),
       });
       if (exists.stdout.toString("utf8").trim() === "1") {
+        await this.refreshRemoteSkillsWorkspace(session);
         return;
       }
       await this.replaceRemoteDirectoryFromLocal(
@@ -238,9 +241,27 @@ class SshSandboxBackendImpl {
           this.params.runtimePaths.remoteAgentWorkspaceDir,
         );
       }
+      await this.refreshRemoteSkillsWorkspace(session);
     } finally {
       await disposeSshSandboxSession(session);
     }
+  }
+
+  private async refreshRemoteSkillsWorkspace(session: SshSandboxSession): Promise<void> {
+    if (
+      this.params.createParams.cfg.workspaceAccess !== "rw" ||
+      !this.params.createParams.skillsWorkspaceDir
+    ) {
+      return;
+    }
+    if (!(await isExistingDirectory(this.params.createParams.skillsWorkspaceDir))) {
+      return;
+    }
+    await this.replaceRemoteDirectoryFromLocal(
+      session,
+      this.params.createParams.skillsWorkspaceDir,
+      this.params.runtimePaths.remoteSkillsWorkspaceDir,
+    );
   }
 
   private async replaceRemoteDirectoryFromLocal(
@@ -290,6 +311,14 @@ class SshSandboxBackendImpl {
   }
 }
 
+async function isExistingDirectory(dir: string): Promise<boolean> {
+  try {
+    return (await fs.stat(dir)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function resolveSshRuntimePaths(workspaceRoot: string, scopeKey: string): ResolvedSshRuntimePaths {
   const runtimeId = buildSshSandboxRuntimeId(scopeKey);
   const runtimeRootDir = path.posix.join(workspaceRoot, runtimeId);
@@ -298,6 +327,12 @@ function resolveSshRuntimePaths(workspaceRoot: string, scopeKey: string): Resolv
     runtimeRootDir,
     remoteWorkspaceDir: path.posix.join(runtimeRootDir, "workspace"),
     remoteAgentWorkspaceDir: path.posix.join(runtimeRootDir, "agent"),
+    remoteSkillsWorkspaceDir: path.posix.join(
+      runtimeRootDir,
+      "workspace",
+      ".openclaw",
+      "sandbox-skills",
+    ),
   };
 }
 
