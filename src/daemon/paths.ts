@@ -1,5 +1,6 @@
 /** Resolves daemon state, home, and generated task-script paths. */
 import fsSync from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayProfileSuffix } from "./constants.js";
@@ -35,22 +36,38 @@ function isExternalVolumePathSync(targetPath: string): boolean {
   return external;
 }
 
+// The boot-volume account name comes from the login identity, not from HOME's
+// structure: an external $HOME may be the volume root itself (e.g.
+// `/Volumes/MainDataDrive`, the shape in issue #60398) whose last path segment
+// is the volume name, not the user. USER/LOGNAME are case-preserved; fall back
+// to the process owner when the launchd-sanitized env drops them.
+function resolveLoginUsername(env: Record<string, string | undefined>): string | undefined {
+  const fromEnv = normalizeOptionalString(env.USER) || normalizeOptionalString(env.LOGNAME);
+  if (fromEnv) {
+    return fromEnv;
+  }
+  try {
+    return normalizeOptionalString(os.userInfo().username);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Home dir whose `Library/LaunchAgents` launchd should manage. When $HOME is on
  * an external APFS volume, launchd refuses to bootstrap plists from it (error 5:
- * I/O error), so fall back to the boot-volume home `/Users/<user>`. The plist
- * path, its uninstall trash target, and doctor's service scan all derive from
- * this single source so they stay on one volume and on the path launchd loaded.
+ * I/O error), so fall back to the boot-volume home `/Users/<login-user>`. The
+ * plist path, its uninstall trash target, and doctor's service scan all derive
+ * from this single source so they stay on one volume and on the path launchd
+ * loaded. Keeps $HOME when the login user is undeterminable (no worse than the
+ * pre-fix behavior).
  */
 export function resolveLaunchAgentHomeDir(env: Record<string, string | undefined>): string {
   const home = resolveHomeDir(env);
   if (!isExternalVolumePathSync(home)) {
     return home;
   }
-  // Derive the boot-volume home from HOME's own basename (case-preserving),
-  // which is the user folder name; this always lands under /Users on the boot
-  // volume regardless of env.USER casing or a sudo-changed USER.
-  const user = path.basename(home);
+  const user = resolveLoginUsername(env);
   return user ? path.join(path.sep, "Users", user) : home;
 }
 

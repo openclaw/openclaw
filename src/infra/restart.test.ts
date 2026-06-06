@@ -262,6 +262,7 @@ describe("triggerOpenClawRestart", () => {
         VITEST: undefined,
         NODE_ENV: undefined,
         HOME: "/Volumes/Data/Users/test",
+        USER: "test",
         OPENCLAW_PROFILE: "default",
       },
       () => {
