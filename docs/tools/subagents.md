@@ -604,11 +604,11 @@ sub-agent is still alive. Unended runs older than the stale-run window
 stop counting as active/pending in `/subagents list`, status summaries,
 descendant completion gating, and per-session concurrency checks.
 
-After a gateway restart, stale unended restored runs are pruned unless
-their child session is marked `abortedLastRun: true`. Those
-restart-aborted child sessions remain recoverable through the sub-agent
-orphan recovery flow, which sends a synthetic resume message before
-clearing the aborted marker.
+After a gateway restart, stale unended restored runs are pruned
+regardless of `abortedLastRun`. Freshly aborted child sessions (within
+the stale-run window) remain recoverable through the sub-agent orphan
+recovery flow, which sends a synthetic resume message before clearing
+the aborted marker.
 
 Automatic restart recovery is bounded per child session. If the same
 sub-agent child is accepted for orphan recovery repeatedly inside the
