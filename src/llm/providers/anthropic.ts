@@ -678,7 +678,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         } else if (event.type === "message_delta") {
           if (event.delta.stop_reason) {
             output.stopReason = mapStopReason(event.delta.stop_reason);
-            if (event.delta.stop_reason === "max_turns") {
+            if ((event.delta.stop_reason as string) === "max_turns") {
               output.errorMessage =
                 "Model turn budget exhausted (max_turns). " +
                 "The run hit the internal turn limit before completing.";
