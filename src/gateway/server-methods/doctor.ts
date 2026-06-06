@@ -350,7 +350,7 @@ function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string):
 function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
   // Status only counts short-term source shapes; promoted diary/report files stay out.
-  if (/(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/.test(normalized)) {
+  if (/(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})(?:-\d{4})?\.md$/.test(normalized)) {
     return true;
   }
   if (
@@ -360,7 +360,7 @@ function isShortTermMemoryPath(filePath: string): boolean {
   ) {
     return true;
   }
-  return /^(\d{4})-(\d{2})-(\d{2})\.md$/.test(normalized);
+  return /^(\d{4})-(\d{2})-(\d{2})(?:-\d{4})?\.md$/.test(normalized);
 }
 
 type DreamingStoreStats = Pick<
