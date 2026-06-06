@@ -584,7 +584,7 @@ export async function restoreModelFromSession(
   const reason = !restoredModel ? "model no longer exists" : "no auth configured";
 
   if (shouldPrintMessages) {
-    console.error(
+    console.warn(
       chalk.yellow(
         `Warning: Could not restore model ${savedProvider}/${savedModelId} (${reason}).`,
       ),
@@ -594,7 +594,7 @@ export async function restoreModelFromSession(
   // If we already have a model, use it as fallback
   if (currentModel) {
     if (shouldPrintMessages) {
-      console.log(chalk.dim(`Falling back to: ${currentModel.provider}/${currentModel.id}`));
+      console.info(chalk.dim(`Falling back to: ${currentModel.provider}/${currentModel.id}`));
     }
     return {
       model: currentModel,
@@ -615,7 +615,7 @@ export async function restoreModelFromSession(
     }
 
     if (shouldPrintMessages) {
-      console.log(chalk.dim(`Falling back to: ${fallbackModel.provider}/${fallbackModel.id}`));
+      console.info(chalk.dim(`Falling back to: ${fallbackModel.provider}/${fallbackModel.id}`));
     }
 
     return {
