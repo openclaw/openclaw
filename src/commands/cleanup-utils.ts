@@ -83,6 +83,9 @@ function isUnsafeRemovalTarget(target: string): boolean {
   if (home && resolved === path.resolve(home)) {
     return true;
   }
+  if (resolved === path.resolve(process.cwd())) {
+    return true;
+  }
   return false;
 }
 
