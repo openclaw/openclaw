@@ -1312,7 +1312,7 @@ export function renderApp(state: AppViewState) {
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const localAssistantAvatarOverride =
-    normalizeOptionalString(loadLocalAssistantIdentity().avatar) ?? null;
+    normalizeOptionalString(loadLocalAssistantIdentity(state.assistantAgentId).avatar) ?? null;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAssistantAvatarStatus = localAssistantAvatarOverride
     ? "data"
@@ -1808,7 +1808,7 @@ export function renderApp(state: AppViewState) {
             assistantAvatarUploadBusy: state.assistantAvatarUploadBusy,
             assistantAvatarUploadError: state.assistantAvatarUploadError,
             onAssistantAvatarOverrideChange: (dataUrl) => {
-              setAssistantAvatarOverride(state, dataUrl);
+              setAssistantAvatarOverride(state, dataUrl, state.assistantAgentId);
               state.chatAvatarUrl = dataUrl;
               state.chatAvatarSource = dataUrl;
               state.chatAvatarStatus = "data";
@@ -1817,7 +1817,7 @@ export function renderApp(state: AppViewState) {
               requestHostUpdate?.();
             },
             onAssistantAvatarClearOverride: () => {
-              setAssistantAvatarOverride(state, null);
+              setAssistantAvatarOverride(state, null, state.assistantAgentId);
               state.chatAvatarUrl = null;
               state.chatAvatarSource = null;
               state.chatAvatarStatus = null;

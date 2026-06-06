@@ -96,4 +96,50 @@ describe("setAssistantAvatarOverride", () => {
     expect(state.assistantAvatarReason).toBeNull();
     expect(loadLocalAssistantIdentity().avatar).toBeNull();
   });
+
+  it("scopes the local override to the given agentId", () => {
+    const state: Parameters<typeof setAssistantAvatarOverride>[0] = {};
+
+    setAssistantAvatarOverride(state, "data:image/png;base64,YWdlbnQx", "agent-1");
+
+    expect(loadLocalAssistantIdentity("agent-1").avatar).toBe("data:image/png;base64,YWdlbnQx");
+    expect(loadLocalAssistantIdentity("agent-2").avatar).toBeNull();
+    expect(loadLocalAssistantIdentity().avatar).toBeNull();
+  });
+
+  it("clears the agent-scoped local override", () => {
+    const state: Parameters<typeof setAssistantAvatarOverride>[0] = {};
+    setAssistantAvatarOverride(state, "data:image/png;base64,YWdlbnQx", "agent-1");
+
+    setAssistantAvatarOverride(state, null, "agent-1");
+
+    expect(loadLocalAssistantIdentity("agent-1").avatar).toBeNull();
+  });
+
+  it("applies the agent-scoped local override when loading identity", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValue({ agentId: "agent-1", name: "Agent One", avatar: "A1" });
+    const state: Parameters<typeof loadAssistantIdentity>[0] = {
+      client: { request } as never,
+      connected: true,
+      sessionKey: "agent:agent-1:main",
+      assistantName: "Old",
+      assistantAvatar: null,
+      assistantAgentId: "agent-1",
+    };
+    // Pre-seed localStorage with an override for this agent
+    const storage = createStorageMock();
+    storage.setItem(
+      "openclaw.control.assistant.v1:agent-1",
+      JSON.stringify({ avatar: "data:image/png;base64,b3ZlcnJpZGU=" }),
+    );
+    vi.stubGlobal("localStorage", storage);
+
+    await loadAssistantIdentity(state);
+
+    expect(state.assistantAvatar).toBe("data:image/png;base64,b3ZlcnJpZGU=");
+    expect(state.assistantAvatarStatus).toBe("data");
+    expect(state.assistantAvatarReason).toBeNull();
+  });
 });

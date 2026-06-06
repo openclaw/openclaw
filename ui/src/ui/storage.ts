@@ -350,10 +350,17 @@ export function saveLocalUserIdentity(next: LocalUserIdentity) {
 
 export type LocalAssistantIdentity = { avatar: string | null };
 
-export function loadLocalAssistantIdentity(): LocalAssistantIdentity {
+function localAssistantIdentityKey(agentId?: string | null): string {
+  if (agentId) {
+    return `${LOCAL_ASSISTANT_IDENTITY_KEY}:${agentId}`;
+  }
+  return LOCAL_ASSISTANT_IDENTITY_KEY;
+}
+
+export function loadLocalAssistantIdentity(agentId?: string | null): LocalAssistantIdentity {
   const storage = getSafeLocalStorage();
   try {
-    const raw = storage?.getItem(LOCAL_ASSISTANT_IDENTITY_KEY);
+    const raw = storage?.getItem(localAssistantIdentityKey(agentId));
     if (!raw) {
       return { avatar: null };
     }
@@ -364,14 +371,14 @@ export function loadLocalAssistantIdentity(): LocalAssistantIdentity {
   }
 }
 
-export function saveLocalAssistantIdentity(next: LocalAssistantIdentity) {
+export function saveLocalAssistantIdentity(next: LocalAssistantIdentity, agentId?: string | null) {
   const storage = getSafeLocalStorage();
   try {
     if (!next.avatar) {
-      storage?.removeItem(LOCAL_ASSISTANT_IDENTITY_KEY);
+      storage?.removeItem(localAssistantIdentityKey(agentId));
       return;
     }
-    storage?.setItem(LOCAL_ASSISTANT_IDENTITY_KEY, JSON.stringify({ avatar: next.avatar }));
+    storage?.setItem(localAssistantIdentityKey(agentId), JSON.stringify({ avatar: next.avatar }));
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory identity updates from being applied
