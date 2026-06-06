@@ -1,5 +1,5 @@
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayMessageChannel } from "./message-channel.js";
 
 const SESSION_CONVERSATION_KINDS = new Set(["direct", "dm", "group", "channel"]);
