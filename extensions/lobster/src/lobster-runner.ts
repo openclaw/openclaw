@@ -53,6 +53,32 @@ type EmbeddedToolContext = {
   llmAdapters?: Record<string, unknown>;
 };
 
+// In-process LLM adapter consumed by the @clawdbot/lobster `llm.invoke` command
+// (see its getDirectAdapter / resolveAdapter). invoke({ payload }) receives the
+// llm.invoke payload and must return a response envelope of the same shape the
+// HTTP `openclaw` provider returns (see invokeOpenClawAdapter), i.e.
+// { ok: true, result: { output: { data, text? }, model?, status? } } — but
+// produced fully in-process, with NO gateway URL or token. This is the
+// "supported embedded bridge" referenced in docs/tools/lobster.md and tracked
+// in #76101 / #90909.
+export type EmbeddedLlmAdapter = {
+  source?: string;
+  invoke: (args: {
+    env?: Record<string, string | undefined>;
+    args?: Record<string, unknown>;
+    payload: unknown;
+  }) => Promise<{ ok: boolean; result?: unknown; error?: { message: string } }>;
+};
+
+// Host-provided in-process bridges for the embedded runner. Populating these lets
+// embedded Lobster workflows run `llm.invoke` (and registry-backed stdlib commands)
+// in-process, instead of the HTTP-only `openclaw.invoke` shim that requires
+// OPENCLAW_URL + an operator token. No credentials are placed in ctx.env.
+export type EmbeddedRuntimeBridges = {
+  llmAdapters?: Record<string, EmbeddedLlmAdapter>;
+  registry?: unknown;
+};
+
 type EmbeddedToolEnvelope = {
   protocolVersion?: number;
   ok: boolean;
@@ -255,7 +281,11 @@ function parseWorkflowArgs(argsJson: string) {
 function createEmbeddedToolContext(
   params: LobsterRunnerParams,
   signal?: AbortSignal,
+  bridges?: EmbeddedRuntimeBridges,
 ): EmbeddedToolContext {
+  // NOTE: we intentionally do NOT inject OPENCLAW_URL or any gateway token into
+  // env. The in-process path runs through bridges.llmAdapters / bridges.registry,
+  // so no operator credential is ever exposed to workflow shell steps (#76101).
   const env = { ...process.env } as Record<string, string | undefined>;
   return {
     cwd: params.cwd,
@@ -265,6 +295,8 @@ function createEmbeddedToolContext(
     stdout: createLimitedSink(Math.max(1024, params.maxStdoutBytes), "stdout"),
     stderr: createLimitedSink(Math.max(1024, params.maxStdoutBytes), "stderr"),
     signal,
+    ...(bridges?.llmAdapters ? { llmAdapters: bridges.llmAdapters } : {}),
+    ...(bridges?.registry !== undefined ? { registry: bridges.registry } : {}),
   };
 }
 
@@ -333,15 +365,17 @@ export async function loadEmbeddedToolRuntimeFromPackage(
 
 export function createEmbeddedLobsterRunner(options?: {
   loadRuntime?: LoadEmbeddedToolRuntime;
+  bridges?: EmbeddedRuntimeBridges;
 }): LobsterRunner {
   const loadRuntime = options?.loadRuntime ?? loadEmbeddedToolRuntimeFromPackage;
+  const bridges = options?.bridges;
   let runtimePromise: Promise<EmbeddedToolRuntime> | undefined;
   return {
     async run(params) {
       runtimePromise ??= loadRuntime();
       const runtime = await runtimePromise;
       return await withTimeout(params.timeoutMs, async (signal) => {
-        const ctx = createEmbeddedToolContext(params, signal);
+        const ctx = createEmbeddedToolContext(params, signal, bridges);
 
         if (params.action === "run") {
           const pipeline = params.pipeline?.trim() ?? "";

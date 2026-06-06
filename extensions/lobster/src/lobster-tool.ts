@@ -1,4 +1,6 @@
 // Lobster plugin module implements lobster tool behavior.
+import os from "node:os";
+import path from "node:path";
 import {
   optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
@@ -12,6 +14,8 @@ import type { OpenClawPluginApi } from "../runtime-api.js";
 import {
   createEmbeddedLobsterRunner,
   resolveLobsterCwd,
+  type EmbeddedLlmAdapter,
+  type EmbeddedRuntimeBridges,
   type LobsterRunner,
   type LobsterRunnerParams,
 } from "./lobster-runner.js";
@@ -214,8 +218,103 @@ function resolveManagedFlowToolResult(result: ManagedLobsterFlowResult) {
   return formatManagedFlowResult(result);
 }
 
+// Build the in-process LLM adapters handed to the embedded Lobster runner. The
+// `openclaw` provider runs an llm-task entirely in-process via
+// api.runtime.agent.runEmbeddedAgent (the same entry the llm-task tool uses),
+// mapping the `llm.invoke` payload <-> response envelope. No gateway URL/token is
+// used, so no operator credential reaches workflow shell steps (#76101 / #90909).
+function buildEmbeddedLlmAdapters(api: OpenClawPluginApi): Record<string, EmbeddedLlmAdapter> {
+  const runInProcess = async (payload: unknown) => {
+    const p = (payload ?? {}) as Record<string, unknown>;
+    const prompt = typeof p.prompt === "string" ? p.prompt : "";
+    if (!prompt.trim()) {
+      throw new Error("llm.invoke (embedded openclaw): prompt required");
+    }
+
+    // Resolve provider/model: payload.model first, else agents.defaults.model.
+    const defaultsModel = api.config?.agents?.defaults?.model as
+      | string
+      | { primary?: string }
+      | undefined;
+    const def = typeof defaultsModel === "string" ? defaultsModel : defaultsModel?.primary;
+    const ref =
+      (typeof p.model === "string" && p.model.trim()) || (typeof def === "string" ? def : "") || "";
+    const provider = ref.includes("/") ? ref.split("/")[0] : undefined;
+    const model = ref.includes("/") ? ref.split("/").slice(1).join("/") : ref || undefined;
+    if (!provider || !model) {
+      throw new Error(
+        "llm.invoke (embedded openclaw): could not resolve provider/model; set agents.defaults.model or pass --model provider/model",
+      );
+    }
+
+    // llm.invoke carries inputs as `artifacts`; fold them into a JSON-only prompt.
+    const artifacts = Array.isArray(p.artifacts) ? p.artifacts : [];
+    const inputJson = JSON.stringify(artifacts, null, 2);
+    const system =
+      "You are a JSON-only function. Return ONLY a valid JSON value. Do not wrap in markdown fences. Do not include commentary. Do not call tools.";
+    const fullPrompt = `${system}\n\nTASK:\n${prompt}\n\nINPUT_JSON:\n${inputJson}\n`;
+
+    const timeoutMs =
+      typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs) ? p.timeoutMs : 30_000;
+    const runId = `lobster-llm-${Date.now()}`;
+
+    const sessionFile = path.join(
+      os.tmpdir(),
+      `lobster-llm-${runId}-${Math.random().toString(36).slice(2)}.session.json`,
+    );
+    const result = await api.runtime.agent.runEmbeddedAgent({
+      sessionId: runId,
+      sessionFile,
+      workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
+      config: api.config,
+      prompt: fullPrompt,
+      timeoutMs,
+      runId,
+      provider,
+      model,
+      disableTools: true,
+    });
+
+    const payloads =
+      typeof result === "object" && result !== null && "payloads" in result
+        ? (result as { payloads?: Array<{ text?: string }> }).payloads
+        : undefined;
+    const text = (payloads ?? [])
+      .map((x) => (typeof x?.text === "string" ? x.text : ""))
+      .join("")
+      .trim();
+    if (!text) {
+      throw new Error("llm.invoke (embedded openclaw): empty output");
+    }
+    const raw = text
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+    let data: unknown;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error("llm.invoke (embedded openclaw): output was not valid JSON");
+    }
+
+    // Shape the response envelope llm.invoke expects (result.output.data).
+    return {
+      ok: true as const,
+      result: { output: { data, text: raw }, model, status: "completed" },
+    };
+  };
+
+  return {
+    openclaw: {
+      source: "openclaw-embedded",
+      invoke: async ({ payload }) => runInProcess(payload),
+    },
+  };
+}
+
 export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolOptions) {
-  const runner = options?.runner ?? createEmbeddedLobsterRunner();
+  const bridges: EmbeddedRuntimeBridges = { llmAdapters: buildEmbeddedLlmAdapters(api) };
+  const runner = options?.runner ?? createEmbeddedLobsterRunner({ bridges });
   return {
     name: "lobster",
     label: "Lobster Workflow",
