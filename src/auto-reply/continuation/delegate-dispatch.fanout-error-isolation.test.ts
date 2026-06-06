@@ -1,5 +1,5 @@
 /**
- * Martin-review-response :: Q1 — fanout error isolation.
+ * Fanout error isolation.
  *
  * If one delegate in a fanout batch errors mid-dispatch, sibling delegates
  * are NOT aborted. The parent (dispatch loop) collects partial results:
@@ -9,8 +9,8 @@
  *
  * This test extends the existing coverage in delegate-dispatch.test.ts
  * ("marks rejected/thrown delegates failed without aborting later delegates")
- * to the fanout shape Martin asked about: each delegate targets a DIFFERENT
- * session via `targetSessionKey`, mid-batch failure does not affect siblings.
+ * to the targeted fanout shape: each delegate targets a DIFFERENT session via
+ * `targetSessionKey`, and a mid-batch failure does not affect siblings.
  *
  * Mock infrastructure mirrors delegate-dispatch.test.ts to keep TaskFlow,
  * subagent-spawn, system-events, and subsystem logger all stubbed.
@@ -123,13 +123,12 @@ afterEach(() => {
   mockFlows.clear();
 });
 
-describe("fanout error isolation (Martin Q1)", () => {
+describe("fanout error isolation", () => {
   it("three delegates targeting different sessions: middle one fails, first and third still dispatch", async () => {
     const sessionKey = "session-fanout-isolation";
 
-    // Each delegate fans out to a DIFFERENT target session via targetSessionKey.
-    // This is the "fanout" shape Martin asked about — one tool turn, N delegates,
-    // each with an independent target.
+    // Each delegate fans out to a DIFFERENT target session via targetSessionKey:
+    // one tool turn, N delegates, each with an independent target.
     enqueuePendingDelegate(sessionKey, {
       task: "fanout-target-A",
       targetSessionKey: "channel:target-A",

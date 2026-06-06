@@ -397,10 +397,10 @@ describe("runReplyAgent :: delegate dispatch span uniformity", () => {
     expect(silentWake.attributes["chain.step.remaining"]).toBe(3);
   });
 
-  // Production gap: post-compaction delegate delivery persists continuation
-  // chain state but does not emit `continuation.delegate.dispatch` with
-  // `delegate.mode = "post-compaction"` yet. Leave this as the trap for the
-  // production lane rather than changing production in this test-only PR.
+  // Post-compaction delegate delivery persists continuation chain state but
+  // does not yet emit `continuation.delegate.dispatch` with
+  // `delegate.mode = "post-compaction"`. Keep this todo as the coverage marker
+  // for the production lane.
   it.todo(
     "emits exactly one continuation.delegate.dispatch span for post-compaction delegates with the same attribute-key shape",
   );

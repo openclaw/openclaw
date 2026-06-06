@@ -686,16 +686,13 @@ export async function runAgentAttempt(params: {
     });
   }
 
-  // --- continuation: spawn-init / turn-1 continueWorkOpts plumbing (#746) ---
+  // --- continuation: spawn-init / turn-1 continueWorkOpts plumbing ---
   // Construct the closure that captures continue_work tool requests fired
   // during this attempt, then surface the runEmbeddedAgent result while
   // post-processing the captured request to schedule the next-turn
-  // heartbeat-wake. Mirrors the followup-runner pattern at
-  // src/auto-reply/reply/followup-runner.ts (#892 cure). Without this wiring,
-  // openclaw-tools.ts:592 evaluates options?.continueWorkOpts as undefined on
-  // the spawn-init code path and continue_work never registers in the
-  // subagent's turn-1 tool-list — chicken-and-egg with the followup-runner
-  // cure that only fires on turn-2+.
+  // heartbeat-wake. Mirrors the followup-runner continue_work pattern. Without
+  // this wiring, createOpenClawTools sees no continueWorkOpts on the spawn-init
+  // path, so continue_work never registers for turn-1 subagent tool calls.
   const continuationEnabled = params.cfg?.agents?.defaults?.continuation?.enabled === true;
   let attemptContinueWorkRequest: ContinueWorkRequest | undefined;
   const continueWorkOpts = continuationEnabled
@@ -706,28 +703,11 @@ export async function runAgentAttempt(params: {
       }
     : undefined;
 
-  // --- continuation: spawn-init / turn-1 requestCompactionOpts plumbing (#917) ---
-  // Sister-of-#746 (half-symmetric-cure-class). PR #892 cured the
-  // continueWorkOpts gap at the followup-runner (turn-2+) path and the
-  // earlier spawn-init cure restored continueWorkOpts on turn-1, but the
-  // sibling closure for request_compaction was not constructed at the
-  // spawn-init / turn-1 path. Result: openclaw-tools.ts:609 evaluates
-  // options?.requestCompactionOpts as undefined on turn-1, the
-  // request_compaction tool never registers in the subagent's spawn-init
-  // tool-list, and a subagent that has been given continue_work capability
-  // (via #746 cure) can schedule its own next turn but cannot reclaim
-  // context mid-flight when pressure rises. Mirrors the followup-runner
-  // block at src/auto-reply/reply/agent-runner-execution.ts:2554-2585. Cohort
-  // substrate-of-record: figs `1511931252` direction-question +
-  // cael+rune+emeric cohort-cosign YES + frond karmaterminal/openclaw#917
-  // issue. Empirical: rune subagent `agent:main:subagent:53cd57ac` returned
-  // TOOL_NOT_IN_LIST at discord:1511936885; emeric R-RC-1 HONEST-LIMIT at
-  // openclaw-bootstrap commit 9684479; cael main-session contrast 1511935121
-  // (REGISTERED + REJECT-at-41%-below-threshold). #917 was filed during
-  // the 2026-06-03 PROOFS cycle on assembly head
-  // 2f71e4378b70ea43fb185edff1af14571eca826f when 4-of-6 prince seats
-  // cross-walked the R-CW-DELEGATE-SELF-CONTINUATION row and the missing
-  // sister tool surfaced empirically.
+  // --- continuation: spawn-init / turn-1 requestCompactionOpts plumbing ---
+  // Keep request_compaction aligned with continue_work on the spawn-init path.
+  // Without this closure, createOpenClawTools sees no requestCompactionOpts on
+  // turn 1, so newly spawned subagents can schedule a next turn but cannot ask
+  // to compact when context pressure rises.
   const requestCompactionOpts = continuationEnabled
     ? {
         sessionId: params.sessionId,
@@ -761,13 +741,11 @@ export async function runAgentAttempt(params: {
               traceparent: request.traceparent,
             });
             if (result.ok && result.compacted) {
-              // Mirror the followup-runner triggerCompaction release
-              // (agent-runner-execution.ts:2591). A successful turn-1 /
-              // spawn-init volitional compaction must dispatch any staged
+              // Mirror the followup-runner triggerCompaction release. A
+              // successful turn-1 volitional compaction must dispatch staged
               // `continue_delegate(mode="post-compaction")` work; without this
               // the staged delegates stay queued and only the followup
-              // (turn-2+) path would ever drain them — the half-cure-gap codex
-              // flagged on #918's own cure-file. `releaseQueuedCompactionTolerant`
+              // (turn-2+) path would ever drain them. `releaseQueuedCompactionTolerant`
               // degrades gracefully (logs + returns) when sessionKey/sessionStore
               // are absent, so this is safe on the suppressVisibleSessionEffects
               // path where both are undefined.
@@ -934,9 +912,8 @@ export async function runAgentAttempt(params: {
  * Schedule a continue_work-triggered heartbeat-wake for the spawn-init /
  * turn-1 path. Loads chain state, enforces maxChainLength + delay clamps,
  * persists advancement, and arms the timer that fires requestHeartbeatNow.
- * Behaviour mirrors the followup-runner block introduced by PR #892 for
- * turn-2+ symmetry. Kept here as a local helper so the spawn-init path
- * stays single-sourced for the cure.
+ * Behaviour mirrors the followup-runner block for turn-2+ symmetry. Kept here
+ * as a local helper so spawn-init scheduling stays single-sourced.
  */
 async function scheduleSpawnInitContinueWorkWake(params: {
   sessionKey: string;

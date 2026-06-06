@@ -10,9 +10,9 @@
 //   2. NON-NEGATIVE → CLAMPED into [minDelayMs, maxDelayMs] symmetrically.
 //   3. Clamp result is surfaced to the model via the details `note` field.
 //
-// SPIDER-WEB ROLE: four tests guard four cardinal points of the contract.
-// If any flips — clamp-where-reject, accept-where-clamp, silent-coerce —
-// reviewer should look at continue-work-tool.ts:60–110 (validate-then-clamp).
+// Tests guard the delaySeconds boundary contract. If any branch flips —
+// clamp-where-reject, accept-where-clamp, or silent-coerce — inspect
+// createContinueWorkTool validation and clamp handling.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetContinuationTracer } from "../../infra/continuation-tracer.js";
@@ -71,25 +71,23 @@ describe("continue_work tool — delaySeconds boundary validation", () => {
   // ───────────────────────────────────────────────────────────────────────
   // REJECT branch: negative delaySeconds.
   //
-  // CANON GUARDED: continue-work-tool.ts:70–71 explicitly throws
-  // ToolInputError for negative values BEFORE reaching the clamping logic.
+  // CANON GUARDED: createContinueWorkTool throws ToolInputError for negative
+  // values BEFORE reaching the clamping logic.
   // This is the asymmetric corner of the contract — every other invalid
   // shape gets coerced, but negatives are surfaced as errors.
   //
-  // SPIDER-WEB TRIPWIRE: if this test starts asserting "clamps to 0" or
+  // Regression indicator: if this test starts asserting "clamps to 0" or
   // "clamps to minDelayMs", the tool semantic has shifted from
-  // reject-on-negative to coerce-on-negative; reviewer should look at
-  // continue-work-tool.ts:60–80 for whether the validate gate was removed
-  // or relocated below the clamp.
+  // reject-on-negative to coerce-on-negative; inspect whether the validate
+  // gate was removed or relocated below the clamp.
   // ───────────────────────────────────────────────────────────────────────
   it("rejects negative delaySeconds with ToolInputError", async () => {
     const requestContinuation = vi.fn();
     const tool = makeTool({ requestContinuation });
 
-    // The tool surface for continue-work-tool throws ToolInputError directly
-    // (see continue-work-tool.ts:70–71) rather than returning {isError:true};
-    // wrap the call so we can assert both (a) the throw shape and (b) the
-    // non-scheduling invariant.
+    // The tool throws ToolInputError directly rather than returning
+    // {isError:true}; wrap the call so we can assert both the throw shape and
+    // the non-scheduling invariant.
     await expect(
       tool.execute("call-negative", {
         reason: "Negative delay boundary test.",
@@ -109,10 +107,10 @@ describe("continue_work tool — delaySeconds boundary validation", () => {
   // rejected. The `note` field surfaces the clamp so the model knows it
   // got a shorter delay than requested.
   //
-  // SPIDER-WEB TRIPWIRE: if this starts rejecting instead of clamping, the
+  // Regression indicator: if this starts rejecting instead of clamping, the
   // tool became stricter and the model will start getting errors on
-  // perfectly reasonable "wake me in 10 minutes" asks; reviewer should
-  // check whether the upper bound semantics flipped.
+  // perfectly reasonable "wake me in 10 minutes" asks; verify the upper-bound
+  // semantics before accepting the change.
   // ───────────────────────────────────────────────────────────────────────
   it("clamps delaySeconds exceeding maxDelayMs to 300s", async () => {
     const requestContinuation = vi.fn();
@@ -149,7 +147,7 @@ describe("continue_work tool — delaySeconds boundary validation", () => {
   // is no separate "absurd value" rejection path. 999_999s and 300s both
   // land at the same clamped result.
   //
-  // SPIDER-WEB TRIPWIRE: if someone adds an upper-upper-bound rejection
+  // Regression indicator: if someone adds an upper-upper-bound rejection
   // (e.g. "values > 1 hour are errors"), this test fires; reviewer should
   // decide whether that new gate is intentional or accidental.
   // ───────────────────────────────────────────────────────────────────────
@@ -185,7 +183,7 @@ describe("continue_work tool — delaySeconds boundary validation", () => {
   // negative-rejection case: 0 is the smallest accepted input, and it
   // doesn't pass through unchanged.
   //
-  // SPIDER-WEB TRIPWIRE: if zero starts rejecting (collapse with -1) OR
+  // Regression indicator: if zero starts rejecting (collapse with -1) OR
   // starts passing through as a literal 0s schedule (collapse with the
   // pass-through case), the boundary has shifted; reviewer should check
   // whether minDelayMs is still being applied to the lower bound.

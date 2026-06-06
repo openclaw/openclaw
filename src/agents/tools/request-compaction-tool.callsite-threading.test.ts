@@ -9,9 +9,8 @@
  *   must be dropped (set to undefined) so resolveEmbeddedCompactionTarget
  *   picks the default profile for that provider.
  *
- * These tests verify the closure construction pattern used at:
- * - src/auto-reply/reply/agent-runner-execution.ts:1006-1036
- * - src/auto-reply/reply/followup-runner.ts:269-312
+ * These tests verify the closure construction pattern used by the
+ * agent-runner-execution and followup-runner triggerCompaction call sites.
  *
  * See: docs/design/continue-work-signal-v2.md
  */
@@ -103,7 +102,7 @@ vi.mock("../../agents/embedded-agent-runner/compact.queued.js", () => ({
 // ---------------------------------------------------------------------------
 
 /**
- * Recreates the triggerCompaction closure pattern from followup-runner.ts:269-312.
+ * Recreates the triggerCompaction closure pattern from followup-runner.
  *
  * This is the closure that gets passed to createRequestCompactionTool.
  * Key behavior: it must use the captured provider/model from the
@@ -132,9 +131,9 @@ function buildTriggerCompactionClosure(
       const { compactEmbeddedAgentSession } =
         await import("../../agents/embedded-agent-runner/compact.queued.js");
 
-      // Thread the session's active provider/model through so
-      // volitional compaction doesn't fall back to DEFAULT_PROVIDER/MODEL
-      // (openai/gpt-5.4) which nobody has auth for.
+      // Thread the session's active provider/model through so volitional
+      // compaction does not fall back to DEFAULT_PROVIDER/MODEL, which may not
+      // match the session's configured credentials.
       //
       // Thread authProfileId only when the
       // inner-scope provider matches the persisted primary (the persisted

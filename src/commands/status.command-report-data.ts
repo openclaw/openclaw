@@ -34,9 +34,10 @@ import type { SessionStatus, StatusSummary } from "./status.types.js";
 
 /** Builds all table rows, section lines, and footer data needed by the status report renderer. */
 /**
- * Format the /status continuation overview row per RFC §6.3. Pure function
- * over already-resolved config + recent-session runtime counts; the live
- * queries (TaskFlow lookups per session key) live at the caller.
+ * Format the /status continuation overview row per
+ * docs/design/continue-work-signal-v2.md §6.3. Pure function over
+ * already-resolved config + recent-session runtime counts; the live queries
+ * (TaskFlow lookups per session key) live at the caller.
  *
  * @returns the formatted banner value, or `undefined` when continuation is
  *   disabled (so the caller can skip rendering the row).
@@ -157,7 +158,8 @@ export async function buildStatusCommandReportData(
         const lazy = await import("../auto-reply/continuation/lazy.runtime.js");
         const cfg = lazy.resolveContinuationRuntimeConfig();
 
-        // RFC §6.3 — surface runtime continuation state. TaskFlow-backed
+        // docs/design/continue-work-signal-v2.md §6.3 — surface runtime continuation state.
+        // TaskFlow-backed
         // counters are queryable cold-path from the CLI (SQLite persistent);
         // in-memory counters (volitional compaction count, session-entry
         // chain depth) are not — they live only in the gateway process and

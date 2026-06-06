@@ -134,7 +134,7 @@ describe("continuation cross-session targeting", () => {
       },
     ]);
     expect(requestHeartbeatNow).toHaveBeenCalledTimes(2);
-    // Per #578/#580 fix: do NOT immediately ack the durable file. The
+    // Do NOT immediately ack the durable file. The
     // in-memory enqueueSystemEvent call above is process-local; non-attached
     // recipients (different process / pre-restart) cannot see it. The durable
     // queue file must persist until the recipient consumes it via the recovery
@@ -378,9 +378,9 @@ describe("continuation cross-session targeting", () => {
   // Real-chain regression for targeted delegate-return durability.
   // Explicit targeted deliveries must leave a durable queue file for named
   // recipients even when the in-memory event path also accepts the payload.
-  // Bug-shape: targeting.ts called `ackSessionDelivery` immediately after
+  // Bug shape: targeting.ts called `ackSessionDelivery` immediately after
   // `enqueueSessionDelivery` + `enqueueSystemEvent`. The ack renamed the
-  // queue file to `.delivered` and unlinked it (storage.ts:326-340), leaving
+  // queue file to `.delivered` and unlinked it, leaving
   // ZERO durable record for non-attached recipients (different process
   // and/or pre-restart) to pick up. This test exercises the REAL
   // `enqueueSessionDelivery` + `ackSessionDelivery` chain (no I/O mocking
@@ -411,7 +411,7 @@ describe("continuation cross-session targeting", () => {
 
       expect(result).toMatchObject({ enqueued: 1, delivered: 1 });
 
-      // Per #578/#580 fix: durable queue entry must persist in the SQLite
+      // The durable queue entry must persist in the SQLite
       // substrate (NOT acked/removed). The recovery loop on next gateway
       // restart picks it up via `recoverPendingRestartContinuationDeliveries`.
       const persistedEntries = await loadPendingSessionDeliveries(stateDir);

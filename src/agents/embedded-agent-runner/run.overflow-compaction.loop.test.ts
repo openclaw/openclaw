@@ -108,8 +108,8 @@ describe("overflow compaction in run loop", () => {
     );
     // Regression guard: overflow compaction must also emit a
     // [context-pressure:fire] anchor so operators grepping for mid-turn
-    // pressure triggers (trigger F, per RFC §4.1) find the in-turn event
-    // that bypasses the pre-run checkContextPressure() path.
+    // pressure triggers (docs/design/continue-work-signal-v2.md §4.1) find the
+    // in-turn event that bypasses the pre-run checkContextPressure() path.
     expectLogIncludes(mockedLog.warn, "[context-pressure:fire] mid-turn trigger=overflow");
     expectLogIncludes(mockedLog.info, "auto-compaction succeeded");
     // Should not be an error result

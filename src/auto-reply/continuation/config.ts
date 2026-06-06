@@ -109,7 +109,8 @@ export function resolveContinuationRuntimeConfig(
  * cfg. Using this helper at per-turn enforcement points (chain caps, cost caps,
  * pressure thresholds, schedule-time delay reads) lets reloaded values take
  * effect at the next decision-point without invalidating already-armed timers
- * or queued retries (RFC §6.5 in-flight-state invariant).
+ * or queued retries (docs/design/continue-work-signal-v2.md §6.5
+ * in-flight-state invariant).
  */
 export function resolveLiveContinuationRuntimeConfig(
   fallbackCfg: OpenClawConfig,

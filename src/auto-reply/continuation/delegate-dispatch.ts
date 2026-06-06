@@ -409,7 +409,7 @@ export async function dispatchToolDelegates(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Post-compaction delegate dispatch (RFC §4.4)
+// Post-compaction delegate dispatch (docs/design/continue-work-signal-v2.md §4.4)
 // ---------------------------------------------------------------------------
 
 const postCompactionLog = createSubsystemLogger("continuation/compaction");

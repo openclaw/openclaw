@@ -71,15 +71,14 @@ describe("resolveGatewayScopedTools", () => {
     expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
   });
 
-  // karmaterminal/openclaw#923 — the raw gateway catalog must reflect the FULL
+  // The raw gateway catalog must reflect the FULL
   // continuation surface, not just continue_delegate, so /status, doctor, policy
-  // and child-inheritance see all three. Before the fix, continue_work +
-  // request_compaction were absent here (registration was gated on runner closures
-  // this path never supplies); now the path registers them via stub callbacks so
-  // the catalog is honest. (The MCP loopback further EXCLUDES continue_work +
+  // and child-inheritance see all three. Registration cannot depend on runner
+  // closures this path never supplies; this path uses stub callbacks so the
+  // catalog is complete. (The MCP loopback further EXCLUDES continue_work +
   // request_compaction as internal/non-CLI-invocable — see mcp-http.runtime.test.ts;
   // that filtering is downstream of this raw resolution.)
-  it("registers the full continuation surface in the raw gateway catalog when continuation is enabled (karmaterminal/openclaw#923)", () => {
+  it("registers the full continuation surface in the raw gateway catalog when continuation is enabled", () => {
     const result = resolveGatewayScopedTools({
       cfg: {
         agents: { defaults: { continuation: { enabled: true } } },
@@ -96,7 +95,7 @@ describe("resolveGatewayScopedTools", () => {
     expect(names).toContain("request_compaction");
   });
 
-  // karmaterminal/openclaw#923 (figs Q2) — registration honors per-tool bans:
+  // Registration honors per-tool bans:
   // the continuation trio gates on continuation.enabled, then a banned tool drops
   // out through the policy denylist → 2 register instead of 3.
   it("honors a per-tool ban — continuation registers the trio minus the banned tool", () => {

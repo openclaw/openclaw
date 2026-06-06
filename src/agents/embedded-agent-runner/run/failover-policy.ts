@@ -236,10 +236,9 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     !params.harnessOwnsTransport
   ) {
     // Plain LLM-phase timeout outside an in-flight abort: surface so local
-    // timeout recovery can run (#86 deadlock fix). Aborted + LLM-phase
-    // timeouts fall through to shouldRotateAssistant rotation; tool-execution
-    // + compaction timeouts fall through to continue_normal (#52147 — neither
-    // rotate nor fallback while a tool/compaction is in flight). When the
+    // timeout recovery can run. Aborted + LLM-phase timeouts fall through to
+    // shouldRotateAssistant rotation; tool-execution + compaction timeouts
+    // fall through to continue_normal so in-flight work is not interrupted. When the
     // harness owns the transport (harnessOwnsTransport=true), the timeout is
     // not a local LLM-phase silence — defer to shouldRotateAssistant so a
     // concrete failoverReason can drive rotation/fallback.

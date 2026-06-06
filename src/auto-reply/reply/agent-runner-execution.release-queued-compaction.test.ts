@@ -1,11 +1,11 @@
 /**
- * Spiderweb-T1: branch tests for `releaseQueuedCompactionCompletion`.
+ * Branch tests for `releaseQueuedCompactionCompletion`.
  *
  * This helper is the post-queued-compaction dispatcher invoked from the
- * request_compaction async-resolution path at agent-runner-execution.ts:L2152.
+ * request_compaction async-resolution path in agent-runner-execution.
  * It owns incrementing the run-compaction count, refreshing the session entry,
  * dispatching post-compaction delegates, and emitting the continuation-released
- * span — a guardrail-class flow with zero prior test coverage on df502943c2.
+ * span.
  *
  * The four-branch table covered here:
  *   1. compactionResult.ok === false               → early no-op
@@ -17,8 +17,7 @@
  * Branches 1 & 2 are unreachable through the single call site at L2152 because
  * that site already gates on `if (result.ok && result.compacted)`. They are
  * defensive guards inside the helper. Testing them directly here means a future
- * refactor that drops either guard breaks these tests, which is the spiderweb
- * property required for safety.
+ * refactor that drops either guard breaks these tests.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -423,7 +422,7 @@ describe("releaseQueuedCompactionCompletion: happy-path dispatch (branch 4)", ()
 });
 
 /**
- * #816 regression: releaseQueuedCompactionTolerant must isolate release-side
+ * releaseQueuedCompactionTolerant must isolate release-side
  * failures from the caller's compaction-outcome signal.
  *
  * compactEmbeddedAgentSession has already mutated session-snapshot truth on
@@ -435,7 +434,7 @@ describe("releaseQueuedCompactionCompletion: happy-path dispatch (branch 4)", ()
  * (incrementRunCompactionCount, dispatchPostCompactionDelegates, span emit)
  * to throw. The tolerant wrapper must swallow + logVerbose + not re-throw.
  */
-describe("releaseQueuedCompactionTolerant: error-isolation guard (#816)", () => {
+describe("releaseQueuedCompactionTolerant: error-isolation guard", () => {
   it("resolves silently when the underlying release succeeds (happy-path passthrough)", async () => {
     const tolerant = await getReleaseQueuedCompactionTolerant();
     const sessionEntry = makeSessionEntry();

@@ -275,11 +275,11 @@ describe("request_compaction tool", () => {
   });
 
   // -------------------------------------------------------------------------
-  // No generation guard (RFC 2026-04-15): compaction is not blocked by
-  // unrelated channel activity.
+  // No generation guard; per docs/design/continue-work-signal-v2.md,
+  // compaction is not blocked by unrelated channel activity.
   // -------------------------------------------------------------------------
 
-  it("proceeds regardless of session generation drift (post-RFC 2026-04-15)", async () => {
+  it("proceeds regardless of session generation drift", async () => {
     const tool = makeTool();
     const result = await executeTool(tool);
 
@@ -594,7 +594,7 @@ describe("request_compaction tool", () => {
   //   restart. The existing "dedup is cleared after triggerCompaction
   //   resolves" test only covers the happy path.
   //
-  // Pins request-compaction-tool.ts:233-235 (the .finally cleanup).
+  // Pins the createRequestCompactionTool .finally cleanup.
   it("clears pending compaction session after background rejection", async () => {
     let rejectCompaction!: (err: Error) => void;
     mockTriggerCompaction.mockReturnValue(
@@ -646,8 +646,7 @@ describe("request_compaction tool", () => {
   //   across test boundaries — symptom would be flaky `already_pending`
   //   results bleeding between tests.
   //
-  // Pins request-compaction-tool.ts:273-280 (both branches: keyed and
-  // unkeyed).
+  // Pins _resetGuardState for both keyed and unkeyed branches.
   it("_resetGuardState clears pending compaction sessions for restart/test isolation", async () => {
     // Keyed reset path.
     _setPending(SESSION_KEY);

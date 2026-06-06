@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 /**
- * RFC §3.4: the system-prompt continuation section branches on tool availability
- * to teach either the tool-path-first (Tier 1) or fallback-only (Tier 2) narrative.
- * A regression that inverts the branch would teach agents the wrong path and ship green.
+ * docs/design/continue-work-signal-v2.md §3.4: the system-prompt continuation
+ * section branches on tool availability to teach either the tool-path-first
+ * path or the fallback-only path. A regression that inverts the branch would
+ * teach agents the wrong path and ship green.
  */
 describe("buildAgentSystemPrompt — continuation section branching", () => {
   const baseParams = {

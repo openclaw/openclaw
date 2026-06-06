@@ -1,11 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // delegate-dispatch — chain-depth exhaustion
 //
-// SEAM GUARDED: This file traps the bounded-resurrection invariant from
-// the continue-work-signal-v2 RFC. Delegates can spawn delegates, which
+// SEAM GUARDED: This file traps the bounded-continuation invariant from
+// docs/design/continue-work-signal-v2.md. Delegates can spawn delegates, which
 // can spawn more delegates — without a chain-depth cap, this becomes a
-// runaway recursion engine. The cap (maxChainLength) is the lich-protocol
-// commitment that no agent can summon an infinite line of successors.
+// runaway recursion engine. The cap (maxChainLength) keeps delegate chains
+// bounded.
 //
 // ARCHITECTURAL CANON (from delegate-dispatch.ts):
 //   1. EVERY dispatch call carries a `chainState` with currentChainCount.
@@ -22,13 +22,12 @@
 //      per successful spawn — so a single call can dispatch N delegates
 //      and then reject the (N+1)th when the running counter hits the cap.
 //
-// SPIDER-WEB ROLE: These three tests pin three distinct corners of the
+// These three tests pin distinct corners of the
 // bounded-chain contract. If the dispatch loop is ever changed to skip
 // the chain-depth check, OR if the TaskFlow-failure-marking is dropped on
 // rejection, one of these tests will fire and point reviewers straight at
 // the budget-check block in delegate-dispatch.ts. The bounded-chain
-// invariant is the difference between "lich-protocol with brakes" and
-// "lich-protocol that eats its own future"; this file is the brake-pad.
+// invariant prevents unbounded successor chains.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -165,7 +164,7 @@ describe("chain-depth exhaustion", () => {
   // CANON GUARDED: the strict-less-than comparison. At equality, dispatch
   // is REJECTED, not allowed to slip through "one more time."
   //
-  // SPIDER-WEB TRIPWIRE: if this test flips to "dispatched: 1, rejected:
+  // Regression indicator: if this test flips to "dispatched: 1, rejected:
   // 0", the comparison went from `<` to `<=` somewhere; reviewer should
   // grep delegate-dispatch.ts for the chain-cap budget check and verify
   // operator direction.
@@ -210,7 +209,7 @@ describe("chain-depth exhaustion", () => {
   // SAME dispatchToolDelegates call. The first delegate spawns and lifts
   // count 9 → 10; the second delegate sees count===10 and gets rejected.
   //
-  // SPIDER-WEB TRIPWIRE: if the test ever shows "dispatched: 2" (cap
+  // Regression indicator: if the test ever shows "dispatched: 2" (cap
   // checked once, mutated never) or "dispatched: 0" (cap checked against
   // pre-mutation snapshot only), the counter-increment loop is broken.
   // Reviewer should look at the per-iteration update of
@@ -267,7 +266,7 @@ describe("chain-depth exhaustion", () => {
   // surfaces (listTaskFlowsForOwnerKey) report a delegate as still
   // pending forever; transitioning it to `succeeded` would be a lie.
   //
-  // SPIDER-WEB TRIPWIRE: if the TaskFlow record stays `queued` after
+  // Regression indicator: if the TaskFlow record stays `queued` after
   // rejection, the failFlow call was dropped from the rejection branch;
   // reviewer should look for failFlow / "mark failed" lines in
   // delegate-dispatch.ts and verify they're in the cap-rejection

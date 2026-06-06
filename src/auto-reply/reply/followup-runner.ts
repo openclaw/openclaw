@@ -957,9 +957,9 @@ export function createFollowupRunner(params: {
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
                 // Continuation: thread continueWorkOpts so continue_work is
-                // callable on queued followup turns (subagent sessions, continuation-
-                // triggered heartbeats). Without this, the tool never registers and
-                // subagents cannot self-elect another turn. (#746)
+                // callable on queued followup turns (subagent sessions,
+                // continuation-triggered heartbeats). Without this, the tool never
+                // registers and subagents cannot self-elect another turn.
                 continueWorkOpts:
                   runtimeConfig?.agents?.defaults?.continuation?.enabled === true
                     ? {
@@ -1075,7 +1075,8 @@ export function createFollowupRunner(params: {
       // followup turn. Parallels the main-session dispatch in agent-runner.ts:
       // without this, delegates queued by continue_work-triggered heartbeats
       // (or any followup turn) stay in the queue until the NEXT inbound
-      // message arrives to trigger the main-session dispatch. RFC §3.2.
+      // message arrives to trigger the main-session dispatch
+      // (docs/design/continue-work-signal-v2.md §3.2).
       if (runtimeConfig?.agents?.defaults?.continuation?.enabled === true && sessionKey) {
         const [
           { dispatchToolDelegates },
@@ -1175,7 +1176,7 @@ export function createFollowupRunner(params: {
         }
       }
 
-      // --- continue_work processing (#746) ---
+      // --- continue_work processing ---
       // When the agent calls continue_work during this followup turn, schedule
       // a delayed heartbeat for the session (same mechanism as agent-runner.ts).
       // This enables subagent/organ sessions to self-elect another turn.

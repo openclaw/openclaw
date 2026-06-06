@@ -137,12 +137,10 @@ describe("checkContextPressure", () => {
   });
 });
 
-// PR #714 follow-up: urgency-text upgrade names BOTH `continue_delegate(mode='post-compaction')`
-// AND `request_compaction(reason='...')` with concrete tool-call shapes, closing the
-// "3 lifeboats, 0 compactions" anti-pattern (figs `1505xxx` 2026-05-20 case where a prince
-// staged three post-compaction lifeboats without ever firing request_compaction() because
-// the warning told the model to PREPARE-FOR but never to TRIGGER).
-describe("checkContextPressure — urgency-text names both tool-calls (#714 follow-up)", () => {
+// Urgency text names both `continue_delegate(mode='post-compaction')` and
+// `request_compaction(reason='...')` with concrete tool-call shapes. The model
+// must know how to preserve state and how to trigger the compaction itself.
+describe("checkContextPressure — urgency text names both tool calls", () => {
   const base = {
     sessionKey: "urgency-test-session",
     contextWindow: 200_000,

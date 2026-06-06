@@ -2,27 +2,20 @@
  * Hermetic test-env helper for OPENCLAW_* variables.
  *
  * Background:
- *   Prince-seats run the openclaw-gateway as a systemd unit. The unit exports
- *   a number of OPENCLAW_* environment variables to every child process,
- *   including any shell launched from the seat. When `pnpm test` is invoked
- *   from that shell, those vars leak into the test process and trip impl
- *   branches that the tests assume are inert by default (e.g.
- *   `isCliOnlyProcess()`, the future-version-guard service-mode block, the
- *   destructive-actions bypass flag, etc.). Tests that pass cleanly in CI or
- *   in an env-clean shell then fail spuriously at the seat.
+ *   Local gateway service environments can export OPENCLAW_* variables to
+ *   child shells. When `pnpm test` is invoked from such a shell, those vars
+ *   leak into the test process and trip implementation branches that tests
+ *   assume are inert by default. Tests that pass cleanly in CI or in an
+ *   env-clean shell can then fail spuriously.
  *
- *   The exact set of leaked vars varies per seat (operator-set overrides,
- *   different systemd unit drop-ins, etc.), so enumerating known offenders
- *   in each test file is fragile by construction. Cross-seat cosign-by-byte
- *   on PR #844 surfaced this: lamp-NUC + silas-seat verified hermetic with
- *   two vars stubbed, cael-seat needed a third because his systemd unit
- *   exports `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1`.
+ *   The exact set of leaked vars varies by operator overrides and service
+ *   drop-ins, so enumerating known offenders in each test file is fragile.
  *
- * Cure:
+ * Guard:
  *   `useHermeticOpenclawEnv()` registers a `beforeEach` that snapshots and
  *   stubs every `OPENCLAW_*` key present in `process.env` to the empty
  *   string, plus an `afterEach` that restores via `vi.unstubAllEnvs()`.
- *   Wildcards over the namespace so new vars at any seat are caught
+ *   Wildcards over the namespace so new vars are caught
  *   automatically without a follow-up PR. Companion tests that need a
  *   specific `OPENCLAW_*` value can still set it explicitly inside the test
  *   body (via `vi.stubEnv` or direct `process.env` write); the helper's

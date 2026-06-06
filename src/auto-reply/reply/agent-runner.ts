@@ -1522,7 +1522,7 @@ export async function runReplyAgent(replyParams: {
   const continuationFeatureEnabled = resolveLiveContinuationRuntimeConfig(cfg).enabled;
   const postCompactionDelegatesToPreserve: SessionPostCompactionDelegate[] = [];
 
-  // Mint a stable `continuationChainId` (UUIDv7) on the 0->1 transition of
+  // Mint a stable `continuationChainId` on the 0->1 transition of
   // `continuationChainCount`. Reuse the existing id for subsequent steps in the
   // same chain so all spans emitted across the chain share a single
   // correlation key.
@@ -1861,7 +1861,7 @@ export async function runReplyAgent(replyParams: {
       });
     }
 
-    // --- Continuation signal extraction (RFC §3.1) ---
+    // --- Continuation signal extraction (docs/design/continue-work-signal-v2.md §3.1) ---
     // Tool-based `continue_work` flows via the closure `requestContinuation`
     // callback in agent-runner-execution.ts and is surfaced on the run outcome
     // as `runOutcome.continueWorkRequest`. Bracket signals (CONTINUE_WORK,
@@ -2182,7 +2182,7 @@ export async function runReplyAgent(replyParams: {
         hasUnbackedReminderCommitment(payload.text),
     );
     // Suppress the guard note when an existing cron job (created in a prior
-    // turn) already covers the commitment — avoids false positives (#32228).
+    // turn) already covers the commitment, avoiding false positives.
     const coveredByExistingCron =
       hasReminderCommitment && successfulCronAdds === 0
         ? await hasSessionRelatedCronJobs({
@@ -3057,7 +3057,7 @@ export async function runReplyAgent(replyParams: {
       });
     }
 
-    // --- Chain state write-back (RFC §3.3) ---
+    // --- Chain state write-back (docs/design/continue-work-signal-v2.md §3.3) ---
     // When delegates were dispatched this turn, persist the advanced chain
     // state returned by `dispatchToolDelegates` rather than re-loading the
     // unchanged pre-dispatch state. Without this the counter never advances
@@ -3096,7 +3096,7 @@ export async function runReplyAgent(replyParams: {
         opts,
       });
       const finalDeliveryText = buildPendingFinalDeliveryText(finalPayloads);
-      // #85714: warn only for unusually substantive private final text. In
+      // Warn only for unusually substantive private final text. In
       // message_tool_only, no tool call can be intentional silence, and
       // finalDeliveryText also includes verbose/status/usage metadata.
       const assistantFinalText = rawAssistantText ?? "";
@@ -3242,7 +3242,7 @@ export async function runReplyAgent(replyParams: {
     // or the reply path doesn't go through it cleanly, the second
     // signal never fires and the typing keepalive loop runs forever.
     // Calling this twice is harmless — cleanup() is guarded by the
-    // `active` flag.  Same pattern as the followup runner fix (#26881).
+    // `active` flag. Same cleanup pattern as the followup runner.
     typing.markDispatchIdle();
   }
 }

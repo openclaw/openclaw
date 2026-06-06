@@ -138,10 +138,9 @@ describe("hedge timer ref/handle cleanup", () => {
     // Drain the fire-and-forget re-dispatch promise.
     await vi.runAllTimersAsync();
 
-    // Before the fix: the natural-fire branch deleted the hedgeTimers map
-    // entry but never called unregisterContinuationTimerHandle, so the
-    // ref count stayed >= 1. The fix makes the natural-fire path mirror
-    // clearHedgeTimer's cleanup.
+    // The natural-fire branch must mirror clearHedgeTimer cleanup: delete the
+    // hedgeTimers entry and unregister the continuation timer handle so the ref
+    // count returns to zero.
     expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(false);
   });
 
@@ -531,8 +530,8 @@ describe("dispatchToolDelegates — TaskFlow status after spawn failure", () => 
   // Pins the contract that the regression report called out as structurally unpinned:
   // "what is the intended TaskFlow status after spawn failure?"
   //
-  // Current emergent behavior on v5.2 (`delegate-dispatch.ts:160 + 240-292`):
-  //   1. consumePendingDelegates(sessionKey) at line 160 calls finishFlow on
+  // Current behavior in dispatchToolDelegates:
+  //   1. consumePendingDelegates(sessionKey) calls finishFlow on
   //      each consumed delegate → TaskFlow row → status="succeeded"
   //   2. spawnSubagentDirect(...) per delegate
   //   3. If spawn returns non-"accepted" status → log info + enqueue system

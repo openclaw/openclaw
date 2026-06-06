@@ -1,7 +1,7 @@
 /**
- * Martin-review-response :: Q2 — post-compaction staging ordering.
+ * Post-compaction staging ordering.
  *
- * The ordering guarantee Martin asked about is:
+ * The ordering guarantee is:
  *
  *   Turn N (pre-compaction):
  *     1. Agent calls continue_delegate(mode="post-compaction", ...).
@@ -35,7 +35,7 @@ beforeEach(() => {
   consumeStagedPostCompactionDelegates(SESSION_KEY);
 });
 
-describe("post-compaction staging ordering (Martin Q2)", () => {
+describe("post-compaction staging ordering", () => {
   it("staging is synchronous: count is >0 immediately after stage() returns (same tick, no await)", () => {
     expect(stagedPostCompactionDelegateCount(SESSION_KEY)).toBe(0);
 
@@ -76,7 +76,7 @@ describe("post-compaction staging ordering (Martin Q2)", () => {
     expect(consumed.map((d) => d.task)).toEqual(["rehydrate-A", "rehydrate-B"]);
     // The wrapper always re-asserts silent/silentWake on consume (the
     // post-compaction dispatch path requires both flags). This is part of
-    // the canonical-flag-set contract Martin asked about.
+    // the canonical flag-set contract.
     expect(consumed[0]).toMatchObject({ silent: true, silentWake: true });
     expect(consumed[1]).toMatchObject({ silent: true, silentWake: true });
     expect(stagedPostCompactionDelegateCount(SESSION_KEY)).toBe(0);
@@ -106,7 +106,7 @@ describe("post-compaction staging ordering (Martin Q2)", () => {
     expect(consumeStagedPostCompactionDelegates(SESSION_KEY)).toEqual([]);
   });
 
-  it("stage → stage → consume preserves FIFO order: the ordering Martin asked about extends across multiple stages within one turn", () => {
+  it("stage → stage → consume preserves FIFO order across multiple stages within one turn", () => {
     // A single turn might stage multiple post-compaction delegates (e.g.
     // a tool that calls continue_delegate twice). Their order at consume
     // time must match the order they were staged.

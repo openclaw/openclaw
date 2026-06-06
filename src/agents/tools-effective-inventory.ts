@@ -350,7 +350,8 @@ export function resolveEffectiveToolInventory(
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     disableMessageTool: params.disableMessageTool,
     // Inventory-only path: register continuation tools via stub callbacks when
-    // enabled so /status and tools-effective reflect the full RFC §2.1 surface.
+    // enabled so /status and tools-effective reflect the full
+    // docs/design/continue-work-signal-v2.md §2.1 surface.
     // Runtime side effects still only run on live runner paths.
     ...buildInventoryContinuationToolOpts(continuationEnabled),
   });

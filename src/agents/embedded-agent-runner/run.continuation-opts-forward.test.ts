@@ -9,25 +9,21 @@ import {
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 
-// Regression coverage for #868: runEmbeddedAgent must forward continueWorkOpts
+// Regression coverage: runEmbeddedAgent must forward continueWorkOpts
 // and requestCompactionOpts into the attempt-layer params so that
 // createOpenClawCodingTools (which calls createOpenClawTools) gets the
-// callbacks. Without forwarding, the warn-guard at openclaw-tools.ts:624
-// fires and only continue_delegate registers in the main-session LLM
+// callbacks. Without forwarding, the createOpenClawTools warn guard fires and
+// only continue_delegate registers in the main-session LLM
 // tool-schema — continue_work + request_compaction are absent from the
 // LLM-callable function-tool-list even though they are configured.
 //
-// Empirically confirmed via schema-inventory introspection at two deployed
-// agent-host seats: continue_delegate present, continue_work +
-// request_compaction absent. Upstream caller
-// auto-reply/reply/agent-runner-execution.ts:2472+2504 constructs the opts
-// based on agents.defaults.continuation.enabled; this regression test pins
-// the run.ts forwarding so the configured opts survive the trip to the
-// attempt layer.
+// The caller constructs the opts based on agents.defaults.continuation.enabled;
+// this regression test pins runEmbeddedAgent forwarding so the configured opts
+// survive the trip to the attempt layer.
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
-describe("runEmbeddedAgent continuation opts forwarding (#868)", () => {
+describe("runEmbeddedAgent continuation opts forwarding", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
   });

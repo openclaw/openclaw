@@ -122,8 +122,8 @@ function readStrictStringArrayParam(
  * The tool can be called multiple times per turn (multi-delegate fan-out).
  * Each call enqueues independently. No single-per-response regex limitation.
  *
- * No generation guard — delayed delegates survive channel noise (RFC
- * 2026-04-15: unrelated inbound traffic does not cancel scheduled work).
+ * No generation guard — per docs/design/continue-work-signal-v2.md,
+ * unrelated inbound traffic does not cancel scheduled work.
  */
 export function createContinueDelegateTool(opts: { agentSessionKey?: string }): AnyAgentTool {
   let delegatesThisTurn = 0;

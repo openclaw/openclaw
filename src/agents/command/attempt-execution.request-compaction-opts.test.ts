@@ -1,40 +1,14 @@
 /**
- * Regression-pin trap-test for #917 (sister-of-#746 / half-symmetric-cure-class).
+ * Regression coverage for spawn-init requestCompactionOpts wiring.
  *
- * Asserts that `runAgentAttempt` (the spawn-init / turn-1 path that subagent
- * gateway invocations land on) constructs and forwards a
- * `requestCompactionOpts` closure to `runEmbeddedAgent` whenever
- * `cfg.agents.defaults.continuation.enabled === true`.
+ * `runAgentAttempt` constructs and forwards a `requestCompactionOpts` closure
+ * to `runEmbeddedAgent` whenever continuation is enabled. Without this wiring,
+ * `createOpenClawTools` sees no request-compaction callbacks on turn 1, so the
+ * `request_compaction` tool never registers for newly spawned subagents.
  *
- * Without this wiring, openclaw-tools.ts:609 evaluates
- * `options?.requestCompactionOpts` as undefined on turn-1, the
- * `request_compaction` tool never registers in the subagent's spawn-init
- * tool-list, and a subagent that has been given continue_work capability
- * (via PR #898's cure for #746 Layer 2) can schedule its own next turn but
- * cannot reclaim context mid-flight when pressure rises.
- *
- * Half-symmetric-cure-class: PR #898 cured `continueWorkOpts` plumbing at
- * the same `runAgentAttempt` spawn-init code path, but the sibling
- * closure for `request_compaction` was not constructed. The sibling
- * surface lived all along inside `runEmbeddedAttempt` via
- * `params.requestCompactionOpts` (already-plumbed through
- * `src/agents/embedded-agent-runner/run.ts:1569`); the gap was strictly
- * the *construction* of the closure at `runAgentAttempt` to feed into
- * `runEmbeddedAgent`.
- *
- * Empirical substrate:
- *  - rune subagent `agent:main:subagent:53cd57ac` returned TOOL_NOT_IN_LIST
- *    on `request_compaction` at discord:1511936885
- *  - emeric R-RC-1 HONEST-LIMIT at openclaw-bootstrap commit 9684479
- *  - cael main-session contrast `1511935121` (REGISTERED + REJECT-at-41%)
- *  - cael code-byte-walk `1511929995`: ZERO `requestCompactionOpts`
- *    matches at attempt-execution.ts spawn-init code path pre-cure
- *
- * Trap-test-first per figs `1511931252` + cohort cosign (rune + cael +
- * emeric) + frond `1511932561` (karmaterminal/openclaw#917 issue) +
- * R-REGRESSION-TRAP-TESTS-family discipline canonized at
- * openclaw-bootstrap PR #1120 (PROOF-CORPUS-METHOD.md per-prince-row
- * assignments redistribute).
+ * The sibling `continueWorkOpts` closure already uses the same spawn-init path.
+ * These tests keep request-compaction plumbing aligned with it so subagents can
+ * both schedule a next turn and reclaim context when pressure rises.
  */
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -145,7 +119,7 @@ function makeContinuationDisabledConfig(): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
-describe("runAgentAttempt #917 spawn-init requestCompactionOpts plumbing (sister-of-#746)", () => {
+describe("runAgentAttempt spawn-init requestCompactionOpts plumbing", () => {
   let tmpDir: string;
   let sessionEntry: SessionEntry;
   let sessionStore: Record<string, SessionEntry>;
@@ -216,9 +190,8 @@ describe("runAgentAttempt #917 spawn-init requestCompactionOpts plumbing (sister
         }
       | undefined;
     expect(callArgs).toBeDefined();
-    // RED: pre-cure this is undefined → request_compaction never registers
-    //      in the subagent's turn-1 tool-list. Sister-of-#746 / #898's
-    //      continueWorkOpts-only construction at this same code path.
+    // If this is undefined, request_compaction never registers in the
+    // subagent's turn-1 tool list even though continuation is enabled.
     expect(callArgs?.requestCompactionOpts).toBeDefined();
     expect(typeof callArgs?.requestCompactionOpts?.getContextUsage).toBe("function");
     expect(typeof callArgs?.requestCompactionOpts?.triggerCompaction).toBe("function");
@@ -235,14 +208,10 @@ describe("runAgentAttempt #917 spawn-init requestCompactionOpts plumbing (sister
     expect(callArgs?.requestCompactionOpts).toBeUndefined();
   });
 
-  // Cure-mechanism pin per cael 1511929995 + rune empirical: the
-  // tool-list-registration gap manifests at openclaw-tools.ts:609 — if the
-  // closure carries getContextUsage as the wrong shape (e.g. async, or
-  // missing the null-return contract), the request_compaction tool factory
-  // will still register but fire incorrect REJECT-shape on call. Pin the
-  // shape so a future regression that supplies a stub-shaped closure is
-  // still caught here, not only at the integration-empirical layer.
-  it("requestCompactionOpts.getContextUsage returns sync number-or-null (cure-mechanism shape)", async () => {
+  // The request_compaction factory requires a synchronous number-or-null
+  // context-usage callback. A stub-shaped closure could still register the
+  // tool but produce incorrect rejection behavior at call time.
+  it("requestCompactionOpts.getContextUsage returns sync number-or-null", async () => {
     await runEmbeddedAttempt(makeContinuationEnabledConfig());
 
     const callArgs = runEmbeddedAgentMock.mock.calls[0]?.[0] as
@@ -251,18 +220,14 @@ describe("runAgentAttempt #917 spawn-init requestCompactionOpts plumbing (sister
     expect(callArgs?.requestCompactionOpts).toBeDefined();
 
     // Should be invocable without throwing and return number | null
-    // (synchronous, matching computeRequestCompactionContextUsage contract
-    // at agent-runner-execution.ts:252-287).
+    // (synchronous, matching computeRequestCompactionContextUsage).
     const result = callArgs?.requestCompactionOpts?.getContextUsage();
     expect(result === null || typeof result === "number").toBe(true);
   });
 
-  // Half-cure-gap codex P2 (#918's own cure-file, attempt-execution.ts:730):
-  // a successful turn-1 / spawn-init volitional compaction must run the
-  // `releaseQueuedCompactionTolerant` step used by the followup path so staged
-  // `continue_delegate(mode="post-compaction")` work is dispatched. Pre-cure
-  // the spawn-init triggerCompaction returned immediately and the delegates
-  // stayed queued.
+  // A successful turn-1 volitional compaction must run the same
+  // `releaseQueuedCompactionTolerant` step used by followup turns so staged
+  // `continue_delegate(mode="post-compaction")` work is dispatched.
   it("triggerCompaction releases queued post-compaction delegates after a successful compaction", async () => {
     releaseQueuedCompactionTolerantMock.mockReset();
     compactEmbeddedAgentSessionMock.mockReset();
@@ -321,23 +286,17 @@ describe("runAgentAttempt #917 spawn-init requestCompactionOpts plumbing (sister
   });
 });
 
-// Cross-layer half-symmetric-cure-class sentinel:
-//   - #746 Layer 1 (turn-2+ followup-runner): src/auto-reply/reply/followup-runner.test.ts
-//   - #746 Layer 2 (turn-1 spawn-init runAgentAttempt continueWorkOpts):
-//     attempt-execution.continue-work-opts.test.ts
-//   - #917 (turn-1 spawn-init runAgentAttempt requestCompactionOpts): this file
-// Together these prevent a regression that fixes one tool's plumbing in
-// isolation from silently leaving the sibling tool's plumbing unwired at
-// the same code path — the half-symmetric-cure-class instance that
-// produced #917 in the first place.
-describe("#917 half-symmetric-cure-class drift-catch sentinel", () => {
-  it("documents both sibling cure sites for spawn-init continuation tools (sentinel only)", () => {
-    // This sentinel exists so a future maintainer searching for #917 +
-    // sister-of-#746 in test output sees both sibling cure sites
-    // referenced from one place. Intentional no-op assertion; the real
-    // coverage lives in the two file-specific tests
-    // (attempt-execution.continue-work-opts.test.ts pins continueWorkOpts;
-    // this file pins requestCompactionOpts).
+// Cross-layer spawn-init plumbing sentinel:
+//   - turn-2+ followup-runner continueWorkOpts coverage
+//   - turn-1 runAgentAttempt continueWorkOpts coverage
+//   - turn-1 runAgentAttempt requestCompactionOpts coverage in this file
+// Together these prevent one continuation tool from being wired while its
+// sibling remains unavailable on the same code path.
+describe("spawn-init continuation tool plumbing parity", () => {
+  it("documents both sibling spawn-init continuation tool sites (sentinel only)", () => {
+    // Intentional no-op assertion; the real coverage lives in the two
+    // file-specific tests. Keeping the sibling sites named together makes
+    // asymmetric plumbing regressions easier to spot.
     expect(true).toBe(true);
   });
 });

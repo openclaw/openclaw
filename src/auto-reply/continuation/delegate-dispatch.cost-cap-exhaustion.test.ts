@@ -2,7 +2,7 @@
 // delegate-dispatch — cost-cap exhaustion mid-chain
 //
 // SEAM GUARDED: This file traps the cost-cap invariant — the second of
-// the two bounded-resurrection guards in the lich protocol (the first
+// the two bounded-continuation guards (the first
 // being chain-depth, covered in the sibling test file). Where chain-depth
 // counts HOPS, cost-cap counts TOKENS. A long chain of cheap delegates
 // might never hit chain-depth but could still burn through the user's
@@ -23,7 +23,7 @@
 //      `queued` to `failed`, identical to chain-depth rejections.
 //   5. Cap rejections emit a system event with "cost-capped" text.
 //
-// SPIDER-WEB ROLE: These five tests guard five distinct corners of the
+// Tests guard distinct corners of the
 // cost-cap contract:
 //   - just-under   → ALLOW (proves the gate isn't over-eager)
 //   - just-over    → REJECT (proves the gate fires)
@@ -164,7 +164,7 @@ describe("cost-cap exhaustion mid-chain", () => {
   // CANON GUARDED: the gate is not over-eager. Being 1 token below the
   // cap is still under the cap; dispatch should succeed.
   //
-  // SPIDER-WEB TRIPWIRE: if this test starts asserting rejection, the
+  // Regression indicator: if this test starts asserting rejection, the
   // gate operator went from `>` to `>=` or got an off-by-one; reviewer
   // should look at the cost-cap comparison in delegate-dispatch.ts.
   // ───────────────────────────────────────────────────────────────────────
@@ -212,7 +212,7 @@ describe("cost-cap exhaustion mid-chain", () => {
   // CANON GUARDED: the gate fires on over-cap, emitting the cost-capped
   // system event so the model can see why its delegate didn't dispatch.
   //
-  // SPIDER-WEB TRIPWIRE: if this test starts asserting "dispatched: 1",
+  // Regression indicator: if this test starts asserting "dispatched: 1",
   // the cost-cap check has been removed or bypassed; reviewer should
   // grep delegate-dispatch.ts for costCapTokens comparisons.
   // ───────────────────────────────────────────────────────────────────────
@@ -263,7 +263,7 @@ describe("cost-cap exhaustion mid-chain", () => {
   // the loop doesn't re-evaluate from scratch (accumulated can only
   // grow). This is the cascade-rejection-on-cap behavior.
   //
-  // SPIDER-WEB TRIPWIRE: if this test starts asserting "rejected: 1"
+  // Regression indicator: if this test starts asserting "rejected: 1"
   // (only the first checked, rest mysteriously absent) or "rejected: 0,
   // dispatched: 3" (cap somehow cleared mid-loop), the cascade logic is
   // broken; reviewer should look at the for-each-delegate iteration in
@@ -313,7 +313,7 @@ describe("cost-cap exhaustion mid-chain", () => {
   // rejections. The two budget-rejection paths must produce symmetric
   // observable state.
   //
-  // SPIDER-WEB TRIPWIRE: if the TaskFlow stays `queued` after a cost-cap
+  // Regression indicator: if the TaskFlow stays `queued` after a cost-cap
   // rejection, the failFlow call is missing from the cost-cap branch
   // (but possibly still present in the chain-depth branch — the sibling
   // test would still pass). This is a sneaky regression shape; reviewer
@@ -364,7 +364,7 @@ describe("cost-cap exhaustion mid-chain", () => {
   // cap value, dispatch is still ALLOWED — the cap is the inclusive
   // ceiling, not the exclusive one.
   //
-  // SPIDER-WEB TRIPWIRE: this is the single most surgical pin in the
+  // Regression indicator: this is the single most surgical pin in the
   // file. If `>` ever flips to `>=` (very easy refactor mistake, looks
   // like a "be safer" change), this test fires immediately and only
   // this test — none of the just-under/just-over/cascade tests would

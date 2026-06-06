@@ -11,7 +11,7 @@
 // stack invariants where the missing key is a programmer error, keep the
 // throwing `requireSessionKey` in `system-events.ts` instead.
 //
-// See issue #292 (cluster C1) for context.
+// Keep skip-and-log callers distinguishable from bottom-of-stack invariants.
 
 export type SessionKeyParams = {
   sessionKey?: string | null;
