@@ -100,9 +100,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(startConfig?.["features.unified_exec"]).toBe(true);
     expect(startConfig?.experimental_use_unified_exec_tool).toBe(true);
     const hookState = startConfig?.["hooks.state"] as Record<string, { enabled?: unknown }>;
-    const preToolUseState = Object.values(hookState).find(
-      (state) => state.enabled === true,
-    );
+    const preToolUseState = Object.values(hookState).find((state) => state.enabled === true);
     expect(preToolUseState).toBeDefined();
   });
 
@@ -535,7 +533,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
   });
 
-  it("accepts a stale first hook generation when resuming a pre-generation binding", async () => {
+  it("starts fresh instead of trusting a pre-generation binding for native hooks", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeCodexAppServerBinding(sessionFile, {
@@ -545,7 +543,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       modelProvider: "openai",
       dynamicToolsFingerprint: "[]",
     });
-    const harness = createResumeHarness();
+    const harness = createStartedThreadHarness();
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
@@ -555,9 +553,10 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     await harness.waitForMethod("turn/start");
 
-    const resumeRequest = harness.requests.find((request) => request.method === "thread/resume");
-    const relayId = extractRelayIdFromThreadRequest(resumeRequest?.params);
-    const currentGeneration = extractGenerationFromThreadRequest(resumeRequest?.params);
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    expect(harness.requests.some((request) => request.method === "thread/resume")).toBe(false);
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const currentGeneration = extractGenerationFromThreadRequest(startRequest?.params);
     expect(currentGeneration).not.toBe("legacy-generation-from-running-thread");
     await expect(
       invokeNativeHookRelay({
@@ -573,7 +572,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
           tool_input: { command: "pwd" },
         },
       }),
-    ).resolves.toMatchObject({ exitCode: 0 });
+    ).rejects.toThrow("native hook relay bridge stale registration");
     await expect(
       invokeNativeHookRelay({
         provider: "codex",
@@ -590,7 +589,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       }),
     ).rejects.toThrow("native hook relay bridge stale registration");
 
-    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     expect((await readCodexAppServerBinding(sessionFile))?.nativeHookRelayGeneration).toBe(
       currentGeneration,

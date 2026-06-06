@@ -50,6 +50,7 @@ export type CodexAppServerThreadBinding = {
   userMcpServersFingerprint?: string;
   mcpServersFingerprint?: string;
   nativeHookRelayGeneration?: string;
+  nativeHookRelayConfigFingerprint?: string;
   pluginAppsFingerprint?: string;
   pluginAppsInputFingerprint?: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
@@ -137,6 +138,11 @@ export async function readCodexAppServerBinding(
         parsed.nativeHookRelayGeneration.trim()
           ? parsed.nativeHookRelayGeneration
           : undefined,
+      nativeHookRelayConfigFingerprint:
+        typeof parsed.nativeHookRelayConfigFingerprint === "string" &&
+        parsed.nativeHookRelayConfigFingerprint.trim()
+          ? parsed.nativeHookRelayConfigFingerprint
+          : undefined,
       pluginAppsFingerprint:
         typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
       pluginAppsInputFingerprint:
@@ -190,6 +196,7 @@ export async function writeCodexAppServerBinding(
     userMcpServersFingerprint: binding.userMcpServersFingerprint,
     mcpServersFingerprint: binding.mcpServersFingerprint,
     nativeHookRelayGeneration: binding.nativeHookRelayGeneration,
+    nativeHookRelayConfigFingerprint: binding.nativeHookRelayConfigFingerprint,
     pluginAppsFingerprint: binding.pluginAppsFingerprint,
     pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
     pluginAppPolicyContext: binding.pluginAppPolicyContext,

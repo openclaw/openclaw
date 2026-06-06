@@ -525,109 +525,130 @@ export async function startOrResumeThread(params: {
           configPatch: params.finalConfigPatch,
           nativeHookRelayGeneration: params.nativeHookRelayGeneration,
         };
-        const resumeConfig = mergeCodexThreadConfigs(
-          params.config,
-          userMcpServersConfigPatch,
+        const resumeBinding = binding;
+        const nativeHookRelayConfigFingerprint = fingerprintNativeHookRelayConfigPatch(
           finalConfigPatch.configPatch,
         );
-        const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
-          buildThreadResumeParams(params.params, {
-            threadId: binding.threadId,
-            authProfileId,
-            appServer: params.appServer,
-            dynamicTools: params.dynamicTools,
-            developerInstructions: params.developerInstructions,
-            config: resumeConfig,
-            nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-            nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-          }),
-        );
-        const response = assertCodexThreadResumeResponse(
-          await lifecycleTiming.measure("thread-resume-request", () =>
-            params.client.request("thread/resume", resumeParams, { signal: params.signal }),
-          ),
-        );
-        throwIfAborted();
-        const boundAuthProfileId = authProfileId;
-        const fallbackModelProvider = resolveCodexAppServerModelProvider({
-          provider: params.params.provider,
-          authProfileId: boundAuthProfileId,
-          authProfileStore: params.params.authProfileStore,
-          agentDir: params.params.agentDir,
-          config: params.params.config,
-        });
-        const nextMcpServersFingerprint =
-          params.mcpServersFingerprintEvaluated === true
-            ? params.mcpServersFingerprint
-            : binding.mcpServersFingerprint;
-        await lifecycleTiming.measure("thread-resume-write-binding", () =>
-          writeCodexAppServerBinding(
-            params.params.sessionFile,
+        if (resumeBinding.nativeHookRelayConfigFingerprint !== nativeHookRelayConfigFingerprint) {
+          embeddedAgentLog.debug(
+            "codex app-server native hook relay config changed; starting a new thread",
             {
+              threadId: resumeBinding.threadId,
+              previousNativeHookRelayConfigFingerprint:
+                resumeBinding.nativeHookRelayConfigFingerprint,
+              nativeHookRelayConfigFingerprint,
+            },
+          );
+          await clearCodexAppServerBinding(params.params.sessionFile);
+          binding = undefined;
+        } else {
+          const resumeConfig = mergeCodexThreadConfigs(
+            params.config,
+            userMcpServersConfigPatch,
+            finalConfigPatch.configPatch,
+          );
+          const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
+            buildThreadResumeParams(params.params, {
+              threadId: resumeBinding.threadId,
+              authProfileId,
+              appServer: params.appServer,
+              dynamicTools: params.dynamicTools,
+              developerInstructions: params.developerInstructions,
+              config: resumeConfig,
+              nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+              nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
+            }),
+          );
+          const response = assertCodexThreadResumeResponse(
+            await lifecycleTiming.measure("thread-resume-request", () =>
+              params.client.request("thread/resume", resumeParams, { signal: params.signal }),
+            ),
+          );
+          throwIfAborted();
+          const boundAuthProfileId = authProfileId;
+          const fallbackModelProvider = resolveCodexAppServerModelProvider({
+            provider: params.params.provider,
+            authProfileId: boundAuthProfileId,
+            authProfileStore: params.params.authProfileStore,
+            agentDir: params.params.agentDir,
+            config: params.params.config,
+          });
+          const nextMcpServersFingerprint =
+            params.mcpServersFingerprintEvaluated === true
+              ? params.mcpServersFingerprint
+              : resumeBinding.mcpServersFingerprint;
+          await lifecycleTiming.measure("thread-resume-write-binding", () =>
+            writeCodexAppServerBinding(
+              params.params.sessionFile,
+              {
+                threadId: response.thread.id,
+                cwd: params.cwd,
+                authProfileId: boundAuthProfileId,
+                model: params.params.modelId,
+                modelProvider: response.modelProvider ?? fallbackModelProvider,
+                dynamicToolsFingerprint,
+                dynamicToolsContainDeferred,
+                userMcpServersFingerprint,
+                mcpServersFingerprint: nextMcpServersFingerprint,
+                nativeHookRelayGeneration:
+                  finalConfigPatch.nativeHookRelayGeneration ??
+                  resumeBinding.nativeHookRelayGeneration,
+                nativeHookRelayConfigFingerprint,
+                pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
+                pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
+                pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
+                contextEngine: contextEngineBinding,
+                environmentSelectionFingerprint,
+                createdAt: resumeBinding.createdAt,
+              },
+              {
+                authProfileStore: params.params.authProfileStore,
+                agentDir: params.params.agentDir,
+                config: params.params.config,
+              },
+            ),
+          );
+          if (contextEngineBinding) {
+            embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
+              sessionId: params.params.sessionId,
+              sessionKey: params.params.sessionKey,
               threadId: response.thread.id,
-              cwd: params.cwd,
-              authProfileId: boundAuthProfileId,
-              model: params.params.modelId,
-              modelProvider: response.modelProvider ?? fallbackModelProvider,
-              dynamicToolsFingerprint,
-              dynamicToolsContainDeferred,
-              userMcpServersFingerprint,
-              mcpServersFingerprint: nextMcpServersFingerprint,
-              nativeHookRelayGeneration:
-                finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
-              pluginAppsFingerprint: binding.pluginAppsFingerprint,
-              pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
-              pluginAppPolicyContext: binding.pluginAppPolicyContext,
-              contextEngine: contextEngineBinding,
-              environmentSelectionFingerprint,
-              createdAt: binding.createdAt,
-            },
-            {
-              authProfileStore: params.params.authProfileStore,
-              agentDir: params.params.agentDir,
-              config: params.params.config,
-            },
-          ),
-        );
-        if (contextEngineBinding) {
-          embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
+              engineId: contextEngineBinding.engineId,
+              epoch: contextEngineBinding.projection?.epoch,
+              fingerprint: contextEngineBinding.projection?.fingerprint,
+              action: "resumed",
+            });
+          }
+          lifecycleTiming.mark("thread-ready");
+          lifecycleTiming.logSummary({
+            runId: params.params.runId,
             sessionId: params.params.sessionId,
             sessionKey: params.params.sessionKey,
             threadId: response.thread.id,
-            engineId: contextEngineBinding.engineId,
-            epoch: contextEngineBinding.projection?.epoch,
-            fingerprint: contextEngineBinding.projection?.fingerprint,
             action: "resumed",
           });
+          return {
+            ...resumeBinding,
+            threadId: response.thread.id,
+            cwd: params.cwd,
+            authProfileId: boundAuthProfileId,
+            model: params.params.modelId,
+            modelProvider: response.modelProvider ?? fallbackModelProvider,
+            dynamicToolsFingerprint,
+            dynamicToolsContainDeferred,
+            userMcpServersFingerprint,
+            mcpServersFingerprint: nextMcpServersFingerprint,
+            nativeHookRelayGeneration:
+              finalConfigPatch.nativeHookRelayGeneration ?? resumeBinding.nativeHookRelayGeneration,
+            nativeHookRelayConfigFingerprint,
+            pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
+            pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
+            pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
+            contextEngine: contextEngineBinding,
+            environmentSelectionFingerprint,
+            lifecycle: { action: "resumed" },
+          };
         }
-        lifecycleTiming.mark("thread-ready");
-        lifecycleTiming.logSummary({
-          runId: params.params.runId,
-          sessionId: params.params.sessionId,
-          sessionKey: params.params.sessionKey,
-          threadId: response.thread.id,
-          action: "resumed",
-        });
-        return {
-          ...binding,
-          threadId: response.thread.id,
-          cwd: params.cwd,
-          authProfileId: boundAuthProfileId,
-          model: params.params.modelId,
-          modelProvider: response.modelProvider ?? fallbackModelProvider,
-          dynamicToolsFingerprint,
-          dynamicToolsContainDeferred,
-          userMcpServersFingerprint,
-          mcpServersFingerprint: nextMcpServersFingerprint,
-          nativeHookRelayGeneration:
-            finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
-          pluginAppsFingerprint: binding.pluginAppsFingerprint,
-          pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
-          pluginAppPolicyContext: binding.pluginAppPolicyContext,
-          contextEngine: contextEngineBinding,
-          environmentSelectionFingerprint,
-          lifecycle: { action: "resumed" },
-        };
       } catch (error) {
         if (isCodexAppServerConnectionClosedError(error)) {
           throw error;
@@ -650,6 +671,9 @@ export async function startOrResumeThread(params: {
     configPatch: params.finalConfigPatch,
     nativeHookRelayGeneration: params.nativeHookRelayGeneration,
   };
+  const nativeHookRelayConfigFingerprint = fingerprintNativeHookRelayConfigPatch(
+    finalConfigPatch.configPatch,
+  );
   const config = lifecycleTiming.measureSync("merge-thread-config", () =>
     mergeCodexThreadConfigs(
       params.config,
@@ -707,6 +731,7 @@ export async function startOrResumeThread(params: {
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
+          nativeHookRelayConfigFingerprint,
           pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
           pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
           pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -754,6 +779,7 @@ export async function startOrResumeThread(params: {
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
     nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
+    nativeHookRelayConfigFingerprint,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -1189,6 +1215,12 @@ function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
 }
 
 function fingerprintUserMcpServersConfigPatch(
+  configPatch: JsonObject | undefined,
+): string | undefined {
+  return configPatch ? JSON.stringify(stabilizeJsonValue(configPatch)) : undefined;
+}
+
+function fingerprintNativeHookRelayConfigPatch(
   configPatch: JsonObject | undefined,
 ): string | undefined {
   return configPatch ? JSON.stringify(stabilizeJsonValue(configPatch)) : undefined;
