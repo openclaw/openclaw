@@ -818,6 +818,70 @@ describe("loadWebMedia", () => {
     }
   });
 
+  it("prunes outbound trusted-html provenance rows when cleanOldMedia sweeps the staged file", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer, cleanOldMedia } = await import("./store.js");
+        const { markTrustedGeneratedHtmlPath } = await import("./web-media.js");
+        const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+        const { getNodeSqliteKysely, executeSqliteQueryTakeFirstSync } =
+          await import("../infra/kysely-sync.js");
+        const saved = await saveMediaBuffer(
+          Buffer.from("<!doctype html><title>Sweep</title>\n", "utf8"),
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "report.html",
+        );
+        await markTrustedGeneratedHtmlPath(saved.path);
+        const resolved = await fs.realpath(saved.path);
+
+        type ProvenanceDb = {
+          outbound_media_provenance: {
+            realpath: string;
+            kind: string;
+            version: number;
+            created_at_ms: number;
+          };
+        };
+        const { db } = openOpenClawStateDatabase();
+        const before = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ProvenanceDb>(db)
+            .selectFrom("outbound_media_provenance")
+            .selectAll()
+            .where("realpath", "=", resolved),
+        );
+        expect(before?.kind).toBe("trusted-generated-html");
+
+        // Backdate the staged file so cleanOldMedia(1) considers it expired.
+        const past = Date.now() - 10_000;
+        await fs.utimes(saved.path, past / 1000, past / 1000);
+        await cleanOldMedia(1, { recursive: true });
+
+        // File is gone…
+        let statError: NodeJS.ErrnoException | undefined;
+        await fs.stat(saved.path).catch((err: NodeJS.ErrnoException) => {
+          statError = err;
+        });
+        expect(statError?.code).toBe("ENOENT");
+
+        // …and so is the provenance row.
+        const after = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ProvenanceDb>(db)
+            .selectFrom("outbound_media_provenance")
+            .selectAll()
+            .where("realpath", "=", resolved),
+        );
+        expect(after).toBeUndefined();
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects host-read HTML files outside the trusted OpenClaw temp root", async () => {
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-host-html-"));
     const htmlFile = path.join(outsideRoot, "report.html");
