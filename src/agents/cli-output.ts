@@ -24,6 +24,14 @@ export type CliOutput = {
   sessionId?: string;
   usage?: CliUsage;
   finalPromptText?: string;
+  /**
+   * True when the CLI emitted a synthetic placeholder assistant message (e.g.
+   * Claude Code CLI's `No response requested.` injected with
+   * `model: "<synthetic>"` after AbortError, wedged-session repair, or
+   * tool-only turns). Downstream classifiers treat this as CLI-generated
+   * no-output metadata instead of a real reply.
+   */
+  syntheticPlaceholder?: boolean;
 };
 
 /** Incremental assistant text emitted while parsing a streaming CLI response. */
@@ -68,6 +76,35 @@ function isClaudeStreamJsonResult(params: {
   parsed: Record<string, unknown>;
 }): boolean {
   return usesClaudeStreamJsonDialect(params) && params.parsed.type === "result";
+}
+
+/**
+ * Synthetic assistant placeholders that Claude Code CLI injects on its own
+ * (model: "<synthetic>") when an upstream turn aborted, the session was
+ * wedged, or `ensureToolResultPairing` needed to repair message ordering.
+ * These strings are not real assistant replies and must not surface to users
+ * as if the model had spoken.
+ */
+export const CLAUDE_CLI_SYNTHETIC_PLACEHOLDER_TEXTS: ReadonlySet<string> = new Set([
+  "No response requested.",
+  "Continue from where you left off.",
+]);
+const CLAUDE_CLI_SYNTHETIC_MODEL = "<synthetic>";
+
+/** True when text exactly matches a known Claude Code CLI synthetic placeholder. */
+export function isClaudeCliSyntheticPlaceholderText(text: string): boolean {
+  return CLAUDE_CLI_SYNTHETIC_PLACEHOLDER_TEXTS.has(text.trim());
+}
+
+function isSyntheticPlaceholderAssistant(parsed: Record<string, unknown>): boolean {
+  if (parsed.type !== "assistant" || !isRecord(parsed.message)) {
+    return false;
+  }
+  if (parsed.message.model !== CLAUDE_CLI_SYNTHETIC_MODEL) {
+    return false;
+  }
+  const text = collectCliText(parsed.message).trim();
+  return text !== "" && CLAUDE_CLI_SYNTHETIC_PLACEHOLDER_TEXTS.has(text);
 }
 
 function extractJsonObjectCandidates(raw: string): string[] {
@@ -371,6 +408,14 @@ function parseClaudeCliJsonlResult(params: {
   if (!usesClaudeStreamJsonDialect(params)) {
     return null;
   }
+  if (isSyntheticPlaceholderAssistant(params.parsed)) {
+    return {
+      text: "",
+      sessionId: params.sessionId,
+      usage: params.usage,
+      syntheticPlaceholder: true,
+    };
+  }
   if (
     typeof params.parsed.type === "string" &&
     params.parsed.type === "result" &&
@@ -638,6 +683,7 @@ export function createCliJsonlStreamingParser(params: {
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   let output: CliOutput | null = null;
+  let syntheticPlaceholderSeen = false;
   const texts: string[] = [];
   const toolTracker = createToolUseTracker();
 
@@ -665,7 +711,13 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (result) {
-      output = result;
+      if (result.syntheticPlaceholder) {
+        syntheticPlaceholderSeen = true;
+      }
+      // Preserve a previously-seen synthetic placeholder marker so a later
+      // (typically empty) `type: result` event cannot mask the fact that the
+      // CLI only emitted a synthetic placeholder this turn.
+      output = syntheticPlaceholderSeen ? { ...result, syntheticPlaceholder: true } : result;
       return;
     }
 
@@ -765,6 +817,8 @@ export function parseCliJsonl(
   }
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
+  let pendingResult: CliOutput | null = null;
+  let syntheticPlaceholderSeen = false;
   const texts: string[] = [];
   for (const line of lines) {
     for (const parsed of parseJsonRecordCandidates(line)) {
@@ -786,7 +840,16 @@ export function parseCliJsonl(
         usage,
       });
       if (claudeResult) {
-        return claudeResult;
+        if (claudeResult.syntheticPlaceholder) {
+          syntheticPlaceholderSeen = true;
+          pendingResult = claudeResult;
+          continue;
+        }
+        // A real `type: result` may follow a synthetic placeholder; preserve
+        // the synthetic marker so the caller can still distinguish it.
+        return syntheticPlaceholderSeen
+          ? { ...claudeResult, syntheticPlaceholder: true }
+          : claudeResult;
       }
 
       const item = isRecord(parsed.item) ? parsed.item : null;
@@ -797,6 +860,9 @@ export function parseCliJsonl(
         }
       }
     }
+  }
+  if (pendingResult) {
+    return pendingResult;
   }
   const text = texts.join("\n").trim();
   if (!text) {
