@@ -366,6 +366,9 @@ export async function runCodexAppServerAttempt(
     agentId: params.agentId,
   });
   const beforeToolCallPolicy = getBeforeToolCallPolicyDiagnosticState();
+  const preToolUsePolicyActive =
+    beforeToolCallPolicy.hasBeforeToolCallHook ||
+    beforeToolCallPolicy.trustedToolPolicies.length > 0;
   preDynamicStartupStages.mark("config");
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await ensureCodexWorkspaceDirOnce(resolvedWorkspace);
@@ -1034,6 +1037,7 @@ export async function runCodexAppServerAttempt(
       agentId: sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
+      preToolUsePolicyActive,
       config: params.config,
       runId: params.runId,
       channelId: hookChannelId,

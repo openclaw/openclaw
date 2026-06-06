@@ -5,6 +5,8 @@ import {
   invokeNativeHookRelay,
   nativeHookRelayTesting,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
 import {
@@ -37,6 +39,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       },
     });
     await harness.waitForMethod("turn/start");
+
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -44,6 +47,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
     expect(startConfig?.["features.hooks"]).toBe(true);
+    expect(startConfig?.["features.unified_exec"]).toBe(true);
+    expect(startConfig?.experimental_use_unified_exec_tool).toBe(true);
     const preToolUseHooks = startConfig?.["hooks.PreToolUse"] as
       | Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
       | undefined;
@@ -62,6 +67,43 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeDefined();
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("keeps PreToolUse relay config active from the run-start policy snapshot", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.config = { tools: { loopDetection: { enabled: false } } } as never;
+
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)
+        ?.preToolUsePolicyActive,
+    ).toBe(true);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig?.["features.unified_exec"]).toBe(true);
+    expect(startConfig?.experimental_use_unified_exec_tool).toBe(true);
+    const hookState = startConfig?.["hooks.state"] as Record<string, { enabled?: unknown }>;
+    const preToolUseState = Object.values(hookState).find(
+      (state) => state.enabled === true,
+    );
+    expect(preToolUseState).toBeDefined();
   });
 
   it("forwards command approval requests through the active native hook relay", async () => {
@@ -270,6 +312,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
     expect(startConfig?.["features.hooks"]).toBe(true);
+    expect(startConfig?.["features.unified_exec"]).toBe(true);
+    expect(startConfig?.experimental_use_unified_exec_tool).toBe(true);
     expect(Array.isArray(startConfig?.["hooks.PreToolUse"])).toBe(true);
     expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.Stop"]).toEqual([]);
@@ -307,6 +351,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
     expect(startConfig?.["features.hooks"]).toBe(true);
+    expect(startConfig).not.toHaveProperty("features.unified_exec");
+    expect(startConfig).not.toHaveProperty("experimental_use_unified_exec_tool");
     expect(Array.isArray(startConfig?.["hooks.PermissionRequest"])).toBe(true);
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(

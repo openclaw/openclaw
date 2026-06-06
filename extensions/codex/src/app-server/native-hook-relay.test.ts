@@ -17,6 +17,8 @@ describe("Codex native hook relay config", () => {
 
     expect(config).toEqual({
       "features.hooks": true,
+      "features.unified_exec": true,
+      experimental_use_unified_exec_tool: true,
       "hooks.PreToolUse": [
         {
           hooks: [
@@ -157,6 +159,8 @@ describe("Codex native hook relay config", () => {
       }),
     ).toEqual({
       "features.hooks": true,
+      "features.unified_exec": true,
+      experimental_use_unified_exec_tool: true,
       "hooks.PreToolUse": [
         {
           hooks: [
@@ -264,6 +268,32 @@ describe("Codex native hook relay config", () => {
         "<session-flags>/config.toml:stop:0:0": { enabled: false },
       },
     });
+  });
+
+  it("enables unified exec only for active PreToolUse relay config", () => {
+    expect(
+      buildCodexNativeHookRelayConfig({
+        relay: createRelay(),
+        events: ["pre_tool_use"],
+      }),
+    ).toMatchObject({
+      "features.unified_exec": true,
+      experimental_use_unified_exec_tool: true,
+    });
+
+    expect(
+      buildCodexNativeHookRelayConfig({
+        relay: createRelay({ inactiveEvents: ["pre_tool_use"] }),
+        events: ["pre_tool_use"],
+      }),
+    ).not.toHaveProperty("features.unified_exec");
+
+    expect(
+      buildCodexNativeHookRelayConfig({
+        relay: createRelay(),
+        events: ["permission_request"],
+      }),
+    ).not.toHaveProperty("features.unified_exec");
   });
 
   it("omits matchers so Codex MCP tool names reach the relay with a stable trust hash", () => {

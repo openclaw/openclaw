@@ -538,6 +538,28 @@ describe("native hook relay registry", () => {
     );
   });
 
+  it("keeps pre-tool relays active from the registration policy snapshot", () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      config: { tools: { loopDetection: { enabled: false } } } as never,
+      preToolUsePolicyActive: true,
+      command: {
+        executable: "/opt/Open Claw/openclaw.mjs",
+        nodeExecutable: "/usr/local/bin/node",
+        timeoutMs: 1234,
+      },
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+    expect(relay.commandForEvent("pre_tool_use")).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
+    );
+  });
+
   it("builds pre-tool relay commands only when before-tool policy is active", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),

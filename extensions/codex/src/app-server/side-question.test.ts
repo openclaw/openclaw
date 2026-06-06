@@ -592,6 +592,8 @@ describe("runCodexAppServerSideQuestion", () => {
     const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
     const config = forkParams?.config as Record<string, unknown> | undefined;
     expect(config?.["features.hooks"]).toBe(true);
+    expect(config?.["features.unified_exec"]).toBe(true);
+    expect(config?.experimental_use_unified_exec_tool).toBe(true);
     expect(config?.["features.code_mode"]).toBe(true);
     expect(config?.["features.code_mode_only"]).toBe(false);
     expect(config?.["hooks.PermissionRequest"]).toEqual([]);
@@ -774,6 +776,8 @@ describe("runCodexAppServerSideQuestion", () => {
       "--event permission_request",
     );
     expect(codexHookCommand(config, "hooks.PreToolUse")?.command).toContain("--event pre_tool_use");
+    expect(config?.["features.unified_exec"]).toBe(true);
+    expect(config?.experimental_use_unified_exec_tool).toBe(true);
   });
 
   it("preserves explicitly configured side-thread native hook events", async () => {
@@ -792,6 +796,8 @@ describe("runCodexAppServerSideQuestion", () => {
       "--event permission_request",
     );
     expect(config?.["hooks.PreToolUse"]).toEqual([]);
+    expect(config).not.toHaveProperty("features.unified_exec");
+    expect(config).not.toHaveProperty("experimental_use_unified_exec_tool");
     expect(config?.["hooks.PostToolUse"]).toEqual([]);
     expect(config?.["hooks.Stop"]).toEqual([]);
     const hookState = config?.["hooks.state"] as
