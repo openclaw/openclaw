@@ -11,6 +11,10 @@ const OPENCLAW_ALPHA_VERSION_RE =
 const OPENCLAW_BETA_VERSION_RE =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-beta\.(?<beta>[1-9]\d*)$/;
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const OFFICIAL_MEMORY_RERANKER_PACKAGE_NAMES = new Set<string>([
+  "@openclaw/memory-mmr",
+  "@openclaw/memory-external-reranker",
+]);
 
 /** Parsed monthly patch OpenClaw release version used for channel-aware ordering. */
 type OpenClawReleaseVersion = {
@@ -133,6 +137,12 @@ export function parseRegistryNpmSpec(rawSpec: string): ParsedRegistryNpmSpec | n
 export function isOpenClawOrgNpmSpec(rawSpec: string | undefined): boolean {
   const parsed = rawSpec ? parseRegistryNpmSpec(rawSpec) : null;
   return parsed?.name.startsWith("@openclaw/") === true;
+}
+
+/** Returns whether an npm spec resolves to an official OpenClaw memory reranker package. */
+export function isOfficialMemoryRerankerNpmSpec(rawSpec: string | undefined): boolean {
+  const parsed = rawSpec ? parseRegistryNpmSpec(rawSpec) : null;
+  return parsed ? OFFICIAL_MEMORY_RERANKER_PACKAGE_NAMES.has(parsed.name) : false;
 }
 
 /** Validates a registry-only npm spec and returns a user-facing error when rejected. */
