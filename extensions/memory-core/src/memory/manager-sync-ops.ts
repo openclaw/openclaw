@@ -300,14 +300,8 @@ export abstract class MemoryManagerSyncOps {
     hasIndexedChunks?: boolean;
   }): MemoryIndexIdentityState {
     const hasProviderOverride = params && "provider" in params;
-    // The plain `memory status` path resolves identity before the provider is
-    // initialized, so settings.model is still the unresolved default: an empty
-    // string when no explicit model is configured. Mirror provider init's model
-    // resolution here (configured model, else adapter default) so identity does
-    // not falsely report a mismatch against meta with a blank "expected" model.
-    const configuredModel =
-      this.settings.model.trim() ||
-      resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg);
+    // Plain status can compare identity before provider init. Mirror provider
+    // init's empty-model fallback so adapter defaults do not look mismatched.
     const configuredProvider =
       this.settings.provider === "none"
         ? null
@@ -315,7 +309,9 @@ export abstract class MemoryManagerSyncOps {
             id:
               resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
               this.settings.provider,
-            model: configuredModel,
+            model:
+              this.settings.model.trim() ||
+              resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg),
           };
     const provider = hasProviderOverride
       ? params.provider!
