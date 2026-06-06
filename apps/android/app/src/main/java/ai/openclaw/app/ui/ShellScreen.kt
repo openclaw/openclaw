@@ -351,7 +351,6 @@ private fun OverviewScreen(
       channelsSummary = channelsSummary,
       nodesDevicesSummary = nodesDevicesSummary,
       readyProviderCount = readyProviderCount,
-      modelsCount = models.size,
       expiringProviderCount = expiringProviderCount,
     )
 
@@ -545,7 +544,6 @@ internal fun homeAttentionRows(
   channelsSummary: GatewayChannelsSummary,
   nodesDevicesSummary: GatewayNodesDevicesSummary,
   readyProviderCount: Int,
-  modelsCount: Int,
   expiringProviderCount: Int = 0,
 ): List<HomeAttentionRow> =
   listOfNotNull(
@@ -574,7 +572,7 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (isConnected && readyProviderCount == 0 && modelsCount == 0 && expiringProviderCount == 0) {
+    if (isConnected && readyProviderCount == 0 && expiringProviderCount == 0) {
       HomeAttentionRow("Providers", "No ready providers", Icons.Outlined.Inventory2, Tab.ProvidersModels)
     } else {
       null
@@ -874,7 +872,7 @@ private fun SettingsShellScreen(
   }
 
   if (route != SettingsRoute.Home) {
-    SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onRouteBack, onNavigate = onRouteChange)
+    SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onRouteBack)
     return
   }
 

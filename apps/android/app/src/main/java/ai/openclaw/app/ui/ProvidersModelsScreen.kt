@@ -308,9 +308,7 @@ internal fun modelProviderReady(status: String): Boolean {
     normalized == "ready" ||
     normalized == "healthy" ||
     normalized == "configured" ||
-    normalized == "static" ||
-    normalized == "unconfigured" ||
-    normalized == "unreachable"
+    normalized == "static"
 }
 
 private fun modelProviderExpiring(status: String): Boolean = status.trim().lowercase() == "expiring"

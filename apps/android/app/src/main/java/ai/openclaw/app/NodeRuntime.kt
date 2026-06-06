@@ -1437,10 +1437,10 @@ class NodeRuntime(
   ) {
     activeGatewayAuth = auth
     val tls = connectionManager.resolveTlsParams(endpoint)
-
+    
     val tunnelConfig = prefs.loadSshTunnelConfig()
     sshTunnelManager.start(tunnelConfig)
-
+    
     val effectiveEndpoint = if (tunnelConfig.enabled) {
       endpoint.copy(host = "127.0.0.1", port = tunnelConfig.localPort)
     } else {
@@ -1490,7 +1490,7 @@ class NodeRuntime(
     val connectAttemptId = connectAttemptSeq.incrementAndGet()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
-
+    
     val tunnelConfig = prefs.loadSshTunnelConfig()
     if (tunnelConfig.enabled) {
       _statusText.value = "Starting SSH tunnel…"
@@ -1504,7 +1504,7 @@ class NodeRuntime(
         tls.expectedFingerprint
           ?.let(::normalizeGatewayTlsFingerprint)
           ?.takeIf { it.isNotBlank() }
-
+      
       scope.launch {
         if (tunnelConfig.enabled) {
           var waited = 0
@@ -1519,11 +1519,11 @@ class NodeRuntime(
           }
           _statusText.value = "Verify gateway TLS fingerprint…"
         }
-
+        
         val probeHost = if (tunnelConfig.enabled) "127.0.0.1" else endpoint.host
         val probePort = if (tunnelConfig.enabled) tunnelConfig.localPort else endpoint.port
         val tlsProbe = tlsFingerprintProbe(probeHost, probePort)
-
+        
         if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
         val fp =
           tlsProbe.fingerprintSha256 ?: run {
@@ -1881,7 +1881,7 @@ class NodeRuntime(
       val agents =
         (root["agents"] as? JsonArray)?.mapNotNull { item ->
           val obj = item.asObjectOrNull() ?: return@mapNotNull null
-          val id = (obj["id"]?.asStringOrNull() ?: obj["key"]?.asStringOrNull())?.trim().orEmpty()
+          val id = obj["id"].asStringOrNull()?.trim().orEmpty()
           if (id.isEmpty()) return@mapNotNull null
           val name = obj["name"].asStringOrNull()?.trim()
           val emoji =
@@ -1922,7 +1922,7 @@ class NodeRuntime(
 
       val authRes = operatorSession.request("models.authStatus", "{}")
       val authRoot = json.parseToJsonElement(authRes).asObjectOrNull()
-      _modelAuthProviders.value = parseGatewayModelProviders(authRoot?.get("providers"))
+      _modelAuthProviders.value = parseGatewayModelProviders(authRoot?.get("providers") as? JsonArray)
     } catch (_: Throwable) {
       _modelCatalogErrorText.value = "Could not load provider catalog."
     } finally {
@@ -2135,7 +2135,7 @@ class NodeRuntime(
     models
       ?.mapNotNull { item ->
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val id = (obj["id"]?.asStringOrNull() ?: obj["key"]?.asStringOrNull())?.trim().orEmpty()
+        val id = obj["id"].asStringOrNull()?.trim().orEmpty()
         if (id.isEmpty()) return@mapNotNull null
         val provider = obj["provider"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id.substringBefore('/', "default")
         val inputTypes = (obj["input"] as? JsonArray)?.mapNotNull { it.asStringOrNull()?.trim()?.lowercase() }?.toSet().orEmpty()
@@ -2204,41 +2204,25 @@ class NodeRuntime(
     return if (level in setOf("trace", "debug", "info", "warn", "error", "fatal")) level else null
   }
 
-    private fun parseGatewayModelProviders(providersElem: JsonElement?): List<GatewayModelProviderSummary> {
-      if (providersElem == null) return emptyList()
-      val items = mutableListOf<JsonObject>()
-      if (providersElem is JsonArray) {
-          for (item in providersElem) {
-              item.asObjectOrNull()?.let { items.add(it) }
-          }
-      } else if (providersElem is JsonObject) {
-          for ((key, value) in providersElem.entries) {
-              val obj = value.asObjectOrNull() ?: continue
-              // If the object doesn't have a "provider" key, inject the map key
-              val mutableObj = obj.toMutableMap()
-              if (!mutableObj.containsKey("provider")) {
-                  mutableObj["provider"] = JsonPrimitive(key)
-              }
-              items.add(JsonObject(mutableObj))
-          }
-      }
-      return items.mapNotNull { obj ->
-          val id = obj["provider"].asStringOrNull()?.trim().orEmpty()
-          if (id.isEmpty()) return@mapNotNull null
-          GatewayModelProviderSummary(
-            id = id,
-            displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: providerDisplayName(id),
-            status = obj["status"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "unknown",
-            profileCount = ((obj["profiles"] as? JsonArray)?.size ?: 0),
-          )
-      }
-  }
+  private fun parseGatewayModelProviders(providers: JsonArray?): List<GatewayModelProviderSummary> =
+    providers
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val id = obj["provider"].asStringOrNull()?.trim().orEmpty()
+        if (id.isEmpty()) return@mapNotNull null
+        GatewayModelProviderSummary(
+          id = id,
+          displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: providerDisplayName(id),
+          status = obj["status"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "unknown",
+          profileCount = ((obj["profiles"] as? JsonArray)?.size ?: 0),
+        )
+      }.orEmpty()
 
   private fun parseCronJobs(jobs: JsonArray?): List<GatewayCronJobSummary> =
     jobs
       ?.mapNotNull { item ->
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val id = (obj["id"]?.asStringOrNull() ?: obj["key"]?.asStringOrNull())?.trim().orEmpty()
+        val id = obj["id"].asStringOrNull()?.trim().orEmpty()
         val name = obj["name"].asStringOrNull()?.trim().orEmpty()
         if (id.isEmpty() || name.isEmpty()) return@mapNotNull null
         val schedule = obj["schedule"].asObjectOrNull()
@@ -3035,3 +3019,4 @@ private data class HomeCanvasAgentCard(
   val caption: String,
   val isActive: Boolean,
 )
+

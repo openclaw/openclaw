@@ -130,7 +130,7 @@ export function stripReasoningTagsFromText(
     firstUnclosedContentIndex !== undefined &&
     cleaned.trim()
   ) {
-    return applyTrim(cleaned.slice(firstUnclosedContentIndex), trimMode);
+    return "";
   }
 
   return trimmedResult;
