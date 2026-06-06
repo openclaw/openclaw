@@ -422,7 +422,7 @@ describe("sessions tools", () => {
     },
   );
 
-  it("sessions_send preserves label ambiguity errors before configured-agent fallback", async () => {
+  it("sessions_send preserves label ambiguity errors before configured-agent no-match path", async () => {
     const config = {
       ...TEST_CONFIG,
       agents: { list: [{ id: "main" }, { id: "orion" }] },
@@ -470,7 +470,7 @@ describe("sessions tools", () => {
     ).toBe(false);
   });
 
-  it("sessions_send preserves an existing sessionKey before configured-agent fallback", async () => {
+  it("sessions_send preserves an existing sessionKey before configured-agent no-match path", async () => {
     const config = {
       ...TEST_CONFIG,
       agents: { list: [{ id: "main" }, { id: "orion" }] },
