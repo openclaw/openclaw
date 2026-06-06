@@ -4,7 +4,7 @@ import { testing, hasAwsCredentials } from "./embedding-provider.js";
 
 describe("hasAwsCredentials", () => {
   afterEach(() => {
-    testing.resetAwsCredentialProbeCacheForTesting?.();
+    testing.resetAwsCredentialProbeCacheForTesting();
   });
   it("accepts static AWS key credentials without loading the credential chain", async () => {
     const loadCredentialProvider = vi.fn();
@@ -85,6 +85,21 @@ describe("hasAwsCredentials", () => {
     expect(loadCredentialProvider).not.toHaveBeenCalled();
   });
 
+  it("preserves the default credential chain for explicit Bedrock configs", async () => {
+    const env = {} as NodeJS.ProcessEnv;
+    const defaultProvider = vi.fn(() => async () => {
+      expect(env.AWS_EC2_METADATA_DISABLED).toBeUndefined();
+      return { accessKeyId: "resolved-access-key" };
+    });
+    const loadCredentialProvider = vi.fn().mockResolvedValue({ defaultProvider });
+
+    await expect(hasAwsCredentials(env, loadCredentialProvider, { allowImds: true })).resolves.toBe(
+      true,
+    );
+
+    expect(defaultProvider).toHaveBeenCalledOnce();
+  });
+
   it("disables IMDS during defaultProvider probing and restores env", async () => {
     const env = { AWS_PROFILE: "work" } as NodeJS.ProcessEnv;
     const defaultProvider = vi.fn(() => async () => {
@@ -121,21 +136,21 @@ describe("hasAwsCredentials", () => {
       } else {
         process.env.AWS_PROFILE = previousProfile;
       }
-      testing.resetAwsCredentialProbeCacheForTesting?.();
+      testing.resetAwsCredentialProbeCacheForTesting();
     }
   });
 
-  it("allows IMDS probing when AWS_ENABLE_IMDS is set", async () => {
-    const env = {
-      AWS_ENABLE_IMDS: "true",
-    } as NodeJS.ProcessEnv;
+  it("keeps IMDS enabled when explicit Bedrock probing allows it", async () => {
+    const env = {} as NodeJS.ProcessEnv;
     const defaultProvider = vi.fn(() => async () => {
       expect(env.AWS_EC2_METADATA_DISABLED).toBeUndefined();
       return { accessKeyId: "imds-access-key" };
     });
     const loadCredentialProvider = vi.fn().mockResolvedValue({ defaultProvider });
 
-    await expect(hasAwsCredentials(env, loadCredentialProvider)).resolves.toBe(true);
+    await expect(hasAwsCredentials(env, loadCredentialProvider, { allowImds: true })).resolves.toBe(
+      true,
+    );
 
     expect(defaultProvider).toHaveBeenCalledOnce();
   });
