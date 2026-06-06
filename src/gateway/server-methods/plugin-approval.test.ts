@@ -382,7 +382,7 @@ describe("createPluginApprovalHandlers", () => {
       }
     });
 
-    it("expires plugin approvals when explicit forwarding fails despite originating chat routing", async () => {
+    it("keeps plugin approvals pending when explicit forwarding fails but originating chat can approve", async () => {
       const forwarder = {
         handleRequested: vi.fn(async () => false),
         handleResolved: vi.fn(async () => {}),
@@ -399,6 +399,7 @@ describe("createPluginApprovalHandlers", () => {
         {
           title: "Sensitive action",
           description: "Desc",
+          twoPhase: true,
           turnSourceChannel: "slack",
           turnSourceTo: "C123",
         },
@@ -408,10 +409,12 @@ describe("createPluginApprovalHandlers", () => {
         },
       );
 
-      await handlers["plugin.approval.request"](opts);
+      const requestPromise = handlers["plugin.approval.request"](opts);
+      const approvalId = await waitForAcceptedApproval(respond);
 
       expect(forwarder.handlePluginApprovalRequested).toHaveBeenCalledTimes(1);
-      expect(expectResponseOk(respond).decision).toBeNull();
+      manager.resolve(approvalId, "allow-once");
+      await requestPromise;
     });
 
     it.each(invalidRequestCases)("rejects $name", async ({ params }) => {

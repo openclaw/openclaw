@@ -458,7 +458,6 @@ export async function handlePendingApprovalRequest<
   const hasTurnSourceRoute =
     !hasApprovalClients &&
     !delivery.delivered &&
-    !delivery.attempted &&
     hasApprovalTurnSourceRoute({
       turnSourceChannel: params.record.request.turnSourceChannel,
       turnSourceAccountId: params.record.request.turnSourceAccountId,

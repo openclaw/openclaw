@@ -325,7 +325,7 @@ describe("handlePendingApprovalRequest", () => {
     await requestPromise;
   });
 
-  it("expires when explicit delivery fails instead of falling back to turn-source routing", async () => {
+  it("keeps turn-source approvals pending when explicit delivery fails", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
       {
@@ -360,26 +360,20 @@ describe("handlePendingApprovalRequest", () => {
     });
 
     await Promise.resolve();
-    let assertionError: Error | undefined;
-    try {
-      expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
-      expect(manager.getSnapshot(record.id)?.resolvedBy).toBe("no-approval-route");
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ id: "approval-explicit-delivery-failed", decision: null }),
-        undefined,
-      );
-    } catch (err) {
-      assertionError = err instanceof Error ? err : new Error(String(err));
-    } finally {
-      if (manager.getSnapshot(record.id)?.resolvedAtMs === undefined) {
-        manager.resolve(record.id, "deny");
-      }
-      await requestPromise;
-    }
-    if (assertionError) {
-      throw assertionError;
-    }
+    expect(hasApprovalTurnSourceRouteMock).toHaveBeenCalledWith({
+      turnSourceChannel: "slack",
+      turnSourceAccountId: "work",
+      approvalKind: "exec",
+    });
+    expect(manager.getSnapshot(record.id)?.resolvedBy).not.toBe("no-approval-route");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-explicit-delivery-failed", status: "accepted" }),
+      undefined,
+    );
+
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await requestPromise;
   });
 
   it("targets requested approval events to visible approval clients when available", async () => {
