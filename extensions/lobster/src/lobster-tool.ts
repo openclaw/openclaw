@@ -1,4 +1,5 @@
 // Lobster plugin module implements lobster tool behavior.
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -236,11 +237,21 @@ function buildEmbeddedLlmAdapters(api: OpenClawPluginApi): Record<string, Embedd
       | string
       | { primary?: string }
       | undefined;
-    const def = typeof defaultsModel === "string" ? defaultsModel : defaultsModel?.primary;
-    const ref =
-      (typeof p.model === "string" && p.model.trim()) || (typeof def === "string" ? def : "") || "";
-    const provider = ref.includes("/") ? ref.split("/")[0] : undefined;
-    const model = ref.includes("/") ? ref.split("/").slice(1).join("/") : ref || undefined;
+    const defRef =
+      (typeof defaultsModel === "string" ? defaultsModel : defaultsModel?.primary) || "";
+    const defProvider = defRef.includes("/") ? defRef.split("/")[0] : undefined;
+    const defModel = defRef.includes("/")
+      ? defRef.split("/").slice(1).join("/")
+      : defRef || undefined;
+    const reqRef = (typeof p.model === "string" && p.model.trim()) || "";
+    // Resolve provider and model SEPARATELY so a bare model name (no provider
+    // prefix) still works, falling back to the configured default provider.
+    const provider = (reqRef.includes("/") ? reqRef.split("/")[0] : undefined) ?? defProvider;
+    const model = reqRef
+      ? reqRef.includes("/")
+        ? reqRef.split("/").slice(1).join("/")
+        : reqRef
+      : defModel;
     if (!provider || !model) {
       throw new Error(
         "llm.invoke (embedded openclaw): could not resolve provider/model; set agents.defaults.model or pass --model provider/model",
@@ -262,46 +273,51 @@ function buildEmbeddedLlmAdapters(api: OpenClawPluginApi): Record<string, Embedd
       os.tmpdir(),
       `lobster-llm-${runId}-${Math.random().toString(36).slice(2)}.session.json`,
     );
-    const result = await api.runtime.agent.runEmbeddedAgent({
-      sessionId: runId,
-      sessionFile,
-      workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
-      config: api.config,
-      prompt: fullPrompt,
-      timeoutMs,
-      runId,
-      provider,
-      model,
-      disableTools: true,
-    });
-
-    const payloads =
-      typeof result === "object" && result !== null && "payloads" in result
-        ? (result as { payloads?: Array<{ text?: string }> }).payloads
-        : undefined;
-    const text = (payloads ?? [])
-      .map((x) => (typeof x?.text === "string" ? x.text : ""))
-      .join("")
-      .trim();
-    if (!text) {
-      throw new Error("llm.invoke (embedded openclaw): empty output");
-    }
-    const raw = text
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/```\s*$/i, "")
-      .trim();
-    let data: unknown;
     try {
-      data = JSON.parse(raw);
-    } catch {
-      throw new Error("llm.invoke (embedded openclaw): output was not valid JSON");
-    }
+      const result = await api.runtime.agent.runEmbeddedAgent({
+        sessionId: runId,
+        sessionFile,
+        workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
+        config: api.config,
+        prompt: fullPrompt,
+        timeoutMs,
+        runId,
+        provider,
+        model,
+        disableTools: true,
+      });
 
-    // Shape the response envelope llm.invoke expects (result.output.data).
-    return {
-      ok: true as const,
-      result: { output: { data, text: raw }, model, status: "completed" },
-    };
+      const payloads =
+        typeof result === "object" && result !== null && "payloads" in result
+          ? (result as { payloads?: Array<{ text?: string }> }).payloads
+          : undefined;
+      const text = (payloads ?? [])
+        .map((x) => (typeof x?.text === "string" ? x.text : ""))
+        .join("")
+        .trim();
+      if (!text) {
+        throw new Error("llm.invoke (embedded openclaw): empty output");
+      }
+      const raw = text
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/```\s*$/i, "")
+        .trim();
+      let data: unknown;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        throw new Error("llm.invoke (embedded openclaw): output was not valid JSON");
+      }
+
+      // Shape the response envelope llm.invoke expects (result.output.data).
+      return {
+        ok: true as const,
+        result: { output: { data, text: raw }, model, status: "completed" },
+      };
+    } finally {
+      // Clean up the transient embedded-agent session file.
+      await fs.rm(sessionFile, { force: true }).catch(() => {});
+    }
   };
 
   return {

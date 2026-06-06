@@ -137,6 +137,64 @@ describe("createEmbeddedLobsterRunner", () => {
     expect(env.CLAWD_TOKEN).toBeUndefined();
   });
 
+  it("strips gateway credentials from the embedded env even when present in process.env", async () => {
+    // Seed the gateway-process env with credentials, then confirm they are NOT
+    // forwarded into the embedded tool context (review finding: a workflow shell
+    // step must not be able to read OPENCLAW_URL/token from ctx.env).
+    const seeded: Record<string, string> = {
+      OPENCLAW_URL: "http://127.0.0.1:18789",
+      OPENCLAW_TOKEN: "secret-token",
+      CLAWD_URL: "http://127.0.0.1:18789",
+      CLAWD_TOKEN: "secret-token",
+    };
+    const prev: Record<string, string | undefined> = {};
+    for (const [k, v] of Object.entries(seeded)) {
+      prev[k] = process.env[k];
+      process.env[k] = v;
+    }
+    try {
+      const runtime = {
+        runToolRequest: vi.fn().mockResolvedValue({
+          ok: true,
+          protocolVersion: 1,
+          status: "ok",
+          output: [],
+          requiresApproval: null,
+        }),
+        resumeToolRequest: vi.fn(),
+      };
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+
+      await runner.run({
+        action: "run",
+        pipeline: "exec --json=true echo hi",
+        cwd: process.cwd(),
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
+      });
+
+      const request = requireRecord(
+        requireFirstCallParam(runtime.runToolRequest.mock.calls, "run tool request"),
+        "run tool request",
+      );
+      const env = requireRecord(requireRecord(request.ctx, "tool context").env, "env");
+      expect(env.OPENCLAW_URL).toBeUndefined();
+      expect(env.OPENCLAW_TOKEN).toBeUndefined();
+      expect(env.CLAWD_URL).toBeUndefined();
+      expect(env.CLAWD_TOKEN).toBeUndefined();
+    } finally {
+      for (const [k, v] of Object.entries(prev)) {
+        if (v === undefined) {
+          delete process.env[k];
+        } else {
+          process.env[k] = v;
+        }
+      }
+    }
+  });
+
   it("runs inline pipelines through the embedded runtime", async () => {
     const runtime = {
       runToolRequest: vi.fn().mockResolvedValue({

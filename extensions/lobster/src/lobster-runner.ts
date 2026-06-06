@@ -287,6 +287,12 @@ function createEmbeddedToolContext(
   // env. The in-process path runs through bridges.llmAdapters / bridges.registry,
   // so no operator credential is ever exposed to workflow shell steps (#76101).
   const env = { ...process.env } as Record<string, string | undefined>;
+  // SECURITY (#76101): actively STRIP gateway credentials that the gateway
+  // process env may carry, so they can never reach workflow shell steps via
+  // ctx.env. The in-process LLM path needs none of these.
+  for (const key of ["OPENCLAW_URL", "OPENCLAW_TOKEN", "CLAWD_URL", "CLAWD_TOKEN"]) {
+    delete env[key];
+  }
   return {
     cwd: params.cwd,
     env,
