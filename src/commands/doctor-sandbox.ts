@@ -27,14 +27,28 @@ type SandboxScriptInfo = {
   cwd: string;
 };
 
-function resolveSandboxScript(scriptRel: string): SandboxScriptInfo | null {
+export function resolveSandboxScript(
+  scriptRel: string,
+  options: { argv1?: string; cwd?: string } = {},
+): SandboxScriptInfo | null {
+  const cwd = options.cwd ?? process.cwd();
+  const argv1 = options.argv1 ?? process.argv[1];
   const candidates = new Set<string>();
-  candidates.add(process.cwd());
-  const argv1 = process.argv[1];
+  candidates.add(cwd);
   if (argv1) {
-    const normalized = path.resolve(argv1);
-    candidates.add(path.resolve(path.dirname(normalized), ".."));
-    candidates.add(path.resolve(path.dirname(normalized)));
+    // argv1 may be a symlinked launcher (e.g. ~/.openclaw/npm/bin/openclaw → <repo>/openclaw.mjs).
+    // path.resolve does NOT follow symlinks, so resolve the real path too and search both — otherwise
+    // scripts/ is looked for next to the launcher symlink instead of in the actual repo checkout.
+    const launchers = new Set<string>([path.resolve(argv1)]);
+    try {
+      launchers.add(fs.realpathSync(argv1));
+    } catch {
+      // argv1 is not a resolvable real path; keep the literal candidate only.
+    }
+    for (const launcher of launchers) {
+      candidates.add(path.resolve(path.dirname(launcher), ".."));
+      candidates.add(path.resolve(path.dirname(launcher)));
+    }
   }
 
   for (const root of candidates) {
