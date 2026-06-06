@@ -133,7 +133,7 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledTimes(1);
   });
 
-  it("uses Homebrew opt Node when a version-manager execPath is active", async () => {
+  it("prefers version-manager execPath over Homebrew opt Node (regression #89376)", async () => {
     const homebrewOptNode = "/opt/homebrew/opt/node@22/bin/node";
     mockNodePathPresent(homebrewOptNode);
 
@@ -150,8 +150,8 @@ describe("resolvePreferredNodePath", () => {
       execPath: fnmNode,
     });
 
-    expect(result).toBe(homebrewOptNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(result).toBe(fnmNode);
+    expect(execFile).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to version-manager execPath when no supported system node exists", async () => {
