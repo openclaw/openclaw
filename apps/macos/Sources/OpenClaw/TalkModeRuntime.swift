@@ -393,7 +393,22 @@ actor TalkModeRuntime {
             guard self.isCurrent(gen) else { return }
             self.logger.info(
                 "talk chat.send ok runId=\(response.runId, privacy: .public) " +
-                    "session=\(sessionKey, privacy: .public)")
+                    "session=\(sessionKey, privacy: .public) " +
+                    "status=\(response.status, privacy: .public)")
+            switch response.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "timeout":
+                self.logger.warning(
+                    "talk chat.send terminal timeout runId=\(response.runId, privacy: .public)")
+                await self.resumeListeningIfNeeded()
+                return
+            case "error":
+                self.logger.warning(
+                    "talk chat.send terminal error runId=\(response.runId, privacy: .public)")
+                await self.resumeListeningIfNeeded()
+                return
+            default:
+                break
+            }
 
             var assistantText = await self.waitForAssistantEventText(
                 sessionKey: sessionKey,

@@ -971,9 +971,34 @@ final class TalkModeManager: NSObject {
             self.logger.info(
                 "chat.send start sessionKey=\(sessionKey, privacy: .public) chars=\(prompt.count, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send start sessionKey=\(sessionKey) chars=\(prompt.count)")
-            let runId = try await self.sendChat(prompt, gateway: gateway)
-            self.logger.info("chat.send ok runId=\(runId, privacy: .public)")
-            GatewayDiagnostics.log("talk: chat.send ok runId=\(runId)")
+            let response = try await self.sendChat(prompt, gateway: gateway)
+            let runId = response.runId
+            self.logger.info(
+                "chat.send ok runId=\(runId, privacy: .public) " +
+                    "status=\(response.status, privacy: .public)")
+            GatewayDiagnostics.log("talk: chat.send ok runId=\(runId) status=\(response.status)")
+            if let terminalState = Self.chatCompletionState(forTerminalSendStatus: response.status) {
+                GatewayDiagnostics.log("talk: chat.send terminal ack runId=\(runId) status=\(response.status)")
+                switch terminalState {
+                case .aborted:
+                    self.statusText = "Aborted"
+                    self.logger.warning("chat.send terminal timeout runId=\(runId, privacy: .public)")
+                    if restartAfter {
+                        await self.start()
+                    }
+                    return
+                case .error:
+                    self.statusText = "Chat error"
+                    self.logger.warning("chat.send terminal error runId=\(runId, privacy: .public)")
+                    if restartAfter {
+                        await self.start()
+                    }
+                    return
+                default:
+                    break
+                }
+            }
+
             let shouldIncremental = self.shouldUseIncrementalTTS()
             var streamingTask: Task<Void, Never>?
             if shouldIncremental {
@@ -994,7 +1019,9 @@ final class TalkModeManager: NSObject {
                 GatewayDiagnostics.log("talk: chat completion aborted runId=\(runId)")
                 streamingTask?.cancel()
                 await self.finishIncrementalSpeech()
-                await self.start()
+                if restartAfter {
+                    await self.start()
+                }
                 return
             } else if completion.state == .error {
                 self.statusText = "Chat error"
@@ -1002,7 +1029,9 @@ final class TalkModeManager: NSObject {
                 GatewayDiagnostics.log("talk: chat completion error runId=\(runId)")
                 streamingTask?.cancel()
                 await self.finishIncrementalSpeech()
-                await self.start()
+                if restartAfter {
+                    await self.start()
+                }
                 return
             }
 
@@ -1025,7 +1054,9 @@ final class TalkModeManager: NSObject {
                 GatewayDiagnostics.log("talk: assistant text timeout runId=\(runId)")
                 streamingTask?.cancel()
                 await self.finishIncrementalSpeech()
-                await self.start()
+                if restartAfter {
+                    await self.start()
+                }
                 return
             }
             self.logger.info("assistant text ok chars=\(assistantText.count, privacy: .public)")
@@ -1286,8 +1317,18 @@ final class TalkModeManager: NSObject {
         var assistantText: String?
     }
 
-    private func sendChat(_ message: String, gateway: GatewayNodeSession) async throws -> String {
-        struct SendResponse: Decodable { let runId: String }
+    private static func chatCompletionState(forTerminalSendStatus status: String) -> ChatCompletionState? {
+        switch status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "timeout":
+            return .aborted
+        case "error":
+            return .error
+        default:
+            return nil
+        }
+    }
+
+    private func sendChat(_ message: String, gateway: GatewayNodeSession) async throws -> OpenClawChatSendResponse {
         let payload: [String: Any] = [
             "sessionKey": mainSessionKey,
             "message": message,
@@ -1303,8 +1344,7 @@ final class TalkModeManager: NSObject {
                 userInfo: [NSLocalizedDescriptionKey: "Failed to encode chat payload"])
         }
         let res = try await gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 30)
-        let decoded = try JSONDecoder().decode(SendResponse.self, from: res)
-        return decoded.runId
+        return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
     }
 
     private func waitForChatCompletion(

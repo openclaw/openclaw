@@ -104,6 +104,7 @@ class MicCaptureManager(
   private val messageQueue = ArrayDeque<String>()
   private val messageQueueLock = Any()
   private var flushedPartialTranscript: String? = null
+
   // Correlates chat events with the idempotency key generated before sendChat returns.
   private var pendingRunId: String? = null
   private var pendingAssistantEntryId: String? = null
@@ -493,10 +494,12 @@ class MicCaptureManager(
         if (runId == null) {
           pendingRunTimeoutJob?.cancel()
           pendingRunTimeoutJob = null
+          pendingRunId = null
           removeFirstQueuedMessage()
           publishQueue()
           _isSending.value = false
           pendingAssistantEntryId = null
+          _statusText.value = if (_micEnabled.value) listeningStatus() else "Mic off"
           sendQueuedIfIdle()
         } else {
           armPendingRunTimeout(runId)

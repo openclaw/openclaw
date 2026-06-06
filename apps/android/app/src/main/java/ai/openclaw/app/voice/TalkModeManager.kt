@@ -1,6 +1,8 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.parseChatSendAck
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -168,6 +170,7 @@ class TalkModeManager internal constructor(
   @Volatile private var realtimeSessionId: String? = null
   private var realtimeCaptureJob: Job? = null
   private var realtimeAppendJob: Job? = null
+
   // Realtime tool calls can complete before their chat final arrives; cache by call/run id until both sides meet.
   private val realtimeToolRuns = LinkedHashMap<String, RealtimeToolRun>()
   private val pendingRealtimeToolCalls = LinkedHashSet<String>()
@@ -380,7 +383,12 @@ class TalkModeManager internal constructor(
         reloadConfig()
         val startedAt = System.currentTimeMillis().toDouble() / 1000.0
         val prompt = buildPrompt(command)
-        val runId = sendChat(prompt, session)
+        val ack = sendChat(prompt, session)
+        val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
+        if (ack.isTerminal) {
+          _statusText.value = if (ack.normalizedStatus == "error") "Chat error" else "Aborted"
+          return@launch
+        }
         val ok = waitForChatFinal(runId)
         val assistant =
           consumeRunText(runId)
@@ -397,8 +405,9 @@ class TalkModeManager internal constructor(
         }
       } catch (err: Throwable) {
         Log.w(tag, "speakWakeCommand failed: ${err.message}")
+      } finally {
+        onComplete()
       }
-      onComplete()
     }
   }
 
@@ -1603,8 +1612,14 @@ class TalkModeManager internal constructor(
     try {
       val startedAt = System.currentTimeMillis().toDouble() / 1000.0
       Log.d(tag, "chat.send start sessionKey=${mainSessionKey.ifBlank { "main" }} chars=${prompt.length}")
-      val runId = sendChat(prompt, session)
-      Log.d(tag, "chat.send ok runId=$runId")
+      val ack = sendChat(prompt, session)
+      val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
+      Log.d(tag, "chat.send ok runId=$runId status=${ack.status}")
+      if (ack.isTerminal) {
+        _statusText.value = if (ack.normalizedStatus == "error") "Chat error" else "Aborted"
+        start()
+        return
+      }
       val ok = waitForChatFinal(runId)
       if (!ok) {
         Log.w(tag, "chat final timeout runId=$runId; attempting history fallback")
@@ -1678,7 +1693,7 @@ class TalkModeManager internal constructor(
   private suspend fun sendChat(
     message: String,
     session: GatewaySession,
-  ): String {
+  ): ChatSendAck {
     val runId = UUID.randomUUID().toString()
     armPendingRun(runId)
     val params =
@@ -1691,11 +1706,15 @@ class TalkModeManager internal constructor(
       }
     try {
       val res = session.request("chat.send", params.toString())
-      val parsed = parseRunId(res) ?: runId
-      if (parsed != runId) {
-        pendingRunId = parsed
+      val parsed = parseChatSendAck(json, res)
+      val actualRunId = parsed.runId ?: runId
+      if (actualRunId != runId) {
+        pendingRunId = actualRunId
       }
-      return parsed
+      if (parsed.isTerminal) {
+        clearPendingRun(actualRunId)
+      }
+      return parsed.copy(runId = actualRunId)
     } catch (err: Throwable) {
       clearPendingRun(runId)
       throw err

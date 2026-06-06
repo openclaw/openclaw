@@ -135,6 +135,33 @@ class MicCaptureManagerTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun terminalChatSendAckClearsPendingVoiceTurn() =
+    runTest {
+      val sentMessages = mutableListOf<String>()
+      val manager =
+        createManager(
+          scope = this,
+          sendToGateway = { message, onRunIdKnown ->
+            sentMessages += message
+            onRunIdKnown("run-terminal")
+            null
+          },
+        )
+
+      manager.onGatewayConnectionChanged(true)
+      setPrivateMutableStateFlowValue(manager, "_micEnabled", true)
+      manager.submitTranscribedMessage("terminal voice turn")
+      runCurrent()
+
+      assertEquals(listOf("terminal voice turn"), sentMessages)
+      assertEquals(null, privateField<String?>(manager, "pendingRunId"))
+      assertEquals(false, manager.isSending.value)
+      assertEquals(emptyList<String>(), manager.queuedMessages.value)
+      assertEquals("Listening", manager.statusText.value)
+    }
+
+  @Test
   fun pcm16FramesAreEncodedAsPcmuFrames() {
     val manager = createManager()
     val method = manager.javaClass.getDeclaredMethod("pcm16ToPcmu", ByteArray::class.java)

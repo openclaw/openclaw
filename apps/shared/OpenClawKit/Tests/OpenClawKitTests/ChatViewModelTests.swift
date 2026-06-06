@@ -102,6 +102,7 @@ private func makeViewModel(
     compactSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
     setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
+    sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)? = nil,
     waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
     healthResponses: [Bool] = [true],
     initialThinkingLevel: String? = nil,
@@ -117,6 +118,7 @@ private func makeViewModel(
         compactSessionHook: compactSessionHook,
         setSessionModelHook: setSessionModelHook,
         setSessionThinkingHook: setSessionThinkingHook,
+        sendMessageHook: sendMessageHook,
         waitForRunCompletionHook: waitForRunCompletionHook,
         healthResponses: healthResponses)
     let vm = await MainActor.run {
@@ -304,6 +306,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let compactSessionHook: (@Sendable (String) async throws -> Void)?
     private let setSessionModelHook: (@Sendable (String?) async throws -> Void)?
     private let setSessionThinkingHook: (@Sendable (String) async throws -> Void)?
+    private let sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)?
     private let waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)?
     private let healthResponses: [Bool]
 
@@ -319,6 +322,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         compactSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
         setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
+        sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)? = nil,
         waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
         healthResponses: [Bool] = [true])
     {
@@ -330,6 +334,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.compactSessionHook = compactSessionHook
         self.setSessionModelHook = setSessionModelHook
         self.setSessionThinkingHook = setSessionThinkingHook
+        self.sendMessageHook = sendMessageHook
         self.waitForRunCompletionHook = waitForRunCompletionHook
         self.healthResponses = healthResponses
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
@@ -381,6 +386,9 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.sentSessionKeysAppend(sessionKey)
         await self.state.sentRunIdsAppend(idempotencyKey)
         await self.state.sentThinkingLevelsAppend(thinking)
+        if let sendMessageHook {
+            return try await sendMessageHook(idempotencyKey)
+        }
         return OpenClawChatSendResponse(runId: idempotencyKey, status: "ok")
     }
 
@@ -815,6 +823,84 @@ extension TestChatTransportState {
         #expect(await transport.sentRunIds() == firstRunIds)
         #expect(await MainActor.run { vm.pendingRunCount } == 1)
         #expect(await MainActor.run { vm.input } == "second")
+    }
+
+    @Test func terminalTimeoutSendAckClearsPendingRunAndAllowsNextSend() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId, messages: [])
+        let sendCount = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            sendMessageHook: { runId in
+                let count = await sendCount.increment()
+                return OpenClawChatSendResponse(
+                    runId: runId,
+                    status: count == 1 ? "timeout" : "ok")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "first")
+        try await waitUntil("timeout ack clears pending run") {
+            await MainActor.run { vm.pendingRunCount == 0 && !vm.isSending }
+        }
+        #expect(await transport.sentRunIds().count == 1)
+        #expect(await MainActor.run { vm.errorText } == nil)
+        #expect(await MainActor.run { !vm.messages.containsUserText("first") })
+
+        await sendUserMessage(vm, text: "second")
+        try await waitUntil("second send is accepted after timeout ack") {
+            await transport.sentRunIds().count == 2
+        }
+    }
+
+    @Test func terminalErrorSendAckIfReturnedClearsRemotePendingRunAndSurfacesError() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId, messages: [])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            sendMessageHook: { runId in
+                OpenClawChatSendResponse(runId: "remote-\(runId)", status: "error")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "hello")
+
+        try await waitUntil("error ack clears pending run") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 &&
+                    !vm.isSending &&
+                    vm.errorText == "Chat failed before the run started; try again."
+            }
+        }
+        #expect(await MainActor.run { !vm.messages.containsUserText("hello") })
+        #expect(await transport.waitCompletionRunIds().isEmpty)
+    }
+
+    @Test func sendRpcErrorRemovesOptimisticUserEchoAndSurfacesError() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId, messages: [])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            sendMessageHook: { _ in
+                throw NSError(
+                    domain: "OpenClawChatViewModelTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "gateway rejected send"])
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "rpc failure")
+
+        try await waitUntil("rpc error clears pending run") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 &&
+                    !vm.isSending &&
+                    vm.errorText == "gateway rejected send"
+            }
+        }
+        #expect(await transport.sentRunIds().count == 1)
+        #expect(await MainActor.run { !vm.messages.containsUserText("rpc failure") })
+        #expect(await transport.waitCompletionRunIds().isEmpty)
     }
 
     @Test func keepsOptimisticUserMessageWhenFinalRefreshReturnsOnlyAssistantHistory() async throws {
@@ -2705,5 +2791,16 @@ extension TestChatTransportState {
                     errorMessage: nil)))
 
         try await waitUntil("pending run clears") { await MainActor.run { vm.pendingRunCount == 0 } }
+    }
+}
+
+private extension Array where Element == OpenClawChatMessage {
+    func containsUserText(_ text: String) -> Bool {
+        self.contains { message in
+            message.role == "user"
+                && message.content.contains { part in
+                    part.text == text
+                }
+        }
     }
 }
