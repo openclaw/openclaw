@@ -1817,6 +1817,7 @@ describe("chrome MCP page parsing", () => {
       targetId: "1",
       x: 10,
       y: 20,
+      button: "right",
       delayMs: Number.NaN,
     });
 

@@ -271,7 +271,6 @@ type ChromeMcpTrackedEmulationState = {
   colorScheme?: "dark" | "light";
 };
 
-const execFileAsync = promisify(execFile);
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, PendingChromeMcpSession>();
 const emulationStates = new Map<string, ChromeMcpTrackedEmulationState>();
