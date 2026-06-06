@@ -232,7 +232,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
   const { loadGatewayStartupPlugins } = await import("./server-plugin-bootstrap.js");
-  const loaded = await loadGatewayStartupPlugins({
+  const loaded = loadGatewayStartupPlugins({
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
     workspaceDir: params.workspaceDir,
