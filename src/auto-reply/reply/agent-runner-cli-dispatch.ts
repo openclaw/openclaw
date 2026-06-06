@@ -10,18 +10,9 @@ import { clearCliSession } from "../../agents/cli-session.js";
 import { extractToolResultText } from "../../agents/embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
-import {
-  isAgentRunRestartAbortReason,
-  resolveAgentRunAbortLifecycleFields,
-} from "../../agents/run-termination.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
-import {
-  emitAgentEvent,
-  onAgentEvent,
-  withAgentRunLifecycleGeneration,
-} from "../../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent } from "../../infra/agent-events.js";
 import { formatToolAggregate } from "../tool-meta.js";
 
 function isClaudeCliProvider(provider: string): boolean {
@@ -190,13 +181,9 @@ export async function clearDroppedCliSessionBinding(params: {
   if (!params.storePath || !params.sessionKey) {
     return;
   }
-  await updateSessionEntry(
-    { storePath: params.storePath, sessionKey: params.sessionKey },
-    (entry) => {
-      clearEntry(entry);
-      return entry;
-    },
-  );
+  await updateSessionStore(params.storePath, (store) => {
+    clearEntry(store[params.sessionKey!]);
+  });
 }
 
 function createToolEventBridge(params: {
@@ -301,9 +288,8 @@ function createCommentaryEventBridge(params: {
   });
 }
 
-type RunCliAgentWithLifecycleParams = {
+export async function runCliAgentWithLifecycle(params: {
   runId: string;
-  lifecycleGeneration?: string;
   provider: string;
   runParams: RunCliAgentParams;
   startedAt?: number;
@@ -317,22 +303,7 @@ type RunCliAgentWithLifecycleParams = {
   onCommentaryText?: (payload: { text: string; itemId?: string }) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
-};
-
-export function runCliAgentWithLifecycle(
-  params: RunCliAgentWithLifecycleParams,
-): Promise<EmbeddedAgentRunResult> {
-  if (!params.lifecycleGeneration) {
-    return runCliAgentWithLifecycleInternal(params);
-  }
-  return withAgentRunLifecycleGeneration(params.lifecycleGeneration, () =>
-    runCliAgentWithLifecycleInternal(params),
-  );
-}
-
-async function runCliAgentWithLifecycleInternal(
-  params: RunCliAgentWithLifecycleParams,
-): Promise<EmbeddedAgentRunResult> {
+}): Promise<EmbeddedAgentRunResult> {
   const startedAt = params.startedAt ?? Date.now();
   const emitLifecycleStart = params.emitLifecycleStart ?? true;
   const emitLifecycleTerminal = params.emitLifecycleTerminal ?? true;
@@ -340,9 +311,6 @@ async function runCliAgentWithLifecycleInternal(
   if (emitLifecycleStart) {
     emitAgentEvent({
       runId: params.runId,
-      ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-      ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-      ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
       stream: "lifecycle",
       data: {
         phase: "start",
@@ -381,10 +349,6 @@ async function runCliAgentWithLifecycleInternal(
       ...params.runParams,
       emitCommentaryText: Boolean(params.onCommentaryText),
     });
-    const restartAbortReason = params.runParams.abortSignal?.reason;
-    if (isAgentRunRestartAbortReason(restartAbortReason)) {
-      throw restartAbortReason;
-    }
     const result = params.transformResult?.(rawResult) ?? rawResult;
     await stopAgentEventBridges(bridges);
 
@@ -398,17 +362,22 @@ async function runCliAgentWithLifecycleInternal(
     }
 
     if (emitLifecycleTerminal) {
+      const yieldedLifecycleData =
+        result.meta.yielded === true
+          ? {
+              yielded: true,
+              livenessState: result.meta.livenessState,
+              stopReason: result.meta.stopReason,
+            }
+          : {};
       emitAgentEvent({
         runId: params.runId,
-        ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-        ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-        ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
         stream: "lifecycle",
         data: {
           phase: "end",
           startedAt,
           endedAt: Date.now(),
-          ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
+          ...yieldedLifecycleData,
         },
       });
       lifecycleTerminalEmitted = true;
@@ -420,16 +389,12 @@ async function runCliAgentWithLifecycleInternal(
     if (emitLifecycleTerminal) {
       emitAgentEvent({
         runId: params.runId,
-        ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-        ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-        ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
         stream: "lifecycle",
         data: {
           phase: "error",
           startedAt,
           endedAt: Date.now(),
           error: String(err),
-          ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
         },
       });
       lifecycleTerminalEmitted = true;
@@ -442,16 +407,12 @@ async function runCliAgentWithLifecycleInternal(
     if (emitLifecycleTerminal && !lifecycleTerminalEmitted) {
       emitAgentEvent({
         runId: params.runId,
-        ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
-        ...(params.runParams.sessionId ? { sessionId: params.runParams.sessionId } : {}),
-        ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
         stream: "lifecycle",
         data: {
           phase: "error",
           startedAt,
           endedAt: Date.now(),
           error: "CLI run completed without lifecycle terminal event",
-          ...resolveAgentRunAbortLifecycleFields(params.runParams.abortSignal),
         },
       });
     }
