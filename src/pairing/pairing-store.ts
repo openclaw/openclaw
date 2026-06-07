@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
 import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
@@ -277,6 +278,13 @@ function normalizeId(value: string | number): string {
   return normalizeStringifiedOptionalString(value) ?? "";
 }
 
+function resolvePairingAdapter(
+  channel: PairingChannel,
+  pairingAdapter?: ChannelPairingAdapter,
+): ChannelPairingAdapter | undefined {
+  return pairingAdapter ?? getPairingAdapter(channel) ?? undefined;
+}
+
 function normalizeAllowEntry(entry: string, pairingAdapter?: ChannelPairingAdapter): string {
   const trimmed = entry.trim();
   if (!trimmed) {
@@ -308,32 +316,39 @@ function normalizeAllowFromInput(
   return normalizeAllowEntry(normalizeId(entry), pairingAdapter);
 }
 
-async function readAllowFromStateForPath(filePath: string): Promise<string[]> {
-  return (await readAllowFromStateForPathWithExists(filePath)).entries;
+async function readAllowFromStateForPath(
+  channel: PairingChannel,
+  filePath: string,
+): Promise<string[]> {
+  return (await readAllowFromStateForPathWithExists(channel, filePath)).entries;
 }
 
 async function readAllowFromStateForPathWithExists(
+  channel: PairingChannel,
   filePath: string,
 ): Promise<{ entries: string[]; exists: boolean }> {
   return await readAllowFromFileWithExists({
     cacheNamespace: PAIRING_ALLOW_FROM_CACHE_NAMESPACE,
     filePath,
-    normalizeStore: (store) => normalizeAllowFromList(store),
+    normalizeStore: (store) => normalizeAllowFromList(store, resolvePairingAdapter(channel)),
   });
 }
 
-function readAllowFromStateForPathSync(filePath: string): string[] {
-  return readAllowFromStateForPathSyncWithExists(filePath).entries;
+function readAllowFromStateForPathSync(channel: PairingChannel, filePath: string): string[] {
+  return readAllowFromStateForPathSyncWithExists(channel, filePath).entries;
 }
 
-function readAllowFromStateForPathSyncWithExists(filePath: string): {
+function readAllowFromStateForPathSyncWithExists(
+  channel: PairingChannel,
+  filePath: string,
+): {
   entries: string[];
   exists: boolean;
 } {
   return readAllowFromFileSyncWithExists({
     cacheNamespace: PAIRING_ALLOW_FROM_CACHE_NAMESPACE,
     filePath,
-    normalizeStore: (store) => normalizeAllowFromList(store),
+    normalizeStore: (store) => normalizeAllowFromList(store, resolvePairingAdapter(channel)),
   });
 }
 
@@ -347,8 +362,9 @@ async function readAllowFromState(params: {
     version: 1,
     allowFrom: [],
   });
-  const current = normalizeAllowFromList(value, params.pairingAdapter);
-  const normalized = normalizeAllowFromInput(params.entry, params.pairingAdapter);
+  const pairingAdapter = resolvePairingAdapter(params.channel, params.pairingAdapter);
+  const current = normalizeAllowFromList(value, pairingAdapter);
+  const normalized = normalizeAllowFromInput(params.entry, pairingAdapter);
   return { current, normalized: normalized || null };
 }
 
@@ -384,7 +400,7 @@ async function readNonDefaultAccountAllowFrom(params: {
   accountId: string;
 }): Promise<string[]> {
   const scopedPath = resolveAllowFromFilePath(params.channel, params.env, params.accountId);
-  return await readAllowFromStateForPath(scopedPath);
+  return await readAllowFromStateForPath(params.channel, scopedPath);
 }
 
 function readNonDefaultAccountAllowFromSync(params: {
@@ -393,7 +409,7 @@ function readNonDefaultAccountAllowFromSync(params: {
   accountId: string;
 }): string[] {
   const scopedPath = resolveAllowFromFilePath(params.channel, params.env, params.accountId);
-  return readAllowFromStateForPathSync(scopedPath);
+  return readAllowFromStateForPathSync(params.channel, scopedPath);
 }
 
 async function updateAllowFromStoreEntry(params: {
@@ -434,7 +450,7 @@ export async function readLegacyChannelAllowFromStore(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string[]> {
   const filePath = resolveAllowFromFilePath(channel, env);
-  return await readAllowFromStateForPath(filePath);
+  return await readAllowFromStateForPath(channel, filePath);
 }
 
 export async function readChannelAllowFromStore(
@@ -452,11 +468,11 @@ export async function readChannelAllowFromStore(
     });
   }
   const scopedPath = resolveAllowFromFilePath(channel, env, resolvedAccountId);
-  const scopedEntries = await readAllowFromStateForPath(scopedPath);
+  const scopedEntries = await readAllowFromStateForPath(channel, scopedPath);
   // Backward compatibility: legacy channel-level allowFrom store was unscoped.
   // Keep honoring it for default account to prevent re-pair prompts after upgrades.
   const legacyPath = resolveAllowFromFilePath(channel, env);
-  const legacyEntries = await readAllowFromStateForPath(legacyPath);
+  const legacyEntries = await readAllowFromStateForPath(channel, legacyPath);
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
 }
 
@@ -465,7 +481,7 @@ export function readLegacyChannelAllowFromStoreSync(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const filePath = resolveAllowFromFilePath(channel, env);
-  return readAllowFromStateForPathSync(filePath);
+  return readAllowFromStateForPathSync(channel, filePath);
 }
 
 export function readChannelAllowFromStoreSync(
@@ -483,9 +499,9 @@ export function readChannelAllowFromStoreSync(
     });
   }
   const scopedPath = resolveAllowFromFilePath(channel, env, resolvedAccountId);
-  const scopedEntries = readAllowFromStateForPathSync(scopedPath);
+  const scopedEntries = readAllowFromStateForPathSync(channel, scopedPath);
   const legacyPath = resolveAllowFromFilePath(channel, env);
-  const legacyEntries = readAllowFromStateForPathSync(legacyPath);
+  const legacyEntries = readAllowFromStateForPathSync(channel, legacyPath);
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
 }
 
