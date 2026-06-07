@@ -11,7 +11,6 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
-import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
@@ -127,40 +126,6 @@ export async function writeDailyDreamingPhaseBlock(params: {
 const DEEP_SLEEP_HEADING = "## Deep Sleep";
 const DEEP_SLEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
 const DEEP_SLEEP_END_MARKER = "<!-- openclaw:dreaming:deep:end -->";
-const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
-
-async function resolveDreamsPath(workspaceDir: string): Promise<string> {
-  for (const name of DREAMS_FILENAMES) {
-    const target = path.join(workspaceDir, name);
-    try {
-      await fs.access(target);
-      return target;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw err;
-      }
-    }
-  }
-  return path.join(workspaceDir, DREAMS_FILENAMES[0]);
-}
-
-async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
-  const stat = await fs.lstat(dreamsPath).catch((err: unknown) => {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return null;
-    }
-    throw err;
-  });
-  if (!stat) {
-    return;
-  }
-  if (stat.isSymbolicLink()) {
-    throw new Error("Refusing to write symlinked DREAMS.md");
-  }
-  if (!stat.isFile()) {
-    throw new Error("Refusing to write non-file DREAMS.md");
-  }
-}
 
 export async function writeDeepDreamingToDreamsMd(params: {
   workspaceDir: string;
@@ -168,33 +133,21 @@ export async function writeDeepDreamingToDreamsMd(params: {
   nowMs?: number;
   timezone?: string;
 }): Promise<string> {
-  const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
-  const original = await fs.readFile(dreamsPath, "utf-8").catch((err: unknown) => {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return "";
-    }
-    throw err;
-  });
+  const { updateDreamsFile } = await import("./dreaming-narrative.js");
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
-  const updated = replaceManagedMarkdownBlock({
-    original,
-    heading: DEEP_SLEEP_HEADING,
-    startMarker: DEEP_SLEEP_START_MARKER,
-    endMarker: DEEP_SLEEP_END_MARKER,
-    body,
+  return updateDreamsFile<string>({
+    workspaceDir: params.workspaceDir,
+    updater: (existing, dreamsPath) => {
+      const updated = replaceManagedMarkdownBlock({
+        original: existing,
+        heading: DEEP_SLEEP_HEADING,
+        startMarker: DEEP_SLEEP_START_MARKER,
+        endMarker: DEEP_SLEEP_END_MARKER,
+        body,
+      });
+      return { content: updated, result: dreamsPath };
+    },
   });
-  const content = withTrailingNewline(updated);
-  await assertSafeDreamsPath(dreamsPath);
-  await replaceFileAtomic({
-    filePath: dreamsPath,
-    content,
-    mode: 0o600,
-    preserveExistingMode: true,
-    tempPrefix: `${path.basename(dreamsPath)}.dreams`,
-    throwOnCleanupError: true,
-  });
-  return dreamsPath;
 }
 
 export async function writeDeepDreamingReport(params: {

@@ -530,7 +530,7 @@ async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promi
   });
 }
 
-async function updateDreamsFile<T>(params: {
+export async function updateDreamsFile<T>(params: {
   workspaceDir: string;
   updater: (
     existing: string,
@@ -553,6 +553,7 @@ async function updateDreamsFile<T>(params: {
   lockEntry.refs += 1;
   try {
     return await lockEntry.withLock(async () => {
+      await assertSafeDreamsPath(dreamsPath);
       const existing = await readDreamsFile(dreamsPath);
       const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
       if (shouldWrite) {
