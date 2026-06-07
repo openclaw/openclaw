@@ -1098,6 +1098,45 @@ function hasAutoFixableLegacyOpenAICodexProvider(providersValue: unknown): boole
   return false;
 }
 
+export function collectBlockedLegacyOpenAICodexProviderWarnings(raw: unknown): string[] {
+  const models = getRecord(getRecord(raw)?.models);
+  const providers = getRecord(models?.providers);
+  const canonicalEntry = providers ? getCanonicalOpenAIProviderEntry(providers) : undefined;
+  if (!providers || !canonicalEntry) {
+    return [];
+  }
+
+  const warnings: string[] = [];
+  for (const [providerId, providerValue] of Object.entries(providers)) {
+    const provider = getRecord(providerValue);
+    if (!provider || normalizeProviderId(providerId) !== LEGACY_OPENAI_CODEX_PROVIDER_ID) {
+      continue;
+    }
+    const normalized = normalizeLegacyOpenAIResponsesApi(providerId, provider, []);
+    if (normalized.changed) {
+      continue;
+    }
+    const modelsToMerge = getMergeableLegacyOpenAIModels({
+      canonical: canonicalEntry.value,
+      legacy: normalized.value,
+    });
+    if (modelsToMerge.length === 0) {
+      continue;
+    }
+    const mergeBlockers = collectModelMergeBlockers({
+      canonical: canonicalEntry.value,
+      legacy: normalized.value,
+    });
+    if (mergeBlockers.length === 0) {
+      continue;
+    }
+    warnings.push(
+      `models.providers.${providerId} cannot be merged automatically into models.providers.${canonicalEntry.key} because provider-level defaults cannot be represented safely on merged models: ${mergeBlockers.join(", ")}. Move the affected model/provider defaults manually before removing models.providers.${providerId}.`,
+    );
+  }
+  return warnings;
+}
+
 function buildMergedLegacyOpenAIModel(
   model: unknown,
   legacyProvider: Record<string, unknown>,
