@@ -4,7 +4,7 @@ import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
-import { resolveWindowsCommandShim } from "../../windows-command.js";
+import { buildWindowsBatchInvocation, resolveWindowsCommandShim } from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -14,7 +14,7 @@ const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
     command,
-    cmdCommands: ["npm", "pnpm", "yarn", "npx"],
+    cmdCommands: ["claude", "npm", "pnpm", "yarn", "npx"],
   });
 }
 
@@ -38,6 +38,12 @@ export async function createChildAdapter(params: {
   const preparedSpawn = prepareOomScoreAdjustedSpawn(resolvedArgv[0] ?? "", resolvedArgv.slice(1), {
     env: baseEnv,
   });
+  const batchInvocation = buildWindowsBatchInvocation({
+    command: preparedSpawn.command,
+    args: preparedSpawn.args,
+  });
+  const spawnCommand = batchInvocation?.command ?? preparedSpawn.command;
+  const spawnArgs = batchInvocation?.args ?? preparedSpawn.args;
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
@@ -52,7 +58,8 @@ export async function createChildAdapter(params: {
     stdio: ["pipe", "pipe", "pipe"],
     detached: useDetached,
     windowsHide: true,
-    windowsVerbatimArguments: params.windowsVerbatimArguments,
+    windowsVerbatimArguments:
+      batchInvocation?.windowsVerbatimArguments ?? params.windowsVerbatimArguments,
   };
   if (stdinMode === "inherit") {
     options.stdio = ["inherit", "pipe", "pipe"];
@@ -61,7 +68,7 @@ export async function createChildAdapter(params: {
   }
 
   const spawned = await spawnWithFallback({
-    argv: [preparedSpawn.command, ...preparedSpawn.args],
+    argv: [spawnCommand, ...spawnArgs],
     options,
     fallbacks: useDetached
       ? [

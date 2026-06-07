@@ -83,6 +83,7 @@ type SpawnWithFallbackParams = {
     detached?: boolean;
     env?: NodeJS.ProcessEnv | Record<string, string>;
     stdio?: string[];
+    windowsVerbatimArguments?: boolean;
   };
   fallbacks?: Array<{ options?: { detached?: boolean } }>;
 };
@@ -365,6 +366,26 @@ describe("createChildAdapter", () => {
     await vi.advanceTimersByTimeAsync(300);
 
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
+  });
+
+  it("wraps Windows Claude CLI child runs through cmd.exe instead of spawning .cmd directly", async () => {
+    setPlatform("win32");
+
+    await createAdapterHarness({
+      pid: 3131,
+      argv: ["claude", "--print", "hello world"],
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv).toEqual([
+      "C:\\Windows\\System32\\cmd.exe",
+      "/d",
+      "/s",
+      "/c",
+      'claude.cmd --print "hello world"',
+    ]);
+    expect(spawnArgs.options?.detached).toBe(false);
+    expect(spawnArgs.options?.windowsVerbatimArguments).toBe(true);
   });
 
   it("disables detached mode in service-managed runtime", async () => {

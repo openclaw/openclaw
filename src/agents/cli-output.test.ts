@@ -401,6 +401,44 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("uses Claude assistant text when the terminal stream-json result is empty", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "session-telegram" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [{ type: "text", text: "Telegram visible reply." }],
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-telegram",
+          result: "   ",
+          usage: { input_tokens: 10, output_tokens: 3 },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Telegram visible reply.",
+      sessionId: "session-telegram",
+      usage: {
+        input: 10,
+        output: 3,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
+
   it("unwraps nested Claude agent result JSON from stream-json output", () => {
     const result = parseCliJsonl(
       [
@@ -564,6 +602,49 @@ describe("createCliJsonlStreamingParser", () => {
       cacheRead: 125,
       cacheWrite: undefined,
       total: undefined,
+    });
+  });
+
+  it("keeps Claude assistant text in streaming output when the terminal result is empty", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "session-telegram" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [{ type: "text", text: "Telegram visible reply." }],
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-telegram",
+          result: "   ",
+          usage: { input_tokens: 10, output_tokens: 3 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "Telegram visible reply.",
+      sessionId: "session-telegram",
+      usage: {
+        input: 10,
+        output: 3,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
     });
   });
 

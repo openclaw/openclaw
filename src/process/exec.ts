@@ -11,48 +11,11 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
-import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
-import { resolveWindowsCommandShim } from "./windows-command.js";
+import { buildWindowsBatchInvocation, resolveWindowsCommandShim } from "./windows-command.js";
 
 const execFileAsync = promisify(execFile);
-
-const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
-
-function isWindowsBatchCommand(resolvedCommand: string): boolean {
-  if (process.platform !== "win32") {
-    return false;
-  }
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(resolvedCommand));
-  return ext === ".cmd" || ext === ".bat";
-}
-
-function escapeForCmdExe(arg: string): string {
-  // Reject cmd metacharacters to avoid injection when we must pass a single command line.
-  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
-    throw new Error(
-      `Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}. ` +
-        "Pass an explicit shell-wrapper argv at the call site instead.",
-    );
-  }
-  // Quote when needed; double inner quotes for cmd parsing.
-  if (!arg.includes(" ") && !arg.includes('"')) {
-    return arg;
-  }
-  return `"${arg.replace(/"/g, '""')}"`;
-}
-
-function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string {
-  return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
-}
-
-function resolveTrustedWindowsCmdExe(): string {
-  if (process.platform !== "win32") {
-    return "cmd.exe";
-  }
-  return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
-}
 
 function assignChildEnvValue(params: {
   env: NodeJS.ProcessEnv;
@@ -148,17 +111,19 @@ function resolveChildProcessInvocation(params: {
       : params.argv;
   const resolvedCommand =
     finalArgv !== params.argv ? (finalArgv[0] ?? "") : resolveCommand(params.argv[0] ?? "");
-  const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
+  const batchInvocation = buildWindowsBatchInvocation({
+    command: resolvedCommand,
+    args: finalArgv.slice(1),
+  });
 
   return {
-    command: useCmdWrapper ? resolveTrustedWindowsCmdExe() : resolvedCommand,
-    args: useCmdWrapper
-      ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
-      : finalArgv.slice(1),
+    command: batchInvocation?.command ?? resolvedCommand,
+    args: batchInvocation?.args ?? finalArgv.slice(1),
     usesWindowsExitCodeShim:
-      process.platform === "win32" && (useCmdWrapper || finalArgv !== params.argv),
+      process.platform === "win32" && (batchInvocation !== null || finalArgv !== params.argv),
     windowsHide: true,
-    windowsVerbatimArguments: useCmdWrapper ? true : params.windowsVerbatimArguments,
+    windowsVerbatimArguments:
+      batchInvocation?.windowsVerbatimArguments ?? params.windowsVerbatimArguments,
   };
 }
 

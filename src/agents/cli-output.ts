@@ -361,12 +361,28 @@ export function parseCliJson(
   return { text, sessionId, usage };
 }
 
+function collectClaudeCliAssistantText(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+}): string {
+  if (!usesClaudeStreamJsonDialect(params) || params.parsed.type !== "assistant") {
+    return "";
+  }
+  return collectCliText(params.parsed.message).trim();
+}
+
+function resolveBufferedCliText(texts: readonly string[], assistantText = ""): string {
+  return texts.join("\n").trim() || assistantText.trim();
+}
+
 function parseClaudeCliJsonlResult(params: {
   backend: CliBackendConfig;
   providerId: string;
   parsed: Record<string, unknown>;
   sessionId?: string;
   usage?: CliUsage;
+  fallbackText?: string;
 }): CliOutput | null {
   if (!usesClaudeStreamJsonDialect(params)) {
     return null;
@@ -379,6 +395,10 @@ function parseClaudeCliJsonlResult(params: {
     const resultText = unwrapNestedCliResultText(params.parsed.result).trim();
     if (resultText) {
       return { text: resultText, sessionId: params.sessionId, usage: params.usage };
+    }
+    const fallbackText = params.fallbackText?.trim();
+    if (fallbackText) {
+      return { text: fallbackText, sessionId: params.sessionId, usage: params.usage };
     }
     // Claude may finish with an empty result after tool-only work. Keep the
     // resolved session handle and usage instead of dropping them.
@@ -663,10 +683,20 @@ export function createCliJsonlStreamingParser(params: {
       parsed,
       sessionId,
       usage,
+      fallbackText: resolveBufferedCliText(texts, assistantText),
     });
     if (result) {
       output = result;
       return;
+    }
+
+    const assistantMessageText = collectClaudeCliAssistantText({
+      backend: params.backend,
+      providerId: params.providerId,
+      parsed,
+    });
+    if (assistantMessageText) {
+      texts.push(assistantMessageText);
     }
 
     const item = isRecord(parsed.item) ? parsed.item : null;
@@ -746,7 +776,7 @@ export function createCliJsonlStreamingParser(params: {
       if (output) {
         return output;
       }
-      const text = texts.join("\n").trim();
+      const text = resolveBufferedCliText(texts, assistantText);
       return text ? { text, sessionId, usage } : null;
     },
   };
@@ -784,9 +814,15 @@ export function parseCliJsonl(
         parsed,
         sessionId,
         usage,
+        fallbackText: resolveBufferedCliText(texts),
       });
       if (claudeResult) {
         return claudeResult;
+      }
+
+      const assistantMessageText = collectClaudeCliAssistantText({ backend, providerId, parsed });
+      if (assistantMessageText) {
+        texts.push(assistantMessageText);
       }
 
       const item = isRecord(parsed.item) ? parsed.item : null;
@@ -798,7 +834,7 @@ export function parseCliJsonl(
       }
     }
   }
-  const text = texts.join("\n").trim();
+  const text = resolveBufferedCliText(texts);
   if (!text) {
     return null;
   }
