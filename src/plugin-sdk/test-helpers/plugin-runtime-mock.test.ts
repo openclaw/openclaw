@@ -83,18 +83,16 @@ describe("createPluginRuntimeMock", () => {
     );
   });
 
-  it("reflects inbound overrides through the deprecated turn alias", async () => {
-    const run = vi.fn(async () => ({ admission: { kind: "deny" }, dispatched: false }));
+  it("reflects inbound overrides through the deprecated turn alias", () => {
+    const overrideRun = createPluginRuntimeMock().channel.inbound.run;
     const runtime = createPluginRuntimeMock({
       channel: {
-        inbound: { run },
+        inbound: { run: overrideRun },
       },
     });
 
-    await runtime.channel.turn.run({ channel: "test", raw: {}, adapter: {} });
-
     expect(runtime.channel.turn).toBe(runtime.channel.inbound);
-    expect(run).toHaveBeenCalledOnce();
+    expect(runtime.channel.turn.run).toBe(overrideRun);
   });
 
   it("routes untrusted group prompt facts into untrusted structured context", () => {
