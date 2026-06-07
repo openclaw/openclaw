@@ -39,6 +39,7 @@ import {
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps } from "./core-bridge.js";
 import type { MsteamsLogger, MsteamsSession } from "./msteams-media-stream.js";
+import type { MsteamsVideoFrame } from "./msteams-video-frame.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 
@@ -196,11 +197,9 @@ export interface MsteamsRealtimeDeps {
   /**
    * Latest sampled inbound video frame (camera / screen-share) for the `look_at_screen` tool, so
    * the agent can describe what the caller is showing. Provided by the provider; undefined disables
-   * the tool. Structural type avoids a circular import with the provider.
+   * the tool. Uses the shared `MsteamsVideoFrame` type (type-only import → no runtime cycle).
    */
-  getLatestFrame?: (
-    source?: "camera" | "screenshare",
-  ) => { dataBase64: string; mime: string; width: number; height: number } | undefined;
+  getLatestFrame?: (source?: "camera" | "screenshare") => MsteamsVideoFrame | undefined;
 
   /**
    * Suppress caller-leg input while assistant audio is playing (self-echo guard).
