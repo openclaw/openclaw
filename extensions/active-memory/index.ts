@@ -580,6 +580,65 @@ function isMissingRegisteredMemoryToolsError(
   return sourceParts.includes(runtimeSource);
 }
 
+function isRunnableChannelName(channel: string): boolean {
+  return !channel.includes(":") && !channel.includes("/");
+}
+
+function resolveRunnableChannelNameFromSessionKey(sessionKey?: string): string | undefined {
+  const rawSessionKey = normalizeOptionalString(sessionKey);
+  if (!rawSessionKey) {
+    return undefined;
+  }
+  const { baseSessionKey } = parseThreadSessionSuffix(rawSessionKey);
+  const parsed = parseAgentSessionKey(baseSessionKey ?? rawSessionKey);
+  if (!parsed) {
+    return undefined;
+  }
+  const restParts = parsed.rest.split(":").filter(Boolean);
+  const chatTypeIndex = restParts.findIndex((part) => {
+    const token = part.trim().toLowerCase();
+    return token === "direct" || token === "dm" || token === "group" || token === "channel";
+  });
+  if (chatTypeIndex <= 0) {
+    return undefined;
+  }
+  const channel = normalizeOptionalString(restParts[0]);
+  return channel && isRunnableChannelName(channel) ? channel : undefined;
+}
+
+// iMessage target strings identify the peer, but the embedded recall run still
+// needs the runnable plugin channel so lightweight bootstrap can build a thread key.
+function resolveIMessageScopedRunnableChannelName(params: {
+  channelId?: string;
+  messageProvider?: string;
+  sessionKeyChannel?: string;
+}): string | undefined {
+  const channelId = normalizeOptionalString(params.channelId);
+  if (!channelId) {
+    return undefined;
+  }
+  const separatorIndex = channelId.indexOf(":");
+  if (separatorIndex === -1) {
+    return undefined;
+  }
+  const prefix = channelId.slice(0, separatorIndex).trim().toLowerCase();
+  const suffix = normalizeOptionalString(channelId.slice(separatorIndex + 1));
+  if (!suffix) {
+    return undefined;
+  }
+  if (prefix === "imessage" || prefix === "sms" || prefix === "auto") {
+    return "imessage";
+  }
+  const context = (params.sessionKeyChannel ?? params.messageProvider ?? "").trim().toLowerCase();
+  if (
+    (context === "imessage" || context === "bluebubbles" || !context) &&
+    (prefix === "chat_id" || prefix === "chat_guid" || prefix === "chat_identifier")
+  ) {
+    return "imessage";
+  }
+  return undefined;
+}
+
 function resolveRecallRunChannelContext(params: {
   api: OpenClawPluginApi;
   agentId: string;
@@ -591,24 +650,32 @@ function resolveRecallRunChannelContext(params: {
   messageChannel?: string;
   messageProvider?: string;
 } {
-  const isRunnableChannelName = (channel: string) =>
-    !channel.includes(":") && !channel.includes("/");
   const explicitChannel = normalizeOptionalString(params.channelId);
   const explicitProvider = normalizeOptionalString(params.messageProvider);
+  const sessionKeyChannel = resolveRunnableChannelNameFromSessionKey(params.sessionKey);
+  const iMessageScopedChannel = resolveIMessageScopedRunnableChannelName({
+    channelId: explicitChannel,
+    messageProvider: explicitProvider,
+    sessionKeyChannel,
+  });
   // A channelId that contains ":" is a scoped conversation id (e.g. Telegram
   // forum-topic "-100123:topic:77") or "/" (e.g. Google Chat "spaces/...") is
   // not a runnable channel name. Using it as the embedded recall run's channel
   // causes bundled-plugin dirName validation to throw (#76704, #78918).
   const runnableExplicitChannel =
-    explicitChannel && isRunnableChannelName(explicitChannel) ? explicitChannel : undefined;
+    explicitChannel && isRunnableChannelName(explicitChannel)
+      ? explicitChannel
+      : iMessageScopedChannel;
   // Non-webchat providers often pass a raw conversation id as channelId.
   // Keep those ids for filtering, but run the recall sub-agent through the provider.
-  const trustedExplicitChannel =
+  const shouldTrustRunnableExplicitChannel = Boolean(
     runnableExplicitChannel &&
     runnableExplicitChannel !== explicitProvider &&
-    (!explicitProvider || explicitProvider === "webchat")
-      ? runnableExplicitChannel
-      : undefined;
+    (!explicitProvider || explicitProvider === "webchat"),
+  );
+  const trustedExplicitChannel =
+    iMessageScopedChannel ??
+    (shouldTrustRunnableExplicitChannel ? runnableExplicitChannel : undefined);
   const resolveReturnValue = (paramsLocal: {
     resolvedChannel?: string;
     resolvedChannelStrength?: "strong" | "weak";
@@ -618,12 +685,14 @@ function resolveRecallRunChannelContext(params: {
     return {
       messageChannel:
         trustedExplicitChannel ??
+        sessionKeyChannel ??
         trustedResolvedChannel ??
         explicitProvider ??
         runnableExplicitChannel ??
         paramsLocal.resolvedChannel,
       messageProvider:
         trustedExplicitChannel ??
+        sessionKeyChannel ??
         trustedResolvedChannel ??
         explicitProvider ??
         runnableExplicitChannel ??
