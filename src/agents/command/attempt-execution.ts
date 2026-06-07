@@ -697,9 +697,9 @@ export async function runAgentAttempt(params: {
   // Construct the closure that captures continue_work tool requests fired
   // during this attempt, then surface the runEmbeddedAgent result while
   // post-processing the captured request to schedule the next-turn
-  // heartbeat-wake. Mirrors the followup-runner continue_work pattern. Without
+  // TaskFlow wake. Mirrors the followup-runner continue_work pattern. Without
   // this wiring, createOpenClawTools sees no continueWorkOpts on the spawn-init
-  // path, so continue_work never registers for turn-1 subagent tool calls.
+  // path, so typed continue_work never registers for turn-1 subagent tool calls.
   const continuationEnabled = params.cfg?.agents?.defaults?.continuation?.enabled === true;
   let attemptContinueWorkRequest: ContinueWorkRequest | undefined;
   const continueWorkOpts = continuationEnabled
@@ -889,21 +889,38 @@ export async function runAgentAttempt(params: {
     }),
   );
 
-  // Post-turn: if continue_work fired during this attempt, schedule the next
-  // turn via heartbeat-wake. Mirrors the followup-runner heartbeat-scheduler
-  // block; we keep this guarded by sessionKey + continuation.enabled and use
-  // dynamic imports to keep the static graph free of the continuation-runtime
-  // dependency on the spawn-init path.
-  if (attemptContinueWorkRequest && continuationEnabled && params.sessionKey) {
+  // Post-turn: capture both continue_work surfaces. Light-context subagents may
+  // not receive the typed tool, so the #952 nested path must honor the bracket
+  // token parsed from the final payload as well as the tool callback.
+  if (continuationEnabled && params.sessionKey) {
     try {
-      await scheduleSpawnInitContinueWorkWake({
+      const { extractContinuationSignal } = await import("../../auto-reply/continuation/signal.js");
+      const extraction = extractContinuationSignal({
+        payloads: embeddedRunResult.payloads ?? [],
+        ...(attemptContinueWorkRequest ? { continueWorkRequest: attemptContinueWorkRequest } : {}),
+        enabled: true,
         sessionKey: params.sessionKey,
-        sessionEntry: params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
-        runId: params.runId,
-        request: attemptContinueWorkRequest,
-        cfg: params.cfg,
-        runResult: embeddedRunResult,
       });
+      if (extraction.signal?.kind === "work") {
+        await scheduleSpawnInitContinueWorkWake({
+          sessionKey: params.sessionKey,
+          sessionEntry: params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
+          runId: params.runId,
+          request: {
+            reason: extraction.workReason ?? "",
+            ...(extraction.signal.delayMs !== undefined
+              ? { delaySeconds: extraction.signal.delayMs / 1000 }
+              : attemptContinueWorkRequest
+                ? { delaySeconds: attemptContinueWorkRequest.delaySeconds }
+                : {}),
+            ...(extraction.signal.traceparent
+              ? { traceparent: extraction.signal.traceparent }
+              : {}),
+          },
+          cfg: params.cfg,
+          runResult: embeddedRunResult,
+        });
+      }
     } catch (err) {
       // Persistence/scheduling failure must not break the attempt itself —
       // mirrors followup-runner's defensive logging.
@@ -925,7 +942,7 @@ async function scheduleSpawnInitContinueWorkWake(params: {
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
   runId: string;
-  request: ContinueWorkRequest;
+  request: { reason: string; delaySeconds?: number; traceparent?: string };
   cfg: OpenClawConfig;
   runResult: EmbeddedAgentRunResult;
 }): Promise<void> {
@@ -946,7 +963,11 @@ async function scheduleSpawnInitContinueWorkWake(params: {
   const result = await scheduleContinuationWork({
     sessionKey: params.sessionKey,
     chainState,
-    request: params.request,
+    request: {
+      reason: params.request.reason,
+      delaySeconds: params.request.delaySeconds ?? continuationConfig.defaultDelayMs / 1000,
+      ...(params.request.traceparent ? { traceparent: params.request.traceparent } : {}),
+    },
     config: continuationConfig,
     parentRunId: params.runId,
     log: (message) => log.info(message),

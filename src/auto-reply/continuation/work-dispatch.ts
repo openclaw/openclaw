@@ -15,7 +15,7 @@ import {
   enqueuePendingWork,
   listPendingWorkSessionKeysForRecovery,
   markPendingWorkFailed,
-  markPendingWorkHeartbeatRequested,
+  markPendingWorkTurnGranted,
   peekSoonestUnmaturedWorkDueAt,
   requeuePendingWork,
   type PendingContinuationWork,
@@ -24,6 +24,7 @@ import {
 const log = createSubsystemLogger("continuation/work-dispatch");
 const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
 const BUSY_RETRY_MS = 1_000;
+const CONTINUATION_TURN_BUSY_REASON = "requests-in-flight";
 
 const workTimers = new Map<string, NodeJS.Timeout>();
 
@@ -68,6 +69,82 @@ export function resetContinuationWorkDispatchForTests(): void {
   workTimers.clear();
 }
 
+function formatContinuationWakeText(work: PendingContinuationWork): string {
+  return (
+    `[continuation:wake] Turn ${work.hop}/${work.maxChainLength}. ` +
+    (work.chainStartedAt !== undefined
+      ? `Chain started at ${new Date(work.chainStartedAt).toISOString()}. `
+      : "") +
+    (work.accumulatedChainTokens !== undefined
+      ? `Accumulated tokens: ${work.accumulatedChainTokens}. `
+      : "") +
+    `The agent elected to continue working.` +
+    (work.reason ? ` Reason: ${work.reason}` : "")
+  );
+}
+
+type ContinuationTurnGrantResult = { status: "ran" } | { status: "skipped"; reason: string };
+
+async function driveContinuationTurn(
+  work: PendingContinuationWork,
+  wakeText: string,
+): Promise<ContinuationTurnGrantResult> {
+  const [
+    { getRuntimeConfig },
+    { resolveStorePath },
+    { loadSessionStore },
+    { parseAgentSessionKey },
+    { getReplyFromConfig },
+    { replyRunRegistry },
+  ] = await Promise.all([
+    import("../../config/config.js"),
+    import("../../config/sessions/paths.js"),
+    import("../../config/sessions/store-load.js"),
+    import("../../sessions/session-key-utils.js"),
+    import("../reply/get-reply.js"),
+    import("../reply/reply-run-registry.js"),
+  ]);
+
+  // Same-session continuations grant a normal turn directly. Do not route through
+  // heartbeat wake registration/active-hours gates, which are agent-schedule policy
+  // and can strand subagent sessions that are otherwise eligible for a turn.
+  if (replyRunRegistry.isActive(work.sessionKey)) {
+    return { status: "skipped", reason: CONTINUATION_TURN_BUSY_REASON };
+  }
+
+  const cfg = getRuntimeConfig();
+  const agentId = parseAgentSessionKey(work.sessionKey)?.agentId;
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const store = loadSessionStore(storePath);
+  const entry = store[work.sessionKey];
+  if (!entry) {
+    return { status: "skipped", reason: "missing-session" };
+  }
+
+  await getReplyFromConfig(
+    {
+      Body: wakeText,
+      BodyForCommands: wakeText,
+      CommandBody: wakeText,
+      Provider: "system",
+      Surface: "system",
+      From: "system",
+      To: "agent",
+      SessionKey: work.sessionKey,
+      RuntimePolicySessionKey: work.sessionKey,
+      ...(agentId ? { AgentId: agentId } : {}),
+    },
+    {
+      continuationTrigger: "work-wake",
+      parentRunId: work.parentRunId,
+      typingPolicy: "system_event",
+      suppressTyping: true,
+    },
+    cfg,
+  );
+  return { status: "ran" };
+}
+
 export async function dispatchPendingContinuationWork(params: {
   sessionKey: string;
   recoverRunning?: boolean;
@@ -101,28 +178,11 @@ export async function dispatchPendingContinuationWork(params: {
       log.info(
         `[continuation:work-wake] hop=${work.hop}/${work.maxChainLength} session=${work.sessionKey}`,
       );
-      enqueueSystemEvent(
-        `[continuation:wake] Turn ${work.hop}/${work.maxChainLength}. ` +
-          (work.chainStartedAt !== undefined
-            ? `Chain started at ${new Date(work.chainStartedAt).toISOString()}. `
-            : "") +
-          (work.accumulatedChainTokens !== undefined
-            ? `Accumulated tokens: ${work.accumulatedChainTokens}. `
-            : "") +
-          `The agent elected to continue working.` +
-          (work.reason ? ` Reason: ${work.reason}` : ""),
-        { sessionKey: work.sessionKey, trusted: true },
-      );
-      const { runHeartbeatOnce } = await import("../../infra/heartbeat-runner.js");
-      const result = await runHeartbeatOnce({
-        sessionKey: work.sessionKey,
-        reason: "continuation",
-        intent: "immediate",
-        parentRunId: work.parentRunId,
-        continuationTurnGrant: true,
-      });
+      const wakeText = formatContinuationWakeText(work);
+      enqueueSystemEvent(wakeText, { sessionKey: work.sessionKey, trusted: true });
+      const result = await driveContinuationTurn(work, wakeText);
       if (result.status === "ran") {
-        markPendingWorkHeartbeatRequested(work);
+        markPendingWorkTurnGranted(work);
         dispatched++;
         continue;
       }

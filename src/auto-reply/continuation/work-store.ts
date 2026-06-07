@@ -41,7 +41,7 @@ const PendingWorkStateSchema = z.object({
   chainId: z.string().optional(),
   traceparent: z.string().optional(),
   releasedAt: z.number().int().nonnegative().optional(),
-  heartbeatRequestedAt: z.number().int().nonnegative().optional(),
+  turnGrantedAt: z.number().int().nonnegative().optional(),
 });
 
 type PendingWorkState = z.infer<typeof PendingWorkStateSchema>;
@@ -198,7 +198,7 @@ export function consumePendingWork(
   return work;
 }
 
-export function markPendingWorkHeartbeatRequested(work: PendingContinuationWork): boolean {
+export function markPendingWorkTurnGranted(work: PendingContinuationWork): boolean {
   if (!work.flowId || work.expectedRevision === undefined) {
     return false;
   }
@@ -208,7 +208,7 @@ export function markPendingWorkHeartbeatRequested(work: PendingContinuationWork)
   const finished = finishFlow({
     flowId: work.flowId,
     expectedRevision: work.expectedRevision,
-    currentStep: "Same-session continuation wake requested",
+    currentStep: "Same-session continuation turn granted",
     stateJson: {
       ...(state ?? {
         kind: "continuation_work",
@@ -219,7 +219,7 @@ export function markPendingWorkHeartbeatRequested(work: PendingContinuationWork)
         dueAt: work.dueAt,
         maxChainLength: work.maxChainLength,
       }),
-      heartbeatRequestedAt: now,
+      turnGrantedAt: now,
     },
     updatedAt: now,
     endedAt: now,
@@ -327,8 +327,7 @@ export function hasLiveOrRecentlyDispatchedContinuationWork(
     }
     const state = decodeWorkState(flow);
     return (
-      state?.heartbeatRequestedAt !== undefined &&
-      now - flow.endedAt <= RECENTLY_DISPATCHED_RETAIN_MS
+      state?.turnGrantedAt !== undefined && now - flow.endedAt <= RECENTLY_DISPATCHED_RETAIN_MS
     );
   });
 }

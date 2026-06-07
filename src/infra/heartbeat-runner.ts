@@ -1339,13 +1339,6 @@ export async function runHeartbeatOnce(opts: {
   intent?: HeartbeatWakeIntent;
   reason?: string;
   parentRunId?: string;
-  /**
-   * Same-session continuation work grants are not periodic heartbeats. They
-   * reuse the heartbeat runner's session routing/getReplyFromConfig path but
-   * must not depend on the agent being registered for heartbeat schedules,
-   * interval config, or active-hours windows. Busy/lane protections still apply.
-   */
-  continuationTurnGrant?: boolean;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? getRuntimeConfig();
@@ -1362,22 +1355,18 @@ export async function runHeartbeatOnce(opts: {
     source: opts.source,
     mergeRequestedHeartbeat: opts.source === "cron",
   });
-  const isContinuationTurnGrant =
-    opts.continuationTurnGrant === true && opts.reason === "continuation";
-  if (!isContinuationTurnGrant) {
-    if (!areHeartbeatsEnabled()) {
-      return { status: "skipped", reason: "disabled" };
-    }
-    if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
-      return { status: "skipped", reason: "disabled" };
-    }
-    if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
-      return { status: "skipped", reason: "disabled" };
-    }
+  if (!areHeartbeatsEnabled()) {
+    return { status: "skipped", reason: "disabled" };
+  }
+  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+    return { status: "skipped", reason: "disabled" };
+  }
+  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+    return { status: "skipped", reason: "disabled" };
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!isContinuationTurnGrant && !isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
     return { status: "skipped", reason: "quiet-hours" };
   }
 

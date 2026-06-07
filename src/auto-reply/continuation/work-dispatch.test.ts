@@ -1,15 +1,47 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
-
 const turnGrants: unknown[] = [];
 const systemEvents: unknown[] = [];
-const runHeartbeatOnceMock = vi.fn(async (opts: unknown): Promise<HeartbeatRunResult> => {
-  turnGrants.push(opts);
-  return { status: "ran", durationMs: 1 };
+const activeSessions = new Set<string>();
+const mockSessionStore: Record<string, unknown> = {};
+
+vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => ({ session: { store: "test-store" } }),
+}));
+
+vi.mock("../../config/sessions/paths.js", () => ({
+  resolveStorePath: () => "test-store",
+}));
+
+vi.mock("../../config/sessions/store-load.js", () => ({
+  loadSessionStore: () => mockSessionStore,
+}));
+
+vi.mock("../../sessions/session-key-utils.js", () => ({
+  parseAgentSessionKey: (sessionKey: string) => {
+    const match = /^agent:([^:]+)/.exec(sessionKey);
+    return match ? { agentId: match[1] } : undefined;
+  },
+}));
+
+vi.mock("../reply/reply-run-registry.js", () => ({
+  replyRunRegistry: {
+    isActive: (sessionKey: string) => activeSessions.has(sessionKey),
+  },
+}));
+
+vi.mock("../reply/get-reply.js", () => ({
+  getReplyFromConfig: vi.fn(async (context: unknown, options: unknown, cfg: unknown) => {
+    turnGrants.push({ context, options, cfg });
+    return [{ text: "ok" }];
+  }),
+}));
+
+vi.mock("../../infra/heartbeat-runner.js", () => {
+  throw new Error("continuation_work dispatch must not use the heartbeat runner");
 });
 
-vi.mock("../../infra/heartbeat-runner.js", () => ({
-  runHeartbeatOnce: (opts: unknown) => runHeartbeatOnceMock(opts),
+vi.mock("../../infra/heartbeat-wake.js", () => ({
+  isRetryableHeartbeatBusySkipReason: (reason: string) => reason === "requests-in-flight",
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
@@ -180,8 +212,11 @@ describe("durable continuation_work dispatch", () => {
   beforeEach(() => {
     vi.useFakeTimers({ now: 1_000_000 });
     turnGrants.length = 0;
-    runHeartbeatOnceMock.mockClear();
     systemEvents.length = 0;
+    activeSessions.clear();
+    for (const key of Object.keys(mockSessionStore)) {
+      delete mockSessionStore[key];
+    }
     mockFlows.clear();
     flowCounter = 0;
     resetContinuationWorkDispatchForTests();
@@ -194,6 +229,7 @@ describe("durable continuation_work dispatch", () => {
 
   it("retains a continue_delegate child session while its continue_work wake is pending", async () => {
     const childSessionKey = "agent:main:continuation-child";
+    mockSessionStore[childSessionKey] = { sessionKey: childSessionKey };
     enqueuePendingWork({
       sessionKey: childSessionKey,
       hop: 2,
@@ -218,15 +254,19 @@ describe("durable continuation_work dispatch", () => {
 
     expect(turnGrants).toEqual([
       expect.objectContaining({
-        sessionKey: childSessionKey,
-        reason: "continuation",
-        continuationTurnGrant: true,
+        context: expect.objectContaining({
+          SessionKey: childSessionKey,
+          Provider: "system",
+          Body: expect.stringContaining("nested hop"),
+        }),
+        options: expect.objectContaining({ continuationTrigger: "work-wake" }),
       }),
     ]);
   });
 
   it("re-arms a delayed continue_work election after simulated gateway restart", async () => {
     const sessionKey = "agent:main:main";
+    mockSessionStore[sessionKey] = { sessionKey };
     await scheduleContinuationWork({
       sessionKey,
       chainState: {
@@ -250,10 +290,11 @@ describe("durable continuation_work dispatch", () => {
 
     expect(turnGrants).toEqual([
       expect.objectContaining({
-        sessionKey,
-        reason: "continuation",
-        parentRunId: "run-1",
-        continuationTurnGrant: true,
+        context: expect.objectContaining({ SessionKey: sessionKey }),
+        options: expect.objectContaining({
+          continuationTrigger: "work-wake",
+          parentRunId: "run-1",
+        }),
       }),
     ]);
     expect(systemEvents).toEqual([
@@ -263,10 +304,8 @@ describe("durable continuation_work dispatch", () => {
 
   it("requeues instead of losing a claimed continuation when the session is busy", async () => {
     const sessionKey = "agent:main:busy";
-    runHeartbeatOnceMock.mockResolvedValueOnce({
-      status: "skipped",
-      reason: "requests-in-flight",
-    });
+    mockSessionStore[sessionKey] = { sessionKey };
+    activeSessions.add(sessionKey);
     enqueuePendingWork({
       sessionKey,
       hop: 2,
