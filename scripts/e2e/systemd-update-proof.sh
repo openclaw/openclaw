@@ -13,18 +13,15 @@ else
   UNIT="openclaw-gateway-${PROFILE}.service"
 fi
 PREFIX="$ARTIFACT_DIR/npm-prefix"
-HOME_DIR="$ARTIFACT_DIR/home"
 STATE_DIR="$ARTIFACT_DIR/state"
 LOG_DIR="$ARTIFACT_DIR/logs"
 SUMMARY_JSON="$ARTIFACT_DIR/summary.json"
 CURRENT_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-$ROOT_DIR/openclaw-current.tgz}"
 
-mkdir -p "$ARTIFACT_DIR" "$PREFIX" "$HOME_DIR" "$STATE_DIR" "$LOG_DIR"
-export HOME="$HOME_DIR"
-export XDG_CONFIG_HOME="$HOME_DIR/.config"
-export XDG_CACHE_HOME="$HOME_DIR/.cache"
+mkdir -p "$ARTIFACT_DIR" "$PREFIX" "$STATE_DIR" "$LOG_DIR"
 export OPENCLAW_PROFILE="$PROFILE"
 export OPENCLAW_STATE_DIR="$STATE_DIR"
+export OPENCLAW_CONFIG_PATH="$STATE_DIR/openclaw.json"
 export OPENCLAW_GATEWAY_PORT="$PORT"
 export OPENCLAW_SKIP_CHANNELS=1
 export OPENCLAW_SKIP_PROVIDERS=1
@@ -56,7 +53,7 @@ cleanup() {
   set +e
   systemctl --user stop "$UNIT" >/dev/null 2>&1 || true
   systemctl --user disable "$UNIT" >/dev/null 2>&1 || true
-  rm -f "$XDG_CONFIG_HOME/systemd/user/$UNIT"
+  rm -f "$HOME/.config/systemd/user/$UNIT"
   systemctl --user daemon-reload >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -97,7 +94,7 @@ install_baseline_service() {
 
 simulate_missing_supervisor_with_live_gateway() {
   log "removing real systemd user unit while leaving gateway process alive"
-  unit_path="$XDG_CONFIG_HOME/systemd/user/$UNIT"
+  unit_path="$HOME/.config/systemd/user/$UNIT"
   cp "$unit_path" "$LOG_DIR/removed-unit-copy.service"
   rm -f "$unit_path"
   systemctl --user daemon-reload >"$LOG_DIR/missing-daemon-reload.out" 2>"$LOG_DIR/missing-daemon-reload.err"
