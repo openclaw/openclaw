@@ -319,6 +319,29 @@ describe("outbound channel resolution", () => {
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
+  it("resolves outbound plugins from the selected runtime channel registry", async () => {
+    const setupPlugin = { id: "alpha" };
+    const runtimePlugin = { id: "alpha", outbound: { sendText: vi.fn() } };
+    getLoadedChannelPluginMock.mockReturnValue(undefined);
+    getChannelPluginMock.mockReturnValue(undefined);
+    getActivePluginRegistryMock.mockReturnValue({
+      channels: [{ plugin: setupPlugin }],
+    });
+    getActivePluginChannelRegistryMock.mockReturnValue({
+      channels: [{ plugin: runtimePlugin }],
+    });
+    const channelResolution = await importChannelResolution("selected-runtime-registry");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(runtimePlugin);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
   it("keeps setup shells visible for read-only channel lookup", async () => {
     const setupPlugin = { id: "alpha" };
     const runtimePlugin = { id: "alpha", outbound: { sendText: vi.fn() } };

@@ -127,10 +127,6 @@ function resolveDirectFromRegistry(
   return undefined;
 }
 
-function resolveDirectFromActiveRegistry(channel: string): ChannelPlugin | undefined {
-  return resolveDirectFromRegistry(getActivePluginRegistry(), channel);
-}
-
 function messageAdapterCanSendText(
   message: ChannelMessageAdapterShape | undefined,
 ): message is ChannelMessageAdapterShape {
@@ -148,23 +144,28 @@ function channelPluginHasRuntimeOutboundSurface(plugin: ChannelPlugin | undefine
   return Boolean(plugin?.outbound?.sendText ?? resolveSendCapableMessageAdapter(plugin));
 }
 
+function resolveRuntimeOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
+  return channelPluginHasRuntimeOutboundSurface(plugin) ? plugin : undefined;
+}
+
 function resolveRuntimeOutboundPluginCandidate(params: {
   loaded?: ChannelPlugin;
-  active?: ChannelPlugin;
+  runtime?: ChannelPlugin;
+  setupFallback?: ChannelPlugin;
   bundled?: ChannelPlugin;
   allowSetupShell?: boolean;
 }): ChannelPlugin | undefined {
   if (channelPluginHasRuntimeOutboundSurface(params.loaded)) {
     return params.loaded;
   }
-  if (channelPluginHasRuntimeOutboundSurface(params.active)) {
-    return params.active;
+  if (params.runtime) {
+    return params.runtime;
   }
   if (channelPluginHasRuntimeOutboundSurface(params.bundled)) {
     return params.bundled;
   }
   if (params.allowSetupShell) {
-    return params.loaded ?? params.active ?? params.bundled;
+    return params.loaded ?? params.setupFallback ?? params.bundled;
   }
   return undefined;
 }
@@ -193,6 +194,12 @@ function resolveValueFromRuntimeRegistries<TValue>(
 
 function resolveDirectFromRuntimeRegistries(channel: string): ChannelPlugin | undefined {
   return resolveValueFromRuntimeRegistries(channel, (plugin) => plugin);
+}
+
+function resolveRuntimeOutboundPluginFromRuntimeRegistries(
+  channel: string,
+): ChannelPlugin | undefined {
+  return resolveValueFromRuntimeRegistries(channel, resolveRuntimeOutboundPlugin);
 }
 
 function toOutboundChannelRuntime(plugin: ChannelPlugin): OutboundChannelRuntime {
@@ -261,11 +268,13 @@ export function resolveOutboundChannelPlugin(params: {
   const resolveLoaded = () => getLoadedChannelPlugin(normalized);
   const resolve = () => getChannelPlugin(normalized);
   const current = resolveLoaded();
-  const directCurrent = resolveDirectFromActiveRegistry(normalized);
+  const runtimeCurrent = resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized);
+  const setupFallback = resolveDirectFromRuntimeRegistries(normalized);
   const bundledCurrent = resolve();
   const candidate = resolveRuntimeOutboundPluginCandidate({
     loaded: current,
-    active: directCurrent,
+    runtime: runtimeCurrent,
+    setupFallback,
     bundled: bundledCurrent,
     allowSetupShell: params.allowBootstrap !== true,
   });
@@ -280,7 +289,8 @@ export function resolveOutboundChannelPlugin(params: {
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
   return resolveRuntimeOutboundPluginCandidate({
     loaded: resolveLoaded(),
-    active: resolveDirectFromActiveRegistry(normalized),
+    runtime: resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized),
+    setupFallback: resolveDirectFromRuntimeRegistries(normalized),
     bundled: resolve(),
   });
 }
