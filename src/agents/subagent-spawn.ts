@@ -1,3 +1,8 @@
+/**
+ * Subagent spawn executor.
+ *
+ * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
+ */
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -82,11 +87,13 @@ import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
   buildSubagentSystemPrompt,
   callGateway,
+  dispatchGatewayMethodInProcess,
   emitSessionLifecycleEvent,
   forkSessionFromParent,
   getGlobalHookRunner,
   getSessionBindingService,
   getRuntimeConfig,
+  hasInProcessGatewayContext,
   loadSessionStore,
   mergeSessionEntry,
   mergeDeliveryContext,
@@ -128,9 +135,11 @@ function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
 
 type SubagentSpawnDeps = {
   callGateway: typeof callGateway;
+  dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   forkSessionFromParent: typeof forkSessionFromParent;
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
   getRuntimeConfig: typeof getRuntimeConfig;
+  hasInProcessGatewayContext: typeof hasInProcessGatewayContext;
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
   resolveContextEngine: typeof resolveContextEngine;
   resolveParentForkDecision: typeof resolveParentForkDecision;
@@ -139,9 +148,11 @@ type SubagentSpawnDeps = {
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   callGateway,
+  dispatchGatewayMethodInProcess,
   forkSessionFromParent,
   getGlobalHookRunner,
   getRuntimeConfig,
+  hasInProcessGatewayContext,
   ensureContextEnginesInitialized,
   resolveContextEngine,
   resolveParentForkDecision,
@@ -240,10 +251,30 @@ async function callSubagentGateway(
   // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
   // "agent" -> write) keep their least-privilege scope.
   const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
-  return await subagentSpawnDeps.callGateway({
+  const request = {
     ...params,
     ...(scopes != null ? { scopes } : {}),
-  });
+  };
+  if (
+    subagentSpawnDeps.hasInProcessGatewayContext() &&
+    request.params != null &&
+    typeof request.params === "object" &&
+    !Array.isArray(request.params)
+  ) {
+    // Spawn is already running in the gateway process for channel/tool calls.
+    // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
+    return await subagentSpawnDeps.dispatchGatewayMethodInProcess(
+      request.method,
+      request.params as Record<string, unknown>,
+      {
+        expectFinal: request.expectFinal,
+        ...(scopes != null ? { forceSyntheticClient: true } : {}),
+        timeoutMs: request.timeoutMs,
+        ...(scopes != null ? { syntheticScopes: scopes } : {}),
+      },
+    );
+  }
+  return await subagentSpawnDeps.callGateway(request);
 }
 
 function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): string | undefined {

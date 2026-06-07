@@ -1,3 +1,4 @@
+/** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
 import crypto from "node:crypto";
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import {
@@ -112,6 +113,10 @@ import {
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./agent-runner-execution.js";
+import {
+  takeCommandSessionMetadataChanges,
+  type CommandSessionMetadataChange,
+} from "./command-session-metadata.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
   createInternalHookEvent,
@@ -154,6 +159,9 @@ import { resolveRunTypingPolicy } from "./typing-policy.js";
 type SourceReplyTranscriptMirror = NonNullable<
   NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"]
 >;
+type InternalReplyResolverOptions = {
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
+};
 
 class DispatchReplyOperationAbortedError extends Error {
   constructor() {
@@ -456,6 +464,7 @@ function createReplyDispatchEvent(
   }) as PluginHookReplyDispatchEvent;
 }
 
+/** Test-only hooks for overriding selected dispatch dependencies. */
 export const testing = {
   createReplyDispatchEvent,
 };
@@ -744,6 +753,7 @@ async function mirrorInternalSourceReplyToTranscript(params: {
   }
 }
 
+/** Reads final outcome counters from dispatchers that expose them. */
 export function getDispatcherFinalOutcomeCounts(dispatcher: DispatcherOutcomeCountsView): {
   cancelled: number;
   failed: number;
@@ -987,6 +997,7 @@ export type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 
+/** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
@@ -1299,6 +1310,14 @@ export async function dispatchReplyFromConfig(
   };
   const getQueuedFollowupAbortSignal = () =>
     dispatchReplyOperation?.abortSignal ?? params.replyOptions?.abortSignal;
+  let observedReplyDelivery = false;
+  const markObservedReplyDelivery = async () => {
+    if (observedReplyDelivery) {
+      return;
+    }
+    observedReplyDelivery = true;
+    await params.replyOptions?.onObservedReplyDelivery?.();
+  };
   const getReplyOptions = () => {
     const abortSignal = getDispatchAbortSignal();
     if (!abortSignal) {
@@ -1731,6 +1750,7 @@ export async function dispatchReplyFromConfig(
   };
   const finishReplyOperationBusyDispatch = (opts?: {
     recordAgentDispatchCompleted?: boolean;
+    sessionMetadataChanges?: DispatchFromConfigResult["sessionMetadataChanges"];
   }): DispatchFromConfigResult => {
     if (opts?.recordAgentDispatchCompleted) {
       recordAgentDispatchCompleted("completed", { reason: "reply-operation-active" });
@@ -1741,6 +1761,9 @@ export async function dispatchReplyFromConfig(
     return attachSourceReplyDeliveryMode({
       queuedFinal: false,
       counts: dispatcher.getQueuedCounts(),
+      ...(opts?.sessionMetadataChanges
+        ? { sessionMetadataChanges: opts.sessionMetadataChanges }
+        : {}),
     });
   };
   const finishReplyOperationAbortedDispatch = (): DispatchFromConfigResult => {
@@ -1957,6 +1980,32 @@ export async function dispatchReplyFromConfig(
     const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
     const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
     const shouldSendToolStartStatuses = false;
+    const notifiedSessionMetadataChangeKeys = new Set<string>();
+    let sessionMetadataChangesForResult: CommandSessionMetadataChange[] | undefined;
+    const notifySessionMetadataChanges = (
+      changes: CommandSessionMetadataChange[] | undefined,
+    ): void => {
+      if (!changes?.length) {
+        return;
+      }
+      const freshChanges: CommandSessionMetadataChange[] = [];
+      for (const change of changes) {
+        const key = JSON.stringify([change.sessionKey, change.agentId ?? null, change.reason]);
+        if (notifiedSessionMetadataChangeKeys.has(key)) {
+          continue;
+        }
+        notifiedSessionMetadataChangeKeys.add(key);
+        freshChanges.push(change);
+      }
+      if (freshChanges.length === 0) {
+        return;
+      }
+      sessionMetadataChangesForResult = [
+        ...(sessionMetadataChangesForResult ?? []),
+        ...freshChanges,
+      ];
+      params.onSessionMetadataChanges?.(freshChanges);
+    };
     const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
       suppressAutomaticSourceDelivery &&
       sourceReplyDeliveryMode === "message_tool_only" &&
@@ -2126,6 +2175,7 @@ export async function dispatchReplyFromConfig(
               ctx,
               runId: params.replyOptions?.runId,
               sessionKey: acpDispatchSessionKey,
+              toolsAllow: params.replyOptions?.toolsAllow,
               images: params.replyOptions?.images,
               inboundAudio,
               sessionTtsAuto,
@@ -2451,6 +2501,10 @@ export async function dispatchReplyFromConfig(
           {
             ...getReplyOptions(),
             sourceReplyDeliveryMode,
+            ...({
+              onSessionMetadataChanges: notifySessionMetadataChanges,
+            } satisfies InternalReplyResolverOptions),
+            onObservedReplyDelivery: markObservedReplyDelivery,
             suppressToolErrorWarnings,
             shouldSuppressToolErrorWarnings,
             typingPolicy: typing.typingPolicy,
@@ -2749,8 +2803,15 @@ export async function dispatchReplyFromConfig(
         ),
       ),
     );
+    const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
+    notifySessionMetadataChanges(sessionMetadataChanges);
     if ((await ensureDispatchReplyOperation("dispatch")).status === "busy") {
-      return finishReplyOperationBusyDispatch({ recordAgentDispatchCompleted: true });
+      return finishReplyOperationBusyDispatch({
+        recordAgentDispatchCompleted: true,
+        ...(sessionMetadataChangesForResult
+          ? { sessionMetadataChanges: sessionMetadataChangesForResult }
+          : {}),
+      });
     }
 
     if (ctx.AcpDispatchTailAfterReset === true) {
@@ -2764,6 +2825,7 @@ export async function dispatchReplyFromConfig(
               ctx,
               runId: params.replyOptions?.runId,
               sessionKey: acpDispatchSessionKey,
+              toolsAllow: params.replyOptions?.toolsAllow,
               images: params.replyOptions?.images,
               inboundAudio,
               sessionTtsAuto,
@@ -2796,6 +2858,9 @@ export async function dispatchReplyFromConfig(
           return attachSourceReplyDeliveryMode({
             queuedFinal: tailDispatchResult.queuedFinal,
             counts: tailDispatchResult.counts,
+            ...(sessionMetadataChangesForResult
+              ? { sessionMetadataChanges: sessionMetadataChangesForResult }
+              : {}),
           });
         }
       }
@@ -2953,7 +3018,11 @@ export async function dispatchReplyFromConfig(
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts,
-      ...(!queuedFinal && !emptyFinalAllowedAsSilent
+      ...(sessionMetadataChangesForResult
+        ? { sessionMetadataChanges: sessionMetadataChangesForResult }
+        : {}),
+      ...(observedReplyDelivery ? { observedReplyDelivery } : {}),
+      ...(!queuedFinal && !observedReplyDelivery && !emptyFinalAllowedAsSilent
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),

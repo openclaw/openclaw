@@ -1,3 +1,7 @@
+/**
+ * OpenClaw ACPX runtime adapter. It wraps the upstream acpx runtime with
+ * OpenClaw session metadata, lease tracking, model scoping, and cleanup policy.
+ */
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path, { resolve as resolvePath } from "node:path";
@@ -192,6 +196,16 @@ function readOpenClawLeaseIdFromRecord(record: unknown): string | undefined {
   }
   const { openclawLeaseId } = record as { openclawLeaseId?: unknown };
   return typeof openclawLeaseId === "string" ? openclawLeaseId.trim() || undefined : undefined;
+}
+
+function readOpenClawGatewayInstanceIdFromRecord(record: unknown): string | undefined {
+  if (typeof record !== "object" || record === null) {
+    return undefined;
+  }
+  const { openclawGatewayInstanceId } = record as { openclawGatewayInstanceId?: unknown };
+  return typeof openclawGatewayInstanceId === "string"
+    ? openclawGatewayInstanceId.trim() || undefined
+    : undefined;
 }
 
 function extractGeneratedWrapperPath(command: string | undefined): string {
@@ -635,6 +649,7 @@ function shouldUseDistinctBridgeDelegate(options: AcpRuntimeOptions): boolean {
   return Array.isArray(mcpServers) && mcpServers.length > 0;
 }
 
+/** OpenClaw-managed ACP runtime implementation backed by the upstream acpx runtime. */
 export class AcpxRuntime implements AcpRuntime {
   private readonly sessionStore: ResetAwareSessionStore;
   private readonly agentRegistry: AcpAgentRegistry;
@@ -901,9 +916,12 @@ export class AcpxRuntime implements AcpRuntime {
     if (!rootPid || !rootCommand) {
       return;
     }
+    const expectedGatewayInstanceId = readOpenClawGatewayInstanceIdFromRecord(record);
     await cleanupOpenClawOwnedAcpxProcessTree({
       rootPid,
       rootCommand,
+      ...(leaseId ? { expectedLeaseId: leaseId } : {}),
+      ...(expectedGatewayInstanceId ? { expectedGatewayInstanceId } : {}),
       wrapperRoot: this.wrapperRoot,
       deps: this.processCleanupDeps,
     });
@@ -1235,6 +1253,7 @@ export {
   encodeAcpxRuntimeHandleState,
 };
 
+/** Test-only hooks for ACPX runtime behavior that is otherwise private. */
 export const testing = {
   appendCodexAcpConfigOverrides,
   assertSupportedRuntimeSessionMode,

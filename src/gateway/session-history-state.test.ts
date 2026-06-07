@@ -1,3 +1,6 @@
+/**
+ * Session history state hashing and metadata tests.
+ */
 import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
@@ -179,6 +182,78 @@ describe("SessionHistorySseState", () => {
         }
       )?.content?.[0]?.text,
     ).toBe("Still the current chat.");
+    expect(
+      Boolean(
+        (appended?.message as { openclawMessageToolMirror?: unknown } | undefined)
+          ?.openclawMessageToolMirror,
+      ),
+    ).toBe(true);
+  });
+
+  test("keeps message-tool mirror pending across projected sessions_send inline history", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message-forwarded",
+              name: "message",
+              arguments: {
+                action: "send",
+                message: "Still visible after forwarded handoff.",
+              },
+            },
+          ],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "forwarded status update" }],
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:webchat:source",
+            sourceTool: "sessions_send",
+          },
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    expect(state.snapshot().messages[1]).toMatchObject({
+      role: "assistant",
+      senderLabel: "Forwarded from main",
+    });
+    expect(
+      state.appendInlineMessage({
+        message: {
+          role: "toolResult",
+          toolName: "message",
+          toolCallId: "call-message-forwarded",
+          content: { ok: true, messageId: "24271", chatId: "current-run" },
+        },
+        messageSeq: 3,
+      })?.messageSeq,
+    ).toBe(3);
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+      messageSeq: 4,
+    });
+
+    expect(
+      (
+        appended?.message as {
+          content?: Array<{ text?: string }>;
+          openclawMessageToolMirror?: unknown;
+        }
+      )?.content?.[0]?.text,
+    ).toBe("Still visible after forwarded handoff.");
     expect(
       Boolean(
         (appended?.message as { openclawMessageToolMirror?: unknown } | undefined)

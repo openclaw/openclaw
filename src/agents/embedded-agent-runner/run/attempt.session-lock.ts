@@ -1,5 +1,8 @@
+/**
+ * Coordinates embedded-attempt session ownership, takeover, and prompt locks.
+ */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -25,6 +28,8 @@ type LockOptions = {
 type SessionWriteLockRunOptions = {
   publishOwnedWrite?: boolean;
 };
+
+type SessionFileWriteAppendValidator<T> = (result: T, appendedText: string) => boolean;
 
 type SessionWithAgentPrompt = {
   agent?: {
@@ -572,6 +577,10 @@ export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
   releaseHeldLockForAbort(): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
+  withOwnedSessionFileWrite<T>(
+    run: () => T,
+    validateAppend?: SessionFileWriteAppendValidator<T>,
+  ): T;
   reacquireAfterPrompt(): Promise<void>;
   waitForSessionEvents(session: unknown): Promise<void>;
   withSessionWriteLock<T>(
@@ -784,6 +793,42 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
   }
 
+  // Synchronous append paths cannot await withSessionWriteLock. Only publish
+  // their post-write fingerprint when the pre-write state was already trusted.
+  function publishOwnedSessionFileFenceSync<T>(write: {
+    beforeWrite: SessionFileFingerprint;
+    result: T;
+    beforeText?: string;
+    validateAppend?: SessionFileWriteAppendValidator<T>;
+  }): void {
+    if (takeoverDetected) {
+      return;
+    }
+    const fingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+    const beforeWriteIsTrusted =
+      (fenceActive && sameSessionFileFingerprint(fenceFingerprint, write.beforeWrite)) ||
+      isTrustedSessionFileState(sessionFileFenceKey, write.beforeWrite);
+    if (sameSessionFileFingerprint(write.beforeWrite, fingerprint) || !beforeWriteIsTrusted) {
+      return;
+    }
+    if (write.validateAppend) {
+      const afterText = readFileSync(params.lockOptions.sessionFile, "utf8");
+      if (
+        write.beforeText === undefined ||
+        !afterText.startsWith(write.beforeText) ||
+        !write.validateAppend(write.result, afterText.slice(write.beforeText.length))
+      ) {
+        return;
+      }
+    }
+    const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, fingerprint);
+    if (fenceActive) {
+      fenceFingerprint = fingerprint;
+      fenceSnapshot = { fingerprint };
+      fenceGeneration = generation;
+    }
+  }
+
   const noopLock: SessionLock = { release: async () => {} };
 
   async function releaseHeldLockWithFence(): Promise<void> {
@@ -801,17 +846,23 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
       const lock = heldLock;
       heldLock = undefined;
-      const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-      const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
-      const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
-      fenceFingerprint = fingerprint;
-      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-      fenceGeneration =
-        ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
-          ? ownedWrite.generation
-          : (trustedGeneration ?? fenceGeneration);
-      fenceActive = true;
-      await lock.release();
+      // Clearing `heldLock` transfers release ownership to this block. Fence reads can
+      // throw after that transfer; release the underlying file lock anyway so later
+      // turns do not wait for the maxHoldMs watchdog.
+      try {
+        const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+        const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
+        const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
+        fenceFingerprint = fingerprint;
+        fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+        fenceGeneration =
+          ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
+            ? ownedWrite.generation
+            : (trustedGeneration ?? fenceGeneration);
+        fenceActive = true;
+      } finally {
+        await lock.release();
+      }
     } finally {
       finishHeldLockDrain(drainOwner);
     }
@@ -903,6 +954,23 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         fenceFingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
         fenceSnapshot = { fingerprint: fenceFingerprint };
       }
+    },
+    withOwnedSessionFileWrite<T>(
+      run: () => T,
+      validateAppend?: SessionFileWriteAppendValidator<T>,
+    ): T {
+      const beforeWrite = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+      const beforeText = validateAppend
+        ? readFileSync(params.lockOptions.sessionFile, "utf8")
+        : undefined;
+      const result = run();
+      publishOwnedSessionFileFenceSync({
+        beforeWrite,
+        result,
+        ...(beforeText !== undefined ? { beforeText } : {}),
+        ...(validateAppend ? { validateAppend } : {}),
+      });
+      return result;
     },
     async reacquireAfterPrompt(): Promise<void> {
       await waitForHeldLockDrain();
