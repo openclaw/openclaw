@@ -43,6 +43,8 @@ type PendingExec = {
   sshSession: SshSandboxSession;
 };
 
+const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
+
 export function buildOpenShellSshExecEnv(): NodeJS.ProcessEnv {
   return sanitizeEnvVars(process.env).allowed;
 }
@@ -410,6 +412,31 @@ class OpenShellSandboxBackendImpl {
         this.params.remoteAgentWorkspaceDir,
       );
     }
+    await this.syncSkillsWorkspaceToRemote();
+  }
+
+  private async syncSkillsWorkspaceToRemote(): Promise<void> {
+    if (
+      this.params.createParams.cfg.workspaceAccess !== "rw" ||
+      !this.params.createParams.skillsWorkspaceDir
+    ) {
+      return;
+    }
+    const remoteSkillsWorkspaceDir = resolveRemoteMaterializedSkillsWorkspaceDir(
+      this.params.remoteWorkspaceDir,
+    );
+    await this.runRemoteShellScriptInternal({
+      script: 'mkdir -p -- "$1" && find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
+      args: [remoteSkillsWorkspaceDir],
+    });
+    const stats = await fs.lstat(this.params.createParams.skillsWorkspaceDir).catch(() => null);
+    if (!stats?.isDirectory() || stats.isSymbolicLink()) {
+      return;
+    }
+    await this.uploadPathToRemote(
+      this.params.createParams.skillsWorkspaceDir,
+      remoteSkillsWorkspaceDir,
+    );
   }
 
   private async syncWorkspaceFromRemote(): Promise<void> {
@@ -430,6 +457,10 @@ class OpenShellSandboxBackendImpl {
         if (result.code !== 0) {
           throw new Error(result.stderr.trim() || "openshell sandbox download failed");
         }
+        await fs.rm(path.join(tmpDir, ...MATERIALIZED_SKILLS_REMOTE_PARTS), {
+          recursive: true,
+          force: true,
+        });
         await replaceDirectoryContents({
           sourceDir: tmpDir,
           targetDir: this.params.createParams.workspaceDir,
@@ -506,6 +537,11 @@ export function buildOpenShellSandboxName(scopeKey: string): string {
     5381,
   );
   return `openclaw-${safe || "session"}-${hash.toString(16).slice(0, 8)}`;
+}
+
+function resolveRemoteMaterializedSkillsWorkspaceDir(remoteWorkspaceDir: string): string {
+  const root = remoteWorkspaceDir.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+  return path.posix.join(root, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
 }
 
 function resolveOpenShellTmpRoot(): string {

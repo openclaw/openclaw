@@ -517,6 +517,58 @@ describe("openshell fs bridges", () => {
     );
   });
 
+  it("reads materialized sandbox skills from the protected skills workspace", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const skillsWorkspaceDir = await makeTempDir("openclaw-openshell-skills-");
+    const skillFile = path.join(skillsWorkspaceDir, "skills", "demo", "SKILL.md");
+    const shadowFile = path.join(
+      workspaceDir,
+      ".openclaw",
+      "sandbox-skills",
+      "skills",
+      "demo",
+      "SKILL.md",
+    );
+    await fs.mkdir(path.dirname(skillFile), { recursive: true });
+    await fs.mkdir(path.dirname(shadowFile), { recursive: true });
+    await fs.writeFile(skillFile, "# Demo\nmaterialized\n", "utf8");
+    await fs.writeFile(shadowFile, "# Demo\nworkspace shadow\n", "utf8");
+
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        skillsWorkspaceDir,
+        workspaceAccess: "rw",
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(
+      bridge.readFile({
+        filePath: "/sandbox/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+      }),
+    ).resolves.toEqual(Buffer.from("# Demo\nmaterialized\n"));
+    await expect(
+      bridge.readFile({
+        filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+      }),
+    ).resolves.toEqual(Buffer.from("# Demo\nmaterialized\n"));
+    await expect(
+      bridge.writeFile({
+        filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+        data: "owned",
+      }),
+    ).rejects.toThrow(/read-only/);
+    expect(await fs.readFile(shadowFile, "utf8")).toContain("workspace shadow");
+    expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
+  });
+
   it("rejects reads of a symlinked leaf", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
     const outsideDir = await makeTempDir("openclaw-openshell-outside-");
