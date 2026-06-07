@@ -78,6 +78,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false
   },
@@ -116,6 +117,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false
   },
@@ -221,8 +223,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 39998,
-    "roughTokens": 10000
+    "chars": 43664,
+    "roughTokens": 10916
   },
   "openClawDeveloperInstructions": {
     "chars": 1964,
@@ -233,8 +235,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6544
   },
   "totalWithDynamicToolsJson": {
-    "chars": 66176,
-    "roughTokens": 16544
+    "chars": 69842,
+    "roughTokens": 17461
   },
   "userInputText": {
     "chars": 1129,
@@ -578,19 +580,10 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "boolean"
         },
         "attachments": {
-          "description": "Structured attachments; each needs media/mediaUrl/path/filePath/fileUrl/url.",
+          "description": "Structured attachments; each entry uses media.",
           "items": {
             "properties": {
-              "filePath": {
-                "type": "string"
-              },
-              "fileUrl": {
-                "type": "string"
-              },
               "media": {
-                "type": "string"
-              },
-              "mediaUrl": {
                 "type": "string"
               },
               "mimeType": {
@@ -599,14 +592,8 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
               "name": {
                 "type": "string"
               },
-              "path": {
-                "type": "string"
-              },
               "type": {
                 "enum": ["image", "audio", "video", "file"],
-                "type": "string"
-              },
-              "url": {
                 "type": "string"
               }
             },
@@ -641,9 +628,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "filename": {
           "type": "string"
         },
-        "filePath": {
-          "type": "string"
-        },
         "forceDocument": {
           "description": "Send image/GIF/video as document; avoids compression.",
           "type": "boolean"
@@ -665,9 +649,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "mimeType": {
-          "type": "string"
-        },
-        "path": {
           "type": "string"
         },
         "quoteText": {
@@ -695,7 +676,8 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": ["action"],

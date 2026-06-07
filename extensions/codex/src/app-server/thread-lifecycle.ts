@@ -1,18 +1,26 @@
 import {
+  buildSkillWorkshopPromptSection,
   embeddedAgentLog,
+  formatErrorMessage,
   isActiveHarnessContextEngine,
+  SKILL_WORKSHOP_TOOL_NAME,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
-import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerConnectionClosedError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
+import { shouldDisableCodexToolSearchForModel } from "./dynamic-tool-profile.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
   isCodexPluginThreadBindingStale,
@@ -56,6 +64,26 @@ export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding &
   lifecycle: CodexAppServerThreadLifecycle;
 };
 
+class CodexThreadStartRequestError extends Error {
+  constructor(cause: unknown) {
+    super(formatErrorMessage(cause), { cause });
+    this.name = "CodexThreadStartRequestError";
+  }
+}
+
+export function isCodexThreadStartRequestError(error: unknown): boolean {
+  return error instanceof CodexThreadStartRequestError;
+}
+
+export type CodexThreadFinalConfigPatchDecision =
+  | { action: "resume"; binding: CodexAppServerThreadBinding }
+  | { action: "start" };
+
+export type CodexThreadFinalConfigPatchResult = {
+  configPatch?: JsonObject;
+  nativeHookRelayGeneration?: string;
+};
+
 export type CodexContextEngineThreadBootstrapProjection = {
   mode: "thread_bootstrap";
   epoch: string;
@@ -71,9 +99,11 @@ export type CodexPluginThreadConfigProvider = {
 
 export const CODEX_NATIVE_PERSONALITY_NONE = "none";
 
+// Stream structured patch snapshots so large generated edits keep the turn active.
 export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
   "features.code_mode_only": false,
+  "features.apply_patch_streaming_events": true,
 };
 
 export const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
@@ -85,32 +115,88 @@ const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
   project_doc_max_bytes: 0,
 };
 
-type CodexThreadLifecycleTimingSpan = {
+const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
+  "features.multi_agent": false,
+};
+
+export type CodexThreadLifecycleTimingSpan = {
   name: string;
   durationMs: number;
   elapsedMs: number;
 };
 
-type CodexThreadLifecycleTimingSummary = {
+export type CodexThreadLifecycleTimingSummary = {
   totalMs: number;
   spans: CodexThreadLifecycleTimingSpan[];
+};
+
+export type CodexThreadLifecycleTimingLogger = {
+  isEnabled?: (level: "trace") => boolean;
+  trace: (message: string, meta?: Record<string, unknown>) => void;
+  warn: (message: string, meta?: Record<string, unknown>) => void;
+};
+
+export type CodexThreadLifecycleTimingAction = "started" | "resumed" | "rotated";
+
+export type CodexThreadLifecycleTimingOptions = {
+  enabled?: boolean;
+  now?: () => number;
+  log?: CodexThreadLifecycleTimingLogger;
+  totalThresholdMs?: number;
+  stageThresholdMs?: number;
 };
 
 const CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS = 1_000;
 const CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS = 500;
 
-function createCodexThreadLifecycleTimingTracker(options: { enabled?: boolean } = {}): {
+export function shouldWarnCodexThreadLifecycleTimingSummary(
+  summary: CodexThreadLifecycleTimingSummary,
+  options: CodexThreadLifecycleTimingOptions = {},
+): boolean {
+  const totalThresholdMs =
+    options.totalThresholdMs ?? CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS;
+  const stageThresholdMs =
+    options.stageThresholdMs ?? CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS;
+  return (
+    summary.totalMs >= totalThresholdMs ||
+    summary.spans.some((span) => span.durationMs >= stageThresholdMs)
+  );
+}
+
+export function formatCodexThreadLifecycleTimingSummary(params: {
+  runId: string;
+  sessionId: string;
+  sessionKey?: string;
+  action: CodexThreadLifecycleTimingAction;
+  summary: CodexThreadLifecycleTimingSummary;
+}): string {
+  const spans =
+    params.summary.spans.length > 0
+      ? params.summary.spans
+          .map((span) => `${span.name}:${span.durationMs}ms@${span.elapsedMs}ms`)
+          .join(",")
+      : "none";
+  return (
+    `[trace:codex-app-server] thread lifecycle: runId=${params.runId} ` +
+    `sessionId=${params.sessionId} sessionKey=${params.sessionKey ?? "unknown"} ` +
+    `action=${params.action} totalMs=${params.summary.totalMs} stages=${spans}`
+  );
+}
+
+function createCodexThreadLifecycleTimingTracker(options: CodexThreadLifecycleTimingOptions = {}): {
   measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
   measureSync: <T>(name: string, run: () => T) => T;
-  logIfSlow: (params: {
+  mark: (name: string) => void;
+  logSummary: (params: {
     runId: string;
     sessionId: string;
     sessionKey?: string;
-    action: "started" | "resumed" | "rotated";
+    action: CodexThreadLifecycleTimingAction;
     threadId?: string;
   }) => void;
 } {
-  if (!options.enabled) {
+  const log = options.log ?? embeddedAgentLog;
+  if (!options.enabled && log.isEnabled?.("trace") !== true) {
     return {
       async measure(_name, run) {
         return await run();
@@ -118,37 +204,31 @@ function createCodexThreadLifecycleTimingTracker(options: { enabled?: boolean } 
       measureSync(_name, run) {
         return run();
       },
-      logIfSlow() {},
+      mark() {},
+      logSummary() {},
     };
   }
 
-  const startedAt = Date.now();
+  const now = options.now ?? Date.now;
+  const startedAt = now();
   let didLog = false;
   const spans: CodexThreadLifecycleTimingSpan[] = [];
   const toMs = (value: number) => Math.max(0, Math.round(value));
   const record = (name: string, spanStartedAt: number) => {
+    const currentAt = now();
     spans.push({
       name,
-      durationMs: toMs(Date.now() - spanStartedAt),
-      elapsedMs: toMs(Date.now() - startedAt),
+      durationMs: toMs(currentAt - spanStartedAt),
+      elapsedMs: toMs(currentAt - startedAt),
     });
   };
   const snapshot = (): CodexThreadLifecycleTimingSummary => ({
-    totalMs: toMs(Date.now() - startedAt),
+    totalMs: toMs(now() - startedAt),
     spans: spans.slice(),
   });
-  const shouldLog = (summary: CodexThreadLifecycleTimingSummary) =>
-    summary.totalMs >= CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS ||
-    summary.spans.some((span) => span.durationMs >= CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS);
-  const formatSpans = (summary: CodexThreadLifecycleTimingSummary) =>
-    summary.spans.length > 0
-      ? summary.spans
-          .map((span) => `${span.name}:${span.durationMs}ms@${span.elapsedMs}ms`)
-          .join(",")
-      : "none";
   return {
     async measure(name, run) {
-      const spanStartedAt = Date.now();
+      const spanStartedAt = now();
       try {
         return await run();
       } finally {
@@ -156,38 +236,47 @@ function createCodexThreadLifecycleTimingTracker(options: { enabled?: boolean } 
       }
     },
     measureSync(name, run) {
-      const spanStartedAt = Date.now();
+      const spanStartedAt = now();
       try {
         return run();
       } finally {
         record(name, spanStartedAt);
       }
     },
-    logIfSlow(params) {
+    mark(name) {
+      record(name, now());
+    },
+    logSummary(params) {
       if (didLog) {
         return;
       }
       const summary = snapshot();
-      if (!shouldLog(summary)) {
+      const shouldWarn = shouldWarnCodexThreadLifecycleTimingSummary(summary, options);
+      if (!shouldWarn && !log.isEnabled?.("trace")) {
         return;
       }
       didLog = true;
-      embeddedAgentLog.warn(
-        `codex app-server thread lifecycle timings runId=${params.runId} sessionId=${
-          params.sessionId
-        } sessionKey=${params.sessionKey ?? "unknown"} action=${params.action} totalMs=${
-          summary.totalMs
-        } stages=${formatSpans(summary)}`,
-        {
-          runId: params.runId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          action: params.action,
-          threadId: params.threadId,
-          totalMs: summary.totalMs,
-          spans: summary.spans,
-        },
-      );
+      const message = formatCodexThreadLifecycleTimingSummary({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        action: params.action,
+        summary,
+      });
+      const meta = {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        action: params.action,
+        threadId: params.threadId,
+        totalMs: summary.totalMs,
+        spans: summary.spans,
+      };
+      if (shouldWarn) {
+        log.warn(message, meta);
+      } else {
+        log.trace(message, meta);
+      }
     },
   };
 }
@@ -202,6 +291,10 @@ export async function startOrResumeThread(params: {
   developerInstructions?: string;
   config?: JsonObject;
   finalConfigPatch?: JsonObject;
+  buildFinalConfigPatch?: (
+    decision: CodexThreadFinalConfigPatchDecision,
+  ) => CodexThreadFinalConfigPatchResult;
+  nativeHookRelayGeneration?: string;
   nativeCodeModeEnabled?: boolean;
   nativeCodeModeOnlyEnabled?: boolean;
   userMcpServersEnabled?: boolean;
@@ -210,16 +303,23 @@ export async function startOrResumeThread(params: {
   environmentSelection?: CodexTurnEnvironmentParams[];
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
+  signal?: AbortSignal;
+  timing?: CodexThreadLifecycleTimingOptions;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
   // Thread lifecycle spans are useful when profiling startup churn, but normal
   // turns should not pay Date.now/span-array overhead while resuming threads.
   const lifecycleTiming = createCodexThreadLifecycleTimingTracker({
-    enabled: isCodexAppServerProfilerEnabled(params.params.config),
+    ...params.timing,
+    enabled:
+      params.timing?.enabled ?? isCodexAppServerProfilerEnabled(params.params.config),
   });
-  const dynamicToolsFingerprint = lifecycleTiming.measureSync("fingerprint_dynamic_tools", () =>
+  const dynamicToolsFingerprint = lifecycleTiming.measureSync("dynamic-tools-fingerprint", () =>
     fingerprintDynamicTools(params.dynamicTools),
   );
-  const contextEngineBinding = lifecycleTiming.measureSync("context_engine_binding", () =>
+  const dynamicToolsContainDeferred = params.dynamicTools.some(
+    (tool) => tool.deferLoading === true,
+  );
+  const contextEngineBinding = lifecycleTiming.measureSync("context-engine-binding", () =>
     buildContextEngineBinding(params.params, params.contextEngineProjection),
   );
   const userMcpServersConfigPatch =
@@ -232,7 +332,7 @@ export async function startOrResumeThread(params: {
   const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
     params.environmentSelection,
   );
-  let binding = await lifecycleTiming.measure("read_binding", () =>
+  let binding = await lifecycleTiming.measure("read-binding", () =>
     readCodexAppServerBinding(params.params.sessionFile, {
       authProfileStore: params.params.authProfileStore,
       agentDir: params.params.agentDir,
@@ -242,6 +342,22 @@ export async function startOrResumeThread(params: {
   let preserveExistingBinding = false;
   let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
+  const throwIfAborted = () => {
+    if (!params.signal?.aborted) {
+      return;
+    }
+    const reason = params.signal.reason;
+    if (reason instanceof Error) {
+      throw reason;
+    }
+    const error = new Error(
+      typeof reason === "string" && reason.length > 0
+        ? reason
+        : "codex app-server thread lifecycle aborted",
+    );
+    error.name = "AbortError";
+    throw error;
+  };
   if (binding?.threadId && params.nativeCodeModeEnabled === false) {
     embeddedAgentLog.debug(
       "codex app-server native tool surface disabled for turn; starting transient thread",
@@ -323,7 +439,7 @@ export async function startOrResumeThread(params: {
       })
     ) {
       try {
-        prebuiltPluginThreadConfig = await lifecycleTiming.measure("plugin_config_recovery", () =>
+        prebuiltPluginThreadConfig = await lifecycleTiming.measure("plugin-config-recovery", () =>
           params.pluginThreadConfig?.build(),
         );
         pluginBindingStale =
@@ -353,6 +469,23 @@ export async function startOrResumeThread(params: {
     });
     await clearCodexAppServerBinding(params.params.sessionFile);
     binding = undefined;
+  }
+  if (binding?.threadId) {
+    if (
+      binding.dynamicToolsFingerprint &&
+      params.dynamicTools.length > 0 &&
+      binding.dynamicToolsContainDeferred !== dynamicToolsContainDeferred &&
+      (binding.dynamicToolsContainDeferred !== undefined || !dynamicToolsContainDeferred)
+    ) {
+      embeddedAgentLog.debug(
+        "codex app-server dynamic tool loading changed; starting a new thread",
+        {
+          threadId: binding.threadId,
+        },
+      );
+      await clearCodexAppServerBinding(params.params.sessionFile);
+      binding = undefined;
+    }
   }
   if (binding?.threadId) {
     // `/codex resume <thread>` writes a binding before the next turn can know
@@ -387,12 +520,19 @@ export async function startOrResumeThread(params: {
     } else {
       try {
         const authProfileId = params.params.authProfileId ?? binding.authProfileId;
+        const finalConfigPatch = params.buildFinalConfigPatch?.({
+          action: "resume",
+          binding,
+        }) ?? {
+          configPatch: params.finalConfigPatch,
+          nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+        };
         const resumeConfig = mergeCodexThreadConfigs(
           params.config,
           userMcpServersConfigPatch,
-          params.finalConfigPatch,
+          finalConfigPatch.configPatch,
         );
-        const resumeParams = lifecycleTiming.measureSync("thread_resume_params", () =>
+        const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
           buildThreadResumeParams(params.params, {
             threadId: binding.threadId,
             authProfileId,
@@ -405,10 +545,11 @@ export async function startOrResumeThread(params: {
           }),
         );
         const response = assertCodexThreadResumeResponse(
-          await lifecycleTiming.measure("thread_resume_request", () =>
-            params.client.request("thread/resume", resumeParams),
+          await lifecycleTiming.measure("thread-resume-request", () =>
+            params.client.request("thread/resume", resumeParams, { signal: params.signal }),
           ),
         );
+        throwIfAborted();
         const boundAuthProfileId = authProfileId;
         const fallbackModelProvider = resolveCodexAppServerModelProvider({
           provider: params.params.provider,
@@ -421,7 +562,7 @@ export async function startOrResumeThread(params: {
           params.mcpServersFingerprintEvaluated === true
             ? params.mcpServersFingerprint
             : binding.mcpServersFingerprint;
-        await lifecycleTiming.measure("thread_resume_write_binding", () =>
+        await lifecycleTiming.measure("thread-resume-write-binding", () =>
           writeCodexAppServerBinding(
             params.params.sessionFile,
             {
@@ -431,8 +572,11 @@ export async function startOrResumeThread(params: {
               model: params.params.modelId,
               modelProvider: response.modelProvider ?? fallbackModelProvider,
               dynamicToolsFingerprint,
+              dynamicToolsContainDeferred,
               userMcpServersFingerprint,
               mcpServersFingerprint: nextMcpServersFingerprint,
+              nativeHookRelayGeneration:
+                finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
               pluginAppsFingerprint: binding.pluginAppsFingerprint,
               pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
               pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -458,7 +602,8 @@ export async function startOrResumeThread(params: {
             action: "resumed",
           });
         }
-        lifecycleTiming.logIfSlow({
+        lifecycleTiming.mark("thread-ready");
+        lifecycleTiming.logSummary({
           runId: params.params.runId,
           sessionId: params.params.sessionId,
           sessionKey: params.params.sessionKey,
@@ -473,8 +618,11 @@ export async function startOrResumeThread(params: {
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
+          dynamicToolsContainDeferred,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
+          nativeHookRelayGeneration:
+            finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
           pluginAppsFingerprint: binding.pluginAppsFingerprint,
           pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -496,19 +644,23 @@ export async function startOrResumeThread(params: {
 
   const pluginThreadConfig = params.pluginThreadConfig?.enabled
     ? (prebuiltPluginThreadConfig ??
-      (await lifecycleTiming.measure("plugin_config_build", () =>
+      (await lifecycleTiming.measure("plugin-config-build", () =>
         params.pluginThreadConfig?.build(),
       )))
     : undefined;
-  const config = lifecycleTiming.measureSync("merge_thread_config", () =>
+  const finalConfigPatch = params.buildFinalConfigPatch?.({ action: "start" }) ?? {
+    configPatch: params.finalConfigPatch,
+    nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+  };
+  const config = lifecycleTiming.measureSync("merge-thread-config", () =>
     mergeCodexThreadConfigs(
       params.config,
       userMcpServersConfigPatch,
       pluginThreadConfig?.configPatch,
-      params.finalConfigPatch,
+      finalConfigPatch.configPatch,
     ),
   );
-  const startParams = lifecycleTiming.measureSync("thread_start_params", () =>
+  const startParams = lifecycleTiming.measureSync("thread-start-params", () =>
     buildThreadStartParams(params.params, {
       cwd: params.cwd,
       dynamicTools: params.dynamicTools,
@@ -520,11 +672,18 @@ export async function startOrResumeThread(params: {
       environmentSelection: params.environmentSelection,
     }),
   );
-  const response = assertCodexThreadStartResponse(
-    await lifecycleTiming.measure("thread_start_request", () =>
-      params.client.request("thread/start", startParams),
-    ),
-  );
+  const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
+    try {
+      return await params.client.request("thread/start", startParams, { signal: params.signal });
+    } catch (error) {
+      if (error instanceof CodexAppServerRpcError) {
+        throw new CodexThreadStartRequestError(error);
+      }
+      throw error;
+    }
+  });
+  const response = assertCodexThreadStartResponse(threadStartResponse);
+  throwIfAborted();
   const modelProvider = resolveCodexAppServerModelProvider({
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
@@ -536,7 +695,7 @@ export async function startOrResumeThread(params: {
   const nextMcpServersFingerprint =
     params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
   if (!preserveExistingBinding) {
-    await lifecycleTiming.measure("thread_start_write_binding", () =>
+    await lifecycleTiming.measure("thread-start-write-binding", () =>
       writeCodexAppServerBinding(
         params.params.sessionFile,
         {
@@ -546,8 +705,10 @@ export async function startOrResumeThread(params: {
           model: response.model ?? params.params.modelId,
           modelProvider: response.modelProvider ?? modelProvider,
           dynamicToolsFingerprint,
+          dynamicToolsContainDeferred,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
+          nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
           pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
           pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
           pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -574,7 +735,8 @@ export async function startOrResumeThread(params: {
       });
     }
   }
-  lifecycleTiming.logIfSlow({
+  lifecycleTiming.mark("thread-ready");
+  lifecycleTiming.logSummary({
     runId: params.params.runId,
     sessionId: params.params.sessionId,
     sessionKey: params.params.sessionKey,
@@ -590,8 +752,10 @@ export async function startOrResumeThread(params: {
     model: response.model ?? params.params.modelId,
     modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
+    dynamicToolsContainDeferred,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
+    nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -816,11 +980,16 @@ export function buildCodexRuntimeThreadConfig(
     "features.code_mode_only": options.nativeCodeModeOnlyEnabled === true,
   };
   if (options.nativeCodeModeEnabled === false) {
-    return (
-      mergeCodexThreadConfigs(codeModeConfig, config, CODEX_CODE_MODE_DISABLED_THREAD_CONFIG) ?? {
-        ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
-      }
-    );
+    const disabledConfig = mergeCodexThreadConfigs(
+      config,
+      CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+    ) ?? {
+      ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+    };
+    // Native patch streaming is part of native code mode, so do not send it
+    // when runtime policy disables that tool surface.
+    delete disabledConfig["features.apply_patch_streaming_events"];
+    return disabledConfig;
   }
   if (options.nativeCodeModeOnlyEnabled === true) {
     return (
@@ -844,7 +1013,14 @@ function buildCodexRuntimeThreadConfigForRun(
   config: JsonObject | undefined,
   options: { nativeCodeModeEnabled?: boolean; nativeCodeModeOnlyEnabled?: boolean } = {},
 ): JsonObject {
-  const runtimeConfig = buildCodexRuntimeThreadConfig(config, options);
+  const baseConfig = buildCodexRuntimeThreadConfig(config, options);
+  const runtimeConfig =
+    mergeCodexThreadConfigs(
+      baseConfig,
+      shouldDisableCodexToolSearchForModel(params.modelId)
+        ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
+        : undefined,
+    ) ?? baseConfig;
   if (params.bootstrapContextMode !== "lightweight") {
     return runtimeConfig;
   }
@@ -866,6 +1042,8 @@ export function buildTurnStartParams(
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
     turnScopedDeveloperInstructions?: string;
+    skillsCollaborationInstructions?: string;
+    memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
   },
 ): CodexTurnStartParams {
@@ -884,6 +1062,8 @@ export function buildTurnStartParams(
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
+      skillsCollaborationInstructions: options.skillsCollaborationInstructions,
+      memoryCollaborationInstructions: options.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
     }),
   };
@@ -908,6 +1088,8 @@ export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
   options: {
     turnScopedDeveloperInstructions?: string;
+    skillsCollaborationInstructions?: string;
+    memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
   } = {},
 ): CodexTurnCollaborationMode {
@@ -925,27 +1107,28 @@ function buildTurnScopedCollaborationInstructions(
   params: EmbeddedRunAttemptParams,
   options: {
     turnScopedDeveloperInstructions?: string;
+    skillsCollaborationInstructions?: string;
+    memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
   } = {},
 ): string | null {
+  const contextInstructions = joinPresentSections(
+    options.turnScopedDeveloperInstructions,
+    options.memoryCollaborationInstructions,
+    options.skillsCollaborationInstructions,
+  );
   if (params.trigger === "cron") {
-    return joinPresentSections(
-      buildCronCollaborationInstructions(),
-      options.turnScopedDeveloperInstructions,
-    );
+    return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
   }
   if (params.trigger === "heartbeat") {
     return joinPresentSections(
       buildHeartbeatCollaborationInstructions(),
-      options.turnScopedDeveloperInstructions,
+      contextInstructions,
       options.heartbeatCollaborationInstructions,
     );
   }
-  if (options.turnScopedDeveloperInstructions?.trim()) {
-    return joinPresentSections(
-      buildDefaultCollaborationInstructions(),
-      options.turnScopedDeveloperInstructions,
-    );
+  if (contextInstructions?.trim()) {
+    return joinPresentSections(buildDefaultCollaborationInstructions(), contextInstructions);
   }
   return null;
 }
@@ -1027,9 +1210,7 @@ function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
   for (const [key, child] of Object.entries(tool).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    // Tool-search presentation can change per turn without changing the
-    // durable app-server execution contract for an existing thread.
-    if (key === "description" || key === "deferLoading" || key === "namespace") {
+    if (key === "description") {
       continue;
     }
     stable[key] = stabilizeJsonValue(child);
@@ -1085,6 +1266,7 @@ export function buildDeveloperInstructions(
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     buildDeferredDynamicToolManifest(options.dynamicTools),
+    buildSkillWorkshopInstruction(options.dynamicTools),
     "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
     buildVisibleReplyInstruction(params, options.dynamicTools),
     nativeCommandGuidance,
@@ -1108,6 +1290,18 @@ function buildDeferredDynamicToolManifest(
     return undefined;
   }
   return `Deferred searchable OpenClaw dynamic tools available: ${deferredToolNames.join(", ")}. Use \`tool_search\` to load exact callable specs before use.`;
+}
+
+function buildSkillWorkshopInstruction(
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+): string | undefined {
+  const hasSkillWorkshop = (dynamicTools ?? []).some(
+    (tool) => tool.name.trim() === SKILL_WORKSHOP_TOOL_NAME,
+  );
+  if (!hasSkillWorkshop) {
+    return undefined;
+  }
+  return buildSkillWorkshopPromptSection().join("\n");
 }
 
 function buildVisibleReplyInstruction(
@@ -1157,23 +1351,20 @@ export function resolveCodexAppServerModelProvider(params: {
     // native provider/auth selection instead of forcing the legacy OpenAI path.
     return undefined;
   }
-  if (
-    isCodexAppServerNativeAuthProfile(params) &&
-    (normalizedLower === "openai" || normalizedLower === "openai-codex")
-  ) {
+  if (isCodexAppServerNativeAuthProfile(params) && normalizedLower === "openai") {
     // When OpenClaw is forwarding ChatGPT/Codex OAuth, `openai` is Codex's
     // native provider id, not a public OpenAI API-key choice. Omit the override
     // so app-server keeps its configured provider/auth pair for this session.
     return undefined;
   }
-  return normalizedLower === "openai-codex" ? "openai" : normalized;
+  return normalizedLower === "openai" ? "openai" : normalized;
 }
 
 // Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark) use the
 // none/low/medium/high/xhigh effort enum and reject "minimal". The CLI
 // defaults thinkLevel to "minimal", so without translation EVERY agent turn
 // on those models pays a wasted first request + retry-with-low fallback in
-// pi-embedded-runner. Map "minimal" -> "low" upfront for modern models so the
+// embedded-agent-runner. Map "minimal" -> "low" upfront for modern models so the
 // first request is accepted. Older Codex models still accept "minimal"
 // directly. (#71946)
 // Exported for unit-test coverage of the model-aware translation path.

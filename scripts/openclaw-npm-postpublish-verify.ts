@@ -1,6 +1,5 @@
 #!/usr/bin/env -S node --import tsx
 
-import { execFileSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -25,6 +24,7 @@ import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
@@ -138,6 +138,7 @@ export function collectInstalledPackageErrors(params: {
 
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
+  errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
 
   return errors;
@@ -312,6 +313,34 @@ export function collectInstalledPluginSdkZodArtifactErrors(packageRoot: string):
   }
 
   return [];
+}
+
+export function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
+  const pluginSdkDistRoot = join(packageRoot, "dist", "plugin-sdk");
+  const errors: string[] = [];
+  const forbiddenPrivateWorkspaceSpecifiers = ["@openclaw/llm-core"];
+
+  if (!existsSync(pluginSdkDistRoot)) {
+    return [];
+  }
+
+  for (const entry of readdirSync(pluginSdkDistRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".d.ts")) {
+      continue;
+    }
+
+    const relativePath = `dist/plugin-sdk/${entry.name}`;
+    const content = readFileSync(join(pluginSdkDistRoot, entry.name), "utf8");
+    for (const specifier of forbiddenPrivateWorkspaceSpecifiers) {
+      if (content.includes(`"${specifier}`) || content.includes(`'${specifier}`)) {
+        errors.push(
+          `installed package plugin SDK declaration '${relativePath}' references private workspace package ${specifier}.`,
+        );
+      }
+    }
+  }
+
+  return errors;
 }
 
 function listInstalledRootDistJavaScriptFiles(packageRoot: string): string[] {
@@ -616,12 +645,7 @@ function npmExec(args: string[], cwd: string): string {
     platform: process.platform,
   });
 
-  return execFileSync(invocation.command, invocation.args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }).trim();
+  return runNpmVerifyCommand(invocation, cwd);
 }
 
 function resolveGlobalRoot(prefixDir: string, cwd: string): string {
@@ -638,12 +662,7 @@ function installSpec(prefixDir: string, spec: string, cwd: string): void {
 
 function readInstalledBinaryVersion(prefixDir: string, cwd: string): string {
   const invocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
-  return execFileSync(invocation.command, invocation.args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }).trim();
+  return runNpmVerifyCommand(invocation, cwd);
 }
 
 function verifyScenario(version: string, scenario: PublishedInstallScenario): void {

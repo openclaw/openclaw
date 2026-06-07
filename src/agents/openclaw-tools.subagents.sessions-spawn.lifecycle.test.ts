@@ -2,6 +2,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
+  testing as bundleMcpRuntimeTesting,
+  getOrCreateSessionMcpRuntime,
+} from "./agent-bundle-mcp-tools.js";
+import {
   getCallGatewayMock,
   getSessionsSpawnTool,
   resetSessionsSpawnAnnounceFlowOverride,
@@ -14,10 +18,6 @@ import {
   waitForSessionsSpawnEvent,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import {
-  testing as bundleMcpRuntimeTesting,
-  getOrCreateSessionMcpRuntime,
-} from "./pi-bundle-mcp-tools.js";
-import {
   getLatestSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.js";
@@ -29,18 +29,7 @@ const fastModeEnv = vi.hoisted(() => {
 });
 
 const hookRunnerMocks = vi.hoisted(() => ({
-  runSubagentSpawning: vi.fn(async (event: unknown) => {
-    const input = event as {
-      threadRequested?: boolean;
-    };
-    if (!input.threadRequested) {
-      return undefined;
-    }
-    return {
-      status: "ok" as const,
-      threadBindingReady: true,
-    };
-  }),
+  runSubagentSpawning: vi.fn(async () => undefined),
   runSubagentSpawned: vi.fn(async () => {}),
   runSubagentEnded: vi.fn(async () => {}),
 }));
@@ -103,7 +92,6 @@ async function executeSpawnAndExpectAccepted(params: {
 }) {
   const result = await params.tool.execute(params.callId, {
     task: "do thing",
-    runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
     ...(params.label ? { label: params.label } : {}),
     ...(params.expectsCompletionMessage === false ? { expectsCompletionMessage: false } : {}),
@@ -191,6 +179,13 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
           debounceMs: 0,
         },
       },
+      agents: {
+        defaults: {
+          subagents: {
+            runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+          },
+        },
+      },
     });
     resetSubagentRegistryForTests({ persist: false });
     hookRunnerMocks.runSubagentSpawning.mockClear();
@@ -198,9 +193,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     hookRunnerMocks.runSubagentEnded.mockClear();
     setSessionsSpawnHookRunnerOverride({
       hasHooks: (hookName: string) =>
-        hookName === "subagent_spawning" ||
-        hookName === "subagent_spawned" ||
-        hookName === "subagent_ended",
+        hookName === "subagent_spawned" || hookName === "subagent_ended",
       runSubagentSpawning: hookRunnerMocks.runSubagentSpawning,
       runSubagentSpawned: hookRunnerMocks.runSubagentSpawned,
       runSubagentEnded: hookRunnerMocks.runSubagentEnded,
@@ -301,10 +294,20 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       agentSessionKey: "main",
       agentChannel: "whatsapp",
     });
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      messages: { queue: { debounceMs: 0 } },
+      agents: {
+        defaults: {
+          subagents: {
+            runTimeoutSeconds: 120,
+          },
+        },
+      },
+    });
 
     const result = await tool.execute("call-start-timeout", {
       task: "do thing",
-      runTimeoutSeconds: 120,
     });
 
     expectAcceptedRunDetails(result.details);

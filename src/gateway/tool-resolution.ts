@@ -1,11 +1,11 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
-} from "../agents/pi-tools.policy.js";
+} from "../agents/agent-tools.policy.js";
+import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -36,6 +36,10 @@ export function resolveGatewayScopedTools(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   messageProvider?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  currentInboundAudio?: boolean;
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -123,7 +127,6 @@ export function resolveGatewayScopedTools(params: {
     inheritedToolPolicy,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
-    excludedToolNames.length > 0 ? { deny: excludedToolNames } : undefined,
   ]);
   const inheritedToolDenylist = [...explicitDenylist];
   // Passed by reference to sessions_spawn and populated after the final policy
@@ -150,6 +153,10 @@ export function resolveGatewayScopedTools(params: {
     sourceReplyDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
+    currentChannelId: params.currentChannelId ?? params.agentTo,
+    currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
+    currentMessageId: params.currentMessageId,
+    currentInboundAudio: params.currentInboundAudio,
     senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,

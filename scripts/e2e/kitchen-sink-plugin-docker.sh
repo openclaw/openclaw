@@ -22,7 +22,7 @@ npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixtu
 SCENARIOS
 )"
 KITCHEN_SINK_SCENARIOS="${OPENCLAW_KITCHEN_SINK_PLUGIN_SCENARIOS:-$DEFAULT_KITCHEN_SINK_SCENARIOS}"
-MAX_MEMORY_MIB="${OPENCLAW_KITCHEN_SINK_MAX_MEMORY_MIB:-2048}"
+MAX_MEMORY_MIB="${OPENCLAW_KITCHEN_SINK_PLUGIN_MAX_MEMORY_MIB:-${OPENCLAW_KITCHEN_SINK_MAX_MEMORY_MIB:-2304}}"
 MAX_CPU_PERCENT="${OPENCLAW_KITCHEN_SINK_MAX_CPU_PERCENT:-1200}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_KITCHEN_SINK_PLUGIN_DOCKER_RUN_TIMEOUT:-1200s}"
 KITCHEN_SINK_CLI_TIMEOUT="${OPENCLAW_KITCHEN_SINK_PLUGIN_CLI_TIMEOUT:-${KITCHEN_SINK_CLI_TIMEOUT:-180s}}"
@@ -64,12 +64,13 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --nam
   >"$RUN_LOG" 2>&1 &
 docker_pid="$!"
 
-while kill -0 "$docker_pid" 2>/dev/null; do
-  if docker_e2e_docker_cmd inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-    docker_e2e_docker_cmd stats --no-stream --format '{{json .}}' "$CONTAINER_NAME" >>"$STATS_LOG" 2>/dev/null || true
-  fi
-  sleep 2
-done
+docker_e2e_sample_stats_until_exit \
+  "$CONTAINER_NAME" \
+  "$docker_pid" \
+  "$STATS_LOG" \
+  "$RUN_LOG" \
+  "Kitchen-sink plugin Docker E2E" \
+  "${OPENCLAW_DOCKER_E2E_STATS_HEARTBEAT_SECONDS:-30}"
 
 set +e
 wait "$docker_pid"

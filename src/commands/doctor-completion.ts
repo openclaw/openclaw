@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveCliName } from "../cli/cli-name.js";
 import {
   completionCacheExists,
@@ -14,7 +15,6 @@ import {
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type CompletionShell = "zsh" | "bash" | "fish" | "powershell";
@@ -90,14 +90,14 @@ export function shellCompletionStatusToHealthFindings(
   status: ShellCompletionStatus,
 ): readonly HealthFinding[] {
   const checkId = "core/doctor/shell-completion";
-  const path = `shellCompletion.${status.shell}`;
+  const pathLocal = `shellCompletion.${status.shell}`;
   if (status.usesSlowPattern) {
     return [
       {
         checkId,
         severity: "info",
         message: `Your ${status.shell} profile uses slow dynamic completion (source <(...)).`,
-        path,
+        path: pathLocal,
         fixHint: "Run `openclaw doctor --fix` to upgrade to cached completion.",
       },
     ];
@@ -108,7 +108,7 @@ export function shellCompletionStatusToHealthFindings(
         checkId,
         severity: "info",
         message: `Shell completion is configured in your ${status.shell} profile but the cache is missing.`,
-        path,
+        path: pathLocal,
         fixHint: `Run \`openclaw completion --write-state\` or \`openclaw doctor --fix\` to regenerate ${status.cachePath}.`,
       },
     ];

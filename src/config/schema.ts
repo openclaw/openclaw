@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { CHANNEL_IDS } from "../channels/ids.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
@@ -360,6 +362,14 @@ function applyChannelHints(hints: ConfigUiHints, channels: ChannelUiMetadata[]):
 function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
   const seen = new Set<string>();
   const ordered: string[] = [];
+  for (const id of CHANNEL_IDS) {
+    const normalized = normalizeLowercaseStringOrEmpty(id);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  }
   for (const channel of channels) {
     const normalized = normalizeLowercaseStringOrEmpty(channel.id);
     if (!normalized || seen.has(normalized)) {
@@ -650,7 +660,7 @@ function resolveLookupChildSchema(
     return asJsonSchemaObject(properties[segment]);
   }
 
-  const itemIndex = /^\d+$/.test(segment) ? Number.parseInt(segment, 10) : undefined;
+  const itemIndex = parseConfigPathArrayIndex(segment);
   const items = resolveItemsSchema(schema, itemIndex);
   if ((segment === "*" || itemIndex !== undefined) && items) {
     return items;

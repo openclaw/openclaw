@@ -1,14 +1,7 @@
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import {
-  REALTIME_VOICE_AGENT_CONSULT_TOOL,
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-} from "../../talk/agent-consult-tool.js";
-import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
-import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -16,7 +9,14 @@ import {
   validateTalkClientCreateParams,
   validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+} from "../../talk/agent-consult-tool.js";
+import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
+import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
 import { startTalkRealtimeAgentConsult } from "../talk-agent-consult.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -112,6 +112,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         providerConfigs: realtimeConfig.providers,
         cfg: runtimeConfig,
         cfgForResolve: runtimeConfig,
+        defaultModel: realtimeConfig.model,
         noRegisteredProviderMessage: "No realtime voice provider registered",
       });
       const launchOptions = buildRealtimeVoiceLaunchOptions({

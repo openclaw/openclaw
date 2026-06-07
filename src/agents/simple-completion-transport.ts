@@ -1,7 +1,9 @@
-import { getApiProvider, type Api, type Model } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getApiProvider } from "../llm/api-registry.js";
+import type { Api, Model } from "../llm/types.js";
 import { createAnthropicVertexStreamFnForModel } from "./anthropic-vertex-stream.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
+import { prepareGoogleSimpleCompletionModel } from "./google-simple-completion-stream.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import {
   buildTransportAwareSimpleStreamFn,
@@ -36,7 +38,7 @@ function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): string {
       return parsed.toString().replace(/\/$/u, "");
     }
   } catch {
-    // Keep non-URL custom values on the same suffix contract pi-ai accepts.
+    // Keep non-URL custom values on the same suffix contract transport callers accept.
   }
   if (normalized.endsWith("/codex/responses")) {
     return normalized.slice(0, -"/responses".length);
@@ -50,8 +52,8 @@ function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): string {
 function prepareCodexSimpleTransportModel<TApi extends Api>(
   model: Model<TApi>,
   cfg?: OpenClawConfig,
-): Model<Api> | undefined {
-  if (model.provider !== "openai-codex" || model.api !== "openai-codex-responses") {
+): Model | undefined {
+  if (model.provider !== "openai" || model.api !== "openai-chatgpt-responses") {
     return undefined;
   }
 
@@ -60,7 +62,7 @@ function prepareCodexSimpleTransportModel<TApi extends Api>(
   const transportModel = {
     ...model,
     baseUrl: normalizeCodexResponsesBaseUrlForOpenAISdk(model.baseUrl),
-  } as Model<Api>;
+  } as Model;
   const api = resolveTransportAwareSimpleApi(model.api);
   const streamFn = createOpenClawTransportStreamFnForModel(transportModel, { cfg });
   if (!api || !streamFn) {
@@ -77,7 +79,7 @@ function prepareCodexSimpleTransportModel<TApi extends Api>(
 export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   model: Model<TApi>;
   cfg?: OpenClawConfig;
-}): Model<Api> {
+}): Model {
   const { model, cfg } = params;
   // Only provider-owned custom APIs need runtime stream registration here.
   if (!getApiProvider(model.api) && registerProviderStreamForModel({ model, cfg })) {
@@ -96,6 +98,10 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
       ensureCustomApiRegistered(transportAwareModel.api, streamFn);
       return transportAwareModel;
     }
+  }
+
+  if (model.api === "google-generative-ai") {
+    return prepareGoogleSimpleCompletionModel(model);
   }
 
   if (model.provider === "anthropic-vertex") {

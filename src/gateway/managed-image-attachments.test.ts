@@ -16,6 +16,11 @@ const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
 const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
+const getRuntimeConfigMock = vi.fn(() => ({}));
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: getRuntimeConfigMock,
+}));
 
 vi.mock("./http-utils.js", () => ({
   authorizeGatewayHttpRequestOrReply: authorizeGatewayHttpRequestOrReplyMock,
@@ -92,7 +97,7 @@ function requireBlock(blocks: unknown[], index = 0): ManagedImageBlock {
 
 async function createFixture(
   stateDir: string,
-  options?: { sessionKey?: string; attachmentId?: string; filename?: string },
+  options?: { sessionKey?: string; agentId?: string; attachmentId?: string; filename?: string },
 ) {
   const attachmentId = options?.attachmentId ?? "11111111-1111-4111-8111-111111111111";
   const sessionKey = options?.sessionKey ?? "agent:main:main";
@@ -103,6 +108,7 @@ async function createFixture(
   const record: Record<string, unknown> = {
     attachmentId,
     sessionKey,
+    ...(options?.agentId ? { agentId: options.agentId } : {}),
     messageId: "msg-1",
     createdAt: new Date().toISOString(),
     alt: "Cat",
@@ -175,20 +181,24 @@ async function requestManagedImage(params: {
   );
 
   const auth = { mode: "test" } as never;
-  const server = http.createServer(async (req, res) => {
-    const handled = await handleManagedOutgoingImageHttpRequest(req, res, {
-      auth,
-      trustedProxies: ["127.0.0.1/32"],
-      allowRealIpFallback: false,
-      stateDir: params.stateDir,
-    });
-    if (!handled) {
-      res.statusCode = 404;
-      res.end("unhandled");
-    }
+  const server = http.createServer((req, res) => {
+    void (async () => {
+      const handled = await handleManagedOutgoingImageHttpRequest(req, res, {
+        auth,
+        trustedProxies: ["127.0.0.1/32"],
+        allowRealIpFallback: false,
+        stateDir: params.stateDir,
+      });
+      if (!handled) {
+        res.statusCode = 404;
+        res.end("unhandled");
+      }
+    })();
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address() as AddressInfo;
 
   try {
@@ -201,16 +211,18 @@ async function requestManagedImage(params: {
           method: params.method ?? "GET",
           headers: params.headers,
         },
-        async (res) => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of res) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
-          resolve({
-            statusCode: res.statusCode ?? 0,
-            headers: res.headers,
-            body: Buffer.concat(chunks),
-          });
+        (res) => {
+          void (async () => {
+            const chunks: Buffer[] = [];
+            for await (const chunk of res) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            resolve({
+              statusCode: res.statusCode ?? 0,
+              headers: res.headers,
+              body: Buffer.concat(chunks),
+            });
+          })();
         },
       );
       req.on("error", reject);
@@ -219,9 +231,9 @@ async function requestManagedImage(params: {
 
     return { result, auth };
   } finally {
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
   }
 }
 
@@ -501,7 +513,9 @@ describe("createManagedOutgoingImageBlocks", () => {
       res.end(imageBuffer);
     });
 
-    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", resolve);
+    });
     const address = upstream.address() as AddressInfo;
     setMediaStoreNetworkDepsForTest({
       resolvePinnedHostname: async (hostname) => ({
@@ -542,9 +556,9 @@ describe("createManagedOutgoingImageBlocks", () => {
       expect(await fs.readFile(record.original.path)).toEqual(imageBuffer);
     } finally {
       setMediaStoreNetworkDepsForTest();
-      await new Promise<void>((resolve, reject) =>
-        upstream.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
       if (previousStateDir == null) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
@@ -669,7 +683,9 @@ describe("createManagedOutgoingImageBlocks", () => {
       res.setHeader("content-type", "image/png");
       res.end(imageBuffer);
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const address = server.address() as AddressInfo;
     setMediaStoreNetworkDepsForTest({
       resolvePinnedHostname: async (hostname) => ({
@@ -690,9 +706,9 @@ describe("createManagedOutgoingImageBlocks", () => {
       expect(requireBlock(blocks).type).toBe("image");
     } finally {
       setMediaStoreNetworkDepsForTest();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
       if (previousStateDir == null) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
@@ -895,6 +911,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   beforeEach(async () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-cleanup-"));
     vi.clearAllMocks();
+    getRuntimeConfigMock.mockReturnValue({});
   });
 
   afterEach(async () => {
@@ -1011,5 +1028,85 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.deletedRecordCount).toBe(1);
     expect(result.retainedCount).toBe(1);
     await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
+  });
+
+  it("retains other selected-agent global records during scoped cleanup", async () => {
+    const retainedFixture = await createFixture(stateDir, {
+      sessionKey: "global",
+      agentId: "work",
+      attachmentId: "55555555-5555-4555-8555-555555555555",
+    });
+    const deletedFixture = await createFixture(stateDir, {
+      sessionKey: "global",
+      agentId: "main",
+      attachmentId: "66666666-6666-4666-8666-666666666666",
+    });
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-main-global", sessionFile: "/tmp/global-main.jsonl" },
+    });
+    readSessionMessagesMock.mockReturnValue([]);
+
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      sessionKey: "global",
+      agentId: "main",
+    });
+
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "main" });
+    expect(result.deletedRecordCount).toBe(1);
+    expect(result.retainedCount).toBe(1);
+    await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
+    await expectPathMissing(deletedFixture.originalPath);
+  });
+
+  it("treats legacy unscoped global records as the configured default agent", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "work", default: true }] },
+    });
+    const deletedFixture = await createFixture(stateDir, {
+      sessionKey: "global",
+      attachmentId: "88888888-8888-4888-8888-888888888888",
+    });
+    const retainedFixture = await createFixture(stateDir, {
+      sessionKey: "global",
+      agentId: "main",
+      attachmentId: "99999999-9999-4999-8999-999999999999",
+    });
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-work-global", sessionFile: "/tmp/global-work.jsonl" },
+    });
+    readSessionMessagesMock.mockReturnValue([]);
+
+    const result = await cleanupManagedOutgoingImageRecords({
+      stateDir,
+      sessionKey: "global",
+      agentId: "work",
+    });
+
+    expect(result.deletedRecordCount).toBe(1);
+    expect(result.retainedCount).toBe(1);
+    await expectPathMissing(deletedFixture.originalPath);
+    await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
+  });
+
+  it("does not retain selected-agent global records during full cleanup", async () => {
+    const fixture = await createFixture(stateDir, {
+      sessionKey: "global",
+      agentId: "work",
+      attachmentId: "77777777-7777-4777-8777-777777777777",
+    });
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-work-global", sessionFile: "/tmp/global-work.jsonl" },
+    });
+    readSessionMessagesMock.mockReturnValue([]);
+
+    const result = await cleanupManagedOutgoingImageRecords({ stateDir });
+
+    expect(result.deletedRecordCount).toBe(1);
+    expect(result.retainedCount).toBe(0);
+    await expectPathMissing(fixture.originalPath);
   });
 });

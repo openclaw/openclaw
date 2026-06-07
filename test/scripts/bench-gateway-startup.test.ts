@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
+import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
 async function listenOnLoopback(handler: Parameters<typeof createServer>[0]) {
   const server = createServer(handler);
@@ -23,8 +23,10 @@ async function listenOnLoopback(handler: Parameters<typeof createServer>[0]) {
 }
 
 describe("gateway startup benchmark script", () => {
-  it("prints help without running benchmark cases", () => {
-    const result = spawnSync(
+  let helpResult: ReturnType<typeof spawnSync>;
+
+  beforeAll(() => {
+    helpResult = spawnSync(
       process.execPath,
       ["--import", "tsx", "scripts/bench-gateway-startup.ts", "--help"],
       {
@@ -36,14 +38,16 @@ describe("gateway startup benchmark script", () => {
         },
       },
     );
+  });
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("OpenClaw Gateway startup benchmark");
-    expect(result.stdout).toContain("--case <id>");
-    expect(result.stdout).toContain("--cpu-prof-dir <dir>");
-    expect(result.stdout).toContain("default (gateway default)");
-    expect(result.stdout).not.toContain("[gateway-startup-bench]");
-    expect(result.stderr).toBe("");
+  it("prints help without running benchmark cases", () => {
+    expect(helpResult.status).toBe(0);
+    expect(helpResult.stdout).toContain("OpenClaw Gateway startup benchmark");
+    expect(helpResult.stdout).toContain("--case <id>");
+    expect(helpResult.stdout).toContain("--cpu-prof-dir <dir>");
+    expect(helpResult.stdout).toContain("default (gateway default)");
+    expect(helpResult.stdout).not.toContain("[gateway-startup-bench]");
+    expect(helpResult.stderr).toBe("");
   });
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
@@ -275,90 +279,9 @@ describe("gateway startup benchmark script", () => {
     ]);
   });
 
-  it("classifies queued child exits before sending teardown signals", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      signalCode: NodeJS.Signals | null;
-    };
-    child.exitCode = null;
-    child.signalCode = null;
-    child.kill = vi.fn(() => true);
-
-    const stopped = testing.stopChild(child as unknown as Parameters<typeof testing.stopChild>[0]);
-    queueMicrotask(() => {
-      child.exitCode = 7;
-      child.emit("exit", 7, null);
-    });
-
-    await expect(stopped).resolves.toEqual({
-      exitedBeforeTeardown: true,
-      exitCode: 7,
-      signal: null,
-    });
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("classifies failed teardown signaling as a pre-teardown child exit", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      signalCode: NodeJS.Signals | null;
-    };
-    child.exitCode = null;
-    child.signalCode = null;
-    child.kill = vi.fn(() => {
-      setImmediate(() => {
-        child.exitCode = 8;
-        child.emit("exit", 8, null);
-      });
-      return false;
-    });
-
-    await expect(
-      testing.stopChild(child as unknown as Parameters<typeof testing.stopChild>[0]),
-    ).resolves.toEqual({
-      exitedBeforeTeardown: true,
-      exitCode: 8,
-      signal: null,
-    });
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-  });
-
-  it("bounds teardown when the child ignores termination signals", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      signalCode: NodeJS.Signals | null;
-      stderr: { destroy: ReturnType<typeof vi.fn> };
-      stdin: { destroy: ReturnType<typeof vi.fn> };
-      stdout: { destroy: ReturnType<typeof vi.fn> };
-      unref: ReturnType<typeof vi.fn>;
-    };
-    child.exitCode = null;
-    child.signalCode = null;
-    child.kill = vi.fn(() => true);
-    child.stderr = { destroy: vi.fn() };
-    child.stdin = { destroy: vi.fn() };
-    child.stdout = { destroy: vi.fn() };
-    child.unref = vi.fn();
-
-    await expect(
-      testing.stopChild(child as unknown as Parameters<typeof testing.stopChild>[0], {
-        killGraceMs: 1,
-        teardownGraceMs: 1,
-      }),
-    ).resolves.toEqual({
-      exitedBeforeTeardown: false,
-      exitCode: null,
-      signal: "SIGKILL",
-    });
-    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
-    expect(child.stdin.destroy).toHaveBeenCalledOnce();
-    expect(child.stdout.destroy).toHaveBeenCalledOnce();
-    expect(child.stderr.destroy).toHaveBeenCalledOnce();
-    expect(child.unref).toHaveBeenCalledOnce();
+  registerStopChildBehaviorTests({
+    stopChild: testing.stopChild,
+    queuedExitCode: 7,
   });
 
   it("collects Count-suffixed startup trace metrics", () => {

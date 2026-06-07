@@ -18,8 +18,8 @@ describe("path prepend helpers", () => {
     { env: env({ path: "/usr/bin" }), expected: "path" },
     { env: env({ PaTh: "/usr/bin" }), expected: "PaTh" },
     { env: env({ HOME: "/tmp" }), expected: "PATH" },
-  ])("finds the PATH key for %j", ({ env, expected }) => {
-    expect(findPathKey(env)).toBe(expected);
+  ])("finds the PATH key for %j", ({ env: envEntry, expected }) => {
+    expect(findPathKey(envEntry)).toBe(expected);
   });
 
   it("normalizes prepend lists by trimming, skipping blanks, and deduping", () => {
@@ -55,13 +55,13 @@ describe("path prepend helpers", () => {
   });
 
   it("applies prepends to the discovered PATH key and preserves existing casing", () => {
-    const env = {
+    const envResult = {
       Path: pathLine("/usr/bin", "/opt/bin"),
     };
 
-    applyPathPrepend(env, ["/custom/bin", "/usr/bin"]);
+    applyPathPrepend(envResult, ["/custom/bin", "/usr/bin"]);
 
-    expect(env).toEqual({
+    expect(envResult).toEqual({
       Path: pathLine("/custom/bin", "/usr/bin", "/opt/bin"),
     });
   });
@@ -87,9 +87,9 @@ describe("path prepend helpers", () => {
       prepend: undefined,
       expected: env({ PATH: "/usr/bin" }),
     },
-  ])("respects requireExisting for %j", ({ env, prepend, expected }) => {
-    applyPathPrepend(env, prepend, { requireExisting: true });
-    expect(env).toEqual(expected);
+  ])("respects requireExisting for %j", ({ env: envValue, prepend, expected }) => {
+    applyPathPrepend(envValue, prepend, { requireExisting: true });
+    expect(envValue).toEqual(expected);
   });
 
   it.each([
@@ -103,9 +103,9 @@ describe("path prepend helpers", () => {
         PATH: "/custom/bin",
       },
     },
-  ])("$name", ({ env, prepend, opts, expected }) => {
-    applyPathPrepend(env, prepend, opts);
-    expect(env).toEqual(expected);
+  ])("$name", ({ env: envLocal, prepend, opts, expected }) => {
+    applyPathPrepend(envLocal, prepend, opts);
+    expect(envLocal).toEqual(expected);
   });
 
   describe("removePathPrepend", () => {

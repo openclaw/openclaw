@@ -78,7 +78,7 @@ vi.mock("./logs-cli.runtime.js", () => ({
     ...args: Parameters<typeof import("./logs-cli.runtime.js").execFileUtf8Tail>
   ) => execFileUtf8Tail(...args),
   resolveGatewaySystemdServiceName: (
-    ...args: Parameters<typeof import("../daemon/constants.js").resolveGatewaySystemdServiceName>
+    ..._args: Parameters<typeof import("../daemon/constants.js").resolveGatewaySystemdServiceName>
   ) => "openclaw-gateway",
 }));
 
@@ -191,6 +191,17 @@ describe("logs cli", () => {
         deviceIdentity: null,
       },
     );
+  });
+
+  it.each([
+    ["--limit", "10x"],
+    ["--max-bytes", "250kb"],
+    ["--interval", "1s"],
+  ])("rejects partial numeric %s values", async (flag, value) => {
+    await expect(runLogsCli(["logs", flag, value])).rejects.toThrow(
+      `${flag} must be a positive integer.`,
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 
   it("keeps explicit Gateway URLs on the normal CLI client identity", async () => {
@@ -418,10 +429,9 @@ describe("logs cli", () => {
       readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
         .mockResolvedValueOnce({
-          stdout: [
-            "Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz",
-            "-- cursor: s=abc",
-          ].join("\n"),
+          stdout: ["Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz", "-- cursor: s=abc"].join(
+            "\n",
+          ),
           stderr: "",
           code: 0,
           truncated: false,

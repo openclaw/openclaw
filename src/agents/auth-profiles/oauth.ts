@@ -1,19 +1,19 @@
-import {
-  getOAuthApiKey,
-  getOAuthProviders,
-  type OAuthCredentials,
-  type OAuthProvider,
-} from "@earendil-works/pi-ai/oauth";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  getOAuthApiKey,
+  getOAuthProviders,
+  type OAuthCredentials,
+  type OAuthProvider,
+} from "../../llm/oauth.js";
+import {
   formatProviderAuthProfileApiKeyWithPlugin,
   refreshProviderOAuthCredentialWithPlugin,
 } from "../../plugins/provider-runtime.runtime.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
@@ -25,6 +25,7 @@ import {
   readManagedExternalCliCredential,
 } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
+import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -223,7 +224,7 @@ const oauthManager = createOAuthManager({
       credential,
     }),
   readFallbackCredential: ({ profileId, credential }) =>
-    credential.provider === "openai-codex"
+    credential.provider === "openai"
       ? readExternalCliFallbackCredential({
           profileId,
           credential,
@@ -495,11 +496,13 @@ export async function resolveApiKeyForProfile(
       provider: cred.provider,
       profileId,
     });
-    throw new Error(
-      `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
+    throw new OAuthRefreshFailureError({
+      provider: cred.provider,
+      message:
+        `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
         "Please try again or re-authenticate." +
         (hint ? `\n\n${hint}` : ""),
-      { cause: error },
-    );
+      cause: error,
+    });
   }
 }

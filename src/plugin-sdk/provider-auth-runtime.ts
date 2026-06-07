@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveApiKeyForProvider as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
 export {
@@ -107,6 +108,7 @@ export async function waitForLocalOAuthCallback(params: {
   corsOriginAllowlist?: readonly string[];
 }): Promise<OAuthCallbackResult> {
   const hostname = params.hostname ?? "localhost";
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   const escapedSuccessTitle = escapeHtmlText(params.successTitle);
   const resolveOAuthCallbackOrigin = buildOAuthCallbackOriginResolver(params.corsOriginAllowlist);
   const hasCorsOriginAllowlist =
@@ -216,7 +218,7 @@ export async function waitForLocalOAuthCallback(params: {
 
     timeout = setTimeout(() => {
       finish(new Error("OAuth callback timeout"));
-    }, params.timeoutMs);
+    }, timeoutMs);
   });
 }
 
@@ -300,16 +302,17 @@ export async function resolveApiKeyForProvider(
   params: Parameters<ResolveApiKeyForProvider>[0],
 ): Promise<Awaited<ReturnType<ResolveApiKeyForProvider>>> {
   const runtimeAuth = await loadRuntimeModelAuthModule();
-  const resolveApiKeyForProvider =
+  const resolveApiKeyForProviderLocal =
     typeof runtimeAuth.resolveApiKeyForProvider === "function"
       ? runtimeAuth.resolveApiKeyForProvider
       : resolveModelApiKeyForProvider;
-  return resolveApiKeyForProvider(params);
+  return resolveApiKeyForProviderLocal(params);
 }
 
 export async function getRuntimeAuthForModel(
   params: Parameters<GetRuntimeAuthForModel>[0],
 ): Promise<Awaited<ReturnType<GetRuntimeAuthForModel>>> {
-  const { getRuntimeAuthForModel } = await loadRuntimeModelAuthModule();
-  return getRuntimeAuthForModel(params);
+  const { getRuntimeAuthForModel: getRuntimeAuthForModelLocal } =
+    await loadRuntimeModelAuthModule();
+  return getRuntimeAuthForModelLocal(params);
 }

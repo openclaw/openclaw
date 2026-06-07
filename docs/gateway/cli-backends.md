@@ -161,13 +161,14 @@ told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats
 a new policy.
 </Note>
 
-The bundled Anthropic `claude-cli` backend receives the OpenClaw skills snapshot
-two ways: the compact OpenClaw skills catalog in the appended system prompt, and
-a temporary Claude Code plugin passed with `--plugin-dir`. The plugin contains
-only the eligible skills for that agent/session, so Claude Code's native skill
-resolver sees the same filtered set that OpenClaw would otherwise advertise in
-the prompt. Skill env/API key overrides are still applied by OpenClaw to the
-child process environment for the run.
+The bundled Anthropic `claude-cli` backend prefers Claude Code's native skill
+resolver for OpenClaw skills. When the current skills snapshot includes at least
+one selected skill with a materialized path, OpenClaw passes a temporary Claude
+Code plugin with `--plugin-dir` and omits the duplicate OpenClaw skills catalog
+from the appended system prompt. If the snapshot has no materialized plugin
+skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key
+overrides are still applied by OpenClaw to the child process environment for the
+run.
 
 Claude CLI also has its own noninteractive permission mode. OpenClaw maps that
 to the existing exec policy instead of adding Claude-specific policy config.
@@ -370,6 +371,30 @@ its own control markers and channel delivery.
 
 For CLIs that emit Claude Code stream-json compatible JSONL, set
 `jsonlDialect: "claude-stream-json"` on that backend's config.
+
+## Native compaction ownership
+
+Some CLI backends run an agent that compacts its **own** transcript, so OpenClaw must
+not run its safeguard summarizer against them - doing so fights the backend's own
+compaction and can hard-fail the turn.
+
+`claude-cli` has no harness endpoint - Claude Code compacts internally - so it declares
+`ownsNativeCompaction: true`, and OpenClaw returns a no-op from the compaction path.
+Native-harness sessions such as Codex keep routing to their harness compaction endpoint
+instead.
+
+Because the backend owns compaction, the old stopgap of setting
+`contextTokens: 1_000_000` purely to keep OpenClaw's safeguard from firing on a
+claude-cli session is **no longer needed** - the opt-out replaces it.
+
+```typescript
+api.registerCliBackend({ id: "my-cli", ownsNativeCompaction: true /* ... */ });
+```
+
+Only declare `ownsNativeCompaction` for a backend that genuinely owns its compaction: it
+must reliably bound its own transcript as it nears its context window and persist a
+resumable session (e.g. `--resume` / `--session-id`); otherwise a deferred session can
+stay over budget. Matching `agentHarnessId` sessions still route to the harness endpoint.
 
 ## Bundle MCP overlays
 

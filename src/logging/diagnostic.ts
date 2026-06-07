@@ -40,9 +40,9 @@ import {
   resetDiagnosticSessionRecoveryCoordinatorForTest,
   type RecoverStuckSession,
 } from "./diagnostic-session-recovery-coordinator.js";
-import {
-  type StuckSessionRecoveryOutcome,
-  type StuckSessionRecoveryRequest,
+import type {
+  StuckSessionRecoveryOutcome,
+  StuckSessionRecoveryRequest,
 } from "./diagnostic-session-recovery.js";
 import {
   diagnosticSessionStates,
@@ -162,7 +162,7 @@ async function recoverStuckSession(
   stuckSessionRecoveryRuntimePromise ??= import("./diagnostic-stuck-session-recovery.runtime.js");
   return stuckSessionRecoveryRuntimePromise
     .then(({ recoverStuckDiagnosticSession }) => recoverStuckDiagnosticSession(params))
-    .catch((err) => {
+    .catch((err: unknown) => {
       diag.warn(`stuck session recovery unavailable: ${String(err)}`);
       return {
         status: "failed",
@@ -897,6 +897,15 @@ export function logSessionStateChange(
   markActivity();
 }
 
+export function updateDiagnosticSessionFile(params: SessionRef) {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  const state = getDiagnosticSessionState(params);
+  state.sessionFile = params.sessionFile?.trim() || undefined;
+  markActivity();
+}
+
 export function markDiagnosticSessionProgress(params: SessionRef) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
@@ -1225,7 +1234,7 @@ export function startDiagnosticHeartbeat(
           pruneStaleCommandPolls(state);
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         diag.debug(`command-poll-backoff prune failed: ${String(err)}`);
       });
 
@@ -1262,6 +1271,7 @@ export function startDiagnosticHeartbeat(
             request: {
               sessionId: state.sessionId,
               sessionKey: state.sessionKey,
+              sessionFile: state.sessionFile,
               ageMs: attentionAgeMs,
               queueDepth: state.queueDepth,
               expectedState: state.state,
@@ -1284,6 +1294,7 @@ export function startDiagnosticHeartbeat(
             request: {
               sessionId: state.sessionId,
               sessionKey: state.sessionKey,
+              sessionFile: state.sessionFile,
               ageMs: attentionAgeMs,
               queueDepth: state.queueDepth,
               allowActiveAbort: true,

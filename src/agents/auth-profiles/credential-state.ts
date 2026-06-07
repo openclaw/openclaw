@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import type { AuthProfileCredential, OAuthCredential, OAuthCredentialRef } from "./types.js";
 
@@ -25,7 +26,7 @@ export function resolveTokenExpiryState(
   if (typeof expires !== "number") {
     return "invalid_expires";
   }
-  if (!Number.isFinite(expires) || expires <= 0) {
+  if (!Number.isFinite(expires) || expires <= 0 || expires > MAX_DATE_TIMESTAMP_MS) {
     return "invalid_expires";
   }
   const remainingMs = expires - now;
@@ -116,6 +117,9 @@ export function evaluateStoredCredentialEligibility(params: {
     normalizeSecretInputString(credential.refresh) === undefined &&
     !hasConfiguredOAuthRef(credential.oauthRef)
   ) {
+    if (credential.oauthRef) {
+      return { eligible: false, reasonCode: "unresolved_ref" };
+    }
     return { eligible: false, reasonCode: "missing_credential" };
   }
   return { eligible: true, reasonCode: "ok" };

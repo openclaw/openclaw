@@ -15,6 +15,7 @@ const unitFastCandidateGlobs = [
   "packages/plugin-package-contract/**/*.test.ts",
   "src/acp/**/*.test.ts",
   "src/agents/**/*.test.ts",
+  "src/skills/**/*.test.ts",
   "src/auto-reply/**/*.test.ts",
   "src/bootstrap/**/*.test.ts",
   "src/channels/**/*.test.ts",
@@ -30,7 +31,9 @@ const unitFastCandidateGlobs = [
   "src/interactive/**/*.test.ts",
   "src/link-understanding/**/*.test.ts",
   "src/logging/**/*.test.ts",
-  "src/markdown/**/*.test.ts",
+  "packages/markdown-core/src/**/*.test.ts",
+  "packages/media-core/src/**/*.test.ts",
+  "packages/terminal-core/src/**/*.test.ts",
   "src/media/**/*.test.ts",
   "src/media-generation/**/*.test.ts",
   "src/media-understanding/**/*.test.ts",
@@ -47,7 +50,6 @@ const unitFastCandidateGlobs = [
   "src/routing/**/*.test.ts",
   "src/sessions/**/*.test.ts",
   "src/shared/**/*.test.ts",
-  "src/terminal/**/*.test.ts",
   "src/test-utils/**/*.test.ts",
   "src/tasks/**/*.test.ts",
   "src/tts/**/*.test.ts",
@@ -66,7 +68,12 @@ export const forcedUnitFastTestFiles = [
   "packages/memory-host-sdk/src/host/qmd-process.test.ts",
   "packages/memory-host-sdk/src/host/session-files.test.ts",
   "src/acp/client.test.ts",
+  "src/acp/control-plane/manager.backend-failover.test.ts",
+  "src/acp/control-plane/manager.failover.test.ts",
+  "src/acp/control-plane/manager.runtime-config.test.ts",
+  "src/acp/control-plane/manager.runtime-handles.test.ts",
   "src/acp/control-plane/manager.test.ts",
+  "src/acp/control-plane/manager.turn-results.test.ts",
   "src/acp/session-mapper.test.ts",
   "src/acp/persistent-bindings.lifecycle.test.ts",
   "src/acp/translator.prompt-prefix.test.ts",
@@ -74,8 +81,16 @@ export const forcedUnitFastTestFiles = [
   "src/acp/translator.stop-reason.test.ts",
   "src/acp/persistent-bindings.test.ts",
   "src/acp/server.startup.test.ts",
+  "src/acp/translator.final-snapshots.test.ts",
+  "src/acp/translator.prompt-size.test.ts",
+  "src/acp/translator.replay.test.ts",
+  "src/acp/translator.session-config.test.ts",
+  "src/acp/translator.session-list.test.ts",
   "src/acp/translator.session-rate-limit.test.ts",
+  "src/acp/translator.session-setup.test.ts",
+  "src/acp/translator.session-snapshot.test.ts",
   "src/acp/translator.set-session-mode.test.ts",
+  "src/acp/translator.tool-streaming.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
   "extensions/canvas/src/host/server.test.ts",
   "src/crestodian/audit.test.ts",
@@ -121,7 +136,6 @@ export const forcedUnitFastTestFiles = [
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/node-host/invoke-system-run.test.ts",
   "src/pairing/pairing-challenge.test.ts",
-  "src/pairing/allow-from-store-read.test.ts",
   "src/pairing/pairing-store.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
@@ -167,11 +181,11 @@ export const forcedUnitFastTestFiles = [
   "src/security/audit-plugins-trust.test.ts",
   "src/security/audit-plugin-readonly-scope.test.ts",
   "src/security/audit-loopback-logging.test.ts",
-  "src/security/audit-workspace-skill-escape.test.ts",
+  "src/skills/security/workspace-audit.test.ts",
   "src/security/external-content.test.ts",
   "src/security/fix.test.ts",
   "src/security/scan-paths.test.ts",
-  "src/security/skill-scanner.test.ts",
+  "src/skills/security/scanner.test.ts",
   "src/security/audit-config-include-perms.test.ts",
   "src/security/context-visibility.test.ts",
   "src/realtime-transcription/websocket-session.test.ts",
@@ -190,8 +204,8 @@ export const forcedUnitFastTestFiles = [
   "src/tts/status-config.test.ts",
   "src/tts/tts-config.test.ts",
   "src/ui-app-settings.agents-files-refresh.test.ts",
-  "src/terminal/restore.test.ts",
-  "src/terminal/table.test.ts",
+  "packages/terminal-core/src/restore.test.ts",
+  "packages/terminal-core/src/table.test.ts",
   "src/test-helpers/state-dir-env.test.ts",
   "src/test-utils/env.test.ts",
   "src/test-utils/openclaw-test-state.test.ts",
@@ -247,7 +261,7 @@ const disqualifyingPatterns = [
   },
   {
     code: "module-mocking-helper",
-    pattern: /(?:runtime-module-mocks|plugins-cli-test-helpers)/u,
+    pattern: /(?:runtime-module-mocks|plugins-cli-test-helpers|manager\.test-helpers)/u,
   },
   {
     code: "vitest-mock-api",
@@ -400,7 +414,7 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
       : collectUnitFastTestCandidates(cwd);
   const analysis = candidates.map((file) => {
     const absolutePath = path.join(cwd, file);
-    let source = "";
+    let source;
     try {
       source = fs.readFileSync(absolutePath, "utf8");
     } catch {
@@ -425,6 +439,8 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
 
 let cachedUnitFastTestFiles = null;
 let cachedUnitFastTestFileSet = null;
+let cachedUnitFastTimerTestFiles = null;
+let cachedUnitFastTimerTestFileSet = null;
 const cachedSingleUnitFastTestFileResults = new Map();
 
 export function getUnitFastTestFiles() {
@@ -437,12 +453,30 @@ export function getUnitFastTestFiles() {
   return cachedUnitFastTestFiles;
 }
 
+export function getUnitFastTimerTestFiles() {
+  if (cachedUnitFastTimerTestFiles !== null) {
+    return cachedUnitFastTimerTestFiles;
+  }
+  cachedUnitFastTimerTestFiles = collectUnitFastTestFileAnalysis()
+    .filter((entry) => entry.unitFast && entry.reasons.includes("fake-timers"))
+    .map((entry) => entry.file);
+  return cachedUnitFastTimerTestFiles;
+}
+
 function getUnitFastTestFileSet() {
   if (cachedUnitFastTestFileSet !== null) {
     return cachedUnitFastTestFileSet;
   }
   cachedUnitFastTestFileSet = new Set(getUnitFastTestFiles());
   return cachedUnitFastTestFileSet;
+}
+
+function getUnitFastTimerTestFileSet() {
+  if (cachedUnitFastTimerTestFileSet !== null) {
+    return cachedUnitFastTimerTestFileSet;
+  }
+  cachedUnitFastTimerTestFileSet = new Set(getUnitFastTimerTestFiles());
+  return cachedUnitFastTimerTestFileSet;
 }
 
 function isUnitFastTestFileOnDemand(file, cwd = process.cwd()) {
@@ -457,7 +491,7 @@ function isUnitFastTestFileOnDemand(file, cwd = process.cwd()) {
     return false;
   }
 
-  let source = "";
+  let source;
   try {
     source = fs.readFileSync(path.join(cwd, normalized), "utf8");
   } catch {
@@ -476,12 +510,22 @@ export function isUnitFastTestFile(file) {
   return getUnitFastTestFileSet().has(normalizeRepoPath(file));
 }
 
+export function isUnitFastTimerTestFile(file) {
+  return getUnitFastTimerTestFileSet().has(normalizeRepoPath(file));
+}
+
 export function resolveUnitFastTestIncludePattern(file) {
   const normalized = normalizeRepoPath(file);
+  if (isUnitFastTimerTestFile(normalized)) {
+    return null;
+  }
   if (isUnitFastTestFileOnDemand(normalized)) {
     return normalized;
   }
   const siblingTestFile = normalized.replace(/\.ts$/u, ".test.ts");
+  if (isUnitFastTimerTestFile(siblingTestFile)) {
+    return null;
+  }
   if (isUnitFastTestFileOnDemand(siblingTestFile)) {
     return siblingTestFile;
   }
@@ -490,4 +534,13 @@ export function resolveUnitFastTestIncludePattern(file) {
     return isUnitFastTestFileOnDemand(exactTestFile) ? exactTestFile : null;
   }
   return null;
+}
+
+export function resolveUnitFastTimerTestIncludePattern(file) {
+  const normalized = normalizeRepoPath(file);
+  if (isUnitFastTimerTestFile(normalized)) {
+    return normalized;
+  }
+  const siblingTestFile = normalized.replace(/\.ts$/u, ".test.ts");
+  return isUnitFastTimerTestFile(siblingTestFile) ? siblingTestFile : null;
 }

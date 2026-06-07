@@ -13,6 +13,8 @@ import {
 import { loadStatusScanCommandConfig } from "./status.scan.config-shared.js";
 import type { GatewayProbeSnapshot } from "./status.scan.shared.js";
 
+type StatusGatewayProbeTimeoutResolver = (cfg: OpenClawConfig) => number | undefined;
+
 const statusScanDepsRuntimeModuleLoader = createLazyImportLoader(
   () => import("./status.scan.deps.runtime.js"),
 );
@@ -135,13 +137,19 @@ export async function collectStatusScanOverview(params: {
   showSecrets: boolean;
   runtime?: RuntimeEnv;
   allowMissingConfigFastPath?: boolean;
+  skipUpdateCheck?: boolean;
+  fetchGitUpdate?: boolean;
+  includeRegistryUpdate?: boolean;
   resolveHasConfiguredChannels?: (
     cfg: OpenClawConfig,
     sourceConfig: OpenClawConfig,
   ) => boolean | Promise<boolean>;
   includeChannelsData?: boolean;
   includeLiveChannelStatus?: boolean;
+  includeLocalStatusRpcFallback?: boolean;
+  gatewayProbeTimeoutMs?: number | StatusGatewayProbeTimeoutResolver;
   includeChannelSetupRuntimeFallback?: boolean;
+  channelCredentialResolutionSkipped?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
   includeChannelSecretTargets?: boolean;
   skipConfigPluginValidation?: boolean;
@@ -199,6 +207,10 @@ export async function collectStatusScanOverview(params: {
         }),
       );
   const osSummary = resolveOsSummary();
+  const gatewayProbeTimeoutMs =
+    typeof params.gatewayProbeTimeoutMs === "function"
+      ? params.gatewayProbeTimeoutMs(cfg)
+      : params.gatewayProbeTimeoutMs;
   const bootstrap = await createStatusScanCoreBootstrap<
     Awaited<ReturnType<typeof getAgentLocalStatusesFn>>
   >({
@@ -206,6 +218,11 @@ export async function collectStatusScanOverview(params: {
     cfg,
     hasConfiguredChannels,
     opts: params.opts,
+    skipUpdateCheck: params.skipUpdateCheck,
+    fetchGitUpdate: params.fetchGitUpdate,
+    includeRegistryUpdate: params.includeRegistryUpdate,
+    includeLocalStatusRpcFallback: params.includeLocalStatusRpcFallback,
+    gatewayProbeTimeoutMs,
     getTailnetHostname: async (runner) =>
       await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
         getTailnetHostname(runner),
@@ -252,7 +269,7 @@ export async function collectStatusScanOverview(params: {
         if (params.labels?.queryingChannelStatus) {
           params.progress?.setLabel(params.labels.queryingChannelStatus);
         }
-        const channelsStatus = includeLiveChannelStatus
+        const channelsStatusLocal = includeLiveChannelStatus
           ? await resolveStatusChannelsStatus({
               cfg,
               gatewayReachable: gatewaySnapshot.gatewayReachable,
@@ -264,18 +281,27 @@ export async function collectStatusScanOverview(params: {
         params.progress?.tick();
         const { collectChannelStatusIssues, buildChannelsTable } =
           await loadStatusScanRuntimeModule().then(({ statusScanRuntime }) => statusScanRuntime);
-        const channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
+        const channelIssuesLocal = channelsStatusLocal
+          ? collectChannelStatusIssues(channelsStatusLocal)
+          : [];
         if (params.labels?.summarizingChannels) {
           params.progress?.setLabel(params.labels.summarizingChannels);
         }
-        const channels = await buildChannelsTable(cfg, {
+        const channelsLocal = await buildChannelsTable(cfg, {
           showSecrets: params.showSecrets,
           sourceConfig,
           includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
-          liveChannelStatus: channelsStatus,
+          liveChannelStatus: channelsStatusLocal,
+          ...(params.channelCredentialResolutionSkipped === true
+            ? { credentialResolutionSkipped: true }
+            : {}),
         });
         params.progress?.tick();
-        return { channelsStatus, channelIssues, channels };
+        return {
+          channelsStatus: channelsStatusLocal,
+          channelIssues: channelIssuesLocal,
+          channels: channelsLocal,
+        };
       })()
     : {
         channelsStatus: null,

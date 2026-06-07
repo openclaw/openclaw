@@ -22,6 +22,7 @@ import {
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
   resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
+  retryQueuedChatMessage as retryQueuedChatMessageInternal,
   steerQueuedChatMessage as steerQueuedChatMessageInternal,
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
@@ -41,7 +42,7 @@ import {
 } from "./app-lifecycle.ts";
 import { initNativeBridge } from "./app-native-bridge.ts";
 import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
-import { renderApp } from "./app-render.ts";
+import { loadSkillWorkshopMode, renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
   handleActivityScroll as handleActivityScrollInternal,
@@ -69,6 +70,7 @@ import {
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
+import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
   createRealtimeTalkConversationState,
@@ -101,8 +103,10 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
+  ClawHubSkillSecurityVerdict,
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
@@ -138,7 +142,7 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "./types.ts";
-import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
+import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
@@ -150,6 +154,24 @@ declare global {
 
 const bootAssistantIdentity = normalizeAssistantIdentity({});
 const bootLocalUserIdentity = loadLocalUserIdentity();
+const FULL_MESSAGE_SIDEBAR_MAX_CHARS = 500_000;
+
+function isSidebarMarkdownLike(content: SidebarContent | null): content is SidebarContent {
+  return Boolean(content && (content.kind === "markdown" || content.kind === "canvas"));
+}
+
+function resolveSidebarUnavailableReason(
+  reason: "not_found" | "oversized" | "not_visible" | null | undefined,
+): string {
+  switch (reason) {
+    case "oversized":
+      return "Full content is unavailable because the stored transcript entry is too large to return safely.";
+    case "not_visible":
+      return "Full content is unavailable because this transcript entry does not have a visible WebChat projection.";
+    default:
+      return "Full content is no longer available for this transcript entry.";
+  }
+}
 
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
@@ -194,6 +216,7 @@ export class OpenClawApp extends LitElement {
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
+  @state() chatError: string | null = null;
   @state() eventLog: EventLogEntry[] = [];
   eventLogBuffer: EventLogEntry[] = [];
   toolStreamSyncTimer: number | null = null;
@@ -256,7 +279,7 @@ export class OpenClawApp extends LitElement {
   @state() sessionSwitchNotice: { id: number; text: string } | null = null;
   @state() sessionSwitchFlashKey: string | null = null;
   @state() chatSessionPickerOpen = false;
-  @state() chatSessionPickerSurface: "desktop" | "mobile" | null = null;
+  @state() chatSessionPickerSurface: "desktop" | "mobile" | "sidebar" | null = null;
   @state() chatSessionPickerQuery = "";
   @state() chatSessionPickerAppliedQuery = "";
   @state() chatSessionPickerLoading = false;
@@ -265,6 +288,12 @@ export class OpenClawApp extends LitElement {
   private sessionSwitchNoticeSeq = 0;
   private sessionSwitchNoticeTimer: number | null = null;
   private sessionSwitchFlashTimer: number | null = null;
+  chatComposerPersistTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
+  chatComposerPersistSnapshot: {
+    sessionKey: string;
+    chatMessage: string;
+    chatQueue: ChatQueueItem[];
+  } | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatQueueBySession: Record<string, ChatQueueItem[]> = {};
   @state() chatAttachments: ChatAttachment[] = [];
@@ -342,6 +371,7 @@ export class OpenClawApp extends LitElement {
   @state() configUiHints: ConfigUiHints = {};
   @state() configForm: Record<string, unknown> | null = null;
   @state() configFormOriginal: Record<string, unknown> | null = null;
+  @state() selectedAgentId: string | null = null;
   @state() dreamingStatusLoading = false;
   @state() dreamingStatusError: string | null = null;
   @state() dreamingStatus: DreamingStatus | null = null;
@@ -470,6 +500,7 @@ export class OpenClawApp extends LitElement {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   })();
   @state() usageScope: "instance" | "family" = "family";
+  @state() usageAgentId: string | null = null;
   @state() usageSelectedSessions: string[] = [];
   @state() usageSelectedDays: string[] = [];
   @state() usageSelectedHours: number[] = [];
@@ -520,6 +551,8 @@ export class OpenClawApp extends LitElement {
     | import("./views/cron-quick-create.ts").CronQuickCreateDraft
     | null = null;
   @state() cronJobsLoadingMore = false;
+  cronJobsReloadPending = false;
+  cronJobsReloadPendingTableFilters = false;
   @state() cronJobs: CronJob[] = [];
   @state() cronJobsTotal = 0;
   @state() cronJobsHasMore = false;
@@ -576,6 +609,7 @@ export class OpenClawApp extends LitElement {
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
   @state() skillsDetailKey: string | null = null;
+  @state() skillsDetailTab: "overview" | "card" = "overview";
   @state() clawhubSearchQuery = "";
   @state() clawhubSearchResults: ClawHubSearchResult[] | null = null;
   @state() clawhubSearchLoading = false;
@@ -586,6 +620,30 @@ export class OpenClawApp extends LitElement {
   @state() clawhubDetailError: string | null = null;
   @state() clawhubInstallSlug: string | null = null;
   @state() clawhubInstallMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict> = {};
+  @state() clawhubVerdictsLoading = false;
+  @state() clawhubVerdictsError: string | null = null;
+  @state() skillCardContents: Record<string, string> = {};
+  @state() skillCardContentKeys: Record<string, string> = {};
+  @state() skillCardLoadingKey: string | null = null;
+  @state() skillCardErrors: Record<string, string> = {};
+  @state() skillWorkshopLoading = false;
+  @state() skillWorkshopLoaded = false;
+  @state() skillWorkshopError: string | null = null;
+  @state() skillWorkshopInspectingKey: string | null = null;
+  @state() skillWorkshopProposals: SkillWorkshopState["skillWorkshopProposals"] = [];
+  @state() skillWorkshopSelectedKey: string | null = null;
+  @state() skillWorkshopActionBusy: SkillWorkshopState["skillWorkshopActionBusy"] = null;
+  @state() skillWorkshopActionNotice: SkillWorkshopState["skillWorkshopActionNotice"] = null;
+  skillWorkshopActionNoticeTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
+  @state() skillWorkshopRevisionKey: string | null = null;
+  @state() skillWorkshopRevisionDraft = "";
+  @state() skillWorkshopStatusFilter: SkillWorkshopState["skillWorkshopStatusFilter"] = "pending";
+  @state() skillWorkshopQuery = "";
+  @state() skillWorkshopFilePreviewKey: string | null = null;
+  @state() skillWorkshopFilePreviewQuery = "";
+  @state() skillWorkshopQueueWidth = 360;
+  @state() skillWorkshopMode: SkillWorkshopState["skillWorkshopMode"] = loadSkillWorkshopMode();
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
@@ -644,7 +702,7 @@ export class OpenClawApp extends LitElement {
   controlUiResponsivenessObserver: { disconnect: () => void } | null = null;
   toolStreamById = new Map<string, ToolStreamEntry>();
   toolStreamOrder: string[] = [];
-  refreshSessionsAfterChat = new Set<string>();
+  refreshSessionsAfterChat = new Map<string, import("./ui-types.js").ChatSessionRefreshTarget>();
   chatSideResultTerminalRuns = new Set<string>();
   basePath = "";
   popStateHandler = () =>
@@ -670,6 +728,21 @@ export class OpenClawApp extends LitElement {
       this.chatSessionPickerSurface = null;
       return;
     }
+    const openComposerDetails = this.querySelectorAll<HTMLDetailsElement>(
+      ".chat-controls__inline-select[open], .agent-chat__talk-select[open], .agent-chat__talk-options-advanced[open]",
+    );
+    if (openComposerDetails.length > 0) {
+      e.preventDefault();
+      openComposerDetails.forEach((details) => {
+        details.open = false;
+      });
+      return;
+    }
+    if (this.realtimeTalkOptionsOpen) {
+      e.preventDefault();
+      this.realtimeTalkOptionsOpen = false;
+      return;
+    }
     if (!this.chatMobileControlsOpen) {
       return;
     }
@@ -678,6 +751,21 @@ export class OpenClawApp extends LitElement {
   };
   private chatMobileControlsPointerdownHandler = (e: Event) => {
     const path = e.composedPath();
+    this.querySelectorAll<HTMLDetailsElement>(
+      ".chat-controls__inline-select[open], .agent-chat__talk-select[open], .agent-chat__talk-options-advanced[open]",
+    ).forEach((details) => {
+      if (!path.includes(details)) {
+        details.open = false;
+      }
+    });
+    if (this.realtimeTalkOptionsOpen) {
+      const insideTalkOptions = Array.from(
+        this.querySelectorAll(".agent-chat__talk-options, [aria-label='Talk settings']"),
+      ).some((node) => path.includes(node));
+      if (!insideTalkOptions) {
+        this.realtimeTalkOptionsOpen = false;
+      }
+    }
     if (this.chatSessionPickerOpen) {
       const insidePicker = Array.from(this.querySelectorAll(".chat-controls__session-picker")).some(
         (node) => path.includes(node),
@@ -690,7 +778,9 @@ export class OpenClawApp extends LitElement {
     if (!this.chatMobileControlsOpen) {
       return;
     }
-    const wrapper = this.querySelector(".chat-mobile-controls-wrapper");
+    const wrapper =
+      this.querySelector(".chat-settings-popover-wrapper") ??
+      this.querySelector(".chat-mobile-controls-wrapper");
     if (wrapper && path.includes(wrapper)) {
       return;
     }
@@ -707,12 +797,6 @@ export class OpenClawApp extends LitElement {
       switch (action) {
         case "new-session":
           await createChatSessionInternal(this as unknown as AppViewState);
-          break;
-        case "toggle-focus":
-          this.applySettings({
-            ...this.settings,
-            chatFocusMode: !this.settings.chatFocusMode,
-          });
           break;
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);
@@ -1052,6 +1136,13 @@ export class OpenClawApp extends LitElement {
     );
   }
 
+  async retryQueuedChatMessage(id: string) {
+    await retryQueuedChatMessageInternal(
+      this as unknown as Parameters<typeof retryQueuedChatMessageInternal>[0],
+      id,
+    );
+  }
+
   async handleSendChat(
     messageOverride?: string,
     opts?: Parameters<typeof handleSendChatInternal>[2],
@@ -1118,6 +1209,7 @@ export class OpenClawApp extends LitElement {
     }
     if (!this.client || !this.connected) {
       this.lastError = "Gateway not connected";
+      this.chatError = this.lastError;
       return;
     }
     this.realtimeTalkActive = true;
@@ -1134,6 +1226,10 @@ export class OpenClawApp extends LitElement {
           this.realtimeTalkDetail = detail ?? null;
           if (status === "idle" || status === "error") {
             this.realtimeTalkActive = status !== "idle";
+          }
+          if (status === "error" && this.realtimeTalkDetail) {
+            this.lastError = this.realtimeTalkDetail;
+            this.chatError = this.realtimeTalkDetail;
           }
         },
         onTranscript: (entry) => {
@@ -1159,6 +1255,7 @@ export class OpenClawApp extends LitElement {
       this.realtimeTalkStatus = "error";
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
       this.lastError = this.realtimeTalkDetail;
+      this.chatError = this.realtimeTalkDetail;
     }
   }
 
@@ -1260,12 +1357,97 @@ export class OpenClawApp extends LitElement {
       gatewayUrl: nextGatewayUrl,
       token: nextToken,
     });
+    restoreChatComposerState(this, { preserveCurrent: true });
     this.connect();
   }
 
   handleGatewayUrlCancel() {
     this.pendingGatewayUrl = null;
     this.pendingGatewayToken = null;
+    restoreChatComposerState(this, { preserveCurrent: true });
+  }
+
+  private async maybeUpgradeSidebarToFullMessage(content: SidebarContent) {
+    const request = content.fullMessageRequest;
+    if (!request || !this.client) {
+      return;
+    }
+    try {
+      const result = (await this.client.request("chat.message.get", {
+        sessionKey: request.sessionKey,
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+        messageId: request.messageId,
+        maxChars: FULL_MESSAGE_SIDEBAR_MAX_CHARS,
+      })) as
+        | {
+            ok?: boolean;
+            message?: unknown;
+            unavailableReason?: "not_found" | "oversized" | "not_visible";
+          }
+        | undefined;
+
+      if (this.sidebarContent !== content) {
+        return;
+      }
+
+      if (!result?.ok || !result.message || typeof result.message !== "object") {
+        this.sidebarContent = {
+          ...content,
+          unavailableReason: result?.unavailableReason ?? "not_found",
+        };
+        this.sidebarError = resolveSidebarUnavailableReason(
+          result?.unavailableReason ?? "not_found",
+        );
+        return;
+      }
+
+      const message = result.message as Record<string, unknown>;
+      const fetchedMessageText =
+        typeof message.text === "string"
+          ? message.text
+          : typeof message.content === "string"
+            ? message.content
+            : Array.isArray(message.content)
+              ? message.content
+                  .map((block) =>
+                    block &&
+                    typeof block === "object" &&
+                    typeof (block as { text?: unknown }).text === "string"
+                      ? (block as { text: string }).text
+                      : null,
+                  )
+                  .filter((value): value is string => typeof value === "string")
+                  .join("\n")
+              : null;
+      const nextRawText =
+        fetchedMessageText ??
+        (typeof content.rawText === "string"
+          ? content.rawText
+          : content.kind === "markdown"
+            ? content.content
+            : null);
+
+      if (content.kind === "markdown") {
+        this.sidebarContent = {
+          ...content,
+          content: nextRawText || content.content,
+          rawText: nextRawText || content.rawText || content.content,
+          unavailableReason: null,
+        };
+      } else {
+        this.sidebarContent = {
+          ...content,
+          rawText: nextRawText || content.rawText || null,
+          unavailableReason: null,
+        };
+      }
+      this.sidebarError = null;
+    } catch (err) {
+      if (this.sidebarContent !== content) {
+        return;
+      }
+      this.sidebarError = `Failed to load full content: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   // Sidebar handlers for tool output viewing
@@ -1277,6 +1459,9 @@ export class OpenClawApp extends LitElement {
     this.sidebarContent = content;
     this.sidebarError = null;
     this.sidebarOpen = true;
+    if (isSidebarMarkdownLike(content) && content.fullMessageRequest) {
+      void this.maybeUpgradeSidebarToFullMessage(content);
+    }
   }
 
   handleCloseSidebar() {

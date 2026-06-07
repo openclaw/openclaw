@@ -19,7 +19,7 @@ or validating a change without wasting hours.
 Prove the touched surface first. Do not reflexively run the whole suite.
 
 1. Inspect the diff and classify the touched surface:
-   - normal source checkout, source change: `pnpm changed:lanes --json`, then `pnpm check:changed`
+   - normal source checkout, source change: `pnpm changed:lanes --json`, then `pnpm check:changed` (delegates to Crabbox/Testbox)
    - normal source checkout, tests only: `pnpm test:changed`
    - normal source checkout, one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
    - Codex worktree or linked/sparse checkout, one/few explicit files: `node scripts/run-vitest.mjs <path-or-filter>`
@@ -27,7 +27,7 @@ Prove the touched surface first. Do not reflexively run the whole suite.
      use the Crabbox wrapper with the provider that matches the proof surface.
      For maintainer heavy `pnpm` gates, that is usually delegated Blacksmith
      Testbox through Crabbox, e.g. `node scripts/crabbox-wrapper.mjs run
---provider blacksmith-testbox ... -- pnpm check:changed`. For direct AWS
+--provider blacksmith-testbox ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed`. For direct AWS
      Crabbox proof, omit `--provider` and let `.crabbox.yaml` choose AWS.
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
    - docs-only: `pnpm docs:list`, docs formatter/lint only if docs tooling changed or requested
@@ -66,7 +66,7 @@ scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
 
 ```bash
 pnpm changed:lanes --json
-pnpm check:changed       # changed typecheck/lint/guards; no Vitest
+pnpm check:changed       # Crabbox/Testbox changed typecheck/lint/guards; no Vitest
 pnpm test:changed        # cheap smart changed Vitest targets
 pnpm verify              # full check, then full Vitest
 OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed
@@ -75,7 +75,9 @@ OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
 ```
 
 Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
-`pnpm test` wrapper so project routing, workers, and setup stay correct.
+`pnpm test` wrapper so project routing, workers, and setup stay correct. If raw
+Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch
+mode and will not exit on its own.
 When the checkout is a Codex worktree, prefer the direct node harness instead:
 
 ```bash
@@ -213,7 +215,7 @@ workflow only spends setup and queue time on that suite.
 ### Release Evidence
 
 After release-candidate validation or before a release decision, record the
-important run ids in the private `openclaw/releases-private` evidence ledger.
+important run ids in the public `openclaw/releases` evidence ledger.
 Use the manual `OpenClaw Release Evidence`
 (`openclaw-release-evidence.yml`) workflow there. It writes durable summaries
 under `evidence/<release-id>/` and commits:
@@ -236,13 +238,13 @@ short release-manager notes there. Do not store raw logs, provider
 prompts/responses, channel transcripts, signing material, or secret-bearing
 config in git; raw logs stay in Actions artifacts.
 
-When `Full Release Validation` completes and
-`OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN` is configured in the public repo, it
-requests the private `OpenClaw Release Evidence From Full Validation` workflow.
-That private workflow reads the parent full-validation run, extracts the child
-CI/release-checks/Telegram run ids from the parent logs, and opens the evidence
-PR automatically. If the token is absent or the run predates this wiring, trigger
-that private workflow manually with the full-validation run id.
+When `Full Release Validation` completes and `OPENCLAW_RELEASES_DISPATCH_TOKEN`
+is configured in the source repo, it requests the public
+`OpenClaw Release Evidence From Full Validation` workflow. That workflow reads
+the parent full-validation run, extracts the child CI/release-checks/Telegram
+run ids from the parent logs, and opens the evidence PR automatically. If the
+token is absent or the run predates this wiring, trigger that workflow manually
+with the full-validation run id.
 
 ### Release Checks
 

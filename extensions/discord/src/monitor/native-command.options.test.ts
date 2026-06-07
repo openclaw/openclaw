@@ -30,7 +30,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   resolveHumanDelayConfig: () => undefined,
 }));
 
-let listNativeCommandSpecs: typeof import("openclaw/plugin-sdk/command-auth").listNativeCommandSpecs;
+let listNativeCommandSpecs: typeof import("openclaw/plugin-sdk/command-auth-native").listNativeCommandSpecs;
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 let nativeCommandTesting: typeof import("./native-command.js").testing;
 let resolveDiscordNativeAutocompleteAuthorized: typeof import("./native-command-auth.js").resolveDiscordNativeAutocompleteAuthorized;
@@ -213,10 +213,9 @@ async function resolveAutocompleteAuthorized(params: {
 
 describe("createDiscordNativeCommand option wiring", () => {
   beforeAll(async () => {
-    ({ listNativeCommandSpecs } = await import("openclaw/plugin-sdk/command-auth"));
-    ({ createDiscordNativeCommand, testing: nativeCommandTesting } = await import(
-      "./native-command.js"
-    ));
+    ({ listNativeCommandSpecs } = await import("openclaw/plugin-sdk/command-auth-native"));
+    ({ createDiscordNativeCommand, testing: nativeCommandTesting } =
+      await import("./native-command.js"));
     ({ resolveDiscordNativeAutocompleteAuthorized } = await import("./native-command-auth.js"));
     ({ createNoopThreadBindingManager } = await import("./thread-bindings.js"));
   });
@@ -375,7 +374,10 @@ describe("createDiscordNativeCommand option wiring", () => {
         threadBindings: createNoopThreadBindingManager("default"),
       });
       const mode = requireOption(command, "mode");
-      const autocomplete = requireAutocomplete(mode, "plugin mode option did not wire autocomplete");
+      const autocomplete = requireAutocomplete(
+        mode,
+        "plugin mode option did not wire autocomplete",
+      );
       const respond = await runAutocomplete(autocomplete, {
         userId: "blocked-user",
         username: "blocked",
