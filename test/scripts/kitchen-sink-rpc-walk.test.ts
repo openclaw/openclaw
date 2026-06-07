@@ -16,10 +16,12 @@ import {
   appendBoundedOutput,
   assertChannelAccountRunning,
   assertCommandResourceCeiling,
+  assertCreatedKitchenSinkSession,
   assertDiagnosticStabilityClean,
   assertExpectedKitchenSinkToolEntries,
   assertGatewayHealthPayload,
   assertGatewayStatusPayload,
+  assertKitchenSinkUiDescriptors,
   assertKitchenSinkSearchInvokeResult,
   assertKitchenSinkTextInvokeResult,
   assertResourceCeiling,
@@ -919,6 +921,46 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     expect(error.message).toContain("truncated");
     expect(error.message).not.toContain("DO_NOT_DUMP_TOOL_MIDDLE");
     expect(error.message.length).toBeLessThan(1400);
+  });
+
+  it("requires sessions.create to return the requested Kitchen Sink session", () => {
+    expect(() =>
+      assertCreatedKitchenSinkSession({
+        ok: true,
+        key: "agent:main:kitchen-sink-rpc",
+        sessionId: "session-1",
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      assertCreatedKitchenSinkSession({
+        ok: true,
+        key: "agent:main:stale-session",
+        sessionId: "session-1",
+      }),
+    ).toThrow("sessions.create did not return the requested Kitchen Sink session");
+    expect(() =>
+      assertCreatedKitchenSinkSession({
+        ok: true,
+        key: "agent:main:kitchen-sink-rpc",
+      }),
+    ).toThrow("sessions.create did not return the requested Kitchen Sink session");
+  });
+
+  it("requires Kitchen Sink UI descriptor coverage", () => {
+    expect(() =>
+      assertKitchenSinkUiDescriptors({
+        ok: true,
+        descriptors: [{ pluginId: "openclaw-kitchen-sink-fixture", id: "kitchen-sink-panel" }],
+      }),
+    ).not.toThrow();
+
+    expect(() => assertKitchenSinkUiDescriptors({})).toThrow(
+      "plugins.uiDescriptors returned invalid payload",
+    );
+    expect(() => assertKitchenSinkUiDescriptors({ ok: true, descriptors: [] })).toThrow(
+      "plugins.uiDescriptors did not report Kitchen Sink descriptor",
+    );
   });
 });
 

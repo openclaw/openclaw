@@ -1262,6 +1262,36 @@ export function assertKitchenSinkTextInvokeResult(payload) {
   }
 }
 
+export function assertCreatedKitchenSinkSession(payload, expectedKey = SESSION_KEY) {
+  const created = assertObjectPayload(payload, "sessions.create");
+  if (created.ok !== true || created.key !== expectedKey || !isNonEmptyString(created.sessionId)) {
+    throw new Error(
+      `sessions.create did not return the requested Kitchen Sink session: ${boundedJsonPreview(
+        payload,
+      )}`,
+    );
+  }
+  return created;
+}
+
+export function assertKitchenSinkUiDescriptors(payload) {
+  const descriptorPayload = assertObjectPayload(payload, "plugins.uiDescriptors");
+  if (descriptorPayload.ok !== true || !Array.isArray(descriptorPayload.descriptors)) {
+    throw new Error(
+      `plugins.uiDescriptors returned invalid payload: ${boundedJsonPreview(payload)}`,
+    );
+  }
+  const descriptor = descriptorPayload.descriptors.find((entry) => entry?.pluginId === PLUGIN_ID);
+  if (!descriptor) {
+    throw new Error(
+      `plugins.uiDescriptors did not report Kitchen Sink descriptor for ${PLUGIN_ID}: ${boundedJsonPreview(
+        descriptorPayload.descriptors,
+      )}`,
+    );
+  }
+  return descriptor;
+}
+
 export function assertDiagnosticStabilityClean(payload) {
   const problems = [];
   if (!payload || typeof payload !== "object") {
@@ -2016,6 +2046,7 @@ export async function main() {
       { key: SESSION_KEY, agentId: "main", label: "kitchen-sink-rpc" },
       rpcOptions,
     );
+    assertCreatedKitchenSinkSession(createdSession);
     const effective = await retryRpcCall(
       "tools.effective",
       { sessionKey: createdSession.key, agentId: "main" },
@@ -2059,11 +2090,7 @@ export async function main() {
     assertTtsProviderCoverage(ttsStatus, "status");
 
     const uiDescriptors = await retryRpcCall("plugins.uiDescriptors", {}, rpcOptions);
-    if (!uiDescriptors || typeof uiDescriptors !== "object") {
-      throw new Error(
-        `plugins.uiDescriptors returned invalid payload: ${boundedJsonPreview(uiDescriptors)}`,
-      );
-    }
+    assertKitchenSinkUiDescriptors(uiDescriptors);
     const stability = await retryRpcCall("diagnostics.stability", {}, rpcOptions);
     assertDiagnosticStabilityClean(stability);
     await sampleInFlight?.catch(() => {});
