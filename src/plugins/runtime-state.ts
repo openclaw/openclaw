@@ -16,6 +16,7 @@ export type RegistryState = {
   activeVersion: number;
   httpRoute: RegistrySurfaceState;
   channel: RegistrySurfaceState;
+  sessionExtension: RegistrySurfaceState;
   agentEventBridgeUnsubscribe?: (() => void) | undefined;
   key: string | null;
   workspaceDir: string | null;

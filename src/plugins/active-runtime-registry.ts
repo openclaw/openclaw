@@ -7,9 +7,14 @@ import {
   getActivePluginHttpRouteRegistry,
   getActivePluginRegistry,
   getActivePluginRegistryWorkspaceDir,
+  getActivePluginSessionExtensionRegistry,
 } from "./runtime.js";
 
-export type ActiveRuntimePluginRegistrySurface = "active" | "channel" | "http-route";
+export type ActiveRuntimePluginRegistrySurface =
+  | "active"
+  | "channel"
+  | "http-route"
+  | "session-extension";
 
 export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
   return getActivePluginRegistry();
@@ -75,6 +80,8 @@ function resolveSurfaceRegistry(
       return getActivePluginChannelRegistry();
     case "http-route":
       return getActivePluginHttpRouteRegistry();
+    case "session-extension":
+      return getActivePluginSessionExtensionRegistry();
   }
   return null;
 }
