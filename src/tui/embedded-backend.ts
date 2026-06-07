@@ -133,6 +133,27 @@ function shouldLoadFullGatewayCatalogForReplaceMode(cfg: OpenClawConfig) {
   return cfg.models?.mode === "replace" && hasProviderWildcardModelAllowlist(cfg);
 }
 
+function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
+  cfg: OpenClawConfig;
+  entry?: Record<string, unknown>;
+  sessionAgentId: string;
+}): { status: "warmed" } | { status: "failed"; error: string } {
+  try {
+    const spawnedWorkspaceDir = params.entry?.spawnedWorkspaceDir;
+    const workspaceDir =
+      typeof spawnedWorkspaceDir === "string" && spawnedWorkspaceDir.trim()
+        ? spawnedWorkspaceDir
+        : resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId);
+    ensureRuntimePluginsLoaded({
+      config: params.cfg,
+      workspaceDir,
+    });
+    return { status: "warmed" };
+  } catch (err) {
+    return { status: "failed", error: String(err) };
+  }
+}
+
 async function loadEmbeddedTuiModelCatalog(cfg: OpenClawConfig) {
   const configuredCatalog = resolveConfiguredReplaceModeCatalog(cfg);
   if (configuredCatalog !== undefined) {
@@ -419,6 +440,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
       config: cfg,
       agentId: opts.agentId,
     });
+    const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({
+      cfg,
+      entry,
+      sessionAgentId,
+    });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
@@ -483,24 +509,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel: sessionInfo.verboseLevel,
+      runtimePluginsPrewarm,
     };
-  }
-
-  async prewarmAgentRuntime(opts: { sessionKey: string; agentId?: string }) {
-    const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { cfg, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey: opts.sessionKey,
-      config: cfg,
-      agentId: opts.agentId,
-    });
-    const workspaceDir =
-      entry?.spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
-    ensureRuntimePluginsLoaded({
-      config: cfg,
-      workspaceDir,
-    });
-    return { runtimePluginsPrewarm: { status: "warmed" as const } };
   }
 
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {

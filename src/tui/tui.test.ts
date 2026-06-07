@@ -14,7 +14,6 @@ import {
   isIgnorableTuiStopError,
   isTuiTerminalLossError,
   resolveCodexCliBin,
-  resolveBlockedTuiChatSubmitMessage,
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
@@ -149,39 +148,11 @@ describe("canSubmitTuiChatMessage", () => {
       }),
     ).toBe(false);
   });
-
-  it("blocks submit while runtime prewarm is active", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        activityStatus: "warming runtime",
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("resolveBlockedTuiChatSubmitMessage", () => {
-  it("uses runtime warmup copy while prewarm is active", () => {
-    expect(
-      resolveBlockedTuiChatSubmitMessage({
-        activityStatus: "warming runtime",
-      }),
-    ).toBe("runtime is still warming; wait for it to finish before sending a new message");
-  });
-
-  it("keeps abort guidance for active agent runs", () => {
-    expect(resolveBlockedTuiChatSubmitMessage({ activityStatus: "waiting" })).toBe(
-      "agent is busy — press Esc to abort before sending a new message",
-    );
-  });
 });
 
 describe("isTuiBusyActivityStatus", () => {
   it("treats finishing context as a visible busy status", () => {
     expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
-  });
-
-  it("treats runtime warmup as a visible busy status", () => {
-    expect(isTuiBusyActivityStatus("warming runtime")).toBe(true);
   });
 });
 

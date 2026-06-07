@@ -11,6 +11,7 @@ const createSessionGoalMock = vi.fn();
 const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
 const updateSessionGoalStatusMock = vi.fn();
+const ensureRuntimePluginsLoadedMock = vi.fn();
 const listSessionsFromStoreAsyncMock = vi.fn(
   async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
 );
@@ -87,11 +88,16 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentWorkspaceDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}`,
   resolveDefaultAgentId: (cfg?: {
     agents?: { list?: Array<{ id?: string; default?: boolean }> };
   }) =>
     cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
   resolveSessionAgentId: () => "main",
+}));
+
+vi.mock("../agents/runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded: (...args: unknown[]) => ensureRuntimePluginsLoadedMock(...args),
 }));
 
 vi.mock("../agents/defaults.js", () => ({
@@ -230,6 +236,7 @@ describe("EmbeddedTuiBackend", () => {
       status,
       tokensUsed: 0,
     }));
+    ensureRuntimePluginsLoadedMock.mockReset();
     listSessionsFromStoreAsyncMock.mockReset();
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
@@ -602,6 +609,48 @@ describe("EmbeddedTuiBackend", () => {
       messages: [],
     });
     expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "work" });
+  });
+
+  it("loads runtime plugins before returning embedded history", async () => {
+    const cfg = { agents: { list: [{ id: "main" }] } };
+    loadSessionEntryMock.mockReturnValue({
+      cfg,
+      canonicalKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+      entry: { spawnedWorkspaceDir: "/tmp/openclaw-custom-workspace" },
+    });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
+      runtimePluginsPrewarm: { status: "warmed" },
+    });
+    expect(ensureRuntimePluginsLoadedMock).toHaveBeenCalledWith({
+      config: cfg,
+      workspaceDir: "/tmp/openclaw-custom-workspace",
+    });
+  });
+
+  it("returns embedded history when runtime plugin loading fails", async () => {
+    ensureRuntimePluginsLoadedMock.mockImplementationOnce(() => {
+      throw new Error("runtime unavailable");
+    });
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+      entry: {},
+    });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
+      sessionKey: "agent:main:main",
+      messages: [],
+      runtimePluginsPrewarm: { status: "failed", error: "Error: runtime unavailable" },
+    });
   });
 
   it("passes selected-agent global scope into local chat turns", async () => {

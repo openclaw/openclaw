@@ -407,21 +407,6 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const loadHistory = async () => {
-    const shouldPrewarmRuntime = !state.historyLoaded && Boolean(client.prewarmAgentRuntime);
-    if (shouldPrewarmRuntime) {
-      setActivityStatus("warming runtime");
-      tui.requestRender();
-    }
-    const prewarmPromise = shouldPrewarmRuntime
-      ? client
-          .prewarmAgentRuntime?.({
-            sessionKey: state.currentSessionKey,
-            ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
-          })
-          .catch((err: unknown) => ({
-            runtimePluginsPrewarm: { status: "failed", error: String(err) },
-          }))
-      : undefined;
     try {
       const history = await client.loadHistory({
         sessionKey: state.currentSessionKey,
@@ -438,6 +423,7 @@ export function createSessionActions(context: SessionActionContext) {
         verboseLevel?: string;
         traceLevel?: string;
         inFlightRun?: { runId?: unknown; text?: unknown };
+        runtimePluginsPrewarm?: { status?: string; error?: string };
       };
       const sessionInfo = record.sessionInfo;
       if (sessionInfo?.key && sessionInfo.key !== state.currentSessionKey) {
@@ -551,22 +537,14 @@ export function createSessionActions(context: SessionActionContext) {
         setActivityStatus("streaming");
       }
       state.historyLoaded = true;
-      const prewarm = (await prewarmPromise) as
-        | { runtimePluginsPrewarm?: { status?: string; error?: string } }
-        | undefined;
-      if (prewarm?.runtimePluginsPrewarm?.status === "failed") {
+      if (record.runtimePluginsPrewarm?.status === "failed") {
         chatLog.addSystem(
-          `runtime prewarm failed: ${prewarm.runtimePluginsPrewarm.error ?? "unknown"}`,
+          `runtime prewarm failed: ${record.runtimePluginsPrewarm.error ?? "unknown"}`,
         );
       }
       void rememberSessionKey?.(state.currentSessionKey);
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
-      await prewarmPromise;
-    } finally {
-      if (state.activityStatus === "warming runtime") {
-        setActivityStatus("idle");
-      }
     }
     tui.requestRender();
   };
