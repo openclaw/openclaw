@@ -41,6 +41,7 @@ export type FetchLiveProviderModelRowsParams = Omit<FetchLiveProviderModelIdsPar
 export type CachedLiveProviderModelRowsParams = FetchLiveProviderModelRowsParams & {
   ttlMs?: number;
   cacheKeyParts?: readonly unknown[];
+  shouldCacheRows?: (rows: readonly unknown[]) => boolean;
 };
 
 export class LiveModelCatalogHttpError extends Error {
@@ -145,6 +146,7 @@ export async function getCachedLiveProviderModelRows(
     ],
     ttlMs: params.ttlMs,
     load: async () => await fetchLiveProviderModelRows(params),
+    shouldCache: params.shouldCacheRows,
   });
 }
 

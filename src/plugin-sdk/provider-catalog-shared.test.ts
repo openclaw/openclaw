@@ -92,6 +92,37 @@ describe("provider-catalog-shared live catalog cache", () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
+  it("does not retain resolved live catalog values rejected by the cache predicate", async () => {
+    const load = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("empty")
+      .mockResolvedValueOnce("usable");
+
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+        shouldCache: (value) => value !== "empty",
+      }),
+    ).resolves.toBe("empty");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+        shouldCache: (value) => value !== "empty",
+      }),
+    ).resolves.toBe("usable");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+        shouldCache: (value) => value !== "empty",
+      }),
+    ).resolves.toBe("usable");
+
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts the oldest live catalog cache entry when the cache is full", async () => {
     const load = vi.fn(async (id: number) => `value-${id}`);
 

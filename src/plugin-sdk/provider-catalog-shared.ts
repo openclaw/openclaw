@@ -64,6 +64,8 @@ export async function getCachedLiveCatalogValue<T>(params: {
   keyParts: readonly unknown[];
   /** Loader for the live catalog value when no fresh cache entry exists. */
   load: () => Promise<T>;
+  /** Optional predicate for values that are healthy enough to retain. */
+  shouldCache?: (value: T) => boolean;
   /** Cache lifetime in milliseconds; defaults to a short provider-discovery TTL. */
   ttlMs?: number;
   /** Test hook for deterministic cache expiry. */
@@ -96,7 +98,11 @@ export async function getCachedLiveCatalogValue<T>(params: {
     });
   }
   try {
-    return await value;
+    const resolved = await value;
+    if (params.shouldCache && !params.shouldCache(resolved)) {
+      liveCatalogCache.delete(key);
+    }
+    return resolved;
   } catch (err) {
     // Failed live discovery should not poison later retries for the same provider/config.
     liveCatalogCache.delete(key);

@@ -2,7 +2,7 @@
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   clearLiveCatalogCacheForTests,
-  fetchLiveProviderModelRows,
+  getCachedLiveProviderModelRows,
   LiveModelCatalogHttpError,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
@@ -97,12 +97,7 @@ export interface DeepInfraDiscoveredCatalog {
   live: boolean;
 }
 
-let cachedCatalog: DeepInfraDiscoveredCatalog | null = null;
-let cachedAt = 0;
-
 export function resetDeepInfraModelCacheForTest(): void {
-  cachedCatalog = null;
-  cachedAt = 0;
   clearLiveCatalogCacheForTests();
 }
 
@@ -174,6 +169,10 @@ function bucketBySurface(models: DeepInfraSurfaceModel[]): DeepInfraDiscoveredCa
     }
   }
   return catalog;
+}
+
+function hasDeepInfraSurfaceModelRows(rows: readonly unknown[]): boolean {
+  return rows.some((entry) => entryToSurfaceModel(entry as DeepInfraAgentModelEntry) !== null);
 }
 
 // Static fallback. Chat rows live in openclaw.plugin.json (manifest-validated);
@@ -410,17 +409,15 @@ export async function discoverDeepInfraSurfaces(options?: {
     return manifestFallbackCatalog();
   }
 
-  if (cachedCatalog && Date.now() - cachedAt < DISCOVERY_CACHE_TTL_MS) {
-    return cachedCatalog;
-  }
-
   try {
-    const data = await fetchLiveProviderModelRows({
+    const data = await getCachedLiveProviderModelRows({
       providerId: "deepinfra",
       endpoint: DEEPINFRA_MODELS_URL,
       timeoutMs: DISCOVERY_TIMEOUT_MS,
+      ttlMs: DISCOVERY_CACHE_TTL_MS,
       buildRequestHeaders: () => ({ Accept: "application/json" }),
       auditContext: "deepinfra-model-discovery",
+      shouldCacheRows: hasDeepInfraSurfaceModelRows,
     });
     if (data.length === 0) {
       log.warn("No models found from DeepInfra agent-projection endpoint, using static catalog");
@@ -439,10 +436,7 @@ export async function discoverDeepInfraSurfaces(options?: {
     if (surfaceModels.length === 0) {
       return manifestFallbackCatalog();
     }
-    const catalog = bucketBySurface(surfaceModels);
-    cachedCatalog = catalog;
-    cachedAt = Date.now();
-    return catalog;
+    return bucketBySurface(surfaceModels);
   } catch (error) {
     if (error instanceof LiveModelCatalogHttpError) {
       log.warn(`Failed to discover models: HTTP ${error.status}, using static catalog`);

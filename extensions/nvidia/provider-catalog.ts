@@ -1,10 +1,9 @@
 // Nvidia provider module implements model/runtime integration.
 import { lookup as dnsLookup } from "node:dns/promises";
 import {
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
-import { fetchLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+  clearLiveCatalogCacheForTests,
+  getCachedLiveProviderModelRows,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
@@ -46,14 +45,6 @@ type NvidiaFeaturedModel = {
   context: number;
   "max-output": number;
 };
-
-let featuredModelCache:
-  | {
-      expiresAtMs: number;
-      models: ModelDefinitionConfig[];
-    }
-  | undefined;
-let featuredModelRequest: Promise<ModelDefinitionConfig[] | null> | undefined;
 
 type DnsLookupOptions = {
   all?: boolean;
@@ -115,45 +106,16 @@ export async function buildSelectableLiveNvidiaProvider(): Promise<ModelProvider
 }
 
 export function clearNvidiaFeaturedModelCacheForTests() {
-  featuredModelCache = undefined;
-  featuredModelRequest = undefined;
+  clearLiveCatalogCacheForTests();
 }
 
 async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | null> {
-  const now = Date.now();
-  if (
-    featuredModelCache &&
-    isFutureDateTimestampMs(featuredModelCache.expiresAtMs, { nowMs: now })
-  ) {
-    return featuredModelCache.models;
-  }
-  featuredModelCache = undefined;
-  featuredModelRequest ??= fetchNvidiaFeaturedModels();
   try {
-    const models = await featuredModelRequest;
-    if (models && models.length > 0) {
-      const expiresAtMs = resolveExpiresAtMsFromDurationMs(FEATURED_MODEL_CACHE_TTL_MS, {
-        nowMs: now,
-      });
-      if (expiresAtMs !== undefined) {
-        featuredModelCache = {
-          expiresAtMs,
-          models,
-        };
-      }
-    }
-    return models;
-  } finally {
-    featuredModelRequest = undefined;
-  }
-}
-
-async function fetchNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | null> {
-  try {
-    const rows = await fetchLiveProviderModelRows({
+    const rows = await getCachedLiveProviderModelRows({
       providerId: "nvidia",
       endpoint: NVIDIA_FEATURED_MODELS_URL,
       timeoutMs: FEATURED_MODEL_FETCH_TIMEOUT_MS,
+      ttlMs: FEATURED_MODEL_CACHE_TTL_MS,
       requireHttps: true,
       policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(NVIDIA_FEATURED_MODELS_URL),
       // The featured catalog is an NVIDIA-owned CloudFront URL. Some resolvers
@@ -161,6 +123,7 @@ async function fetchNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | nu
       // the guarded fixed-host fetch on the fast path.
       lookupFn: lookupNvidiaFeaturedModelHostname,
       auditContext: "nvidia-featured-model-catalog",
+      shouldCacheRows: (rows) => parseNvidiaFeaturedModels(rows) !== null,
       readRows: (payload) => {
         if (!payload || typeof payload !== "object") {
           return [];

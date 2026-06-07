@@ -241,7 +241,7 @@ describe("chutes-models", () => {
     });
   });
 
-  it("caches fallback static catalog for non-OK responses", async () => {
+  it("does not cache fallback static catalog for non-OK responses", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 503,
@@ -252,7 +252,7 @@ describe("chutes-models", () => {
       const second = await discoverChutesModels("chutes-fallback-token");
       expect(first.map((m) => m.id)).toEqual(CHUTES_MODEL_CATALOG.map((m) => m.id));
       expect(second.map((m) => m.id)).toEqual(CHUTES_MODEL_CATALOG.map((m) => m.id));
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 

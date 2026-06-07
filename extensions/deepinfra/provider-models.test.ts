@@ -355,6 +355,40 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
+
+  it("does not cache successful responses that produce no live catalog rows", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [makeAgentModelEntry({ id: "recovered/model" })] }),
+      });
+
+    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
+      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
+        expectedStaticChatCatalog().map((model) => model.id),
+      );
+      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
+        expectedLiveChatCatalog([
+          {
+            id: "recovered/model",
+            name: "recovered/model",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 131072,
+            maxTokens: 65536,
+            cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+            compat: { supportsUsageInStreaming: true },
+          },
+        ]).map((model) => model.id),
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+  });
 });
 
 describe("discoverDeepInfraSurfaces (per-surface bucketing)", () => {
