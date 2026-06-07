@@ -1,3 +1,4 @@
+// Resource ceiling assertions for Docker E2E stats output.
 import fs from "node:fs";
 import { createInterface } from "node:readline";
 
@@ -52,6 +53,11 @@ function assertSampleValue(value, raw, name, labelLocal) {
   if (value === undefined) {
     throw new Error(
       `docker stats sample for ${labelLocal} had invalid ${name}: ${JSON.stringify(raw)}`,
+    );
+  }
+  if (name === "MemUsage" && value <= 0) {
+    throw new Error(
+      `docker stats sample for ${labelLocal} had non-positive ${name}: ${JSON.stringify(raw)}`,
     );
   }
 }
