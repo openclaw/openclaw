@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -46,6 +47,8 @@ export interface MsteamsProviderOptions {
   bindAddress?: string;
   path?: string;
   sharedSecret?: string;
+  /** Outbound calling: ask the worker to place a Teams call to a user. */
+  outbound?: { enabled: boolean; workerBaseUrl?: string; tenantId?: string };
   logger?: MsteamsLogger;
 }
 
@@ -153,9 +156,24 @@ export class MsteamsProvider implements VoiceCallProvider {
   /** Recording-active state per call (both paths), used to gate inbound video like audio. */
   private readonly recordingActiveByCall = new Map<string, boolean>();
 
+  /** Shared secret (also used to sign the outbound place-call request). */
+  private readonly sharedSecret?: string;
+  /** Outbound calling config (worker base URL + tenant). */
+  private readonly outbound?: { enabled: boolean; workerBaseUrl?: string; tenantId?: string };
+  /**
+   * Calls OpenClaw placed via the worker, keyed by the worker/Graph callId it
+   * returned, awaiting their media WebSocket `session.start` to attach.
+   */
+  private readonly pendingOutbound = new Map<
+    string,
+    { internalCallId: string; from: string; to: string }
+  >();
+
   constructor(options: MsteamsProviderOptions) {
-    const { port, bindAddress, path, sharedSecret, logger } = options;
+    const { port, bindAddress, path, sharedSecret, outbound, logger } = options;
     this.logger = logger;
+    this.sharedSecret = sharedSecret;
+    this.outbound = outbound;
     if (port !== undefined && path && sharedSecret) {
       this.mediaStream = new MsteamsMediaStream({
         port,
@@ -253,6 +271,16 @@ export class MsteamsProvider implements VoiceCallProvider {
     const from = session.caller.aadId ?? `teams:${providerCallId}`;
     // Seed the recording gate for inbound video from the session's initial status.
     this.recordingActiveByCall.set(providerCallId, session.recordingStatus === "active");
+
+    // Outbound: a call WE placed is connecting back. Attach it to the existing
+    // CallRecord (created by manager.initiateCall) instead of registering a new
+    // inbound call, and skip inbound-policy (we initiated it).
+    const pending = this.pendingOutbound.get(providerCallId);
+    if (pending) {
+      this.pendingOutbound.delete(providerCallId);
+      this.handleOutboundSessionStart(session, pending);
+      return;
+    }
 
     // Realtime mode: bridge the call straight to the speech-to-speech model.
     // It does not route through CallManager, so the inbound-call policy is
@@ -360,6 +388,80 @@ export class MsteamsProvider implements VoiceCallProvider {
     this.manager.processEvent(this.buildEvent(providerCallId, { type: "call.answered", from, to }));
     this.logger?.info(
       `MsteamsProvider: session.start callId=${providerCallId} threadId=${session.threadId} caller.aadId=${from}`,
+    );
+  }
+
+  /**
+   * Attach an outbound call (one OpenClaw placed via the worker) when its media
+   * WebSocket connects. The CallRecord already exists (manager.initiateCall), so
+   * we wire STT/TTS state and emit `call.answered` — which drives the manager's
+   * initial-message delivery (notify mode) or conversation start.
+   */
+  private handleOutboundSessionStart(
+    session: MsteamsSession,
+    pending: { internalCallId: string; from: string; to: string },
+  ): void {
+    const providerCallId = session.callId;
+    if (!this.manager || !this.transcription) {
+      this.logger?.error(
+        `MsteamsProvider: outbound session.start for ${providerCallId} before dependencies were wired; closing`,
+      );
+      session.close("not-ready");
+      return;
+    }
+    if (this.calls.has(providerCallId)) {
+      this.logger?.warn(`MsteamsProvider: duplicate outbound session.start for ${providerCallId}`);
+      return;
+    }
+
+    const sttSession = this.transcription.provider.createSession({
+      cfg: this.transcription.cfg,
+      providerConfig: this.transcription.providerConfig,
+      onPartial: (partial) => {
+        this.logger?.debug?.(`MsteamsProvider: partial ${providerCallId} chars=${partial.length}`);
+      },
+      onTranscript: (transcript) => this.handleTranscript(providerCallId, transcript),
+      onSpeechStart: () => this.handleSpeechStart(providerCallId),
+      onError: (error) => {
+        this.logger?.warn(`MsteamsProvider: STT error ${providerCallId} — ${error.message}`);
+      },
+    });
+
+    const state: MsteamsCallState = {
+      providerCallId,
+      internalCallId: pending.internalCallId,
+      session,
+      sttSession,
+      ttsAbort: null,
+      outboundSeq: 0,
+      outboundTimestampMs: 0,
+      turnId: 0,
+      recordingActive: session.recordingStatus === "active",
+      pendingAudio: [],
+    };
+    this.calls.set(providerCallId, state);
+
+    void sttSession
+      .connect()
+      .then(() => this.flushPendingAudio(providerCallId))
+      .catch((err: unknown) => {
+        this.logger?.error(
+          `MsteamsProvider: STT connect failed for outbound ${providerCallId} — ${describeError(err)}`,
+        );
+        this.failCall(providerCallId, "stt-connect-failed");
+      });
+
+    // The CallRecord exists in "initiated"; mark it answered so the manager speaks
+    // the initial message (notify) or starts the conversation.
+    this.manager.processEvent(
+      this.buildEvent(providerCallId, {
+        type: "call.answered",
+        from: pending.from,
+        to: pending.to,
+      }),
+    );
+    this.logger?.info(
+      `MsteamsProvider: outbound session.start callId=${providerCallId} attached to internal ${pending.internalCallId}`,
     );
   }
 
@@ -685,10 +787,84 @@ export class MsteamsProvider implements VoiceCallProvider {
     return { events: [], statusCode: 204 };
   }
 
-  async initiateCall(_input: InitiateCallInput): Promise<InitiateCallResult> {
-    // Outbound calls (OpenClaw asking the worker to dial into a meeting) are not
-    // supported — the msteams provider is inbound-only.
-    throw new Error("MsteamsProvider.initiateCall is not supported (inbound-only)");
+  async initiateCall(input: InitiateCallInput): Promise<InitiateCallResult> {
+    if (!this.outbound?.enabled) {
+      throw new Error(
+        "MsteamsProvider.initiateCall: outbound calling is disabled (set msteams.outbound.enabled)",
+      );
+    }
+    // Phase 1: outbound rides the streaming (STT -> agent -> TTS) path. Realtime
+    // outbound is a follow-up (the realtime path bypasses CallManager).
+    if (this.realtimeDeps) {
+      throw new Error(
+        "MsteamsProvider.initiateCall: outbound currently requires the streaming path (realtime outbound not yet supported)",
+      );
+    }
+    const workerBaseUrl = this.outbound.workerBaseUrl;
+    if (!workerBaseUrl) {
+      throw new Error(
+        "MsteamsProvider.initiateCall: msteams.outbound.workerBaseUrl is not configured",
+      );
+    }
+    if (!this.sharedSecret) {
+      throw new Error("MsteamsProvider.initiateCall: msteams.sharedSecret is not configured");
+    }
+    // `to` carries the target user's AAD object id (optionally prefixed "user:").
+    const userObjectId = input.to.replace(/^user:/i, "").trim();
+    const tenantId = this.outbound.tenantId;
+    if (!userObjectId) {
+      throw new Error("MsteamsProvider.initiateCall: target userObjectId (to) is required");
+    }
+    if (!tenantId) {
+      throw new Error("MsteamsProvider.initiateCall: msteams.outbound.tenantId is not configured");
+    }
+
+    // HMAC over `${timestampMs}.${userObjectId}` (same scheme as the WS handshake).
+    const timestampMs = Date.now();
+    const signature = crypto
+      .createHmac("sha256", this.sharedSecret)
+      .update(`${timestampMs}.${userObjectId}`)
+      .digest("hex");
+    const url = `${workerBaseUrl.replace(/\/+$/, "")}/api/calls/place`;
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-openclawteamsbridge-timestamp": String(timestampMs),
+          "x-openclawteamsbridge-signature": signature,
+        },
+        body: JSON.stringify({ userObjectId, tenantId }),
+      });
+    } catch (err) {
+      throw new Error(
+        `MsteamsProvider.initiateCall: request to worker failed — ${describeError(err)}`,
+      );
+    }
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `MsteamsProvider.initiateCall: worker returned ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 200)}` : ""}`,
+      );
+    }
+    const payload = (await response.json().catch(() => ({}))) as { callId?: string };
+    const workerCallId = payload.callId;
+    if (!workerCallId) {
+      throw new Error("MsteamsProvider.initiateCall: worker response did not include a callId");
+    }
+
+    // Remember the placed call; its media WS `session.start` (same callId) attaches it.
+    this.pendingOutbound.set(workerCallId, {
+      internalCallId: input.callId,
+      from: input.from,
+      to: input.to,
+    });
+    this.logger?.info(
+      `MsteamsProvider: outbound call placed callId=${workerCallId} -> ${userObjectId}`,
+    );
+    return { providerCallId: workerCallId, status: "initiated" };
   }
 
   async hangupCall(input: HangupCallInput): Promise<void> {
