@@ -25,6 +25,9 @@ on:
         required: true
         type: string
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 permissions:
   contents: read
 
@@ -51,7 +54,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24.15.0
-          cache: pnpm
 
       - name: Activate pnpm
         run: |
