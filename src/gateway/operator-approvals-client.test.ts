@@ -133,6 +133,16 @@ describe("withOperatorApprovalsGatewayClient", () => {
     expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
   });
 
+  it("keeps device identity for env loopback approval clients without runtime authority", async () => {
+    bootstrapState.url = "ws://127.0.0.1:18789";
+    bootstrapState.urlSource = "env OPENCLAW_GATEWAY_URL";
+
+    await runOperatorApprovalsGatewayClient();
+
+    expect(clientState.options?.deviceIdentity).toBeUndefined();
+    expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
+  });
+
   it.each([
     {
       name: "explicit loopback gateway URL overrides",

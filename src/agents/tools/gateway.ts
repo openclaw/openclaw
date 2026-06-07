@@ -20,6 +20,7 @@ import {
   type OperatorScope,
 } from "../../gateway/method-scopes.js";
 import { getOperatorApprovalRuntimeToken } from "../../gateway/operator-approval-runtime-token.js";
+import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readStringParam } from "./common.js";
 
@@ -76,13 +77,9 @@ function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: strin
   return { origin, key };
 }
 
-function validateGatewayUrlOverrideForAgentTools(params: {
-  cfg: OpenClawConfig;
-  urlOverride: string;
-}): { url: string; target: GatewayOverrideTarget } {
-  const { cfg } = params;
+function resolveLocalGatewayUrlKeys(cfg: OpenClawConfig): Set<string> {
   const port = resolveGatewayPort(cfg);
-  const localAllowed = new Set<string>([
+  return new Set<string>([
     `ws://127.0.0.1:${port}`,
     `wss://127.0.0.1:${port}`,
     `ws://localhost:${port}`,
@@ -90,7 +87,9 @@ function validateGatewayUrlOverrideForAgentTools(params: {
     `ws://[::1]:${port}`,
     `wss://[::1]:${port}`,
   ]);
+}
 
+function resolveConfiguredRemoteGatewayKey(cfg: OpenClawConfig): string | undefined {
   let remoteKey: string | undefined;
   const remoteUrl = normalizeOptionalString(cfg.gateway?.remote?.url) ?? "";
   if (remoteUrl) {
@@ -102,6 +101,28 @@ function validateGatewayUrlOverrideForAgentTools(params: {
       // gatewayUrl overrides need strict validation.
     }
   }
+  return remoteKey;
+}
+
+function resolveDefaultGatewayTarget(params: {
+  cfg: OpenClawConfig;
+  envGatewayUrl?: string;
+}): GatewayOverrideTarget {
+  if (params.envGatewayUrl) {
+    // Match operator-approvals-client: env-selected URLs may be tunnels or other gateways,
+    // so loopback alone must not grant local approval-runtime authority.
+    return "remote";
+  }
+  return params.cfg.gateway?.mode === "remote" ? "remote" : "local";
+}
+
+function validateGatewayUrlOverrideForAgentTools(params: {
+  cfg: OpenClawConfig;
+  urlOverride: string;
+}): { url: string; target: GatewayOverrideTarget } {
+  const { cfg } = params;
+  const localAllowed = resolveLocalGatewayUrlKeys(cfg);
+  const remoteKey = resolveConfiguredRemoteGatewayKey(cfg);
 
   const parsed = canonicalizeToolGatewayWsUrl(params.urlOverride);
   if (localAllowed.has(parsed.key)) {
@@ -110,6 +131,7 @@ function validateGatewayUrlOverrideForAgentTools(params: {
   if (remoteKey && parsed.key === remoteKey) {
     return { url: parsed.origin, target: "remote" };
   }
+  const port = resolveGatewayPort(cfg);
   throw new Error(
     [
       "gatewayUrl override rejected.",
@@ -160,7 +182,14 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
     typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
       ? Math.max(1, Math.floor(opts.timeoutMs))
       : 30_000;
-  return { url: validatedOverride?.url, token, timeoutMs };
+  const envGatewayUrl = trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
+  const target =
+    validatedOverride?.target ??
+    resolveDefaultGatewayTarget({
+      cfg,
+      envGatewayUrl,
+    });
+  return { url: validatedOverride?.url, token, timeoutMs, target };
 }
 
 const APPROVAL_RUNTIME_METHODS = new Set<string>([
@@ -174,6 +203,7 @@ const APPROVAL_RUNTIME_METHODS = new Set<string>([
 function resolveApprovalRuntimeTokenForGatewayTool(params: {
   method: string;
   opts: GatewayCallOptions;
+  target: GatewayOverrideTarget;
 }): string | undefined {
   if (!APPROVAL_RUNTIME_METHODS.has(params.method)) {
     return undefined;
@@ -183,7 +213,36 @@ function resolveApprovalRuntimeTokenForGatewayTool(params: {
     // caller-supplied gateway URLs.
     return undefined;
   }
+  if (params.target !== "local") {
+    return undefined;
+  }
   return getOperatorApprovalRuntimeToken();
+}
+
+function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
+  method: string;
+  opts: GatewayCallOptions;
+}): DeviceIdentity | undefined {
+  if (!APPROVAL_RUNTIME_METHODS.has(params.method)) {
+    return undefined;
+  }
+  if (trimToUndefined(params.opts.gatewayUrl) !== undefined) {
+    return undefined;
+  }
+  if (trimToUndefined(process.env.OPENCLAW_GATEWAY_URL) === undefined) {
+    return undefined;
+  }
+  try {
+    return loadOrCreateDeviceIdentity();
+  } catch (error) {
+    throw new Error(
+      [
+        "env-selected approval gateway calls require a stable device identity.",
+        "Fix the OpenClaw state directory permissions or unset OPENCLAW_GATEWAY_URL for local approval-runtime calls.",
+      ].join(" "),
+      { cause: error },
+    );
+  }
 }
 
 /**
@@ -199,7 +258,12 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   const scopes = Array.isArray(extra?.scopes)
     ? extra.scopes
     : resolveLeastPrivilegeOperatorScopesForMethod(method, params);
-  const approvalRuntimeToken = resolveApprovalRuntimeTokenForGatewayTool({ method, opts });
+  const approvalRuntimeToken = resolveApprovalRuntimeTokenForGatewayTool({
+    method,
+    opts,
+    target: gateway.target,
+  });
+  const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({ method, opts });
   return await callGateway<T>({
     url: gateway.url,
     token: gateway.token,
@@ -211,6 +275,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     ...(approvalRuntimeToken ? { approvalRuntimeToken } : {}),
+    ...(deviceIdentity ? { deviceIdentity } : {}),
     scopes,
   });
 }
