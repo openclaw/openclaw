@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
+  assertRpcSmokeResponse,
   cleanupTempRoot,
   createGatewayClient,
   installGatewayParentCleanup,
@@ -132,6 +133,59 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     expect(() => summarizeRttSamples([-1])).toThrow(
       "avgMs must be a non-negative finite duration.",
     );
+  });
+
+  it("validates default RPC RTT smoke payloads", () => {
+    expect(() =>
+      assertRpcSmokeResponse("health", {
+        ok: true,
+        payload: {
+          agents: [],
+          channelOrder: [],
+          channels: {},
+          defaultAgentId: "codex",
+          durationMs: 3,
+          ok: true,
+          sessions: { count: 0, path: "/state/sessions", recent: [] },
+          ts: Date.now(),
+        },
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      assertRpcSmokeResponse("config.get", {
+        ok: true,
+        payload: {
+          config: {},
+          exists: true,
+          issues: [],
+          legacyIssues: [],
+          path: "/tmp/openclaw.json",
+          resolved: {},
+          runtimeConfig: {},
+          sourceConfig: {},
+          valid: true,
+          warnings: [],
+        },
+      }),
+    ).not.toThrow();
+
+    expect(() => assertRpcSmokeResponse("health", { ok: true, payload: {} })).toThrow(
+      "health returned invalid payload: expected ok=true.",
+    );
+    expect(() => assertRpcSmokeResponse("config.get", { ok: true, payload: {} })).toThrow(
+      "config.get returned invalid payload: expected config path.",
+    );
+  });
+
+  it("keeps custom RPC RTT methods on the generic ok/error contract", () => {
+    expect(() => assertRpcSmokeResponse("custom.method", { ok: true })).not.toThrow();
+    expect(() =>
+      assertRpcSmokeResponse("custom.method", {
+        error: { code: "bad_request" },
+        ok: false,
+      }),
+    ).toThrow('custom.method failed: {"code":"bad_request"}');
   });
 
   it("closes parent gateway log handles after spawning", async () => {
