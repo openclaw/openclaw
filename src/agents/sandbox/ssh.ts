@@ -656,6 +656,7 @@ export async function runSshSandboxCommand(
 }
 
 export const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
+  "set -e",
   "python3 - \"$1\" <<'PY'",
   "import os, sys",
   "target = os.path.normpath(sys.argv[1])",

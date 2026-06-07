@@ -9,6 +9,7 @@ import {
   buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
+  ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
   type SshSandboxSession,
   uploadDirectoryToSshTarget,
 } from "./ssh.js";
@@ -175,6 +176,13 @@ describe("sandbox ssh helpers", () => {
       }),
     ).not.toThrow();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when remote upload directory validation fails",
+    () => {
+      expect(ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT.split("\n")[0]).toBe("set -e");
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "rejects upload trees with symlinks that escape the local workspace",
