@@ -502,7 +502,7 @@ export class MsteamsProvider implements VoiceCallProvider {
     }
 
     const greetingInstructions = pending.message
-      ? `Open the call by clearly telling the caller the following, then offer to help further: ${pending.message}`
+      ? `This is an OUTBOUND callback you placed to deliver a result the caller already asked for — the work is ALREADY DONE. The moment the caller answers, state this result to them directly as a finished answer. Do NOT say you will look it up, work on it, or call back; it is already complete. Deliver exactly this: "${pending.message}". Then briefly ask if they need anything else.`
       : this.realtimeDeps.greetingInstructions;
     const realtimeCall = createMsteamsRealtimeCall({
       session,

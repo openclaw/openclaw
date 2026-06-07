@@ -604,7 +604,7 @@ export function createMsteamsRealtimeCall(params: {
     const deliveryInstruction = !deliveryTarget
       ? "This task was delegated from a Microsoft Teams voice call and runs in the background; deliver the final result to the caller when complete."
       : deliverVia === "call"
-        ? `This task was delegated from a live Microsoft Teams voice call and now runs in the background; the caller is no longer on the line. Complete the task, then CALL the caller back by invoking the voice_call tool exactly once with action "initiate_call", to "${deliveryTarget}", mode "notify", and message set to a concise, speakable summary of the result.`
+        ? `This task was delegated from a live Microsoft Teams voice call and now runs in the background; the caller is no longer on the line. FIRST complete the task and determine the final answer. THEN deliver it by invoking the voice_call tool exactly once with action "initiate_call", to "${deliveryTarget}", mode "notify", and set message to the FINAL ANSWER ITSELF, phrased as a completed result the caller can hear (for example, "The current time in Dubai is 5:41 PM."). Do NOT phrase message as something you are about to do or will look up — the work is already done by the time you place the call.`
         : `This task was delegated from a live Microsoft Teams voice call and now runs in the background; the caller is no longer waiting on the line. Complete the task, then deliver the final result to the caller by calling the message tool exactly once with action "send", channel "msteams", target "${deliveryTarget}". Keep the delivered message concise.`;
 
     try {

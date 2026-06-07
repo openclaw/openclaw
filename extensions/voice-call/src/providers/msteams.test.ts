@@ -205,7 +205,9 @@ describe("MsteamsProvider (audio loop wiring)", () => {
     }
   });
 
-  async function setup(): Promise<{
+  async function setup(opts?: {
+    outbound?: { enabled: boolean; workerBaseUrl?: string; tenantId?: string };
+  }): Promise<{
     port: number;
     captured: { current?: CapturedStt };
     manager: CallManager;
@@ -228,7 +230,12 @@ describe("MsteamsProvider (audio loop wiring)", () => {
     const transcriptionProvider = createMockTranscriptionProvider(captured, sttControl);
     const tts = createMockTtsProvider();
 
-    provider = new MsteamsProvider({ port, path: STREAM_PATH, sharedSecret: SECRET });
+    provider = new MsteamsProvider({
+      port,
+      path: STREAM_PATH,
+      sharedSecret: SECRET,
+      outbound: opts?.outbound,
+    });
     await provider.start();
     await manager.initialize(provider, "http://localhost/voice/webhook");
     provider.setCallManager(manager);
@@ -613,6 +620,52 @@ describe("MsteamsProvider (audio loop wiring)", () => {
     await waitFor(() => captured.current?.session.connect.mock.calls.length === 1);
     await waitFor(() => captured.current?.session.close.mock.calls.length === 1);
     await waitFor(() => manager.getCallByProviderCallId(callId) === undefined);
+  });
+
+  it("attaches an outbound call (placed via the worker) to the existing CallRecord on session.start", async () => {
+    const { port, captured, manager } = await setup({
+      outbound: { enabled: true, workerBaseUrl: "https://worker.example", tenantId: "tenant-1" },
+    });
+    const graphCallId = "graph-out-1";
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ callId: graphCallId }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      // Place the call through the manager (creates the CallRecord + maps providerCallId).
+      const placed = await manager.initiateCall("user:aad-out", undefined, {
+        message: "The current time in Dubai is 5:41 PM.",
+        mode: "notify",
+      });
+      expect(placed.success).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const internalCall = manager.getCallByProviderCallId(graphCallId);
+      expect(internalCall?.direction).toBe("outbound");
+
+      // The worker dials back: open the media WS with the SAME callId + direction.
+      const { ws } = await connect(port, graphCallId);
+      ws.send(
+        JSON.stringify({
+          type: "session.start",
+          callId: graphCallId,
+          threadId: "thread-out",
+          caller: { aadId: "bot" },
+          direction: "outbound",
+          recordingStatus: "active",
+        }),
+      );
+
+      // Attaches to the EXISTING record (STT created) — not a new inbound call.
+      await waitFor(() => (captured.current?.session.connect.mock.calls.length ?? 0) === 1);
+      expect(manager.getCallByProviderCallId(graphCallId)?.callId).toBe(internalCall?.callId);
+      ws.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("sends assistant.cancel on barge-in (STT speech start)", async () => {

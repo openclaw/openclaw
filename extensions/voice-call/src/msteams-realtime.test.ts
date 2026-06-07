@@ -252,6 +252,39 @@ describe("createMsteamsRealtimeCall", () => {
     expect(texts.some((t) => t.includes("I'll message you"))).toBe(false);
   });
 
+  it('acks a background task with a call-back message when deliverVia is "call"', () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        toolPolicy: "owner",
+        agentRuntime: {} as unknown as CoreAgentDeps,
+        voiceConfig: {} as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+      },
+    });
+
+    mock.getRequest().onToolCall?.({
+      itemId: "item-call",
+      callId: "task-call-2",
+      name: "openclaw_agent_task",
+      args: { task: "find Dubai time", deliverVia: "call" },
+    });
+
+    // Ack should promise a call back (not a chat message).
+    const acked = mock.submitToolResult.mock.calls.some(
+      (args) =>
+        args[0] === "task-call-2" &&
+        typeof (args[1] as { text?: string })?.text === "string" &&
+        /call you back/i.test((args[1] as { text: string }).text),
+    );
+    expect(acked).toBe(true);
+  });
+
   it("exposes look_at_screen and answers with a no-frame message when nothing is shared", () => {
     const ctx = createMockSession();
     const mock = createMockProvider();
