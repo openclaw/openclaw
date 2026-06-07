@@ -764,31 +764,33 @@ async function waitForGatewayReadinessRetryDelay(ms: number): Promise<void> {
   if (!Number.isFinite(ms) || ms <= 0) {
     return;
   }
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
-async function ensureGatewayReadyForSubagentSpawn(): Promise<void> {
-  let attempt = 0;
+async function ensureGatewayReadyForSubagentSpawn(params: {
+  requireAdminScope: boolean;
+}): Promise<void> {
+  const retryDelaysMs = [...getSubagentGatewayReadinessRetryDelaysMs()];
   for (;;) {
     try {
-      // Probe at admin scope rather than read scope so that the gateway
-      // connection pairs at a tier sufficient for the subsequent lifecycle
-      // calls (agent → write, sessions.delete / sessions.patch → admin).
-      // A read-scoped probe can trigger close(1008) "pairing required"
-      // on the later higher-scope upgrade (#59428).
+      // Keep default cleanup="keep" spawns on the least-privilege path so
+      // existing write-scoped clients can still start child agents. Only
+      // cleanup="delete" preflights at admin scope because that path is known
+      // to need admin-only lifecycle cleanup after the child run (#59428).
       await callSubagentGateway({
         method: "sessions.list",
         params: {},
         timeoutMs: SUBAGENT_GATEWAY_READINESS_TIMEOUT_MS,
-        scopes: [ADMIN_SCOPE],
+        ...(params.requireAdminScope ? { scopes: [ADMIN_SCOPE] } : {}),
       });
       return;
     } catch (err) {
-      const delayMs = getSubagentGatewayReadinessRetryDelaysMs()[attempt];
+      const delayMs = retryDelaysMs.shift();
       if (delayMs == null || !isGatewayLifecycleTransientError(err)) {
         throw err;
       }
-      attempt += 1;
       await waitForGatewayReadinessRetryDelay(delayMs);
     }
   }
@@ -1324,11 +1326,13 @@ export async function spawnSubagentDirect(
     };
   }
 
-  // All local guards passed — verify gateway is reachable at the scope tier
-  // required for subsequent lifecycle calls (agent → write, sessions.delete/
-  // sessions.patch → admin) before performing any gateway operations.
+  // All local guards passed — verify the gateway is reachable before performing
+  // any gateway operations. Default cleanup="keep" spawns intentionally preflight
+  // without admin scope so existing write-scoped clients remain compatible.
   try {
-    await ensureGatewayReadyForSubagentSpawn();
+    await ensureGatewayReadyForSubagentSpawn({
+      requireAdminScope: cleanup === "delete",
+    });
   } catch (err) {
     return {
       status: "error",

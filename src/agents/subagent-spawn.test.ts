@@ -879,7 +879,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(requesterOrigin).not.toHaveProperty("threadId");
   });
 
-  it("pins admin-only methods to operator.admin and preserves least-privilege for others (#59428)", async () => {
+  it("preserves least-privilege readiness for default cleanup=keep spawns (#59428)", async () => {
     const capturedCalls: Array<{ method?: string; scopes?: string[] }> = [];
 
     hoisted.callGatewayMock.mockImplementation(
@@ -898,7 +898,7 @@ describe("spawnSubagentDirect seam flow", () => {
 
     const result = await spawnSubagentDirect(
       {
-        task: "verify per-method scope routing",
+        task: "verify default spawn scope routing",
         model: "openai/gpt-5.4",
       },
       {
@@ -917,15 +917,46 @@ describe("spawnSubagentDirect seam flow", () => {
       if (call.method === "sessions.patch" || call.method === "sessions.delete") {
         // Admin-only methods must be pinned to operator.admin.
         expect(call.scopes).toEqual(["operator.admin"]);
-      } else if (call.method === "sessions.list") {
-        // The readiness probe pins sessions.list to admin scope to avoid
-        // close(1008) scope-upgrade failures on subsequent lifecycle calls.
-        expect(call.scopes).toEqual(["operator.admin"]);
       } else {
-        // Non-admin methods (e.g. "agent") must NOT be forced to admin scope.
+        // Default cleanup="keep" readiness and child agent start must remain
+        // least-privilege so write-scoped clients can still spawn children.
         expect(call.scopes).toBeUndefined();
       }
     }
+  });
+
+  it("pins readiness to operator.admin for cleanup=delete spawns (#59428)", async () => {
+    const capturedCalls: Array<{ method?: string; scopes?: string[] }> = [];
+
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; scopes?: string[] }) => {
+        capturedCalls.push({ method: request.method, scopes: request.scopes });
+        if (request.method === "agent") {
+          return { runId: "run-1" };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "verify cleanup delete readiness scope routing",
+        cleanup: "delete",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        workspaceDir: "/tmp/requester-workspace",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const readinessCall = capturedCalls.find((call) => call.method === "sessions.list");
+    expect(readinessCall?.scopes).toEqual(["operator.admin"]);
   });
 
   it("forwards normalized thinking to the agent run", async () => {
