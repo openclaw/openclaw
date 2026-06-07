@@ -1845,7 +1845,8 @@ export abstract class MemoryManagerSyncOps {
       ftsTokenizer: this.settings.store.fts.tokenizer,
     });
     const hasIndexedChunks = this.hasIndexedChunks();
-    const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
+    const needsInitialIndex =
+      indexIdentity.status === "missing" || (indexIdentity.status !== "valid" && !hasIndexedChunks);
     const needsExplicitIdentityReindex =
       params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetSessionFiles;
     const needsFullReindex =
