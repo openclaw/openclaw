@@ -442,6 +442,16 @@ export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs: unknown): numb
   return Math.floor(timeoutMs);
 }
 
+function canReplacePendingRestartEmitHooks(
+  hooks: RestartEmitHooks | undefined,
+  sessionKey: string | undefined,
+): boolean {
+  if (!hooks) {
+    return true;
+  }
+  return pendingRestartSessionKey === undefined || pendingRestartSessionKey === sessionKey;
+}
+
 // Returns true when the new hooks took ownership of the pending restart slot.
 // Coalesced callers from a different sessionKey are rejected to prevent the
 // cross-session continuation overwrite documented in #86742 (CWE-200).
@@ -449,15 +459,11 @@ function updatePendingRestartEmitHooks(
   hooks: RestartEmitHooks | undefined,
   sessionKey: string | undefined,
 ): boolean {
+  if (!canReplacePendingRestartEmitHooks(hooks, sessionKey)) {
+    return false;
+  }
   if (!hooks) {
     return true;
-  }
-  if (
-    pendingRestartSessionKey !== undefined &&
-    sessionKey !== undefined &&
-    pendingRestartSessionKey !== sessionKey
-  ) {
-    return false;
   }
   pendingRestartEmitHooks = hooks;
   if (sessionKey !== undefined) {
@@ -839,6 +845,22 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       !pendingRestartPreparing &&
       (requestedDueAt < pendingRestartDueAt || shouldUpgradeToSkipDeferral);
     if (shouldPullEarlier) {
+      if (!canReplacePendingRestartEmitHooks(opts?.emitHooks, opts?.sessionKey)) {
+        restartLog.warn(
+          `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts?.sessionKey ?? "unspecified"} pendingSessionKey=${pendingRestartSessionKey ?? "unspecified"})`,
+        );
+        return {
+          ok: true,
+          pid: process.pid,
+          signal: "SIGUSR1",
+          delayMs: remainingMs,
+          reason,
+          mode,
+          coalesced: true,
+          cooldownMsApplied,
+          emitHooksQueued: false,
+        };
+      }
       restartLog.warn(
         `restart request rescheduled earlier reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
       );

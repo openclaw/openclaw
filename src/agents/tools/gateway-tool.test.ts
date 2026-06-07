@@ -214,6 +214,23 @@ describe("gateway tool restart continuation", () => {
     });
   });
 
+  it("uses the runtime session, not model-supplied params, for scheduler ownership (#86742)", async () => {
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:main:session-A",
+      config: {},
+    });
+
+    await tool.execute?.("tool-call-1", {
+      action: "restart",
+      sessionKey: "agent:main:session-B",
+      continuationMessage: "Reply after restart",
+    });
+
+    expect(requireScheduledRestartArgs().sessionKey).toBe("agent:main:session-A");
+    await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
+    expect(requireRestartSentinelPayload().sessionKey).toBe("agent:main:session-B");
+  });
+
   it("reports continuationQueued=false when a coalesced restart belongs to another session (#86742)", async () => {
     scheduleGatewaySigusr1RestartMock.mockReturnValue({
       ok: true,

@@ -396,6 +396,41 @@ describe("infra runtime", () => {
       }
     });
 
+    it("rejects earlier reschedule hooks from a different session (#86742)", async () => {
+      const sessionAHooks = vi.fn(async () => {});
+      const sessionBHooks = vi.fn(async () => {});
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        const first = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "session-A",
+          sessionKey: "agent:main:session-A",
+          emitHooks: { beforeEmit: sessionAHooks },
+        });
+        const second = scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "session-B",
+          sessionKey: "agent:main:session-B",
+          emitHooks: { beforeEmit: sessionBHooks },
+        });
+
+        expect(first.coalesced).toBe(false);
+        expect(first.emitHooksQueued).toBe(true);
+        expect(second.coalesced).toBe(true);
+        expect(second.emitHooksQueued).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(sessionAHooks).toHaveBeenCalledTimes(1);
+        expect(sessionBHooks).not.toHaveBeenCalled();
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
     it("rejects coalesced emit hooks from a different session while preparation is in flight (#86742)", async () => {
       // Pins the CWE-200 in-flight preparation race: pendingRestartSessionKey
       // must stay alive through await beforeEmit(), otherwise a coalesced

@@ -397,6 +397,7 @@ export function createGatewayTool(opts?: {
         const sessionKey =
           normalizeOptionalString(params.sessionKey) ??
           normalizeOptionalString(opts?.agentSessionKey);
+        const ownerSessionKey = normalizeOptionalString(opts?.agentSessionKey) ?? sessionKey;
         const delayMs = readNonNegativeIntegerParam(params, "delayMs");
         const reason = normalizeOptionalString(params.reason)?.slice(0, 200);
         const note = normalizeOptionalString(params.note);
@@ -429,10 +430,9 @@ export function createGatewayTool(opts?: {
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
-          // Session-routing guard: coalesced requests from a different session
-          // must not overwrite the existing pending restart's continuation
-          // (CWE-200, #86742).
-          sessionKey,
+          // Ownership uses runtime session identity, not model-supplied routing
+          // params, so another session cannot claim the pending continuation.
+          sessionKey: ownerSessionKey,
           emitHooks: {
             beforeEmit: async () => {
               sentinelPath = await writeRestartSentinel(payload);
