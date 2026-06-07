@@ -304,12 +304,21 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
   };
 }
 
+function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
+  return {
+    baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+    api: "openai-chatgpt-responses",
+    auth: "oauth",
+    models: OPENAI_MANIFEST_PROVIDER.models,
+  };
+}
+
 export async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
-}): Promise<ModelProviderConfig | null> {
+}): Promise<ModelProviderConfig> {
   try {
     const rows = await getCachedLiveProviderModelRows({
       providerId: PROVIDER_ID,
@@ -348,7 +357,7 @@ export async function buildOpenAICodexLiveProviderConfig(params: {
     // Codex/ChatGPT discovery is advisory. Static OpenAI rows stay available
     // when OAuth refresh or the remote model list is unavailable.
   }
-  return null;
+  return buildOpenAICodexStaticProviderConfig();
 }
 
 function isCodexCatalogAuthMode(mode: string): boolean {
@@ -644,7 +653,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
               discoveryApiKey: runtimeAuth.apiKey,
               accountId: metadata.accountId,
             });
-            return provider ? { providers: { [PROVIDER_ID]: provider } } : null;
+            return { providers: { [PROVIDER_ID]: provider } };
           }
         } catch {
           if (isCodexCatalogAuthMode(auth.mode)) {

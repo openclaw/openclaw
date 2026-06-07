@@ -483,6 +483,28 @@ describe("buildOpenAIProvider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("keeps static OpenAI OAuth rows when Codex catalog discovery fails", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: new Response("temporarily unavailable", { status: 503 }),
+      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      release,
+    }));
+
+    const provider = await buildOpenAICodexLiveProviderConfig({
+      discoveryApiKey: "oauth-token",
+      accountId: "acct-openai-workspace",
+      fetchGuard,
+    });
+
+    expect(provider.api).toBe("openai-chatgpt-responses");
+    expect(provider.auth).toBe("oauth");
+    expect(provider.baseUrl).toBe("https://chatgpt.com/backend-api/codex");
+    expect(provider.models.length).toBeGreaterThan(0);
+    expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("keeps the deprecated Codex provider builder on the public API barrel", async () => {
     const { buildOpenAICodexProviderPlugin } = await import("./api.js");
     const provider = buildOpenAICodexProviderPlugin();
