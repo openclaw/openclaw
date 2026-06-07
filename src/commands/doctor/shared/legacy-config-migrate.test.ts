@@ -730,7 +730,7 @@ describe("legacy memory search config migrate", () => {
     ]);
   });
 
-  it("keeps canonical OpenAI model-level context budgets authoritative over legacy provider budgets", () => {
+  it("keeps legacy provider-level Codex budgets when no model target can be identified", () => {
     const res = migrateLegacyConfigForTest({
       models: {
         providers: {
@@ -754,7 +754,6 @@ describe("legacy memory search config migrate", () => {
 
     expect(res.config?.models?.providers?.openai).toEqual({
       api: "openai-chatgpt-responses",
-      maxTokens: 16_384,
       models: [
         {
           id: "openai/gpt-5.5",
@@ -762,14 +761,17 @@ describe("legacy memory search config migrate", () => {
         },
       ],
     });
-    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+    expect(res.config?.models?.providers?.["openai-codex"]).toEqual({
+      contextTokens: 1_050_000,
+      contextWindow: 1_050_000,
+      maxTokens: 16_384,
+    });
     expectMigrationChangesToIncludeFragments(res.changes, [
-      "Copied models.providers.openai-codex maxTokens metadata to models.providers.openai.",
-      "Removed models.providers.openai-codex because models.providers.openai already exists.",
+      "Skipped removing models.providers.openai-codex because provider-level context metadata cannot be mapped safely to a canonical OpenAI model row.",
     ]);
   });
 
-  it("keeps canonical OpenAI model-level context budgets authoritative over legacy provider budgets", () => {
+  it("copies legacy provider-level Codex budgets onto matching canonical model rows", () => {
     const res = migrateLegacyConfigForTest({
       models: {
         providers: {
@@ -786,6 +788,11 @@ describe("legacy memory search config migrate", () => {
             contextTokens: 1_050_000,
             contextWindow: 1_050_000,
             maxTokens: 16_384,
+            models: [
+              {
+                id: "openai-codex/gpt-5.5",
+              },
+            ],
           },
         },
       },
@@ -793,17 +800,17 @@ describe("legacy memory search config migrate", () => {
 
     expect(res.config?.models?.providers?.openai).toEqual({
       api: "openai-chatgpt-responses",
-      maxTokens: 16_384,
       models: [
         {
-          id: "openai/gpt-5.5",
+          id: "gpt-5.5",
           contextWindow: 272_000,
+          maxTokens: 16_384,
         },
       ],
     });
     expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
     expectMigrationChangesToIncludeFragments(res.changes, [
-      "Copied models.providers.openai-codex maxTokens metadata to models.providers.openai.",
+      "Normalized models.providers.openai.models[0].id to gpt-5.5 and copied maxTokens metadata.",
       "Removed models.providers.openai-codex because models.providers.openai already exists.",
     ]);
   });
@@ -849,6 +856,61 @@ describe("legacy memory search config migrate", () => {
     expectMigrationChangesToIncludeFragments(res.changes, [
       "Normalized models.providers.openai.models[0].id to gpt-5.5 and copied contextTokens, contextWindow, maxTokens metadata.",
       "Removed models.providers.openai-codex because models.providers.openai already exists.",
+    ]);
+  });
+
+  it("does not promote legacy provider-level Codex budgets to unrelated canonical OpenAI models", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            models: [
+              {
+                id: "text-embedding-3-small",
+                name: "OpenAI embeddings",
+              },
+            ],
+          },
+          "openai-codex": {
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            contextTokens: 1_050_000,
+            contextWindow: 1_050_000,
+            maxTokens: 16_384,
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "Legacy Codex GPT-5.5",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.openai).toEqual({
+      api: "openai-chatgpt-responses",
+      models: [
+        {
+          id: "text-embedding-3-small",
+          name: "OpenAI embeddings",
+        },
+        {
+          id: "gpt-5.5",
+          name: "Legacy Codex GPT-5.5",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          api: "openai-chatgpt-responses",
+          contextWindow: 1_050_000,
+          contextTokens: 1_050_000,
+          maxTokens: 16_384,
+        },
+      ],
+    });
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      'Moved models.providers.openai-codex.api "openai-codex-responses" → "openai-chatgpt-responses".',
+      "Merged 1 model(s) from models.providers.openai-codex into models.providers.openai: gpt-5.5.",
     ]);
   });
 

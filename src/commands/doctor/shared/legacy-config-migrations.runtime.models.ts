@@ -1043,14 +1043,8 @@ function hasProviderLevelContextBudget(provider: Record<string, unknown>): boole
   return hasContextBudget(provider);
 }
 
-function hasModelLevelContextBudget(provider: Record<string, unknown>): boolean {
-  return (
-    Array.isArray(provider.models) &&
-    provider.models.some((model) => {
-      const modelRecord = getRecord(model);
-      return Boolean(modelRecord && hasContextBudget(modelRecord));
-    })
-  );
+function hasProviderLevelContextMetadata(provider: Record<string, unknown>): boolean {
+  return OPENAI_CODEX_CONTEXT_METADATA_KEYS.some((key) => hasUsableContextMetadata(provider[key]));
 }
 
 function normalizeOpenAIModelIdForComparison(value: unknown): string | undefined {
@@ -1126,26 +1120,44 @@ function normalizeOpenAIModelEntryId(model: Record<string, unknown>, modelId: st
   return true;
 }
 
+function hasMatchingLegacyOpenAIModelEntry(params: {
+  legacyProvider: Record<string, unknown>;
+  canonicalProvider: Record<string, unknown>;
+}): boolean {
+  const canonicalModels = Array.isArray(params.canonicalProvider.models)
+    ? params.canonicalProvider.models
+    : [];
+  const legacyModels = Array.isArray(params.legacyProvider.models)
+    ? params.legacyProvider.models
+    : [];
+  return legacyModels.some((legacyModelValue) => {
+    const legacyModel = getRecord(legacyModelValue);
+    const modelId = canonicalOpenAIModelId(legacyModel?.id);
+    return Boolean(modelId && findOpenAIModelEntry(canonicalModels, modelId));
+  });
+}
+
+function hasUnmappedLegacyProviderContextMetadata(params: {
+  legacyProvider: Record<string, unknown>;
+  canonicalProvider: Record<string, unknown>;
+  modelsToMerge: unknown[];
+}): boolean {
+  return (
+    hasProviderLevelContextMetadata(params.legacyProvider) &&
+    params.modelsToMerge.length === 0 &&
+    !hasMatchingLegacyOpenAIModelEntry({
+      legacyProvider: params.legacyProvider,
+      canonicalProvider: params.canonicalProvider,
+    })
+  );
+}
+
 function copyLegacyOpenAICodexContextMetadataToExistingCanonicalRows(params: {
   legacyProvider: Record<string, unknown>;
   canonicalProvider: Record<string, unknown>;
   changes: string[];
-  skipProviderLevelMetadata?: boolean;
 }): boolean {
   let changed = false;
-  if (!params.skipProviderLevelMetadata) {
-    const providerKeys = copyMissingContextMetadata({
-      source: params.legacyProvider,
-      target: params.canonicalProvider,
-      blockContextBudget: hasModelLevelContextBudget(params.canonicalProvider),
-    });
-    if (providerKeys.length > 0) {
-      params.changes.push(
-        `Copied models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} ${providerKeys.join(", ")} metadata to models.providers.${OPENAI_PROVIDER_ID}.`,
-      );
-      changed = true;
-    }
-  }
 
   const canonicalModels = Array.isArray(params.canonicalProvider.models)
     ? params.canonicalProvider.models
@@ -1169,13 +1181,11 @@ function copyLegacyOpenAICodexContextMetadataToExistingCanonicalRows(params: {
       target: existing.model,
       blockContextBudget: hasProviderLevelContextBudget(params.canonicalProvider),
     });
-    const copiedProviderKeys = params.skipProviderLevelMetadata
-      ? copyMissingContextMetadata({
-          source: params.legacyProvider,
-          target: existing.model,
-          blockContextBudget: hasProviderLevelContextBudget(params.canonicalProvider),
-        })
-      : [];
+    const copiedProviderKeys = copyMissingContextMetadata({
+      source: params.legacyProvider,
+      target: existing.model,
+      blockContextBudget: hasProviderLevelContextBudget(params.canonicalProvider),
+    });
     const copiedKeys = [...copiedModelKeys, ...copiedProviderKeys];
     if (copiedKeys.length === 0 && !normalizedId) {
       continue;
@@ -1288,7 +1298,11 @@ function hasAutoFixableLegacyOpenAICodexProvider(providersValue: unknown): boole
       legacy: normalized.value,
     });
     if (modelsToMerge.length === 0) {
-      return true;
+      return !hasUnmappedLegacyProviderContextMetadata({
+        canonicalProvider: canonicalEntry.value,
+        legacyProvider: normalized.value,
+        modelsToMerge,
+      });
     }
     const mergeBlockers = collectModelMergeBlockers({
       canonical: canonicalEntry.value,
@@ -1323,6 +1337,18 @@ export function collectBlockedLegacyOpenAICodexProviderWarnings(raw: unknown): s
       canonical: canonicalEntry.value,
       legacy: normalized.value,
     });
+    if (
+      hasUnmappedLegacyProviderContextMetadata({
+        canonicalProvider: canonicalEntry.value,
+        legacyProvider: normalized.value,
+        modelsToMerge,
+      })
+    ) {
+      warnings.push(
+        `models.providers.${providerId} cannot be removed automatically into models.providers.${canonicalEntry.key} because provider-level context metadata cannot be mapped safely to a canonical OpenAI model row. Add an explicit models.providers.${canonicalEntry.key}.models[] row for the affected Codex model or move the affected defaults manually before removing models.providers.${providerId}.`,
+      );
+      continue;
+    }
     if (modelsToMerge.length === 0) {
       continue;
     }
@@ -1434,11 +1460,25 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
         canonical,
         legacy: normalized.value,
       });
+      const providerContextMetadataNeedsManualMapping = hasUnmappedLegacyProviderContextMetadata({
+        legacyProvider: normalized.value,
+        canonicalProvider: canonical,
+        modelsToMerge,
+      });
+      if (providerContextMetadataNeedsManualMapping) {
+        if (normalized.changed) {
+          providers[providerId] = normalized.value;
+          providersChanged = true;
+        }
+        changes.push(
+          `Skipped removing models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} because provider-level context metadata cannot be mapped safely to a canonical OpenAI model row.`,
+        );
+        continue;
+      }
       copyLegacyOpenAICodexContextMetadataToExistingCanonicalRows({
         legacyProvider: normalized.value,
         canonicalProvider: canonical,
         changes,
-        skipProviderLevelMetadata: modelsToMerge.length > 0,
       });
       const mergeBlockers =
         modelsToMerge.length > 0
