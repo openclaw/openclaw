@@ -193,6 +193,13 @@ export type PluginLoadOptions = {
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
   hostServices?: PluginRegistryParams["hostServices"];
+  /**
+   * Forwarded to {@link PluginRegistryParams.trustedToolPolicyAllowlist}. Plugin
+   * ids listed here may register trusted tool policies even when their
+   * `record.origin` is not `"bundled"`. The bundled-only default applies when
+   * this list is omitted.
+   */
+  trustedToolPolicyAllowlist?: readonly string[];
   runtimeOptions?: CreatePluginRuntimeOptions;
   startupTrace?: {
     detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -933,6 +940,7 @@ function buildCacheKey(params: {
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
+  trustedToolPolicyAllowlist?: readonly string[];
   activate?: boolean;
 }): string {
   const discoveryContext = resolvePluginDiscoveryContext({
@@ -981,6 +989,15 @@ function buildCacheKey(params: {
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
   const runtimeSubagentMode = params.runtimeSubagentMode ?? "default";
   const gatewayMethodsKey = JSON.stringify(params.coreGatewayMethodNames ?? []);
+  // Allowlist participates in cache identity because it relaxes the
+  // bundled-only admission gate for `registerTrustedToolPolicy`. Two loads
+  // with the same plugin config but different allowlists must produce
+  // different registries; otherwise a registry cached with an allowlisted
+  // external policy could be reused for a later caller that omitted the
+  // allowlist (or vice versa), poisoning the trusted-policy authorization
+  // state. The list is normalized to a sorted, deduped form so logically
+  // equivalent inputs hash identically.
+  const trustedToolPolicyAllowlistKey = JSON.stringify(params.trustedToolPolicyAllowlist ?? []);
   const activationMode = params.activate === false ? "snapshot" : "active";
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     bundledPackage,
@@ -990,7 +1007,24 @@ function buildCacheKey(params: {
     installs,
     loadPaths,
     activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${activationMode}`;
+  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${trustedToolPolicyAllowlistKey}::${activationMode}`;
+}
+
+/**
+ * Normalize a trusted-tool-policy allowlist for caching/comparison: dedupe,
+ * drop empty ids (the gate rejects empty ids anyway), and sort so that the
+ * order callers happen to pass doesn't influence cache identity. Returns
+ * `undefined` when the input is `undefined` or normalizes to empty so that
+ * call sites can treat "unset" and "set-to-empty" identically.
+ */
+function normalizeTrustedToolPolicyAllowlist(
+  allowlist: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (allowlist === undefined) {
+    return undefined;
+  }
+  const normalized = Array.from(new Set(allowlist.filter((id) => id.length > 0))).toSorted();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function matchesScopedPluginRequest(params: {
@@ -1075,6 +1109,7 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.runtimeOptions !== undefined ||
     options.pluginSdkResolution !== undefined ||
     options.coreGatewayHandlers !== undefined ||
+    normalizeTrustedToolPolicyAllowlist(options.trustedToolPolicyAllowlist) !== undefined ||
     options.includeSetupOnlyChannelPlugins === true ||
     options.forceSetupOnlyChannelPlugins === true ||
     options.requireSetupEntryForSetupOnlyChannelPlugins === true ||
@@ -1300,6 +1335,9 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const preferBuiltPluginArtifacts = options.preferBuiltPluginArtifacts === true;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
+  const normalizedTrustedToolPolicyAllowlist = normalizeTrustedToolPolicyAllowlist(
+    options.trustedToolPolicyAllowlist,
+  );
   const installRecords = {
     ...(options.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env })),
     ...cfg.plugins?.installs,
@@ -1330,6 +1368,9 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     runtimeSubagentMode,
     pluginSdkResolution: options.pluginSdkResolution,
     ...(coreGatewayMethodNames !== undefined && { coreGatewayMethodNames }),
+    ...(normalizedTrustedToolPolicyAllowlist !== undefined && {
+      trustedToolPolicyAllowlist: normalizedTrustedToolPolicyAllowlist,
+    }),
     activate: options.activate,
   });
   return {
@@ -1904,6 +1945,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }),
       ...(options.hostServices !== undefined && {
         hostServices: options.hostServices,
+      }),
+      ...(options.trustedToolPolicyAllowlist !== undefined && {
+        trustedToolPolicyAllowlist: options.trustedToolPolicyAllowlist,
       }),
       activateGlobalSideEffects: shouldActivate,
     });
@@ -2844,6 +2888,9 @@ export async function loadOpenClawPluginCliRegistry(
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
     ...(options.coreGatewayMethodNames !== undefined && {
       coreGatewayMethodNames: options.coreGatewayMethodNames,
+    }),
+    ...(options.trustedToolPolicyAllowlist !== undefined && {
+      trustedToolPolicyAllowlist: options.trustedToolPolicyAllowlist,
     }),
     activateGlobalSideEffects: false,
   });

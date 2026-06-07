@@ -491,6 +491,20 @@ export type PluginRegistryParams = {
     cron?: import("../cron/service-contract.js").CronServiceContract;
   };
   activateGlobalSideEffects?: boolean;
+  /**
+   * Plugin ids that are explicitly trusted to register tool policies even when
+   * their {@link PluginRecord.origin} is not `"bundled"`.
+   *
+   * This allowlist is the host's way of saying "I have out-of-band trust in
+   * this plugin and accept responsibility for the policies it registers" -
+   * typically a host-managed policy plugin shipped alongside openclaw but
+   * installed via a non-bundled path (for example a sibling
+   * `plugins/` directory loaded at host startup).
+   *
+   * Match is exact on the plugin id at registration time. An empty / missing
+   * list preserves the historical bundled-only behaviour.
+   */
+  trustedToolPolicyAllowlist?: readonly string[];
 };
 
 export type PluginRegistrationMode = import("./types.js").PluginRegistrationMode;

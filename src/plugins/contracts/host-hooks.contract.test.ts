@@ -189,6 +189,65 @@ describe("host-hook fixture plugin contract", () => {
     expect(diagnostics[1]?.message).toContain("only bundled plugins can claim reserved command");
   });
 
+  it("admits an external plugin to trusted tool policies when allowlisted by host config", () => {
+    const { config, registry } = createPluginRegistryFixture(undefined, {
+      trustedToolPolicyAllowlist: ["host-trusted-policy"],
+    });
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "host-trusted-policy",
+        name: "Host Trusted Policy",
+        origin: "workspace",
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "deny-rm-rf",
+          description: "Host-managed policy allowed via trustedToolPolicyAllowlist",
+          evaluate: () => undefined,
+        });
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(1);
+    expect(registry.registry.trustedToolPolicies?.[0]?.pluginId).toBe("host-trusted-policy");
+    const denyDiagnostics = diagnosticSummaries(registry.registry.diagnostics).filter(
+      (entry) => entry.message?.includes("only bundled plugins can register trusted tool"),
+    );
+    expect(denyDiagnostics).toHaveLength(0);
+  });
+
+  it("still rejects an external plugin whose id is not in the allowlist", () => {
+    const { config, registry } = createPluginRegistryFixture(undefined, {
+      trustedToolPolicyAllowlist: ["some-other-id"],
+    });
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-policy",
+        name: "External Policy",
+        origin: "workspace",
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "deny",
+          description: "Should still be rejected; id not on allowlist",
+          evaluate: () => undefined,
+        });
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(0);
+    const denyDiagnostics = diagnosticSummaries(registry.registry.diagnostics).filter(
+      (entry) =>
+        entry.pluginId === "external-policy" &&
+        entry.message?.includes("only bundled plugins can register trusted tool"),
+    );
+    expect(denyDiagnostics).toHaveLength(1);
+  });
+
   it("allows the official npm Codex plugin to keep /codex command ownership", () => {
     const { config, registry } = createPluginRegistryFixture();
     const codexRoot = path.join("/tmp", ".openclaw", "npm", "node_modules", "@openclaw", "codex");

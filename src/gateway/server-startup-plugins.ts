@@ -225,6 +225,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   baseMethods: string[];
   coreGatewayMethodNames?: readonly string[];
   hostServices?: PluginRegistryParams["hostServices"];
+  trustedToolPolicyAllowlist?: PluginRegistryParams["trustedToolPolicyAllowlist"];
   startupPluginIds: string[];
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
   preferSetupRuntimeForChannelPlugins?: boolean;
@@ -243,6 +244,9 @@ export async function loadGatewayStartupPluginRuntime(params: {
     baseMethods: params.baseMethods,
     ...(params.hostServices !== undefined && {
       hostServices: params.hostServices,
+    }),
+    ...(params.trustedToolPolicyAllowlist !== undefined && {
+      trustedToolPolicyAllowlist: params.trustedToolPolicyAllowlist,
     }),
     pluginIds: params.startupPluginIds,
     pluginLookUpTable: params.pluginLookUpTable,

@@ -367,6 +367,58 @@ describe("getCompatibleActivePluginRegistry", () => {
     expect(resolving).not.toBe(plain);
   });
 
+  it("separates trusted tool policy allowlist in the loader cache key", () => {
+    const baseOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+        },
+      },
+    };
+
+    const noAllowlist = testing.resolvePluginLoadCacheContext(baseOptions).cacheKey;
+    const withAllowlist = testing.resolvePluginLoadCacheContext({
+      ...baseOptions,
+      trustedToolPolicyAllowlist: ["host-trusted-policy"],
+    }).cacheKey;
+    const withDifferentAllowlist = testing.resolvePluginLoadCacheContext({
+      ...baseOptions,
+      trustedToolPolicyAllowlist: ["other-trusted-policy"],
+    }).cacheKey;
+
+    expect(withAllowlist).not.toBe(noAllowlist);
+    expect(withDifferentAllowlist).not.toBe(withAllowlist);
+  });
+
+  it("treats logically-equivalent trusted tool policy allowlists as the same cache key", () => {
+    const baseOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+        },
+      },
+    };
+
+    // Order, duplicates, and empty-string entries are normalized away so
+    // callers that build the list dynamically don't accidentally invalidate
+    // an otherwise-warm cache entry.
+    const canonical = testing.resolvePluginLoadCacheContext({
+      ...baseOptions,
+      trustedToolPolicyAllowlist: ["a", "b"],
+    }).cacheKey;
+    const reordered = testing.resolvePluginLoadCacheContext({
+      ...baseOptions,
+      trustedToolPolicyAllowlist: ["b", "a"],
+    }).cacheKey;
+    const duplicated = testing.resolvePluginLoadCacheContext({
+      ...baseOptions,
+      trustedToolPolicyAllowlist: ["a", "a", "b", ""],
+    }).cacheKey;
+
+    expect(reordered).toBe(canonical);
+    expect(duplicated).toBe(canonical);
+  });
+
   it("does not embed raw resolved plugin config env values in the loader cache key", () => {
     const { cacheKey } = testing.resolvePluginLoadCacheContext({
       config: {

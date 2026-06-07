@@ -20,7 +20,10 @@ export { registerProviders, requireProvider, uniqueSortedStrings };
 /** Creates a minimal plugin registry fixture with quiet logger defaults. */
 export function createPluginRegistryFixture(
   config = {} as OpenClawConfig,
-  params: { hostServices?: PluginRegistryParams["hostServices"] } = {},
+  params: {
+    hostServices?: PluginRegistryParams["hostServices"];
+    trustedToolPolicyAllowlist?: PluginRegistryParams["trustedToolPolicyAllowlist"];
+  } = {},
 ) {
   return {
     config,
@@ -33,6 +36,9 @@ export function createPluginRegistryFixture(
       },
       runtime: {} as PluginRuntime,
       ...(params.hostServices ? { hostServices: params.hostServices } : {}),
+      ...(params.trustedToolPolicyAllowlist
+        ? { trustedToolPolicyAllowlist: params.trustedToolPolicyAllowlist }
+        : {}),
     }),
   };
 }

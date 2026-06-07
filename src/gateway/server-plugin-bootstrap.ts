@@ -42,6 +42,7 @@ type GatewayPluginBootstrapParams = {
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
   hostServices?: PluginRegistryParams["hostServices"];
+  trustedToolPolicyAllowlist?: PluginRegistryParams["trustedToolPolicyAllowlist"];
   baseMethods: string[];
   pluginIds?: string[];
   pluginLookUpTable?: PluginLookUpTable;
@@ -117,6 +118,9 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     }),
     ...(params.hostServices !== undefined && {
       hostServices: params.hostServices,
+    }),
+    ...(params.trustedToolPolicyAllowlist !== undefined && {
+      trustedToolPolicyAllowlist: params.trustedToolPolicyAllowlist,
     }),
     baseMethods: params.baseMethods,
     pluginIds: params.pluginIds,

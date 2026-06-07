@@ -710,6 +710,7 @@ export function loadGatewayPlugins(params: {
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
   hostServices?: PluginRegistryParams["hostServices"];
+  trustedToolPolicyAllowlist?: PluginRegistryParams["trustedToolPolicyAllowlist"];
   baseMethods: string[];
   pluginIds?: string[];
   pluginLookUpTable?: PluginLookUpTable;
@@ -805,6 +806,9 @@ export function loadGatewayPlugins(params: {
     }),
     ...(params.hostServices !== undefined && {
       hostServices: params.hostServices,
+    }),
+    ...(params.trustedToolPolicyAllowlist !== undefined && {
+      trustedToolPolicyAllowlist: params.trustedToolPolicyAllowlist,
     }),
     runtimeOptions: {
       allowGatewaySubagentBinding: true,

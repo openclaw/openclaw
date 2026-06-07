@@ -2020,11 +2020,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  // O(1) membership test for the host-managed allowlist; computed once so the
+  // gate stays cheap on hot registration paths. Matches on `record.id` only;
+  // empty ids fall through to the bundled-only default by design.
+  const trustedToolPolicyAllowlist = new Set(
+    registryParams.trustedToolPolicyAllowlist ?? [],
+  );
+
   const registerTrustedToolPolicy = (
     record: PluginRecord,
     policy: PluginTrustedToolPolicyRegistration,
   ) => {
-    if (record.origin !== "bundled") {
+    const isAllowlistedExternal =
+      record.id.length > 0 && trustedToolPolicyAllowlist.has(record.id);
+    if (record.origin !== "bundled" && !isAllowlistedExternal) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
