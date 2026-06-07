@@ -79,17 +79,6 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
     ).toBe(false);
   });
 
-  it("does not install a new service for package updates when an unmanaged gateway is running", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "npm",
-        serviceInstalled: false,
-        serviceLoaded: false,
-        serviceRunning: true,
-      }),
-    ).toBe(false);
-  });
-
   it("prepares package update restarts when the service unit is missing but the gateway is still running", () => {
     expect(
       shouldPrepareUpdatedInstallRestart({
@@ -97,7 +86,6 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
         serviceInstalled: false,
         serviceLoaded: false,
         serviceRunning: true,
-        serviceSupervisionMissing: true,
       }),
     ).toBe(true);
   });

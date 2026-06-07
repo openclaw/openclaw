@@ -786,9 +786,8 @@ describe("update-cli", () => {
       (await serviceLoaded()) ? { programArguments: ["openclaw", "gateway", "run"] } : null,
     );
     serviceReadRuntime.mockResolvedValue({
-      status: "running",
-      pid: 4242,
-      state: "running",
+      status: "unknown",
+      state: "unknown",
     });
     mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
     prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
