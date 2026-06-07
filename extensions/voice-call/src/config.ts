@@ -101,6 +101,21 @@ const MsteamsConfigSchema = z
      * compliance is enforced out-of-band.
      */
     requireRecordingStatus: z.boolean().default(true),
+    /**
+     * Outbound calling: let OpenClaw ask the worker to place a 1:1 Teams call to
+     * a user ("call me when the task is done"). The worker exposes an
+     * HMAC-authenticated `POST {workerBaseUrl}/api/calls/place`.
+     */
+    outbound: z
+      .object({
+        enabled: z.boolean().default(false),
+        /** Base URL of the worker HTTP API (e.g. https://virtual-employee.pcfc.ae). */
+        workerBaseUrl: z.string().url().optional(),
+        /** AAD tenant id used when placing calls (the target user's tenant). */
+        tenantId: z.string().min(1).optional(),
+      })
+      .strict()
+      .default({ enabled: false }),
   })
   .strict();
 export type MsteamsConfig = z.infer<typeof MsteamsConfigSchema>;
@@ -750,6 +765,11 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
           ...config.msteams,
           path: config.msteams.path ?? "/voice/msteams/stream",
           requireRecordingStatus: config.msteams.requireRecordingStatus ?? true,
+          outbound: {
+            enabled: config.msteams.outbound?.enabled ?? false,
+            workerBaseUrl: config.msteams.outbound?.workerBaseUrl,
+            tenantId: config.msteams.outbound?.tenantId,
+          },
         }
       : config.msteams,
     webhookSecurity: {

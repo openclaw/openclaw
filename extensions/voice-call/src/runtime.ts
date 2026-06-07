@@ -274,6 +274,7 @@ async function resolveProvider(config: VoiceCallConfig, log: Logger): Promise<Vo
         bindAddress: config.msteams?.bindAddress,
         path: config.msteams?.path,
         sharedSecret: resolveMsteamsSharedSecret(config),
+        outbound: config.msteams?.outbound,
         logger: log,
       });
     }

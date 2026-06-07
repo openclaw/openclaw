@@ -73,9 +73,49 @@ describe("MsteamsProvider (stub surface)", () => {
     expect(result.statusCode).toBe(204);
   });
 
-  it("initiateCall throws — outbound dialing is not supported (inbound-only)", async () => {
+  it("initiateCall throws when outbound calling is not enabled", async () => {
     const p = new MsteamsProvider({});
-    await expect(p.initiateCall(STUB_INITIATE_INPUT)).rejects.toThrow(/inbound-only/);
+    await expect(p.initiateCall(STUB_INITIATE_INPUT)).rejects.toThrow(
+      /outbound calling is disabled/,
+    );
+  });
+
+  it("initiateCall (outbound enabled) signs + POSTs /api/calls/place and returns the worker callId", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ callId: "graph-call-9" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const p = new MsteamsProvider({
+        sharedSecret: SECRET,
+        outbound: { enabled: true, workerBaseUrl: "https://worker.example", tenantId: "tenant-1" },
+      });
+      const result = await p.initiateCall({
+        callId: "internal-1",
+        from: "msteams-bot",
+        to: "user:aad-123",
+        webhookUrl: "http://localhost/voice/webhook",
+      } as unknown as Parameters<MsteamsProvider["initiateCall"]>[0]);
+
+      expect(result).toEqual({ providerCallId: "graph-call-9", status: "initiated" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe("https://worker.example/api/calls/place");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual({
+        userObjectId: "aad-123",
+        tenantId: "tenant-1",
+      });
+      const headers = init.headers as Record<string, string>;
+      expect(headers["x-openclawteamsbridge-signature"]).toMatch(/^[0-9a-f]{64}$/);
+      expect(headers["x-openclawteamsbridge-timestamp"]).toMatch(/^\d+$/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("hangupCall is a no-op when no session exists", async () => {
