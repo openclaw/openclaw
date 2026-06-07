@@ -927,11 +927,13 @@ const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
 const MODEL_UNSCOPED_PROVIDER_DEFAULT_KEYS = [
   "apiKey",
+  "auth",
   "request",
   "timeoutSeconds",
   "region",
   "injectNumCtxForOpenAICompat",
   "localService",
+  "headers",
   "authHeader",
 ] as const;
 const CANONICAL_PROVIDER_MODEL_LEAK_KEYS = [
@@ -1001,16 +1003,6 @@ function hasOwnDefinedProperty(record: Record<string, unknown>, key: string): bo
   return Object.hasOwn(record, key) && record[key] !== undefined;
 }
 
-function getStringRecord(value: unknown): Record<string, string> | undefined {
-  const record = getRecord(value);
-  if (!record) {
-    return undefined;
-  }
-  return Object.values(record).every((entry) => typeof entry === "string")
-    ? (record as Record<string, string>)
-    : undefined;
-}
-
 function collectModelMergeBlockers(params: {
   canonical: Record<string, unknown>;
   legacy: Record<string, unknown>;
@@ -1025,9 +1017,6 @@ function collectModelMergeBlockers(params: {
     if (hasOwnDefinedProperty(params.canonical, key)) {
       blockers.push(`models.providers.${OPENAI_PROVIDER_ID}.${key}`);
     }
-  }
-  if (hasOwnDefinedProperty(params.legacy, "headers") && !getStringRecord(params.legacy.headers)) {
-    blockers.push(`models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID}.headers`);
   }
   if (hasOwnDefinedProperty(params.canonical, "headers")) {
     blockers.push(`models.providers.${OPENAI_PROVIDER_ID}.headers`);
@@ -1048,7 +1037,6 @@ function buildMergedLegacyOpenAIModel(
   const legacyBaseUrl =
     typeof legacyProvider.baseUrl === "string" ? legacyProvider.baseUrl : undefined;
   const legacyApi = typeof legacyProvider.api === "string" ? legacyProvider.api : undefined;
-  const legacyHeaders = getStringRecord(legacyProvider.headers);
   const legacyParams = getRecord(legacyProvider.params);
   const legacyAgentRuntime = getRecord(legacyProvider.agentRuntime);
 
@@ -1068,9 +1056,6 @@ function buildMergedLegacyOpenAIModel(
   }
   if (legacyAgentRuntime && modelRecord.agentRuntime === undefined) {
     patch.agentRuntime = legacyAgentRuntime;
-  }
-  if (legacyHeaders && modelRecord.headers === undefined) {
-    patch.headers = legacyHeaders;
   }
   return Object.keys(patch).length > 0 ? Object.assign({}, modelRecord, patch) : model;
 }
