@@ -49,7 +49,12 @@ export interface MsteamsProviderOptions {
   path?: string;
   sharedSecret?: string;
   /** Outbound calling: ask the worker to place a Teams call to a user. */
-  outbound?: { enabled: boolean; workerBaseUrl?: string; tenantId?: string };
+  outbound?: {
+    enabled: boolean;
+    workerBaseUrl?: string;
+    tenantId?: string;
+    answerTimeoutMs?: number;
+  };
   logger?: MsteamsLogger;
 }
 
@@ -101,11 +106,13 @@ const FRAME_BYTES = (MSTEAMS_SAMPLE_RATE_HZ / 1000) * FRAME_DURATION_MS * BYTES_
 const MAX_PRECONNECT_FRAMES = 250;
 
 /**
- * How long to wait for a placed outbound call's media WebSocket to attach before
- * giving up and finalizing the CallRecord, so an unanswered / failed-to-connect
- * call doesn't leak a pending entry or a perpetually-"active" CallRecord.
+ * Default safety-net wait (ms) for a placed outbound call's media WebSocket to attach before
+ * finalizing the CallRecord, so an unanswered / failed-to-connect call doesn't leak a pending entry
+ * or a perpetually-"active" CallRecord. Overridable via `msteams.outbound.answerTimeoutMs`. 120s is
+ * comfortably longer than a typical Teams ring-to-answer (~30-60s before missed/voicemail), so it
+ * fires only on a genuinely dead placement, not a slow answer.
  */
-const OUTBOUND_ANSWER_TIMEOUT_MS = 60_000;
+const OUTBOUND_ANSWER_TIMEOUT_DEFAULT_MS = 120_000;
 
 /**
  * Microsoft Teams voice-call provider.
@@ -870,7 +877,7 @@ export class MsteamsProvider implements VoiceCallProvider {
     // Remember it briefly so a late callee answer isn't mistaken for a fresh inbound call.
     this.timedOutOutbound.add(providerCallId);
     this.logger?.warn(
-      `MsteamsProvider: outbound call ${providerCallId} did not connect within ${OUTBOUND_ANSWER_TIMEOUT_MS}ms; finalizing`,
+      `MsteamsProvider: outbound call ${providerCallId} did not connect within ${this.outbound?.answerTimeoutMs ?? OUTBOUND_ANSWER_TIMEOUT_DEFAULT_MS}ms; finalizing`,
     );
     if (this.manager) {
       this.manager.processEvent({
@@ -989,10 +996,10 @@ export class MsteamsProvider implements VoiceCallProvider {
       message: input.message,
     });
     // No-answer guard: if the call never connects back (busy, declined, offline),
-    // finalize the CallRecord after a timeout so it doesn't linger as active.
+    // finalize the CallRecord after the configured timeout so it doesn't linger as active.
     const noAnswerTimer = setTimeout(
       () => this.finalizeUnansweredOutbound(workerCallId),
-      OUTBOUND_ANSWER_TIMEOUT_MS,
+      this.outbound?.answerTimeoutMs ?? OUTBOUND_ANSWER_TIMEOUT_DEFAULT_MS,
     );
     noAnswerTimer.unref?.();
     this.pendingOutboundTimers.set(workerCallId, noAnswerTimer);
