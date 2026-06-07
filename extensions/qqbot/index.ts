@@ -10,7 +10,7 @@ function registerQQBotFull(api: OpenClawPluginApi): void {
     const registerTools = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(
       import.meta.url,
       {
-        specifier: "./src/bridge/tools/index.js",
+        specifier: "./tools-api.js",
         exportName: "registerQQBotTools",
       },
     );
@@ -18,7 +18,7 @@ function registerQQBotFull(api: OpenClawPluginApi): void {
     return;
   }
   const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./src/bridge/channel-entry.js",
+    specifier: "./channel-entry-api.js",
     exportName: "registerQQBotFull",
   });
   register(api);
