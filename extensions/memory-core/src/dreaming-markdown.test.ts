@@ -168,8 +168,8 @@ describe("dreaming markdown storage", () => {
   });
 
   describe("writeDeepDreamingToDreamsMd", () => {
-    const nowMs = Date.parse("2026-04-05T10:00:00Z");
-    const timezone = "UTC";
+    const deepNowMs = Date.parse("2026-04-05T10:00:00Z");
+    const deepTimezone = "UTC";
 
     it("writes a Deep Sleep managed block into DREAMS.md", async () => {
       const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
@@ -177,8 +177,8 @@ describe("dreaming markdown storage", () => {
       const dreamsPath = await writeDeepDreamingToDreamsMd({
         workspaceDir,
         bodyLines: ["- Ranked 5 candidate(s).", "- Promoted 2 candidate(s)."],
-        nowMs,
-        timezone,
+        nowMs: deepNowMs,
+        timezone: deepTimezone,
       });
 
       expect(dreamsPath).toBe(path.join(workspaceDir, "DREAMS.md"));
@@ -196,14 +196,14 @@ describe("dreaming markdown storage", () => {
       await writeDeepDreamingToDreamsMd({
         workspaceDir,
         bodyLines: ["- First write."],
-        nowMs,
-        timezone,
+        nowMs: deepNowMs,
+        timezone: deepTimezone,
       });
       await writeDeepDreamingToDreamsMd({
         workspaceDir,
         bodyLines: ["- Second write."],
-        nowMs,
-        timezone,
+        nowMs: deepNowMs,
+        timezone: deepTimezone,
       });
 
       const dreamsPath = path.join(workspaceDir, "DREAMS.md");
@@ -224,8 +224,8 @@ describe("dreaming markdown storage", () => {
       await writeDeepDreamingToDreamsMd({
         workspaceDir,
         bodyLines: ["- Ranked 3 candidate(s)."],
-        nowMs,
-        timezone,
+        nowMs: deepNowMs,
+        timezone: deepTimezone,
       });
 
       const dreamsPath = path.join(workspaceDir, "DREAMS.md");
@@ -241,8 +241,8 @@ describe("dreaming markdown storage", () => {
       await writeDeepDreamingToDreamsMd({
         workspaceDir,
         bodyLines: ["- Ranked 1 candidate(s)."],
-        nowMs,
-        timezone,
+        nowMs: deepNowMs,
+        timezone: deepTimezone,
       });
 
       const dreamsPath = path.join(workspaceDir, "DREAMS.md");
@@ -258,8 +258,8 @@ describe("dreaming markdown storage", () => {
       const dreamsPath = await writeDeepDreamingToDreamsMd({
         workspaceDir,
         bodyLines: ["- Ranked 1 candidate(s)."],
-        nowMs,
-        timezone,
+        nowMs: deepNowMs,
+        timezone: deepTimezone,
       });
 
       expect(dreamsPath).toBe(path.join(workspaceDir, "dreams.md"));
@@ -279,8 +279,8 @@ describe("dreaming markdown storage", () => {
         writeDeepDreamingToDreamsMd({
           workspaceDir,
           bodyLines: ["- Should fail."],
-          nowMs,
-          timezone,
+          nowMs: deepNowMs,
+          timezone: deepTimezone,
         }),
       ).rejects.toThrow("Refusing to write symlinked DREAMS.md");
     });
