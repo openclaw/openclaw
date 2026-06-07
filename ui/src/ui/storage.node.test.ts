@@ -577,6 +577,7 @@ describe("loadSettings default gateway URL derivation", () => {
   it.each([
     "agent:main:feishu:direct:ou_123",
     "agent:main:feishu:group:chat_456",
+    "agent:main:slack:channel:C12345",
     "agent:main:direct:ou_123",
     "agent:main:direct:ou_123:thread:99",
     "agent:main:dm:12345:thread:12345:99",
@@ -584,6 +585,7 @@ describe("loadSettings default gateway URL derivation", () => {
     "agent:main:telegram:dm:12345:thread:12345:99",
     "agent:main:feishu:acct_abc:direct:ou_123",
     "agent:main:feishu:group:chat_456:thread_abc",
+    "agent:main:slack:workspace_abc:channel:C12345",
     "agent:main:feishu:acct_abc:group:chat_456:topic_travel",
   ])("preserves a scoped routed session selection across reload %s", async (sessionKey) => {
     setTestLocation({
@@ -627,6 +629,7 @@ describe("loadSettings default gateway URL derivation", () => {
   it.each([
     "agent:main:feishu:direct:ou_123",
     "agent:main:feishu:group:chat_456",
+    "agent:main:slack:channel:C12345",
     "agent:main:direct:ou_123",
     "agent:main:direct:ou_123:thread:99",
     "agent:main:dm:12345:thread:12345:99",
@@ -634,6 +637,7 @@ describe("loadSettings default gateway URL derivation", () => {
     "agent:main:telegram:dm:12345:thread:12345:99",
     "agent:main:feishu:acct_abc:direct:ou_123",
     "agent:main:feishu:group:chat_456:thread_abc",
+    "agent:main:slack:workspace_abc:channel:C12345",
     "agent:main:feishu:acct_abc:group:chat_456:topic_travel",
   ])(
     "falls back to main when restoring a legacy routed session selection %s",

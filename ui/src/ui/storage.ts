@@ -163,7 +163,7 @@ function isHistoricalRoutedSessionKey(value: string | undefined): boolean {
     return false;
   }
   const isPeerSessionMarker = (part: string | undefined): boolean =>
-    part === "direct" || part === "dm" || part === "group";
+    part === "direct" || part === "dm" || part === "group" || part === "channel";
   const parts = trimmed.split(":");
   if (parts[0] !== "agent" || !parts[1]) {
     return false;
