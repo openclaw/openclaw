@@ -290,6 +290,13 @@ describe("Codex native hook relay config", () => {
 
     expect(
       buildCodexNativeHookRelayConfig({
+        relay: createRelay({ preToolUsePolicyActive: false }),
+        events: ["pre_tool_use"],
+      }),
+    ).not.toHaveProperty("features.unified_exec");
+
+    expect(
+      buildCodexNativeHookRelayConfig({
         relay: createRelay(),
         events: ["permission_request"],
       }),
@@ -329,6 +336,7 @@ describe("Codex native hook relay config", () => {
 
 function createRelay(options?: {
   inactiveEvents?: readonly NativeHookRelayRegistrationHandle["allowedEvents"][number][];
+  preToolUsePolicyActive?: boolean;
 }): NativeHookRelayRegistrationHandle {
   const inactiveEvents = new Set(options?.inactiveEvents ?? []);
   return {
@@ -338,6 +346,7 @@ function createRelay(options?: {
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     runId: "run-1",
+    preToolUsePolicyActive: options?.preToolUsePolicyActive ?? true,
     allowedEvents: ["pre_tool_use", "post_tool_use", "permission_request", "before_agent_finalize"],
     expiresAtMs: Date.now() + 1000,
     shouldRelayEvent: (event) => !inactiveEvents.has(event),

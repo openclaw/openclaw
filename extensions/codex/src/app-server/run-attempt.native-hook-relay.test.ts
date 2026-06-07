@@ -47,8 +47,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
     expect(startConfig?.["features.hooks"]).toBe(true);
-    expect(startConfig?.["features.unified_exec"]).toBe(true);
-    expect(startConfig?.experimental_use_unified_exec_tool).toBe(true);
+    expect(startConfig).not.toHaveProperty("features.unified_exec");
+    expect(startConfig).not.toHaveProperty("experimental_use_unified_exec_tool");
     const preToolUseHooks = startConfig?.["hooks.PreToolUse"] as
       | Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
       | undefined;
@@ -310,8 +310,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
     expect(startConfig?.["features.hooks"]).toBe(true);
-    expect(startConfig?.["features.unified_exec"]).toBe(true);
-    expect(startConfig?.experimental_use_unified_exec_tool).toBe(true);
+    expect(startConfig).not.toHaveProperty("features.unified_exec");
+    expect(startConfig).not.toHaveProperty("experimental_use_unified_exec_tool");
     expect(Array.isArray(startConfig?.["hooks.PreToolUse"])).toBe(true);
     expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.Stop"]).toEqual([]);

@@ -244,9 +244,15 @@ export function buildCodexNativeHookRelayConfig(params: {
   const config: JsonObject = {
     "features.hooks": true,
   };
-  if (selectedEvents.has("pre_tool_use") && params.relay.shouldRelayEvent("pre_tool_use")) {
+  if (
+    selectedEvents.has("pre_tool_use") &&
+    params.relay.shouldRelayEvent("pre_tool_use") &&
+    params.relay.preToolUsePolicyActive === true
+  ) {
     // PreToolUse hooks run through Codex's tool router. Force shell-like native
-    // execution onto the hookable exec_command path while the relay is active.
+    // execution onto the hookable exec_command path only when OpenClaw policy
+    // requires PreToolUse enforcement; observational hooks should not broaden
+    // the default Codex execution surface.
     config["features.unified_exec"] = true;
     config.experimental_use_unified_exec_tool = true;
   }
