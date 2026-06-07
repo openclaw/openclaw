@@ -504,7 +504,7 @@ describe("native hook relay CLI", () => {
     });
     const exit = vi.fn((_code: number) => {
       events.push("exit");
-    }) as (code: number) => never;
+    });
 
     const exitCode = await runNativeHookRelayCli(
       { provider: "codex", relayId: "relay-1", event: "pre_tool_use" },

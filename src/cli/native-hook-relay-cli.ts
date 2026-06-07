@@ -125,7 +125,7 @@ export async function runNativeHookRelayCli(
 export type NativeHookRelayProcessExitDeps = {
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
-  exit?: (code: number) => never;
+  exit?: (code: number) => void;
 };
 
 /** Drain relay stdout/stderr so Codex receives complete hook decision JSON before exit. */
