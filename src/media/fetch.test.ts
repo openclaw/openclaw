@@ -609,6 +609,45 @@ describe("readRemoteMediaBuffer", () => {
     expect(saved.fileName).toBe("photo.png");
   });
 
+  it("rejects media URLs outside the configured hostname allowlist before fetch", async () => {
+    const fetchImpl = vi.fn(async () => new Response("should not fetch", { status: 200 }));
+
+    await expect(
+      readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        maxBytes: 1024,
+        ssrfPolicy: { hostnameAllowlist: ["cdn.example.com", "*.assets.example.com"] },
+      }),
+    ).rejects.toThrow("Media URL hostname is not in allowlist: example.com");
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects native redirect results outside the configured hostname allowlist", async () => {
+    const body = makeCancelableStream([new Uint8Array([1, 2, 3])]);
+    const redirectedResponse = new Response(body.stream, {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    });
+    Object.defineProperty(redirectedResponse, "url", {
+      value: "https://example.com/files/photo.png",
+    });
+    const fetchImpl = vi.fn(async () => redirectedResponse);
+
+    await expect(
+      readRemoteMediaBuffer({
+        url: "https://cdn.example.com/download",
+        fetchImpl,
+        maxBytes: 1024,
+        ssrfPolicy: { hostnameAllowlist: ["cdn.example.com"] },
+      }),
+    ).rejects.toThrow("Media URL hostname is not in allowlist: example.com");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(body.wasCanceled()).toBe(true);
+  });
+
   it("clamps oversized saved-response idle timeout timers", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {

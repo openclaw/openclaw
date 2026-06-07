@@ -9,16 +9,20 @@ import {
 } from "@openclaw/media-core/read-response-with-limit";
 import type { Dispatcher } from "undici";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  closeDispatcher,
-  type LookupFn,
-  type PinnedDispatcherPolicy,
-  type SsrFPolicy,
-} from "../infra/net/ssrf.js";
+import { normalizeHostname } from "../infra/net/hostname.js";
 import {
   fetchWithRuntimeDispatcherOrMockedGlobal,
   type DispatcherAwareRequestInit,
 } from "../infra/net/runtime-fetch.js";
+import {
+  closeDispatcher,
+  matchesHostnameAllowlist,
+  normalizeHostnameAllowlist,
+  resolveSsrFPolicyForUrl,
+  type LookupFn,
+  type PinnedDispatcherPolicy,
+  type SsrFPolicy,
+} from "../infra/net/ssrf.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
@@ -188,16 +192,35 @@ function redactMediaUrl(url: string): string {
   return redactSensitiveText(url);
 }
 
+function assertMediaUrlAllowedByPolicy(rawUrl: string, policy?: SsrFPolicy): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("Invalid URL: must be http or https");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Invalid URL: must be http or https");
+  }
+
+  const policyForUrl = resolveSsrFPolicyForUrl(parsed, policy);
+  const allowlist = normalizeHostnameAllowlist(policyForUrl?.hostnameAllowlist);
+  if (allowlist.length > 0) {
+    const hostname = normalizeHostname(parsed.hostname);
+    if (!matchesHostnameAllowlist(hostname, allowlist)) {
+      throw new Error(`Media URL hostname is not in allowlist: ${parsed.hostname}`);
+    }
+  }
+  return parsed.toString();
+}
+
 function unrefTimer(timeout: ReturnType<typeof setTimeout>): void {
   if (typeof timeout === "object" && "unref" in timeout) {
     timeout.unref();
   }
 }
 
-function resolveFetchSignal(params: {
-  requestSignal?: AbortSignal | null;
-  timeoutMs?: number;
-}): {
+function resolveFetchSignal(params: { requestSignal?: AbortSignal | null; timeoutMs?: number }): {
   signal?: AbortSignal;
   cleanup: () => void;
 } {
@@ -278,7 +301,8 @@ async function fetchNativeMediaAttempt(
   options: FetchMediaOptions,
   attempt: FetchDispatcherAttempt,
 ): Promise<NativeMediaResponse> {
-  const { url, fetchImpl, requestInit, maxRedirects, timeoutMs } = options;
+  const { url, fetchImpl, requestInit, maxRedirects, timeoutMs, ssrfPolicy } = options;
+  const requestUrl = assertMediaUrlAllowedByPolicy(url, ssrfPolicy);
   const signal = resolveFetchSignal({
     requestSignal: requestInit?.signal,
     timeoutMs,
@@ -295,11 +319,18 @@ async function fetchNativeMediaAttempt(
   };
   try {
     const response = fetchImpl
-      ? await fetchImpl(url, init)
-      : await fetchWithRuntimeDispatcherOrMockedGlobal(url, init);
+      ? await fetchImpl(requestUrl, init)
+      : await fetchWithRuntimeDispatcherOrMockedGlobal(requestUrl, init);
+    const finalUrl = response.url || requestUrl;
+    try {
+      assertMediaUrlAllowedByPolicy(finalUrl, ssrfPolicy);
+    } catch (err) {
+      await discardIgnoredResponseBody(response);
+      throw err;
+    }
     return {
       response,
-      finalUrl: response.url || url,
+      finalUrl,
       release,
       sourceUrl: redactMediaUrl(url),
     };
@@ -311,16 +342,8 @@ async function fetchNativeMediaAttempt(
   }
 }
 
-async function fetchNativeMediaResponse(
-  options: FetchMediaOptions,
-): Promise<NativeMediaResponse> {
-  const {
-    url,
-    dispatcherPolicy,
-    dispatcherAttempts,
-    lookupFn,
-    shouldRetryFetchError,
-  } = options;
+async function fetchNativeMediaResponse(options: FetchMediaOptions): Promise<NativeMediaResponse> {
+  const { url, dispatcherPolicy, dispatcherAttempts, lookupFn, shouldRetryFetchError } = options;
   const sourceUrl = redactMediaUrl(url);
   const attempts =
     dispatcherAttempts && dispatcherAttempts.length > 0
