@@ -27,7 +27,7 @@ import {
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexModelsCommandText,
   isExpectedCodexStatusCommandText,
-  shouldSkipRetryableCodexHarnessLiveError,
+  isRetryableCodexHarnessLiveError,
 } from "./gateway-codex-harness.live-helpers.js";
 import {
   assertCronJobMatches,
@@ -1037,118 +1037,129 @@ describeLive("gateway live (Codex harness)", () => {
       logCodexLiveStep("client-connected");
 
       try {
-        try {
-          const sessionKey = "agent:dev:live-codex-harness";
+        const maxAttempts = CODEX_HARNESS_SUBAGENT_PROBE ? 1 : 2;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          try {
+            const sessionKey = "agent:dev:live-codex-harness";
 
-          if (CODEX_HARNESS_SUBAGENT_PROBE) {
-            logCodexLiveStep("subagent-probe:start", { sessionKey });
-            await verifyCodexSubagentProbe({ client, sessionKey });
-            logCodexLiveStep("native-subagent-bridge-probe:start", { sessionKey });
-            await verifyCodexNativeSubagentBridgeProbe({ client, sessionKey });
-            logCodexLiveStep("subagent-probe:done");
-            if (CODEX_HARNESS_SUBAGENT_ONLY) {
+            if (CODEX_HARNESS_SUBAGENT_PROBE) {
+              logCodexLiveStep("subagent-probe:start", { sessionKey });
+              await verifyCodexSubagentProbe({ client, sessionKey });
+              logCodexLiveStep("native-subagent-bridge-probe:start", { sessionKey });
+              await verifyCodexNativeSubagentBridgeProbe({ client, sessionKey });
+              logCodexLiveStep("subagent-probe:done");
+              if (CODEX_HARNESS_SUBAGENT_ONLY) {
+                return;
+              }
+            }
+
+            const unsubscribeDebugEvents = await subscribeCodexLiveDebugEvents(sessionKey);
+            const firstNonce = randomBytes(3).toString("hex").toUpperCase();
+            try {
+              const firstToken = `CODEX-HARNESS-${firstNonce}`;
+              const firstText = await requestAgentText({
+                client,
+                sessionKey,
+                expectedToken: firstToken,
+                message: `Reply with exactly ${firstToken} and nothing else.`,
+              });
+              expect(firstText).toContain(firstToken);
+              logCodexLiveStep("first-turn", { firstText });
+
+              const secondNonce = randomBytes(3).toString("hex").toUpperCase();
+              const secondToken = `CODEX-HARNESS-RESUME-${secondNonce}`;
+              const secondText = await requestAgentText({
+                client,
+                sessionKey,
+                expectedToken: secondToken,
+                message: `Reply with exactly ${secondToken} and nothing else. Do not repeat ${firstToken}.`,
+              });
+              expect(secondText).toContain(secondToken);
+              logCodexLiveStep("second-turn", { secondText });
+
+              if (CODEX_HARNESS_CODE_MODE_ONLY) {
+                logCodexLiveStep("code-mode-only-tool-probe:start", { sessionKey });
+                await verifyCodexCodeModeOnlyDynamicToolProbe({ client, sessionKey });
+                logCodexLiveStep("code-mode-only-tool-probe:done");
+              }
+            } finally {
+              unsubscribeDebugEvents();
+            }
+
+            const statusText = await requestCodexCommandText({
+              client,
+              events: gatewayEvents,
+              sessionKey,
+              command: "/codex status",
+              expectedText: [...EXPECTED_CODEX_STATUS_COMMAND_TEXT],
+              isExpectedText: isExpectedCodexStatusCommandText,
+            });
+            logCodexLiveStep("codex-status-command", { statusText });
+
+            const modelsText = await requestCodexCommandText({
+              client,
+              events: gatewayEvents,
+              sessionKey,
+              command: "/codex models",
+              expectedText: [...EXPECTED_CODEX_MODELS_COMMAND_TEXT],
+              isExpectedText: isExpectedCodexModelsCommandText,
+            });
+            logCodexLiveStep("codex-models-command", { modelsText });
+
+            if (CODEX_HARNESS_CHAT_IMAGE_PROBE) {
+              logCodexLiveStep("chat-image-probe:start", { sessionKey });
+              await verifyCodexChatImageProbe({ client, sessionKey });
+              logCodexLiveStep("chat-image-probe:done");
+            }
+
+            if (CODEX_HARNESS_IMAGE_PROBE) {
+              logCodexLiveStep("image-probe:start", { sessionKey });
+              await verifyCodexImageProbe({ client, sessionKey });
+              logCodexLiveStep("image-probe:done");
+            }
+
+            if (CODEX_HARNESS_MCP_PROBE) {
+              logCodexLiveStep("cron-mcp-probe:start", { sessionKey });
+              await verifyCodexCronMcpProbe({
+                client,
+                sessionKey,
+                port,
+                token,
+                env: process.env,
+              });
+              logCodexLiveStep("cron-mcp-probe:done");
+            }
+
+            if (CODEX_HARNESS_GUARDIAN_PROBE) {
+              const guardianSessionKey = "agent:dev:live-codex-harness-guardian";
+              logCodexLiveStep("guardian-probe:start", { sessionKey: guardianSessionKey });
+              await verifyCodexGuardianProbe({ client, sessionKey: guardianSessionKey });
+              logCodexLiveStep("guardian-probe:done");
+            }
+            break;
+          } catch (error) {
+            if (isCodexAccountTokenError(error)) {
+              console.error(
+                "SKIP: Codex auth cannot extract accountId from the available token; skipping live Codex harness assertions.",
+              );
               return;
             }
-          }
-
-          const unsubscribeDebugEvents = await subscribeCodexLiveDebugEvents(sessionKey);
-          const firstNonce = randomBytes(3).toString("hex").toUpperCase();
-          try {
-            const firstToken = `CODEX-HARNESS-${firstNonce}`;
-            const firstText = await requestAgentText({
-              client,
-              sessionKey,
-              expectedToken: firstToken,
-              message: `Reply with exactly ${firstToken} and nothing else.`,
-            });
-            expect(firstText).toContain(firstToken);
-            logCodexLiveStep("first-turn", { firstText });
-
-            const secondNonce = randomBytes(3).toString("hex").toUpperCase();
-            const secondToken = `CODEX-HARNESS-RESUME-${secondNonce}`;
-            const secondText = await requestAgentText({
-              client,
-              sessionKey,
-              expectedToken: secondToken,
-              message: `Reply with exactly ${secondToken} and nothing else. Do not repeat ${firstToken}.`,
-            });
-            expect(secondText).toContain(secondToken);
-            logCodexLiveStep("second-turn", { secondText });
-
-            if (CODEX_HARNESS_CODE_MODE_ONLY) {
-              logCodexLiveStep("code-mode-only-tool-probe:start", { sessionKey });
-              await verifyCodexCodeModeOnlyDynamicToolProbe({ client, sessionKey });
-              logCodexLiveStep("code-mode-only-tool-probe:done");
+            if (
+              attempt < maxAttempts &&
+              !CODEX_HARNESS_SUBAGENT_PROBE &&
+              isRetryableCodexHarnessLiveError(error)
+            ) {
+              logCodexLiveStep("retryable-timeout:retry", {
+                attempt,
+                maxAttempts,
+                message: error instanceof Error ? error.message : String(error),
+              });
+              gatewayEvents.length = 0;
+              await delay(2_000);
+              continue;
+            } else {
+              throw error;
             }
-          } finally {
-            unsubscribeDebugEvents();
-          }
-
-          const statusText = await requestCodexCommandText({
-            client,
-            events: gatewayEvents,
-            sessionKey,
-            command: "/codex status",
-            expectedText: [...EXPECTED_CODEX_STATUS_COMMAND_TEXT],
-            isExpectedText: isExpectedCodexStatusCommandText,
-          });
-          logCodexLiveStep("codex-status-command", { statusText });
-
-          const modelsText = await requestCodexCommandText({
-            client,
-            events: gatewayEvents,
-            sessionKey,
-            command: "/codex models",
-            expectedText: [...EXPECTED_CODEX_MODELS_COMMAND_TEXT],
-            isExpectedText: isExpectedCodexModelsCommandText,
-          });
-          logCodexLiveStep("codex-models-command", { modelsText });
-
-          if (CODEX_HARNESS_CHAT_IMAGE_PROBE) {
-            logCodexLiveStep("chat-image-probe:start", { sessionKey });
-            await verifyCodexChatImageProbe({ client, sessionKey });
-            logCodexLiveStep("chat-image-probe:done");
-          }
-
-          if (CODEX_HARNESS_IMAGE_PROBE) {
-            logCodexLiveStep("image-probe:start", { sessionKey });
-            await verifyCodexImageProbe({ client, sessionKey });
-            logCodexLiveStep("image-probe:done");
-          }
-
-          if (CODEX_HARNESS_MCP_PROBE) {
-            logCodexLiveStep("cron-mcp-probe:start", { sessionKey });
-            await verifyCodexCronMcpProbe({
-              client,
-              sessionKey,
-              port,
-              token,
-              env: process.env,
-            });
-            logCodexLiveStep("cron-mcp-probe:done");
-          }
-
-          if (CODEX_HARNESS_GUARDIAN_PROBE) {
-            const guardianSessionKey = "agent:dev:live-codex-harness-guardian";
-            logCodexLiveStep("guardian-probe:start", { sessionKey: guardianSessionKey });
-            await verifyCodexGuardianProbe({ client, sessionKey: guardianSessionKey });
-            logCodexLiveStep("guardian-probe:done");
-          }
-        } catch (error) {
-          if (isCodexAccountTokenError(error)) {
-            console.error(
-              "SKIP: Codex auth cannot extract accountId from the available token; skipping live Codex harness assertions.",
-            );
-          } else if (
-            shouldSkipRetryableCodexHarnessLiveError(error, {
-              subagentProbe: CODEX_HARNESS_SUBAGENT_PROBE,
-            })
-          ) {
-            console.error(
-              `SKIP: Codex harness live backend hit a retryable gateway timeout; skipping live Codex harness assertions. ${error instanceof Error ? error.message : String(error)}`,
-            );
-          } else {
-            throw error;
           }
         }
       } finally {

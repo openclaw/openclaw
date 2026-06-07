@@ -2,7 +2,6 @@
 set -euo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
-source scripts/lib/docker-e2e-logs.sh
 
 KITCHEN_SINK_SWEEP_SOURCE_ONLY="${KITCHEN_SINK_SWEEP_SOURCE_ONLY:-0}"
 if [[ -z "${OPENCLAW_ENTRY:-}" && "$KITCHEN_SINK_SWEEP_SOURCE_ONLY" != "1" ]]; then
@@ -41,7 +40,13 @@ fi
 run_kitchen_sink_openclaw_logged() {
   local label="$1"
   shift
-  run_logged_print "$label" openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"
+  local safe_label="${label//[^[:alnum:]._-]/_}"
+  local log_file="${KITCHEN_SINK_TMP_DIR}/${safe_label}.log"
+  if ! openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$log_file" 2>&1; then
+    cat "$log_file"
+    return 1
+  fi
+  cat "$log_file"
 }
 
 run_kitchen_sink_openclaw_capture() {
@@ -53,7 +58,8 @@ run_kitchen_sink_openclaw_capture() {
 run_expect_failure() {
   local label="$1"
   shift
-  local output_file="${KITCHEN_SINK_TMP_DIR}/kitchen-sink-expected-failure-${label}.txt"
+  local safe_label="${label//[^[:alnum:]._-]/_}"
+  local output_file="${KITCHEN_SINK_TMP_DIR}/kitchen-sink-expected-failure-${safe_label}.log"
   set +e
   "$@" >"$output_file" 2>&1
   local status="$?"

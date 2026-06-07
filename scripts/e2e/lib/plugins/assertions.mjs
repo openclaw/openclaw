@@ -115,8 +115,8 @@ function pathsEqual(left, right) {
 }
 
 function getInstallRecords() {
-  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-  const config = fs.existsSync(configPath) ? readJson(configPath) : {};
+  const configPath = openClawConfigPath();
+  const config = readOpenClawConfig();
   const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
   const index = readPluginInstallIndex({
     configPath,
@@ -128,9 +128,23 @@ function getInstallRecords() {
   return index.installRecords ?? {};
 }
 
+function openClawConfigPath() {
+  return path.join(process.env.HOME, ".openclaw", "openclaw.json");
+}
+
 function readOpenClawConfig() {
-  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-  return fs.existsSync(configPath) ? readJson(configPath) : {};
+  const configPath = openClawConfigPath();
+  return fs.existsSync(configPath) ? readRequiredOpenClawConfig() : {};
+}
+
+function readRequiredOpenClawConfig() {
+  const configPath = openClawConfigPath();
+  try {
+    return readJson(configPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`failed to read OpenClaw config ${configPath}: ${message}`, { cause: error });
+  }
 }
 
 function assertPluginRemoved(params) {

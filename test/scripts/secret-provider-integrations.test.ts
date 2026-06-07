@@ -237,6 +237,43 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "fails mandatory commands that exit by signal",
+    async () => {
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=signal-${Date.now()}`
+      );
+
+      await expect(
+        proof.runCommand(process.execPath, [
+          "--input-type=module",
+          "--eval",
+          "process.kill(process.pid, 'SIGTERM');",
+        ]),
+      ).rejects.toThrow("command terminated by signal (SIGTERM)");
+    },
+  );
+
+  it.each([
+    ["OPENCLAW_SECRET_PROOF_COMMAND_MS", "150ms"],
+    ["OPENCLAW_SECRET_PROOF_READY_MS", "0"],
+    ["OPENCLAW_SECRET_PROOF_OUTPUT_BYTES", "4mb"],
+  ])("rejects malformed proof env limit %s=%s", async (name, value) => {
+    const previous = process.env[name];
+    process.env[name] = value;
+    try {
+      await expect(
+        import(`${pathToFileURL(proofScriptPath).href}?case=env-${name}-${Date.now()}`),
+      ).rejects.toThrow(`${name} must be a positive integer`);
+    } finally {
+      if (previous === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = previous;
+      }
+    }
+  });
+
   it("fails when proof temp cleanup cannot remove the root", async () => {
     const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=cleanup-${Date.now()}`);
     const rmSync = vi.spyOn(fs, "rmSync").mockImplementation(() => {

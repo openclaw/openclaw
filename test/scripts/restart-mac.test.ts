@@ -36,6 +36,51 @@ function runGatewayPortCheck(fakeLsof: string) {
   );
 }
 
+function runCleanupFunction(fakePgrep: string) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
+  tempRoots.push(root);
+
+  const binDir = join(root, "bin");
+  mkdirSync(binDir);
+  for (const [name, body] of [
+    ["pgrep", fakePgrep],
+    ["pkill", "#!/usr/bin/env bash\nexit 0\n"],
+    ["sleep", "#!/usr/bin/env bash\nexit 0\n"],
+  ] as const) {
+    const toolPath = join(binDir, name);
+    writeFileSync(toolPath, body);
+    chmodSync(toolPath, 0o755);
+  }
+
+  const script = readFileSync(restartScriptPath, "utf8");
+  const cleanupFunction = script.slice(
+    script.indexOf("kill_all_openclaw()"),
+    script.indexOf("stop_launch_agent()"),
+  );
+  const harnessPath = join(root, "cleanup-harness.sh");
+  writeFileSync(
+    harnessPath,
+    [
+      "#!/usr/bin/env bash",
+      cleanupFunction,
+      'APP_PROCESS_PATTERN="OpenClaw.app/Contents/MacOS/OpenClaw"',
+      'DEBUG_PROCESS_PATTERN="/worktree/apps/macos/.build/debug/OpenClaw"',
+      'LOCAL_PROCESS_PATTERN="/worktree/apps/macos/.build-local/debug/OpenClaw"',
+      'RELEASE_PROCESS_PATTERN="/worktree/apps/macos/.build/release/OpenClaw"',
+      "kill_all_openclaw",
+    ].join("\n"),
+  );
+  chmodSync(harnessPath, 0o755);
+
+  return spawnSync("bash", [harnessPath], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    },
+  });
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
@@ -97,5 +142,46 @@ describe("scripts/restart-mac.sh", () => {
     expect(chooseBlock.indexOf("${ROOT_DIR}/dist/OpenClaw.app")).toBeLessThan(
       chooseBlock.indexOf("/Applications/OpenClaw.app"),
     );
+  });
+
+  it("keeps restart cleanup scoped to known OpenClaw app and build paths", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+    const cleanupBlock = script.slice(
+      script.indexOf("kill_all_openclaw()"),
+      script.indexOf("stop_launch_agent()"),
+    );
+
+    expect(cleanupBlock).toContain('pkill -f "${APP_PROCESS_PATTERN}"');
+    expect(cleanupBlock).toContain('pkill -f "${DEBUG_PROCESS_PATTERN}"');
+    expect(cleanupBlock).toContain('pkill -f "${LOCAL_PROCESS_PATTERN}"');
+    expect(cleanupBlock).toContain('pkill -f "${RELEASE_PROCESS_PATTERN}"');
+    expect(cleanupBlock).not.toContain('pkill -x "OpenClaw"');
+    expect(cleanupBlock).not.toContain('pgrep -x "OpenClaw"');
+  });
+
+  it("stops launchd supervision before killing app processes", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+    const stopIndex = script.indexOf("stop_launch_agent\nlog");
+    const killIndex = script.indexOf("if ! kill_all_openclaw");
+
+    expect(stopIndex).toBeGreaterThan(-1);
+    expect(killIndex).toBeGreaterThan(-1);
+    expect(stopIndex).toBeLessThan(killIndex);
+  });
+
+  it("fails restart cleanup when scoped processes survive every kill attempt", () => {
+    const result = runCleanupFunction("#!/usr/bin/env bash\nexit 0\n");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
+
+  it("passes restart cleanup when scoped processes are gone", () => {
+    const result = runCleanupFunction("#!/usr/bin/env bash\nexit 1\n");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
   });
 });

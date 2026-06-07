@@ -332,6 +332,67 @@ export function buildLiveShardPnpmArgs(files, passthroughArgs) {
 }
 
 /**
+ * Builds the Vitest JSON report path used to prove that a live shard ran tests.
+ */
+export function buildLiveShardReportPath(shard, env = process.env) {
+  const reportDir = env.OPENCLAW_LIVE_SHARD_REPORT_DIR || ".artifacts/live-shards";
+  return path.join(reportDir, `${shard}.vitest.json`);
+}
+
+/**
+ * Adds reporters needed for both operator logs and machine-readable evidence.
+ */
+export function addLiveShardReportArgs(passthroughArgs, reportPath) {
+  return [
+    ...passthroughArgs,
+    "--reporter=default",
+    "--reporter=json",
+    `--outputFile.json=${reportPath}`,
+  ];
+}
+
+function readNonNegativeInt(value, label) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Vitest report ${label} must be a non-negative integer.`);
+  }
+  return value;
+}
+
+/**
+ * Validates a Vitest JSON payload for live-shard proof.
+ */
+export function validateLiveShardReportPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return { ok: false, reason: "Vitest report is not an object." };
+  }
+  let passed;
+  try {
+    passed = readNonNegativeInt(payload.numPassedTests, "numPassedTests");
+    readNonNegativeInt(payload.numTotalTests, "numTotalTests");
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
+  if (passed < 1) {
+    return { ok: false, reason: "Vitest report has no passing live tests." };
+  }
+  return { ok: true };
+}
+
+/**
+ * Reads and validates the live-shard Vitest JSON report.
+ */
+export function validateLiveShardReport(reportPath) {
+  let payload;
+  try {
+    payload = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, reason: `Unable to read Vitest report ${reportPath}: ${message}` };
+  }
+  return validateLiveShardReportPayload(payload);
+}
+
+/**
  * Builds spawn options for the live-shard Vitest child.
  */
 export function buildLiveShardSpawnParams(env = process.env, platform = process.platform) {
@@ -386,8 +447,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
 
   console.log(`[test:live:shard] ${shard}: ${files.length} file(s)`);
+  const reportPath = buildLiveShardReportPath(shard, process.env);
+  fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   const child = spawnPnpmRunner({
-    pnpmArgs: buildLiveShardPnpmArgs(files, passthroughArgs),
+    pnpmArgs: buildLiveShardPnpmArgs(files, addLiveShardReportArgs(passthroughArgs, reportPath)),
     ...buildLiveShardSpawnParams(process.env),
   });
   let forwardedSignal = null;
@@ -406,6 +469,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (forwardedSignal) {
       process.kill(process.pid, forwardedSignal);
       return;
+    }
+    if ((code ?? 1) === 0) {
+      const validation = validateLiveShardReport(reportPath);
+      if (!validation.ok) {
+        process.stderr.write(`[test:live:shard] ${validation.reason}\n`);
+        process.exit(1);
+      }
     }
     process.exit(code ?? 1);
   });

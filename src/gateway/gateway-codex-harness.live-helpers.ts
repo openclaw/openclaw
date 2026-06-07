@@ -282,18 +282,10 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
   );
 }
 
-/** Identifies transient live harness errors that are worth retrying. */
+/** Identifies transient live harness errors that are worth retrying, not skipping. */
 export function isRetryableCodexHarnessLiveError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
   return error.message.includes("gateway request timeout for sessions.list");
-}
-
-/** Skips retryable live errors only when the subagent probe is not under test. */
-export function shouldSkipRetryableCodexHarnessLiveError(
-  error: unknown,
-  params: { subagentProbe: boolean },
-): boolean {
-  return isRetryableCodexHarnessLiveError(error) && !params.subagentProbe;
 }
