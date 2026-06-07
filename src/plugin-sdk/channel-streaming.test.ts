@@ -479,7 +479,19 @@ describe("channel-streaming", () => {
         },
         { commandText: "status" },
       ),
-    ).toBe("🛠️ Exec");
+    ).toBe("🛠️ Running command");
+    expect(
+      formatChannelProgressDraftLine(
+        {
+          event: "item",
+          itemKind: "command",
+          name: "exec",
+          status: "failed",
+          progressText: "raw command output",
+        },
+        { commandText: "status" },
+      ),
+    ).toBe("🛠️ Command finished");
     expect(
       formatChannelProgressDraftLine(
         {
@@ -500,7 +512,7 @@ describe("channel-streaming", () => {
           progressText: "raw command output",
         },
       ),
-    ).toBe("🛠️ Exec");
+    ).toBe("🛠️ Running command");
     expect(
       formatChannelProgressDraftLine({
         event: "item",

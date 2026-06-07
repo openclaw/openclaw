@@ -3126,21 +3126,24 @@ describe("matrix monitor handler draft streaming", () => {
       itemId: "cmd-1",
       kind: "command",
       name: "exec",
+      status: "failed",
       progressText: "gh pr edit 89920 --body private-details",
     });
     await opts.onItemEvent?.({
       itemId: "cmd-1",
       kind: "command",
       name: "exec",
+      status: "failed",
       progressText: "gh pr edit 89920 --body private-details",
     });
 
     await vi.waitFor(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
-    expect(singleTextMessageBody()).toContain("🛠️ Exec");
+    expect(singleTextMessageBody()).toContain("🛠️ Command finished");
     expect(singleTextMessageBody()).not.toContain("gh pr edit");
     expect(singleTextMessageBody()).not.toContain("private-details");
+    expect(singleTextMessageBody()).not.toContain("failed");
     await finish();
   });
 
