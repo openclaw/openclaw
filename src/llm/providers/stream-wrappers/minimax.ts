@@ -37,6 +37,15 @@ function isMinimaxModelRequiringThinking(model: { id?: unknown }): boolean {
   return /^MiniMax-M3(\b|[-.])/i.test(modelId);
 }
 
+function isDisabledThinkingPayload(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).type === "disabled"
+  );
+}
+
 /** @deprecated MiniMax provider-owned stream helper; do not use from third-party plugins. */
 export function createMinimaxFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
@@ -71,10 +80,10 @@ export function createMinimaxFastModeWrapper(
  * during streaming.
  *
  * Skipped for MiniMax-M3 and M3.x, which emit proper Anthropic-shape thinking
- * blocks and requires thinking enabled to produce any visible content.
- * Disabling thinking on M3 causes the model to return an empty content
- * array with `stop_reason: "end_turn"` and 1 output token. See
- * {@link isMinimaxModelRequiringThinking}.
+ * blocks and require thinking enabled to produce any visible content.
+ * The Anthropic transport builds `thinking: { type: "disabled" }` for missing
+ * or off reasoning levels, so M3 removes that implicit disabled payload instead.
+ * See {@link isMinimaxModelRequiringThinking}.
  */
 /** @deprecated MiniMax provider-owned stream helper; do not use from third-party plugins. */
 export function createMinimaxThinkingDisabledWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
@@ -83,9 +92,7 @@ export function createMinimaxThinkingDisabledWrapper(baseStreamFn: StreamFn | un
     if (!isMinimaxAnthropicMessagesModel(model)) {
       return underlying(model, context, options);
     }
-    if (isMinimaxModelRequiringThinking(model)) {
-      return underlying(model, context, options);
-    }
+    const requiresThinking = isMinimaxModelRequiringThinking(model);
 
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
@@ -93,9 +100,12 @@ export function createMinimaxThinkingDisabledWrapper(baseStreamFn: StreamFn | un
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
-          // Only inject if thinking is not already explicitly set.
-          // This preserves unknown intentional override from other wrappers.
-          if (payloadObj.thinking === undefined) {
+          if (requiresThinking && isDisabledThinkingPayload(payloadObj.thinking)) {
+            delete payloadObj.thinking;
+          }
+          // M2.x only needs the shim when no earlier wrapper set thinking.
+          // Downstream payload hooks still run after this wrapper.
+          if (!requiresThinking && payloadObj.thinking === undefined) {
             payloadObj.thinking = { type: "disabled" };
           }
         }

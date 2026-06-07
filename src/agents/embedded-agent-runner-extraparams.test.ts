@@ -719,6 +719,64 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
+  it("removes implicit disabled thinking for MiniMax-M3 anthropic-messages payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "disabled" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toStrictEqual([{}]);
+  });
+
+  it("preserves downstream explicit MiniMax-M3 thinking overrides", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "disabled" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      onPayload: (payload) => {
+        (payload as Record<string, unknown>).thinking = { type: "disabled" };
+      },
+    });
+
+    expect(payloads).toStrictEqual([
+      {
+        thinking: { type: "disabled" },
+      },
+    ]);
+  });
+
   it("fills DeepSeek V4 reasoning_content for unowned OpenAI-compatible proxy models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "opencode",
