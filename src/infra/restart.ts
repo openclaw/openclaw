@@ -810,8 +810,12 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       );
       clearActiveDeferralPolls();
       pendingRestartReason = reason;
-      pendingRestartEmitHooks = opts?.emitHooks;
-      pendingRestartSessionKey = opts?.sessionKey;
+      // Hookless forced restarts may bypass stale unowned deferral hooks, but a
+      // session-owned hook is an accepted continuation slot and must still emit.
+      if (opts?.emitHooks || pendingRestartSessionKey === undefined) {
+        pendingRestartEmitHooks = opts?.emitHooks;
+        pendingRestartSessionKey = opts?.sessionKey;
+      }
       void emitPreparedGatewayRestart(undefined, reason);
       return {
         ok: true,
