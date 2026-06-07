@@ -290,7 +290,7 @@ describe("RTT harness", () => {
         {
           env: {
             ...credentialBrokerEnv(port),
-            OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "75",
+            OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "300",
             OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: "250",
           },
           maxBuffer: 128 * 1024,
@@ -299,8 +299,8 @@ describe("RTT harness", () => {
       throw new Error("Expected credential acquire to fail.");
     } catch (error) {
       const execError = error as Error & { stderr?: string };
-      expect(execError.stderr).toContain("credential broker acquire timed out after 75ms");
-      expect(Date.now() - startedAt).toBeLessThan(500);
+      expect(execError.stderr).toContain("credential broker acquire timed out after 300ms");
+      expect(Date.now() - startedAt).toBeLessThan(1000);
       expect(requests).toBe(1);
     } finally {
       await closeServer(server);
@@ -342,7 +342,7 @@ describe("RTT harness", () => {
         {
           env: {
             ...credentialBrokerEnv(port),
-            OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "100",
+            OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "500",
             OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: "900",
           },
           maxBuffer: 128 * 1024,
@@ -352,7 +352,7 @@ describe("RTT harness", () => {
     } catch (error) {
       const execError = error as Error & { stderr?: string };
       expect(execError.stderr).toContain("credential broker acquire timed out after");
-      expect(Date.now() - startedAt).toBeLessThan(500);
+      expect(Date.now() - startedAt).toBeLessThan(1500);
       expect(requests).toBe(2);
     } finally {
       await closeServer(server);

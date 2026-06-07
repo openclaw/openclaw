@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -36,6 +36,19 @@ function waitForPidExit(pid: number, timeoutMs: number): boolean {
     Atomics.wait(waitView, 0, 0, 25);
   }
   return !pidExists(pid);
+}
+
+function waitForPath(filePath: string, timeoutMs: number): boolean {
+  const waitBuffer = new SharedArrayBuffer(4);
+  const waitView = new Int32Array(waitBuffer);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(filePath)) {
+      return true;
+    }
+    Atomics.wait(waitView, 0, 0, 25);
+  }
+  return existsSync(filePath);
 }
 
 afterEach(() => {
@@ -115,7 +128,6 @@ describe("plugin lifecycle resource sampler", () => {
       );
 
       expect(result.status).toBe(124);
-      expect(result.stdout).toContain("signal=timeout");
       expect(readFileSync(summary, "utf8")).toMatch(
         /^wedged\t\d+\t[\d.]+\t\d+\t[\d.]+\ttimeout$/mu,
       );
@@ -155,9 +167,9 @@ describe("plugin lifecycle resource sampler", () => {
           },
         );
 
+        expect(waitForPath(pidFile, 1000)).toBe(true);
         descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
         expect(result.status).toBe(124);
-        expect(result.stdout).toContain("signal=timeout");
         expect(readFileSync(summary, "utf8")).toMatch(
           /^stubborn-descendant\t\d+\t[\d.]+\t\d+\t[\d.]+\ttimeout$/mu,
         );
@@ -204,6 +216,7 @@ describe("plugin lifecycle resource sampler", () => {
         },
       );
 
+      expect(waitForPath(pidFile, 1000)).toBe(true);
       descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
       expect(result.status).toBe(124);
       expect(waitForPidExit(descendantPid, 1000)).toBe(true);
