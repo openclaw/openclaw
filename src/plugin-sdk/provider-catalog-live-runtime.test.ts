@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
+import { NON_ENV_SECRETREF_MARKER } from "./provider-auth-runtime.js";
 import {
   buildLiveModelProviderConfig,
   clearLiveCatalogCacheForTests,
@@ -75,6 +76,34 @@ describe("provider-catalog-live-runtime", () => {
     expect(headers).toBeInstanceOf(Headers);
     expect((headers as Headers).get("authorization")).toBe("Bearer resolved-provider-key");
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send non-secret SecretRef markers as live catalog bearer tokens", async () => {
+    const { fetchGuard, fetchGuardMock } = buildFetchGuard({ data: [] });
+    const buildRequestHeaders = vi.fn(({ apiKey, discoveryApiKey }) => ({
+      Accept: "application/json",
+      ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
+      ...(apiKey ? { "X-Api-Key": apiKey } : {}),
+    }));
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        apiKey: NON_ENV_SECRETREF_MARKER,
+        fetchGuard,
+        buildRequestHeaders,
+      }),
+    ).resolves.toEqual([]);
+
+    expect(buildRequestHeaders).toHaveBeenCalledWith({
+      apiKey: undefined,
+      discoveryApiKey: undefined,
+    });
+    const headers = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
+    expect(headers).toBeInstanceOf(Headers);
+    expect((headers as Headers).get("authorization")).toBeNull();
+    expect((headers as Headers).get("x-api-key")).toBeNull();
   });
 
   it("supports top-level array bodies and custom row readers", async () => {

@@ -1,3 +1,4 @@
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import {
   clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
@@ -87,8 +88,25 @@ function readDefaultLiveModelId(row: unknown): string | undefined {
   return modelId || undefined;
 }
 
+function normalizeLiveModelCatalogRequestApiKey(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || isNonSecretApiKeyMarker(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function selectLiveModelCatalogRequestApiKey(
+  ctx: LiveModelCatalogHeaderContext,
+): string | undefined {
+  return (
+    normalizeLiveModelCatalogRequestApiKey(ctx.discoveryApiKey) ??
+    normalizeLiveModelCatalogRequestApiKey(ctx.apiKey)
+  );
+}
+
 function buildDefaultLiveModelCatalogHeaders(ctx: LiveModelCatalogHeaderContext): HeadersInit {
-  const requestApiKey = ctx.discoveryApiKey ?? ctx.apiKey;
+  const requestApiKey = selectLiveModelCatalogRequestApiKey(ctx);
   return {
     Accept: "application/json",
     ...(requestApiKey ? { Authorization: `Bearer ${requestApiKey}` } : {}),
@@ -96,10 +114,11 @@ function buildDefaultLiveModelCatalogHeaders(ctx: LiveModelCatalogHeaderContext)
 }
 
 function buildHeaders(params: FetchLiveProviderModelIdsParams): Headers {
+  const requestApiKey = selectLiveModelCatalogRequestApiKey(params);
   const headers = new Headers(
     (params.buildRequestHeaders ?? buildDefaultLiveModelCatalogHeaders)({
-      apiKey: params.apiKey,
-      discoveryApiKey: params.discoveryApiKey,
+      apiKey: normalizeLiveModelCatalogRequestApiKey(params.apiKey),
+      discoveryApiKey: requestApiKey,
     }),
   );
   if (!headers.has("accept")) {
@@ -134,6 +153,10 @@ export async function fetchLiveProviderModelRows(
   }
 }
 
+function liveModelCatalogAuthCacheKey(params: LiveModelCatalogHeaderContext): string | undefined {
+  return selectLiveModelCatalogRequestApiKey(params);
+}
+
 export async function getCachedLiveProviderModelRows(
   params: CachedLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
@@ -142,7 +165,7 @@ export async function getCachedLiveProviderModelRows(
       params.providerId,
       "model-rows",
       params.endpoint,
-      params.discoveryApiKey ?? params.apiKey,
+      liveModelCatalogAuthCacheKey(params),
     ],
     ttlMs: params.ttlMs,
     load: async () => await fetchLiveProviderModelRows(params),
@@ -188,7 +211,7 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
         params.providerId,
         "models",
         params.endpoint,
-        params.discoveryApiKey ?? params.apiKey,
+        liveModelCatalogAuthCacheKey(params),
       ],
       ttlMs: params.ttlMs,
       load: async () => await fetchLiveProviderModelIds(params),
