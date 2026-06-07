@@ -48,6 +48,7 @@ const createMockConfig = () => ({
   },
   tools: {
     agentToAgent: { enabled: false },
+    sessionStatus: { details: "compact" },
   },
 });
 
@@ -472,6 +473,34 @@ describe("session_status tool", () => {
     expect(details.statusTextChars).toBe(resultText(result).length);
   });
 
+  it("preserves full session_status details by default for compatibility", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      tools: {
+        agentToAgent: { enabled: false },
+      },
+    };
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-default-full-details", {});
+    const details = result.details as {
+      statusText?: string;
+      statusTextChars?: number;
+      routeContext?: unknown;
+    };
+    expect(details.statusText).toBe(resultText(result));
+    expect(details.statusText).toContain("OpenClaw");
+    expect(details.statusTextChars).toBeUndefined();
+    expect(details.routeContext).toBeUndefined();
+  });
+
   it("enables transcript usage fallback for session_status", async () => {
     resetSessionStore({
       main: {
@@ -688,7 +717,7 @@ describe("session_status tool", () => {
     expect(details.statusText).toBeUndefined();
   });
 
-  it("keeps session_status details compact when legacy full details config is present", async () => {
+  it("returns full session_status details when explicitly configured", async () => {
     const sessionKey = "agent:main:discord:channel:1489550370136129537";
     resetSessionStore({
       [sessionKey]: {
@@ -731,19 +760,20 @@ describe("session_status tool", () => {
       deliveryContext?: { channel?: string; to?: string };
     };
 
-    expect(resultText(result)).toContain("OpenClaw");
-    expect(resultText(result)).toContain("Route context:");
-    expect(details.statusText).toBeUndefined();
-    expect(details.statusTextChars).toBe(resultText(result).length);
-    expect(details.routeContext).toEqual({
-      included: true,
-      origin: true,
-      active: true,
-      deliveryContext: true,
+    expect(details.statusText).toContain("OpenClaw");
+    expect(details.statusText).toContain("Route context:");
+    expect(details.statusTextChars).toBeUndefined();
+    expect(details.routeContext).toBeUndefined();
+    expect(details.origin).toEqual({ provider: "discord", accountId: "bot-primary" });
+    expect(details.active).toEqual({
+      channel: "webchat",
+      to: "control-ui-conversation",
     });
-    expect(details.origin).toBeUndefined();
-    expect(details.active).toBeUndefined();
-    expect(details.deliveryContext).toBeUndefined();
+    expect(details.deliveryContext).toEqual({
+      channel: "discord",
+      to: "channel:1489550370136129537",
+      accountId: "bot-primary",
+    });
   });
 
   it("does not report an active route for explicit non-live session lookups", async () => {
@@ -765,7 +795,11 @@ describe("session_status tool", () => {
     });
     mockConfig = {
       ...mockConfig,
-      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: ["*"] } },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+        sessionStatus: { details: "compact" },
+      },
     };
 
     const tool = createSessionStatusTool({

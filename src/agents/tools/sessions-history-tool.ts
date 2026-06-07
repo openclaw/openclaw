@@ -32,10 +32,11 @@ import {
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
   limit: optionalPositiveIntegerSchema(),
+  includeTools: Type.Optional(Type.Boolean()),
 });
 
+const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_WITH_TOOLS_MAX_BYTES = 24 * 1024;
-const SESSIONS_HISTORY_MAX_BYTES = SESSIONS_HISTORY_WITH_TOOLS_MAX_BYTES;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 const SESSIONS_HISTORY_DEFAULT_LIMIT = 10;
 type GatewayCaller = typeof callGateway;
@@ -286,19 +287,25 @@ export function createSessionsHistoryTool(opts?: {
         params: { sessionKey: resolvedKey, limit },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
-      const selectedMessages = stripSessionHistoryToolMessages(rawMessages);
+      const includeTools = Boolean(params.includeTools);
+      const selectedMessages = includeTools
+        ? rawMessages
+        : stripSessionHistoryToolMessages(rawMessages);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
       const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);
+      const maxBytes = includeTools
+        ? SESSIONS_HISTORY_WITH_TOOLS_MAX_BYTES
+        : SESSIONS_HISTORY_MAX_BYTES;
       const cappedMessages = capArrayByJsonBytes(
         sanitizedMessages.map((entry) => entry.message),
-        SESSIONS_HISTORY_MAX_BYTES,
+        maxBytes,
       );
       const droppedMessages = cappedMessages.items.length < selectedMessages.length;
       const hardened = enforceSessionsHistoryHardCap({
         items: cappedMessages.items,
         bytes: cappedMessages.bytes,
-        maxBytes: SESSIONS_HISTORY_MAX_BYTES,
+        maxBytes,
       });
       return jsonResult({
         sessionKey: displayKey,

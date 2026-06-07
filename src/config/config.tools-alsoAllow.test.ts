@@ -55,7 +55,7 @@ describe("config: tools.alsoAllow", () => {
     const res = validateConfigObject({
       tools: {
         sessionStatus: {
-          details: "compact",
+          details: "full",
         },
       },
     });
@@ -67,7 +67,7 @@ describe("config: tools.alsoAllow", () => {
     const res = validateConfigObject({
       tools: {
         sessionStatus: {
-          details: "full",
+          details: "verbose",
         },
       },
     });

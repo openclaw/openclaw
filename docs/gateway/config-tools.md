@@ -407,16 +407,15 @@ Controls model-facing details returned by the `session_status` tool.
 {
   tools: {
     sessionStatus: {
-      details: "compact", // "compact" | "full"
+      details: "full", // "compact" | "full"
     },
   },
 }
 ```
 
-- `compact` (default): keeps full human-readable status text in tool `content`
-  while returning compact metadata in structured `details`.
-- `full`: preserves legacy `details.statusText` and route metadata for explicit
-  debugging.
+- `full` (default): preserves legacy `details.statusText` and route metadata.
+- `compact`: keeps full human-readable status text in tool `content` while
+  returning compact metadata in structured `details`.
 
 ### `tools.sessions_spawn`
 

@@ -289,7 +289,7 @@ describe("sessions tools", () => {
     };
 
     expect(schemaProp("sessions_history", "limit").type).toBe("integer");
-    expect(hasSchemaProp("sessions_history", "includeTools")).toBe(false);
+    expect(schemaProp("sessions_history", "includeTools").type).toBe("boolean");
     expect(schemaProp("sessions_list", "limit").type).toBe("integer");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("integer");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("integer");
@@ -752,7 +752,7 @@ describe("sessions tools", () => {
       throw new Error("missing sessions_history tool");
     }
 
-    const result = await tool.execute("call3", { sessionKey: "main", includeTools: true });
+    const result = await tool.execute("call3", { sessionKey: "main" });
     const details = result.details as { messages?: unknown[] };
     expect(details.messages).toHaveLength(3);
     expect(details.messages).not.toContainEqual(expect.objectContaining({ role: "toolResult" }));
@@ -767,6 +767,54 @@ describe("sessions tools", () => {
     expect(details.messages).toContainEqual(
       expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
     );
+  });
+
+  it("sessions_history keeps includeTools compatible but bounded", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "toolCall", name: "session_status", arguments: {} }],
+              usage: { input: 1, output: 1 },
+            },
+            {
+              role: "toolResult",
+              content: "tool-output: " + "x".repeat(40_000),
+              details: { giant: "y".repeat(40_000) },
+            },
+            { role: "assistant", content: [{ type: "text", text: "ok" }] },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-history-include-tools-compatible", {
+      sessionKey: "main",
+      includeTools: true,
+    });
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+      truncated?: boolean;
+      contentTruncated?: boolean;
+      bytes?: number;
+    };
+    expect(details.truncated).toBe(true);
+    expect(details.contentTruncated).toBe(true);
+    expect(typeof details.bytes).toBe("number");
+    expect((details.bytes ?? 0) <= 24 * 1024).toBe(true);
+    expect(details.messages).toContainEqual(expect.objectContaining({ role: "toolResult" }));
+    expect(JSON.stringify(details.messages)).toContain("toolCall");
+    const toolResult = details.messages?.find((message) => message.role === "toolResult");
+    expect(toolResult?.details).toBeUndefined();
   });
 
   it("sessions_history requests the last 10 turns by default", async () => {
@@ -871,7 +919,7 @@ describe("sessions tools", () => {
     expect(details.contentTruncated).toBe(true);
     expect(details.contentRedacted).toBe(false);
     expect(typeof details.bytes).toBe("number");
-    expect((details.bytes ?? 0) <= 24 * 1024).toBe(true);
+    expect((details.bytes ?? 0) <= 80 * 1024).toBe(true);
     expect(details.messages && details.messages.length > 0).toBe(true);
 
     const first = details.messages?.[0] as
@@ -933,7 +981,7 @@ describe("sessions tools", () => {
     expect(details.contentTruncated).toBe(false);
     expect(details.contentRedacted).toBe(false);
     expect(typeof details.bytes).toBe("number");
-    expect((details.bytes ?? 0) <= 24 * 1024).toBe(true);
+    expect((details.bytes ?? 0) <= 80 * 1024).toBe(true);
     expect(details.messages).toHaveLength(1);
     expect(details.messages?.[0]?.content).toContain(
       "[sessions_history omitted: message too large]",

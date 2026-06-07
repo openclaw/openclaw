@@ -22,7 +22,8 @@ export function describeSessionsListTool(): string {
 /** Describes the sessions_history tool for model-facing instructions. */
 export function describeSessionsHistoryTool(): string {
   return [
-    "Fetch the last 10 sanitized non-tool turns for a visible session.",
+    "Fetch the last 10 sanitized turns for a visible session.",
+    "`includeTools` is supported for bounded recovery/debug replay; omit for non-tool recall.",
     "Use only after session reset/recovery when required context is missing.",
   ].join(" ");
 }

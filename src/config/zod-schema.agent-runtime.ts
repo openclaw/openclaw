@@ -1109,7 +1109,7 @@ export const ToolsSchema = z
       .optional(),
     sessionStatus: z
       .object({
-        details: z.enum(["compact"]).optional(),
+        details: z.enum(["compact", "full"]).optional(),
       })
       .strict()
       .optional(),

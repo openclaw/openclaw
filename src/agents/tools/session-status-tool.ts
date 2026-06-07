@@ -230,6 +230,7 @@ type SessionStatusRouteSummary = {
   active: boolean;
   deliveryContext: boolean;
 };
+type SessionStatusDetailsMode = "compact" | "full";
 
 const INTERNAL_SESSION_KEY_ORIGIN_PREFIXES = new Set(["main", "cron", "subagent", "acp"]);
 
@@ -355,6 +356,10 @@ function summarizeSessionStatusRoute(
     active: Boolean(details.active),
     deliveryContext: Boolean(details.deliveryContext),
   };
+}
+
+function resolveSessionStatusDetailsMode(cfg: OpenClawConfig): SessionStatusDetailsMode {
+  return cfg.tools?.sessionStatus?.details === "compact" ? "compact" : "full";
 }
 
 function resolveActiveStatusModelIdentity(params: {
@@ -954,6 +959,7 @@ export function createSessionStatusTool(opts?: {
       });
       const routeContextText = formatSessionStatusRouteContext(routeDetails);
       const routeSummary = summarizeSessionStatusRoute(routeDetails);
+      const detailsMode = resolveSessionStatusDetailsMode(cfg);
       const visibleStatusText = routeContextText
         ? `${fullStatusText}
 
@@ -987,8 +993,18 @@ ${routeContextText}`
         content: [{ type: "text", text: visibleStatusText }],
         details: {
           ...detailsBase,
-          statusTextChars: visibleStatusText.length,
-          routeContext: routeSummary,
+          ...(detailsMode === "full"
+            ? {
+                statusText: visibleStatusText,
+                ...routeDetails,
+              }
+            : {}),
+          ...(detailsMode === "compact"
+            ? {
+                statusTextChars: visibleStatusText.length,
+                routeContext: routeSummary,
+              }
+            : {}),
         },
       };
     },

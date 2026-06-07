@@ -89,12 +89,14 @@ describe("tool display details", () => {
         args: {
           sessionKey: "agent:main:main",
           limit: 20,
+          includeTools: true,
         },
       }),
     );
 
     expect(detail).toContain("session agent:main:main");
     expect(detail).toContain("limit 20");
+    expect(detail).toContain("tools true");
   });
 
   it("formats read/write/edit with intent-first file detail", () => {

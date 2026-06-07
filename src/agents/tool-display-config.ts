@@ -334,7 +334,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     sessions_history: {
       emoji: "🧾",
       title: "Session History",
-      detailKeys: ["sessionKey", "limit"],
+      detailKeys: ["sessionKey", "limit", "includeTools"],
     },
     transcripts: {
       emoji: "🎙️",
