@@ -1,7 +1,10 @@
 // Codex tests cover conversation turn collector plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCodexConversationTurnCollector } from "./conversation-turn-collector.js";
+import {
+  CODEX_TURN_INCOMPLETE_RETRY_WARNING,
+  createCodexConversationTurnCollector,
+} from "./conversation-turn-collector.js";
 
 describe("codex conversation turn collector", () => {
   afterEach(() => {
@@ -188,7 +191,7 @@ describe("codex conversation turn collector", () => {
     try {
       const collector = createCodexConversationTurnCollector("thread-1");
       const completion = collector.wait({ timeoutMs: 100 });
-      const assertion = expect(completion).rejects.toThrow("codex app-server bound turn timed out");
+      const assertion = expect(completion).rejects.toThrow(CODEX_TURN_INCOMPLETE_RETRY_WARNING);
       await vi.advanceTimersByTimeAsync(100);
       await assertion;
     } finally {

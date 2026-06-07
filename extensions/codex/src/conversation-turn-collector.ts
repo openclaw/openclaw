@@ -12,6 +12,8 @@ import {
 } from "./app-server/protocol.js";
 
 const MAX_PENDING_NOTIFICATIONS_PER_TURN = 100;
+export const CODEX_TURN_INCOMPLETE_RETRY_WARNING =
+  "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.";
 
 export function createCodexConversationTurnCollector(threadId: string) {
   let turnId: string | undefined;
@@ -142,7 +144,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
         timeout = setTimeout(
           () => {
             completed = true;
-            reject(new Error("codex app-server bound turn timed out"));
+            reject(new Error(CODEX_TURN_INCOMPLETE_RETRY_WARNING));
             clearWaitState();
           },
           resolveTimerTimeoutMs(params.timeoutMs, 100, 100),
