@@ -20,8 +20,10 @@ type QaRuntimeToolFixtureConfig = {
 
 type QaRuntimeToolFixtureRequest = {
   allInputText?: string;
+  plannedToolCallId?: string;
   plannedToolName?: string;
   plannedToolArgs?: unknown;
+  toolOutputCallId?: string;
   toolOutput?: string;
 };
 
@@ -79,6 +81,24 @@ function requestHasToolOutput(request: QaRuntimeToolFixtureRequest) {
   return typeof request.toolOutput === "string" && request.toolOutput.trim().length > 0;
 }
 
+function requestLinksPlannedToolOutput(
+  plannedRequest: QaRuntimeToolFixtureRequest,
+  outputRequest: QaRuntimeToolFixtureRequest,
+) {
+  if (plannedRequest.plannedToolCallId || outputRequest.toolOutputCallId) {
+    return Boolean(
+      plannedRequest.plannedToolCallId &&
+      outputRequest.toolOutputCallId &&
+      plannedRequest.plannedToolCallId === outputRequest.toolOutputCallId,
+    );
+  }
+  return Boolean(
+    plannedRequest === outputRequest &&
+    plannedRequest.plannedToolName &&
+    requestHasToolOutput(outputRequest),
+  );
+}
+
 function findPlannedRequest(params: {
   requests: readonly QaRuntimeToolFixtureRequest[];
   requestCountBefore: number;
@@ -117,12 +137,16 @@ function findExecutedRequest(params: {
     }
     if (request.plannedToolName === params.toolName) {
       plannedRequest ??= request;
-      if (requestHasToolOutput(request)) {
+      if (requestHasToolOutput(request) && requestLinksPlannedToolOutput(request, request)) {
         return { plannedRequest, outputRequest: request };
       }
       continue;
     }
-    if (plannedRequest && requestHasToolOutput(request)) {
+    if (
+      plannedRequest &&
+      requestHasToolOutput(request) &&
+      requestLinksPlannedToolOutput(plannedRequest, request)
+    ) {
       return { plannedRequest, outputRequest: request };
     }
   }

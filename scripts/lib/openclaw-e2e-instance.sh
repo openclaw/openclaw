@@ -365,11 +365,15 @@ openclaw_e2e_wait_mock_openai() {
 }
 openclaw_e2e_start_gateway() { openclaw_e2e_start_tracked_process "$3" node "$1" gateway --port "$2" --bind loopback --allow-unconfigured; }
 openclaw_e2e_exec_gateway() { exec node "$1" gateway --port "$2" --bind "${3:-loopback}" --allow-unconfigured >"$4" 2>&1; }
+openclaw_e2e_gateway_log_port_from_text() {
+  sed -nE 's/.*(127\.0\.0\.1|localhost):([0-9]+).*/\2/p' | tail -n 1
+}
 openclaw_e2e_gateway_log_port() {
-  grep '\[gateway\] ready' "$1" 2>/dev/null | sed -nE 's/.*(127\.0\.0\.1|localhost):([0-9]+).*/\2/p' | tail -n 1
+  grep '\[gateway\] ready' "$1" 2>/dev/null | openclaw_e2e_gateway_log_port_from_text
 }
 openclaw_e2e_wait_gateway_ready() {
   local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" _ saw_ready_log=false
+  local ready_scan_offset=0 ready_scan_carry="" ready_scan_carry_chars=256
   for _ in $(seq 1 "$attempts"); do
     ! kill -0 "$pid" >/dev/null 2>&1 && {
       echo "Gateway exited before becoming ready"
@@ -377,10 +381,37 @@ openclaw_e2e_wait_gateway_ready() {
       tail -n 120 "$log" 2>/dev/null || true
       return 1
     }
-    if grep -q '\[gateway\] ready' "$log" 2>/dev/null; then
-      saw_ready_log=true
+    if [ "$saw_ready_log" != "true" ] && [ -f "$log" ]; then
+      local log_bytes="0"
+      log_bytes="$(wc -c <"$log" 2>/dev/null || echo 0)"
+      log_bytes="${log_bytes//[[:space:]]/}"
+      if ! [[ "$log_bytes" =~ ^[0-9]+$ ]]; then
+        log_bytes="0"
+      fi
+      if [ "$log_bytes" -lt "$ready_scan_offset" ]; then
+        ready_scan_offset=0
+        ready_scan_carry=""
+      fi
+      if [ "$log_bytes" -gt "$ready_scan_offset" ]; then
+        local new_log_text scan_text
+        new_log_text="$(tail -c +"$((ready_scan_offset + 1))" "$log" 2>/dev/null || true)"
+        ready_scan_offset="$log_bytes"
+        scan_text="${ready_scan_carry}${new_log_text}"
+        if [ "${#scan_text}" -gt "$ready_scan_carry_chars" ]; then
+          ready_scan_carry="${scan_text: -$ready_scan_carry_chars}"
+        else
+          ready_scan_carry="$scan_text"
+        fi
+        local ready_log_lines
+        ready_log_lines="$(printf "%s" "$scan_text" | grep '\[gateway\] ready' || true)"
+        if [ -n "$ready_log_lines" ]; then
+          saw_ready_log=true
+          [ -n "$ready_port" ] || ready_port="$(printf "%s" "$ready_log_lines" | openclaw_e2e_gateway_log_port_from_text)"
+        fi
+      fi
+    fi
+    if [ "$saw_ready_log" = "true" ]; then
       [ "$readiness_mode" = "legacy-ready-log-ok" ] && return 0
-      [ -n "$ready_port" ] || ready_port="$(openclaw_e2e_gateway_log_port "$log")"
       [ -n "$ready_port" ] || ready_port="${OPENCLAW_E2E_GATEWAY_READY_PORT:-18789}"
       openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" ok 400 && return 0
     fi

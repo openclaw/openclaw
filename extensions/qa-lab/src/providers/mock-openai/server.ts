@@ -102,8 +102,10 @@ type MockOpenAiRequestSnapshot = {
   model: string;
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
+  plannedToolCallId?: string;
   plannedToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
+  toolOutputCallId?: string;
 };
 
 // Anthropic /v1/messages request/response shapes the mock actually needs.
@@ -377,6 +379,22 @@ function extractFunctionCallOutputText(item: ResponsesInputItem) {
   return stringifyFunctionCallOutput(item.output);
 }
 
+function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
+  if (item.type !== "function_call_output") {
+    return "";
+  }
+  const record = item as {
+    call_id?: unknown;
+    tool_call_id?: unknown;
+    tool_use_id?: unknown;
+  };
+  return (
+    [record.call_id, record.tool_call_id, record.tool_use_id].find(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    ) ?? ""
+  );
+}
+
 function extractToolOutput(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
   for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
@@ -402,6 +420,35 @@ function extractToolOutput(input: ResponsesInputItem[]) {
         return output;
       }
       continue;
+    }
+  }
+  return "";
+}
+
+function extractToolOutputCallId(input: ResponsesInputItem[]) {
+  const lastUserIndex = findLastUserIndex(input);
+  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      return extractFunctionCallOutputCallId(item);
+    }
+  }
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      const laterUserTexts = input
+        .slice(index + 1)
+        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
+        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
+        .filter(Boolean);
+      if (
+        laterUserTexts.length > 0 &&
+        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+      ) {
+        return extractFunctionCallOutputCallId(item);
+      }
     }
   }
   return "";
@@ -1425,6 +1472,19 @@ function extractPlannedToolName(events: StreamEvent[]) {
     const item = event.item as { type?: unknown; name?: unknown };
     if (item.type === "function_call" && typeof item.name === "string") {
       return item.name;
+    }
+  }
+  return undefined;
+}
+
+function extractPlannedToolCallId(events: StreamEvent[]) {
+  for (const event of events) {
+    if (event.type !== "response.output_item.done") {
+      continue;
+    }
+    const item = event.item as { type?: unknown; call_id?: unknown };
+    if (item.type === "function_call" && typeof item.call_id === "string") {
+      return item.call_id;
     }
   }
   return undefined;
@@ -2803,7 +2863,11 @@ function convertAnthropicMessagesToResponsesInput(params: {
       if (block.type === "tool_result") {
         const output = stringifyToolResultContent(block.content);
         if (output.trim()) {
-          toolResultItems.push({ type: "function_call_output", output });
+          toolResultItems.push({
+            type: "function_call_output",
+            call_id: block.tool_use_id,
+            output,
+          });
         }
         continue;
       }
@@ -3167,8 +3231,10 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           model: resolvedModel,
           providerVariant: resolveProviderVariant(resolvedModel),
           imageInputCount: countImageInputs(input),
+          plannedToolCallId: extractPlannedToolCallId(events),
           plannedToolName: extractPlannedToolName(events),
           plannedToolArgs: extractPlannedToolArgs(events),
+          toolOutputCallId: extractToolOutputCallId(input) || undefined,
         };
         requests.push(lastRequest);
         if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
@@ -3223,8 +3289,10 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           model: normalizedModel,
           providerVariant: resolveProviderVariant(normalizedModel),
           imageInputCount: countImageInputs(input),
+          plannedToolCallId: extractPlannedToolCallId(events),
           plannedToolName: extractPlannedToolName(events),
           plannedToolArgs: extractPlannedToolArgs(events),
+          toolOutputCallId: extractToolOutputCallId(input) || undefined,
         };
         requests.push(lastRequest);
         if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {

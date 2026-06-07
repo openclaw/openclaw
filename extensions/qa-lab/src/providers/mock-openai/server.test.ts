@@ -3736,12 +3736,14 @@ describe("qa mock openai server", () => {
     const debug = (await debugResponse.json()) as {
       prompt: string;
       allInputText: string;
+      toolOutputCallId: string;
       toolOutput: string;
     };
     // extractToolOutput should surface the tool_result content because
     // the function_call_output item is placed AFTER the parent user
     // message in the converted input array.
     expect(debug.toolOutput).toBe("SUBAGENT-OK");
+    expect(debug.toolOutputCallId).toBe("toolu_mock_spawn_mixed");
     // extractLastUserText should surface the fresh-text block (the parent
     // user message that was pushed BEFORE the function_call_output).
     expect(debug.prompt).toBe("Keep going with the fanout.");

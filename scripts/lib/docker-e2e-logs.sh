@@ -78,5 +78,25 @@ docker_e2e_run_log() {
 
 docker_e2e_print_log() {
   local log_file="$1"
-  cat "$log_file"
+  local max_bytes="${OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES:-65536}"
+  if ! [[ "$max_bytes" =~ ^[0-9]+$ ]] || [ "$max_bytes" -lt 1 ]; then
+    max_bytes="65536"
+  else
+    max_bytes="$((10#$max_bytes))"
+  fi
+  if [ ! -f "$log_file" ]; then
+    return 0
+  fi
+  local log_bytes
+  log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
+  log_bytes="${log_bytes//[[:space:]]/}"
+  if ! [[ "$log_bytes" =~ ^[0-9]+$ ]]; then
+    log_bytes="0"
+  fi
+  if [ "$log_bytes" -le "$max_bytes" ]; then
+    cat "$log_file"
+    return 0
+  fi
+  echo "--- ${log_file} truncated: showing last ${max_bytes} of ${log_bytes} bytes ---"
+  tail -c "$max_bytes" "$log_file"
 }
