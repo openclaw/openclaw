@@ -40,6 +40,12 @@ const SessionStartSchema = z.object({
    * reports the resulting state here (and via `recording.status` if it changes).
    */
   recordingStatus: RecordingStatusSchema.optional(),
+  /**
+   * "inbound" (caller dialed the bot) or "outbound" (the bot placed this call via
+   * /api/calls/place). OpenClaw correlates outbound calls by callId regardless, but
+   * this makes the media-plane self-describing. Defaults to inbound when absent.
+   */
+  direction: z.enum(["inbound", "outbound"]).optional(),
 });
 
 const SessionEndSchema = z.object({
@@ -109,6 +115,8 @@ export interface MsteamsSession {
   };
   /** Teams recording status reported at answer time (if the worker set it). */
   recordingStatus?: MsteamsRecordingStatus;
+  /** "inbound" (default) or "outbound" (the bot placed this call). */
+  direction?: "inbound" | "outbound";
   /** Push a JSON-serializable message back to the worker. No-op if the socket has closed. */
   send: (message: unknown) => void;
   /** Close the WebSocket gracefully with the given reason text. */
@@ -458,6 +466,7 @@ export class MsteamsMediaStream {
           threadId: parsed.threadId,
           caller: parsed.caller,
           recordingStatus: parsed.recordingStatus,
+          direction: parsed.direction,
           send: (message) => this.sendTo(callId, message),
           close: (reason) => this.closeSession(callId, reason),
         });
