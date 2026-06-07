@@ -1,5 +1,7 @@
 // Builds structured context reports for context command responses.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { AgentMessage } from "../../agents/runtime/index.js";
+import { isRealConversationMessage } from "../../agents/compaction-real-conversation.js";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
 import {
@@ -11,6 +13,7 @@ import {
   resolveFreshSessionTotalTokens,
   type SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
+import { readSessionMessages } from "../../gateway/session-utils.fs.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -32,6 +35,37 @@ function parseContextArgs(commandBodyNormalized: string): string {
     return commandBodyNormalized.slice(8).trim();
   }
   return "";
+}
+
+function countRealConversationMessages(params: HandleCommandsParams): {
+  totalMessages: number;
+  realConversationMessages: number;
+  canCompact: boolean;
+} | null {
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  if (!targetSessionEntry?.sessionId) {
+    return null;
+  }
+  const messages = readSessionMessages(
+    targetSessionEntry.sessionId,
+    params.storePath,
+    targetSessionEntry.sessionFile,
+  );
+  if (!messages || messages.length === 0) {
+    return null;
+  }
+  const agentMessages = messages as unknown as AgentMessage[];
+  let realCount = 0;
+  for (let i = 0; i < agentMessages.length; i++) {
+    if (isRealConversationMessage(agentMessages[i], agentMessages, i)) {
+      realCount++;
+    }
+  }
+  return {
+    totalMessages: agentMessages.length,
+    realConversationMessages: realCount,
+    canCompact: realCount > 0,
+  };
 }
 
 function formatListTop(
@@ -304,6 +338,17 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
           ? `Untracked provider/runtime overhead: ~${formatInt(overheadTokens)} tok`
           : "Untracked provider/runtime overhead: not observed in cached usage";
 
+    // Compaction eligibility diagnostics
+    const compactionDiag = countRealConversationMessages(params);
+    const compactionLines = compactionDiag
+      ? [
+          `Transcript messages: ${formatInt(compactionDiag.totalMessages)} total, ${formatInt(compactionDiag.realConversationMessages)} real-conversation`,
+          compactionDiag.canCompact
+            ? `Compactable: yes (${formatInt(compactionDiag.realConversationMessages)} real-conversation messages eligible)`
+            : `Compactable: no — compaction engine requires real-conversation messages (user, assistant, custom with text; tool results anchored to conversation)`,
+        ]
+      : ["Transcript messages: unavailable — session has no transcript entries"];
+
     return {
       text: [
         "🧠 Context breakdown (detailed)",
@@ -326,6 +371,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         trackedPromptLine,
         actualContextLine,
         ...(overheadLine ? [overheadLine] : []),
+        "",
+        ...compactionLines,
         "",
         totalsLine,
         "",
