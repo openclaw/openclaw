@@ -64,11 +64,30 @@ jobs:
         run: |
           pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
-      - name: Build package tarball
+      - name: Build before/after package tarballs
         run: |
+          set -euo pipefail
+          mkdir -p .artifacts/systemd-package
+          cp package.json "$RUNNER_TEMP/package.json.original"
+          node - <<'NODE'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.version = '2026.6.1-pr91044.1';
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          NODE
           node scripts/package-openclaw-for-docker.mjs \
             --output-dir .artifacts/systemd-package \
-            --output-name openclaw-current.tgz
+            --output-name openclaw-before.tgz
+          node - <<'NODE'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.version = '2026.6.2-pr91044.1';
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          NODE
+          node scripts/package-openclaw-for-docker.mjs \
+            --output-dir .artifacts/systemd-package \
+            --output-name openclaw-after.tgz
+          cp "$RUNNER_TEMP/package.json.original" package.json
 
       - name: Prepare real systemd user manager
         run: |
@@ -84,9 +103,9 @@ jobs:
 
       - name: Run real systemd package-update proof
         env:
-          OPENCLAW_CURRENT_PACKAGE_TGZ: ${{ github.workspace }}/.artifacts/systemd-package/openclaw-current.tgz
+          OPENCLAW_CURRENT_PACKAGE_TGZ: ${{ github.workspace }}/.artifacts/systemd-package/openclaw-after.tgz
           OPENCLAW_SYSTEMD_PROOF_ARTIFACT_DIR: ${{ github.workspace }}/.artifacts/systemd-update-proof/${{ matrix.scenario }}
-          OPENCLAW_SYSTEMD_PROOF_BASELINE_SPEC: ${{ inputs.baseline }}
+          OPENCLAW_SYSTEMD_PROOF_BASELINE_SPEC: file:${{ github.workspace }}/.artifacts/systemd-package/openclaw-before.tgz
           OPENCLAW_SYSTEMD_PROOF_PROFILE: ${{ inputs.profile }}
           OPENCLAW_SYSTEMD_PROOF_SCENARIO: ${{ matrix.scenario }}
         run: |
