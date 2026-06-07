@@ -1,11 +1,13 @@
 // Memory Host SDK tests cover session files behavior.
 import fsSync from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
+  scanSessionFilesForAgent,
   sessionPathForFile,
   type SessionFileEntry,
 } from "./session-files.js";
@@ -71,6 +73,61 @@ describe("listSessionFilesForAgent", () => {
     expect(files.map((filePath) => path.basename(filePath)).toSorted()).toEqual(
       included.toSorted(),
     );
+  });
+});
+
+describe("scanSessionFilesForAgent", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reports ok with the listing for a populated directory", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(path.join(sessionsDir, "a.jsonl"), "");
+
+    const scan = await scanSessionFilesForAgent("main");
+
+    expect(scan.ok).toBe(true);
+    expect(scan.files.map((filePath) => path.basename(filePath))).toEqual(["a.jsonl"]);
+  });
+
+  it("reports ok with an empty listing when the directory exists but holds no sessions", async () => {
+    fsSync.mkdirSync(path.join(tmpDir, "agents", "main", "sessions"), { recursive: true });
+
+    const scan = await scanSessionFilesForAgent("main");
+
+    // An authoritatively empty directory is still a successful scan, so callers
+    // may safely prune orphaned index rows.
+    expect(scan).toEqual({ ok: true, files: [] });
+  });
+
+  it("reports not-ok with an empty listing when the scan fails", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(path.join(sessionsDir, "a.jsonl"), "");
+    const transient = Object.assign(new Error("nfs blip"), { code: "EIO" });
+    vi.spyOn(fsPromises, "readdir").mockRejectedValueOnce(transient);
+
+    const scan = await scanSessionFilesForAgent("main");
+
+    // A failed scan must not be mistaken for an empty directory: ok=false lets
+    // destructive callers skip pruning rather than wiping the index.
+    expect(scan).toEqual({ ok: false, files: [] });
+  });
+
+  it("reports not-ok when the sessions directory is absent", async () => {
+    const scan = await scanSessionFilesForAgent("main");
+
+    expect(scan).toEqual({ ok: false, files: [] });
+  });
+
+  it("keeps listSessionFilesForAgent returning the files array on failure", async () => {
+    vi.spyOn(fsPromises, "readdir").mockRejectedValueOnce(
+      Object.assign(new Error("nfs blip"), { code: "ESTALE" }),
+    );
+
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
   });
 });
 

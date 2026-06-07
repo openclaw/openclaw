@@ -31,6 +31,46 @@ describe("memory session sync state", () => {
         ["sessions/b.jsonl", "hash-b"],
       ]),
     );
+    // A full enumeration that read the directory may prune stale rows.
+    expect(plan.pruneStaleRows).toBe(true);
+  });
+
+  it("skips pruning when the full directory scan failed", () => {
+    const plan = resolveMemorySessionSyncPlan({
+      needsFullReindex: false,
+      // A failed scan surfaces an empty listing even though the index still
+      // holds rows; pruning here would wipe the whole session index.
+      files: [],
+      targetSessionFiles: null,
+      sessionsDirtyFiles: new Set(),
+      existingRows: [
+        { path: "sessions/a.jsonl", hash: "hash-a" },
+        { path: "sessions/b.jsonl", hash: "hash-b" },
+      ],
+      sessionPathForFile: (file) => `sessions/${file.split("/").at(-1)}`,
+      scanOk: false,
+    });
+
+    expect(plan.activePaths).toEqual(new Set());
+    expect(plan.pruneStaleRows).toBe(false);
+  });
+
+  it("still prunes when an authoritatively empty directory leaves orphaned rows", () => {
+    const plan = resolveMemorySessionSyncPlan({
+      needsFullReindex: false,
+      // The directory was read successfully and genuinely has no session files
+      // (e.g. disk-budget removed the last archive); orphaned rows should be
+      // pruned rather than lingering in search.
+      files: [],
+      targetSessionFiles: null,
+      sessionsDirtyFiles: new Set(),
+      existingRows: [{ path: "sessions/a.jsonl", hash: "hash-a" }],
+      sessionPathForFile: (file) => `sessions/${file.split("/").at(-1)}`,
+      scanOk: true,
+    });
+
+    expect(plan.activePaths).toEqual(new Set());
+    expect(plan.pruneStaleRows).toBe(true);
   });
 
   it("treats targeted session syncs as refresh-only and skips unrelated pruning", () => {
@@ -50,6 +90,8 @@ describe("memory session sync state", () => {
     expect(plan.activePaths).toBeNull();
     expect(plan.existingRows).toBeNull();
     expect(plan.existingHashes).toBeNull();
+    // Targeted syncs never hold a full enumeration, so they must not prune.
+    expect(plan.pruneStaleRows).toBe(false);
   });
 
   it("keeps dirty-only incremental mode when no targeted sync is requested", () => {
