@@ -308,6 +308,15 @@ arm_missing_supervisor_after_refresh_probe() {
   : >"$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM"
 }
 
+reset_update_restart_probe_logs() {
+  [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || return 0
+  # Keep the baseline pid file so the shim can stop it, but clear append-only
+  # logs before the update restart path. Stale pre-update "[gateway] ready"
+  # lines can otherwise make readiness checks race the replacement gateway.
+  : >"$SYSTEMCTL_SHIM_DAEMON_LOG"
+  : >"$SYSTEMCTL_SHIM_LOG"
+}
+
 assert_missing_supervisor_after_refresh_probe() {
   missing_supervisor_after_refresh_enabled || return 0
   if [ ! -f "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED" ]; then
@@ -352,6 +361,7 @@ update_args=(update --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURR
 if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
   update_args+=(--no-restart)
 else
+  reset_update_restart_probe_logs
   arm_missing_supervisor_after_refresh_probe
 fi
 set +e
@@ -426,6 +436,9 @@ node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
   --out /tmp/openclaw-upgrade-survivor-readyz.json
 
 echo "Checking gateway RPC status..."
+if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] && [ "$STATUS_BUDGET" -lt 180 ]; then
+  STATUS_BUDGET=180
+fi
 status_start="$(node -e "process.stdout.write(String(Date.now()))")"
 while true; do
   if openclaw_e2e_maybe_timeout "$command_timeout" openclaw gateway status --url "ws://127.0.0.1:$PORT" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >/tmp/openclaw-upgrade-survivor-status.json 2>/tmp/openclaw-upgrade-survivor-status.err; then
