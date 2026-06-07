@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   buildSessionEntry,
+  isSessionArchiveArtifactName,
   listSessionFilesForAgent,
   loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
@@ -857,6 +858,13 @@ async function collectSessionIngestionBatches(params: {
           };
     for (const absolutePath of files) {
       if (isCheckpointSessionTranscriptPath(absolutePath)) {
+        continue;
+      }
+      // Defect 1 (#90313): listSessionFilesForAgent uses isUsageCountedSessionTranscriptFileName,
+      // which includes archived (`.deleted.*` / `.reset.*`) transcript copies. For dreaming
+      // corpus ingestion those archives should be skipped — the primary transcript already
+      // covers the same conversation and re-ingesting the archive double-counts it.
+      if (isSessionArchiveArtifactName(path.basename(absolutePath))) {
         continue;
       }
       const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
