@@ -87,6 +87,8 @@ function openWorkspaceStore<T>(namespace: string): PluginStateKeyedStore<Workspa
   });
 }
 
+// Caller owns typed decoding for values read from plugin state.
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters
 export async function readMemoryCoreWorkspaceEntries<T>(params: {
   namespace: string;
   workspaceDir: string;
@@ -99,6 +101,8 @@ export async function readMemoryCoreWorkspaceEntries<T>(params: {
     .map((entry) => ({ key: entry.value.key, value: entry.value.value }));
 }
 
+// Caller owns typed encoding for values written to plugin state.
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters
 export async function writeMemoryCoreWorkspaceEntries<T>(params: {
   namespace: string;
   workspaceDir: string;
@@ -126,6 +130,8 @@ export async function writeMemoryCoreWorkspaceEntries<T>(params: {
   }
 }
 
+// Caller owns typed encoding for values written to plugin state.
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters
 export async function writeMemoryCoreWorkspaceEntry<T>(params: {
   namespace: string;
   workspaceDir: string;

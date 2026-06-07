@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -53,7 +54,7 @@ describe("memory-core doctor dreaming migration", () => {
   }
 
   function migrationParams(
-    config: unknown = {
+    config: OpenClawConfig = {
       agents: {
         list: [{ id: "main", workspace: workspaceDir }],
       },

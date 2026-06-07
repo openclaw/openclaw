@@ -3965,19 +3965,26 @@ export async function startStaticFileServer(params) {
     close: () => {
       closePromise ??= new Promise((resolvePromise, rejectPromise) => {
         closeStaticFileServerConnections(server, sockets);
-        server.close(async (error) => {
-          const closeLogError = await finishStaticFileServerLog(logStream, logStreamError).catch(
-            (logError) => logError,
-          );
-          if (error) {
-            rejectPromise(error);
-            return;
-          }
-          if (closeLogError) {
-            rejectPromise(closeLogError);
-            return;
-          }
-          resolvePromise();
+        server.close((error) => {
+          void (async () => {
+            const closeLogError = await finishStaticFileServerLog(logStream, logStreamError).catch(
+              (logError: unknown): Error =>
+                logError instanceof Error ? logError : new Error(String(logError)),
+            );
+            if (error) {
+              rejectPromise(error);
+              return;
+            }
+            if (closeLogError) {
+              rejectPromise(
+                closeLogError instanceof Error
+                  ? closeLogError
+                  : new Error(formatError(closeLogError)),
+              );
+              return;
+            }
+            resolvePromise();
+          })();
         });
         closeStaticFileServerConnections(server, sockets);
       });
