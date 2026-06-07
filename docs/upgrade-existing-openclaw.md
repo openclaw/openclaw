@@ -68,9 +68,11 @@ The runtime workspace remains `$HOME/.openclaw/workspace`; the source code comes
 
 What this does: asks the Zorg MemoryDB recall path to read from the database. Expected mode: `database-direct-vector-neural-weighted`.
 
-The upgrade helper applies `db/public_canonical_rules_update_2026_06_02.sql`.
-That SQL seeds the full public-safe canonical rule set and checks for 93 active
-public rules in `zorg_logic_rules`.
+The upgrade helper applies `db/public_canonical_rules_update_2026_06_02.sql`,
+copied from the single packaged add-on rule file at
+`zorg/db/public_canonical_rules_update_2026_06_02.sql`. That SQL seeds the full
+public-safe canonical rule set and checks for 104 active public rules in
+`zorg_logic_rules`.
 
 The upgrade helper also installs the built-in LAN command chat from `lan-chat/`
 by default. To deliberately skip only that LAN chat install, set

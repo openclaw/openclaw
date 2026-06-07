@@ -116,13 +116,12 @@ Active operating rules belong in `public.zorg_logic_rules`. Older compatibility
 surfaces such as `public.zorg_rules` and `public.zorg_rule_catalog` may remain in
 the schema for upgrade compatibility, but they must not remain active recall
 sources after a canonical migration. Use
-`db/public_canonical_rules_update_2026_06_02.sql` as the public-safe upgrade path
-for installs that need the current canonical-rule cleanup: it seeds sanitized
-public rules into `zorg_logic_rules`. The expected public seed count is 93
-active rules scoped as `public_safe` or `public_safe_only`; the SQL raises an
-error if that full public set is not present after application. The same update
-disables active rows in the compatibility tables and raises existing
-chat-response timing rule weights through
+`zorg/db/public_canonical_rules_update_2026_06_02.sql` as the public-safe
+upgrade path for installs that need the current canonical-rule cleanup: it is
+the single packaged add-on rule file and seeds sanitized public rules into
+`zorg_logic_rules`. The expected public seed count is 104 active rules; the SQL
+raises an error if that full public set is not present after application. The
+same update raises existing chat-response timing rule weights through
 `zorg_logic_rule_dynamic_weights` without creating replacement timing rules.
 
 This update is structural and public-safe. It publishes rule shape, sanitized

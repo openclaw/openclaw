@@ -230,9 +230,8 @@ ensure_postgres_database() {
   if [[ -f "$ZORG_WORKSPACE_DIR/db/memory_file_archive_schema.sql" ]]; then
     PGPASSWORD="$ZORG_DB_PASSWORD" psql -h "$ZORG_DB_HOST" -p "$ZORG_DB_PORT" -U "$ZORG_DB_USER" -d "$ZORG_DB_NAME" -v ON_ERROR_STOP=1 -f "$ZORG_WORKSPACE_DIR/db/memory_file_archive_schema.sql" || true
   fi
-  PGPASSWORD="$ZORG_DB_PASSWORD" psql -h "$ZORG_DB_HOST" -p "$ZORG_DB_PORT" -U "$ZORG_DB_USER" -d "$ZORG_DB_NAME" -v ON_ERROR_STOP=1 -f "$ZORG_WORKSPACE_DIR/db/seed_rules.sql" || true
-  if [[ -f "$ZORG_WORKSPACE_DIR/db/runtime_db_only_memory_writer_rules_2026_06_04.sql" ]]; then
-    PGPASSWORD="$ZORG_DB_PASSWORD" psql -h "$ZORG_DB_HOST" -p "$ZORG_DB_PORT" -U "$ZORG_DB_USER" -d "$ZORG_DB_NAME" -v ON_ERROR_STOP=1 -f "$ZORG_WORKSPACE_DIR/db/runtime_db_only_memory_writer_rules_2026_06_04.sql" || true
+  if [[ -f "$ZORG_WORKSPACE_DIR/db/public_canonical_rules_update_2026_06_02.sql" ]]; then
+    PGPASSWORD="$ZORG_DB_PASSWORD" psql -h "$ZORG_DB_HOST" -p "$ZORG_DB_PORT" -U "$ZORG_DB_USER" -d "$ZORG_DB_NAME" -v ON_ERROR_STOP=1 -f "$ZORG_WORKSPACE_DIR/db/public_canonical_rules_update_2026_06_02.sql" || true
   fi
 }
 

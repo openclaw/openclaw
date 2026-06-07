@@ -20,7 +20,7 @@ What it does:
 5. starts local PostgreSQL using the available service manager
 6. creates the local OpenClaw memory role/database with local trust access
 7. writes `sql_memory_map.json` into `$HOME/.openclaw/workspace`
-8. applies the Zorg MemoryDB schema, recall surfaces, and the 93-rule public canonical rule seed from the OpenClaw branch
+8. applies the Zorg MemoryDB schema, recall surfaces, and the 104-rule public canonical rule seed from the single packaged add-on rule file
 9. installs and builds the built-in LAN command console from `./lan-chat`
 10. registers `lan-chat.service` as a user-level systemd service on port `3001`
 11. starts OpenClaw with memory already wired

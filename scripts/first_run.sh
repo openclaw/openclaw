@@ -110,17 +110,14 @@ apply_schema(){
   "$PYTHON" - <<'PY'
 import json, pathlib, psycopg2
 cfg=json.load(open('sql_memory_map.json'))['postgres']
-schema=pathlib.Path('db/schema.sql').read_text(encoding='utf-8')
-public_rules=pathlib.Path('db/public_canonical_rules_update_2026_06_02.sql')
-runtime_rules=pathlib.Path('db/runtime_db_only_memory_writer_rules_2026_06_04.sql')
+schema=pathlib.Path('zorg/db/schema.sql').read_text(encoding='utf-8')
+public_rules=pathlib.Path('zorg/db/public_canonical_rules_update_2026_06_02.sql')
 conn=psycopg2.connect(host=cfg['host'],port=cfg['port'],dbname=cfg['database'],user=cfg['user'])
 with conn:
     with conn.cursor() as cur:
         cur.execute(schema)
         if public_rules.exists():
             cur.execute(public_rules.read_text(encoding='utf-8'))
-        if runtime_rules.exists():
-            cur.execute(runtime_rules.read_text(encoding='utf-8'))
         cur.execute('select refresh_zorg_memory_search_mv();')
         cur.execute('select refresh_zorg_memory_search_fast_mv();')
         cur.execute('select refresh_zorg_master_context();')
