@@ -34,8 +34,9 @@ function resolveConfiguredVaultRoots(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): string[] {
+  const homeDir = resolveHomeDir(params.env);
   const resolved = resolveMemoryWikiConfig(readConfiguredPluginConfig(params.config), {
-    ...(resolveHomeDir(params.env) ? { homedir: resolveHomeDir(params.env) } : {}),
+    homedir: homeDir,
   });
   return [resolved.vault.path];
 }
