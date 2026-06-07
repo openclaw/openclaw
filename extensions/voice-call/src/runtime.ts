@@ -276,8 +276,7 @@ async function resolveProvider(
       // tenantId is canonically the msteams CHAT channel's tenant (channels.msteams.tenantId),
       // which is required for the msteams voice provider anyway — fall back to it so it need not be
       // duplicated under voice-call.config.msteams.outbound.tenantId.
-      const channelTenantId = (fullConfig.channels?.msteams as { tenantId?: string } | undefined)
-        ?.tenantId;
+      const channelTenantId = fullConfig.channels?.msteams?.tenantId;
       const outbound = config.msteams?.outbound
         ? {
             ...config.msteams.outbound,
