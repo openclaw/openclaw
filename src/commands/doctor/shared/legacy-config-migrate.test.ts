@@ -254,6 +254,7 @@ describe("legacy memory search config migrate", () => {
             api: "openai-responses",
             apiKey: "OPENAI_API_KEY",
             baseUrl: "https://api.openai.com/v1",
+            params: { store: true },
             request: { retry: { maxAttempts: 1 } },
             models: [{ id: "text-embedding-3-small" }],
           },
@@ -270,6 +271,7 @@ describe("legacy memory search config migrate", () => {
       api: "openai-responses",
       apiKey: "OPENAI_API_KEY",
       baseUrl: "https://api.openai.com/v1",
+      params: { store: true },
       request: { retry: { maxAttempts: 1 } },
       models: [{ id: "text-embedding-3-small" }],
     });
@@ -281,7 +283,41 @@ describe("legacy memory search config migrate", () => {
     expectMigrationChangesToIncludeFragments(res.changes, [
       'Moved models.providers.openai-codex.api "openai-codex-responses" → "openai-chatgpt-responses"',
       'Moved models.providers.openai-codex.models[0].api "openai-codex-responses" → "openai-chatgpt-responses"',
-      "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai.apiKey, models.providers.openai.request",
+      "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai.apiKey, models.providers.openai.params, models.providers.openai.request",
+    ]);
+  });
+
+  it("merges distinct legacy model ids even when display names collide", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5.5-platform", name: "GPT-5.5" }],
+          },
+          "openai-codex": {
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+          },
+        },
+      },
+    });
+
+    const openai = res.config?.models?.providers?.openai as Record<string, unknown> | undefined;
+    expect(openai?.models).toEqual([
+      { id: "gpt-5.5-platform", name: "GPT-5.5" },
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+      },
+    ]);
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "Merged 1 model(s) from models.providers.openai-codex into models.providers.openai: gpt-5.5",
     ]);
   });
 

@@ -934,6 +934,22 @@ const MODEL_UNSCOPED_PROVIDER_DEFAULT_KEYS = [
   "localService",
   "authHeader",
 ] as const;
+const CANONICAL_PROVIDER_MODEL_LEAK_KEYS = [
+  "apiKey",
+  "auth",
+  "contextWindow",
+  "contextTokens",
+  "maxTokens",
+  "timeoutSeconds",
+  "region",
+  "injectNumCtxForOpenAICompat",
+  "params",
+  "agentRuntime",
+  "localService",
+  "headers",
+  "authHeader",
+  "request",
+] as const;
 
 function hasCanonicalOpenAIProvider(providers: Record<string, unknown>): boolean {
   return Object.keys(providers).some(
@@ -1004,6 +1020,8 @@ function collectModelMergeBlockers(params: {
     if (hasOwnDefinedProperty(params.legacy, key)) {
       blockers.push(`models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID}.${key}`);
     }
+  }
+  for (const key of CANONICAL_PROVIDER_MODEL_LEAK_KEYS) {
     if (hasOwnDefinedProperty(params.canonical, key)) {
       blockers.push(`models.providers.${OPENAI_PROVIDER_ID}.${key}`);
     }
@@ -1121,7 +1139,7 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
         if (!id && !name) {
           return false;
         }
-        return (!id || !canonicalModelIds.has(id)) && (!name || !canonicalModelNames.has(name));
+        return id ? !canonicalModelIds.has(id) : !canonicalModelNames.has(name);
       });
       const mergeBlockers =
         modelsToMerge.length > 0
