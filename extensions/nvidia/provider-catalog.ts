@@ -123,7 +123,7 @@ async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | nul
       // the guarded fixed-host fetch on the fast path.
       lookupFn: lookupNvidiaFeaturedModelHostname,
       auditContext: "nvidia-featured-model-catalog",
-      shouldCacheRows: (rows) => parseNvidiaFeaturedModels(rows) !== null,
+      shouldCacheRows: (modelRows) => parseNvidiaFeaturedModels(modelRows) !== null,
       readRows: (payload) => {
         if (!payload || typeof payload !== "object") {
           return [];
