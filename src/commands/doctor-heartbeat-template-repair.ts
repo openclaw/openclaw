@@ -44,6 +44,19 @@ const DOCS_HEARTBEAT_TEMPLATE_PAGE_AS_TEMPLATE = [
   "`HEARTBEAT.md` lives in the agent workspace. Keep the file empty, or with only Markdown comments and headings, when you want OpenClaw to skip heartbeat model calls.",
   "The default runtime template is:",
   "```markdown",
+  "# Keep this file empty (or with only comments) to skip heartbeat API calls",
+  "# Add tasks below when you want the agent to check something periodically",
+  "```",
+  "Add short tasks below the comments only when you want the agent to check something periodically. Keep heartbeat instructions small because they are read during recurring wakes.",
+  "## Related",
+  "- [Heartbeat config](/gateway/config-agents)",
+] as const;
+
+const LEGACY_DOCS_HEARTBEAT_TEMPLATE_PAGE_AS_TEMPLATE = [
+  "# HEARTBEAT.md template",
+  "`HEARTBEAT.md` lives in the agent workspace. Keep the file empty, or with only Markdown comments and headings, when you want OpenClaw to skip heartbeat model calls.",
+  "The default runtime template is:",
+  "```markdown",
   "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
   "# Add tasks below when you want the agent to check something periodically.",
   "```",
@@ -53,6 +66,11 @@ const DOCS_HEARTBEAT_TEMPLATE_PAGE_AS_TEMPLATE = [
 ] as const;
 
 const HEARTBEAT_DEFAULT_BODY_LINES = [
+  "# Keep this file empty (or with only comments) to skip heartbeat API calls",
+  "# Add tasks below when you want the agent to check something periodically",
+] as const;
+
+const LEGACY_HEARTBEAT_DEFAULT_BODY_LINES = [
   "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
   "# Add tasks below when you want the agent to check something periodically.",
 ] as const;
@@ -73,8 +91,11 @@ const KNOWN_DIRTY_HEARTBEAT_TEMPLATE_LINES = new Set([
   "The default runtime template is:",
   "Add short tasks below the comments only when you want the agent to check something periodically. Keep heartbeat instructions small because they are read during recurring wakes.",
   ...LEGACY_HEARTBEAT_PROSE_TEMPLATE,
+  "# Keep this file empty (or with only comments) to skip heartbeat API calls",
+  "# Add tasks below when you want the agent to check something periodically",
   "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
   "# Add tasks below when you want the agent to check something periodically.",
+
   "## Related",
   "- [Heartbeat config](/gateway/config-agents)",
 ]);
@@ -85,6 +106,7 @@ const KNOWN_REPAIRABLE_DIRTY_HEARTBEAT_TEMPLATES = [
   LEGACY_HEARTBEAT_FENCED_TEMPLATE,
   LEGACY_HEARTBEAT_FENCED_RELATED_TEMPLATE,
   DOCS_HEARTBEAT_TEMPLATE_PAGE_AS_TEMPLATE,
+  LEGACY_DOCS_HEARTBEAT_TEMPLATE_PAGE_AS_TEMPLATE,
 ] as const;
 
 export type HeartbeatTemplateRepairAnalysis =
@@ -108,7 +130,9 @@ export function analyzeHeartbeatTemplateForRepair(
     return { status: "dirty-template" };
   }
 
-  const hasDefaultTemplateBody = HEARTBEAT_DEFAULT_BODY_LINES.every((line) => lines.includes(line));
+  const hasDefaultTemplateBody =
+    HEARTBEAT_DEFAULT_BODY_LINES.every((line) => lines.includes(line)) ||
+    LEGACY_HEARTBEAT_DEFAULT_BODY_LINES.every((line) => lines.includes(line));
   const hasDirtyDocWrapper = lines.some((line) => DIRTY_HEARTBEAT_DOC_WRAPPER_LINES.has(line));
   const hasLegacyProseTemplate = LEGACY_HEARTBEAT_PROSE_TEMPLATE.every((line) =>
     lines.includes(line),
