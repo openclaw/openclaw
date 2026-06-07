@@ -142,6 +142,13 @@ export function createOpenClawTools(
     /** Visible source replies must be sent through the message tool when set to message_tool_only. */
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
     inboundEventKind?: InboundEventKind;
+    /**
+     * True when this turn is processing a sessions_send agent-to-agent message.
+     * The reply already returns through the sessions_send tool result, so the
+     * tool is omitted here to stop the target reverse-calling the requester and
+     * posting duplicate content (issue #39476).
+     */
+    interAgentSendTurn?: boolean;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
     /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
@@ -491,7 +498,10 @@ export function createOpenClawTools(
       config: resolvedConfig,
       callGateway: effectiveCallGateway,
     }),
-    ...(embedded
+    // A sessions_send A2A turn returns the target's reply via the tool result, so
+    // the routed turn must not re-expose sessions_send: otherwise the target can
+    // reverse-call the requester and duplicate the content (issue #39476).
+    ...(embedded || options?.interAgentSendTurn
       ? []
       : [
           createSessionsSendTool({
