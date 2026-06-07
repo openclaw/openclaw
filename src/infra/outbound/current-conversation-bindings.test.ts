@@ -1,11 +1,13 @@
+// Verifies generic current-conversation binding persistence, TTL pruning,
+// capability discovery, touch, list, and unbind behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
-  __testing,
+  testing,
   bindGenericCurrentConversation,
   getGenericCurrentConversationBindingCapabilities,
   listGenericCurrentConversationBindingsBySession,
@@ -13,6 +15,35 @@ import {
   touchGenericCurrentConversationBinding,
   unbindGenericCurrentConversationBindings,
 } from "./current-conversation-bindings.js";
+import type { SessionBindingRecord } from "./session-binding.types.js";
+
+function expectSessionBinding(bound: SessionBindingRecord | null): SessionBindingRecord {
+  if (bound === null) {
+    throw new Error("Expected current-conversation binding");
+  }
+  return bound;
+}
+
+function expectBindingFields(
+  binding: SessionBindingRecord | null | undefined,
+  expected: Partial<SessionBindingRecord>,
+): SessionBindingRecord {
+  const record = expectSessionBinding(binding ?? null);
+  for (const [key, value] of Object.entries(expected)) {
+    expect(record[key as keyof SessionBindingRecord]).toEqual(value);
+  }
+  return record;
+}
+
+function expectBindingMetadata(
+  binding: SessionBindingRecord | null | undefined,
+  expected: Record<string, unknown>,
+): void {
+  const metadata = expectSessionBinding(binding ?? null).metadata;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(metadata?.[key]).toEqual(value);
+  }
+}
 
 function setMinimalCurrentConversationRegistry(): void {
   setActivePluginRegistry(
@@ -41,13 +72,14 @@ describe("generic current-conversation bindings", () => {
     testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-current-bindings-"));
     process.env.OPENCLAW_STATE_DIR = testStateDir;
     setMinimalCurrentConversationRegistry();
-    __testing.resetCurrentConversationBindingsForTests({
+    testing.resetCurrentConversationBindingsForTests({
       deletePersistedFile: true,
     });
   });
 
   afterEach(async () => {
-    __testing.resetCurrentConversationBindingsForTests({
+    vi.useRealTimers();
+    testing.resetCurrentConversationBindingsForTests({
       deletePersistedFile: true,
     });
     if (previousStateDir == null) {
@@ -103,30 +135,27 @@ describe("generic current-conversation bindings", () => {
       },
     });
 
-    expect(bound).toMatchObject({
+    expectBindingFields(bound, {
       bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
     });
 
-    __testing.resetCurrentConversationBindingsForTests();
+    testing.resetCurrentConversationBindingsForTests();
 
-    expect(
-      resolveGenericCurrentConversationBinding({
-        channel: "workspace",
-        accountId: "default",
-        conversationId: "user:U123",
-      }),
-    ).toMatchObject({
+    const resolved = resolveGenericCurrentConversationBinding({
+      channel: "workspace",
+      accountId: "default",
+      conversationId: "user:U123",
+    });
+    expectBindingFields(resolved, {
       bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
-      metadata: expect.objectContaining({
-        label: "workspace-dm",
-      }),
     });
+    expectBindingMetadata(resolved, { label: "workspace-dm" });
   });
 
   it("normalizes persisted target session keys on reload", async () => {
-    const filePath = __testing.resolveBindingsFilePath();
+    const filePath = testing.resolveBindingsFilePath();
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(
       filePath,
@@ -158,21 +187,19 @@ describe("generic current-conversation bindings", () => {
       conversationId: "user:U123",
     });
 
-    expect(resolved).toMatchObject({
+    expectBindingFields(resolved, {
       bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
-      metadata: expect.objectContaining({
-        label: "workspace-dm",
-      }),
     });
-    expect(listGenericCurrentConversationBindingsBySession("agent:codex:acp:workspace-dm")).toEqual(
-      [
-        expect.objectContaining({
-          bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
-          targetSessionKey: "agent:codex:acp:workspace-dm",
-        }),
-      ],
+    expectBindingMetadata(resolved, { label: "workspace-dm" });
+    const bindings = listGenericCurrentConversationBindingsBySession(
+      "agent:codex:acp:workspace-dm",
     );
+    expect(bindings).toHaveLength(1);
+    expectBindingFields(bindings[0], {
+      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+      targetSessionKey: "agent:codex:acp:workspace-dm",
+    });
   });
 
   it("drops self-parent conversation refs when storing generic current bindings", async () => {
@@ -187,29 +214,30 @@ describe("generic current-conversation bindings", () => {
       },
     });
 
-    expect(bound).toMatchObject({
+    const boundRecord = expectBindingFields(bound, {
       bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
-      conversation: {
-        channel: "forum",
-        accountId: "default",
-        conversationId: "6098642967",
-      },
+    });
+    expect(boundRecord.conversation).toEqual({
+      channel: "forum",
+      accountId: "default",
+      conversationId: "6098642967",
     });
     expect(bound?.conversation.parentConversationId).toBeUndefined();
-    expect(
+    expectBindingFields(
       resolveGenericCurrentConversationBinding({
         channel: "forum",
         accountId: "default",
         conversationId: "6098642967",
       }),
-    ).toMatchObject({
-      bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
-      targetSessionKey: "agent:codex:acp:forum-dm",
-    });
+      {
+        bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
+        targetSessionKey: "agent:codex:acp:forum-dm",
+      },
+    );
   });
 
   it("migrates persisted legacy self-parent binding ids on load", async () => {
-    const filePath = __testing.resolveBindingsFilePath();
+    const filePath = testing.resolveBindingsFilePath();
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(
       filePath,
@@ -242,29 +270,27 @@ describe("generic current-conversation bindings", () => {
       conversationId: "6098642967",
     });
 
-    expect(resolved).toMatchObject({
+    const resolvedRecord = expectBindingFields(resolved, {
       bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
       targetSessionKey: "agent:codex:acp:forum-dm",
-      conversation: {
-        channel: "forum",
-        accountId: "default",
-        conversationId: "6098642967",
-      },
+    });
+    expect(resolvedRecord.conversation).toEqual({
+      channel: "forum",
+      accountId: "default",
+      conversationId: "6098642967",
     });
     expect(resolved?.conversation.parentConversationId).toBeUndefined();
 
-    await expect(
-      unbindGenericCurrentConversationBindings({
-        bindingId: resolved?.bindingId,
-        reason: "test cleanup",
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
-      }),
-    ]);
+    const unbound = await unbindGenericCurrentConversationBindings({
+      bindingId: resolved?.bindingId,
+      reason: "test cleanup",
+    });
+    expect(unbound).toHaveLength(1);
+    expectBindingFields(unbound[0], {
+      bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
+    });
 
-    __testing.resetCurrentConversationBindingsForTests();
+    testing.resetCurrentConversationBindingsForTests();
     expect(
       resolveGenericCurrentConversationBinding({
         channel: "forum",
@@ -290,13 +316,71 @@ describe("generic current-conversation bindings", () => {
       reason: "test cleanup",
     });
 
-    __testing.resetCurrentConversationBindingsForTests();
+    testing.resetCurrentConversationBindingsForTests();
 
     expect(
       resolveGenericCurrentConversationBinding({
         channel: "googlechat",
         accountId: "default",
         conversationId: "spaces/AAAAAAA",
+      }),
+    ).toBeNull();
+  });
+
+  it("drops persisted bindings with invalid expiration timestamps", async () => {
+    const filePath = testing.resolveBindingsFilePath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+            targetSessionKey: "agent:codex:acp:workspace-dm",
+            targetKind: "session",
+            conversation: {
+              channel: "workspace",
+              accountId: "default",
+              conversationId: "user:U123",
+            },
+            status: "active",
+            boundAt: 1234,
+            expiresAt: 8_640_000_000_000_001,
+          },
+        ],
+      }),
+    );
+
+    expect(
+      resolveGenericCurrentConversationBinding({
+        channel: "workspace",
+        accountId: "default",
+        conversationId: "user:U123",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not bind generic current conversations when ttl expiry overflows", async () => {
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    await expect(
+      bindGenericCurrentConversation({
+        targetSessionKey: "agent:codex:acp:workspace-dm",
+        targetKind: "session",
+        conversation: {
+          channel: "workspace",
+          accountId: "default",
+          conversationId: "user:U123",
+        },
+        ttlMs: 1,
+      }),
+    ).resolves.toBeNull();
+    expect(
+      resolveGenericCurrentConversationBinding({
+        channel: "workspace",
+        accountId: "default",
+        conversationId: "user:U123",
       }),
     ).toBeNull();
   });
@@ -315,26 +399,25 @@ describe("generic current-conversation bindings", () => {
       },
     });
 
-    expect(bound).not.toBeNull();
+    expectSessionBinding(bound);
 
     touchGenericCurrentConversationBinding(
       "generic:workspace\u241fdefault\u241f\u241fuser:U123",
       1_234_567_890,
     );
 
-    __testing.resetCurrentConversationBindingsForTests();
+    testing.resetCurrentConversationBindingsForTests();
 
-    expect(
+    expectBindingMetadata(
       resolveGenericCurrentConversationBinding({
         channel: "workspace",
         accountId: "default",
         conversationId: "user:U123",
-      })?.metadata,
-    ).toEqual(
-      expect.objectContaining({
+      }),
+      {
         label: "workspace-dm",
         lastActivityAt: 1_234_567_890,
-      }),
+      },
     );
   });
 });

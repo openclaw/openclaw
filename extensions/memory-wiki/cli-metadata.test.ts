@@ -1,3 +1,4 @@
+// Memory Wiki tests cover cli metadata plugin behavior.
 import { Command } from "commander";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +17,19 @@ vi.mock("./src/config.js", () => ({
 }));
 
 import plugin from "./cli-metadata.js";
+
+function requireFirstCliRegistrar(mock: ReturnType<typeof vi.fn>) {
+  const [call] = mock.mock.calls;
+  if (!call || typeof call[0] !== "function") {
+    throw new Error("expected memory-wiki CLI registrar to be registered");
+  }
+  return call[0] as (ctx: {
+    program: Command;
+    config: Record<string, unknown>;
+    workspaceDir: string;
+    logger: unknown;
+  }) => Promise<void>;
+}
 
 describe("memory-wiki cli metadata entry", () => {
   beforeEach(() => {
@@ -46,10 +60,8 @@ describe("memory-wiki cli metadata entry", () => {
 
     plugin.register(api);
 
-    const register = registerCli.mock.calls[0]?.[0];
-
     expect(registerCli).toHaveBeenCalledTimes(1);
-    expect(typeof register).toBe("function");
+    const register = requireFirstCliRegistrar(registerCli);
 
     await register({
       program,

@@ -1,3 +1,4 @@
+// Provides the empty plugin registry used before discovery completes.
 import type { PluginRegistry } from "./registry-types.js";
 
 export function createEmptyPluginRegistry(): PluginRegistry {
@@ -9,12 +10,15 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     channels: [],
     channelSetups: [],
     providers: [],
+    modelCatalogProviders: [],
     cliBackends: [],
     textTransforms: [],
+    embeddingProviders: [],
     speechProviders: [],
     realtimeTranscriptionProviders: [],
     realtimeVoiceProviders: [],
     mediaUnderstandingProviders: [],
+    transcriptSourceProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],
     musicGenerationProviders: [],
@@ -26,11 +30,14 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     memoryEmbeddingProviders: [],
     agentHarnesses: [],
     gatewayHandlers: {},
-    gatewayMethodScopes: {},
+    gatewayMethodDescriptors: [],
+    coreGatewayMethodNames: [],
     httpRoutes: [],
+    hostedMediaResolvers: [],
     cliRegistrars: [],
     reloads: [],
     nodeHostCommands: [],
+    nodeInvokePolicies: [],
     securityAuditCollectors: [],
     services: [],
     gatewayDiscoveryServices: [],
@@ -42,6 +49,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     runtimeLifecycles: [],
     agentEventSubscriptions: [],
     sessionSchedulerJobs: [],
+    sessionActions: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],
   };

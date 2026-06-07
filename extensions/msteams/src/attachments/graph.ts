@@ -1,9 +1,11 @@
+// Msteams plugin module implements graph behavior.
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import { downloadMSTeamsAttachments } from "./download.js";
@@ -102,7 +104,7 @@ export function buildMSTeamsGraphMessageUrls(params: {
         `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(candidate)}`,
       );
     }
-    return Array.from(new Set(urls));
+    return uniqueStrings(urls);
   }
 
   const chatId = params.conversationId?.trim() || readNestedString(params.channelData, ["chatId"]);
@@ -116,7 +118,7 @@ export function buildMSTeamsGraphMessageUrls(params: {
     (candidate) =>
       `${GRAPH_ROOT}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(candidate)}`,
   );
-  return Array.from(new Set(urls));
+  return uniqueStrings(urls);
 }
 
 async function fetchGraphCollection(params: {
@@ -225,13 +227,17 @@ async function downloadGraphHostedContent(params: {
           if (!valRes.ok) {
             continue;
           }
-          // Check Content-Length before buffering to avoid RSS spikes on large files.
-          const cl = valRes.headers.get("content-length");
-          if (cl && Number(cl) > params.maxBytes) {
-            continue;
-          }
-          const ab = await valRes.arrayBuffer();
-          buffer = Buffer.from(ab);
+          const saved = await getMSTeamsRuntime().channel.media.saveResponseMedia(valRes, {
+            sourceUrl: valueUrl,
+            maxBytes: params.maxBytes,
+            fallbackContentType: item.contentType ?? undefined,
+            subdir: "inbound",
+          });
+          out.push({
+            path: saved.path,
+            contentType: saved.contentType,
+            placeholder: inferPlaceholder({ contentType: saved.contentType }),
+          });
         } finally {
           await release();
         }
@@ -241,6 +247,7 @@ async function downloadGraphHostedContent(params: {
         });
         continue;
       }
+      continue;
     } else {
       continue;
     }
@@ -281,6 +288,7 @@ export async function downloadMSTeamsGraphMedia(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
@@ -392,6 +400,7 @@ export async function downloadMSTeamsGraphMedia(params: {
                   url: requestUrl,
                   policy,
                   fetchFn,
+                  fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
                   requestInit: {
                     ...init,
                     headers,
@@ -462,6 +471,7 @@ export async function downloadMSTeamsGraphMedia(params: {
       allowHosts: policy.allowHosts,
       authAllowHosts: policy.authAllowHosts,
       fetchFn: params.fetchFn,
+      fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
       resolveFn: params.resolveFn,
       preserveFilenames: params.preserveFilenames,
       logger: params.logger,

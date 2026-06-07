@@ -1,26 +1,28 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Qa Matrix helper module supports config behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
 
-export type MatrixQaReplyToMode = "off" | "first" | "all" | "batched";
-export type MatrixQaThreadRepliesMode = "off" | "inbound" | "always";
-export type MatrixQaDmPolicy = "allowlist" | "disabled" | "open" | "pairing";
-export type MatrixQaGroupPolicy = "allowlist" | "disabled" | "open";
-export type MatrixQaAutoJoinMode = "allowlist" | "always" | "off";
-export type MatrixQaStreamingMode = "off" | "partial" | "quiet";
-export type MatrixQaActorRole = "driver" | "observer" | "sut";
-export type MatrixQaChunkMode = "length" | "newline";
-export type MatrixQaExecApprovalTarget = "both" | "channel" | "dm";
-export type MatrixQaExecApprovalsEnabled = boolean | "auto";
-export type MatrixQaAllowBotsMode = boolean | "mentions";
+type MatrixQaReplyToMode = "off" | "first" | "all" | "batched";
+type MatrixQaThreadRepliesMode = "off" | "inbound" | "always";
+type MatrixQaDmPolicy = "allowlist" | "disabled" | "open" | "pairing";
+type MatrixQaGroupPolicy = "allowlist" | "disabled" | "open";
+type MatrixQaAutoJoinMode = "allowlist" | "always" | "off";
+type MatrixQaStreamingMode = "off" | "partial" | "quiet";
+type MatrixQaActorRole = "driver" | "observer" | "sut";
+type MatrixQaChunkMode = "length" | "newline";
+type MatrixQaExecApprovalTarget = "both" | "channel" | "dm";
+type MatrixQaExecApprovalsEnabled = boolean | "auto";
+type MatrixQaAllowBotsMode = boolean | "mentions";
 
-export type MatrixQaStreamingConfig = {
+type MatrixQaStreamingConfig = {
   mode?: MatrixQaStreamingMode;
   preview?: {
     toolProgress?: boolean;
   };
 };
 
-export type MatrixQaAgentDefaultsOverrides = {
+type MatrixQaAgentDefaultsOverrides = {
   blockStreamingChunk?: {
     breakPreference?: "newline" | "paragraph" | "sentence";
     maxChars?: number;
@@ -33,19 +35,23 @@ export type MatrixQaAgentDefaultsOverrides = {
   };
 };
 
-export type MatrixQaToolConfigOverrides = {
+type MatrixQaToolConfigOverrides = {
   allow?: string[];
   deny?: string[];
 };
 
-export type MatrixQaGroupConfigOverrides = {
+type MatrixQaAudioConfigOverrides = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["audio"]
+>;
+
+type MatrixQaGroupConfigOverrides = {
   allowBots?: MatrixQaAllowBotsMode;
   enabled?: boolean;
   requireMention?: boolean;
   tools?: MatrixQaToolConfigOverrides;
 };
 
-export type MatrixQaDmConfigOverrides = {
+type MatrixQaDmConfigOverrides = {
   allowFrom?: string[];
   enabled?: boolean;
   policy?: MatrixQaDmPolicy;
@@ -53,15 +59,19 @@ export type MatrixQaDmConfigOverrides = {
   threadReplies?: MatrixQaThreadRepliesMode;
 };
 
-export type MatrixQaThreadBindingsConfigOverrides = {
+type MatrixQaThreadBindingsConfigOverrides = {
   enabled?: boolean;
   idleHours?: number;
   maxAgeHours?: number;
+  spawnSessions?: boolean;
+  defaultSpawnContext?: "isolated" | "fork";
+  /** @deprecated Use spawnSessions instead. */
   spawnAcpSessions?: boolean;
+  /** @deprecated Use spawnSessions instead. */
   spawnSubagentSessions?: boolean;
 };
 
-export type MatrixQaExecApprovalsConfigOverrides = {
+type MatrixQaExecApprovalsConfigOverrides = {
   agentFilter?: string[];
   approvers?: string[];
   enabled?: MatrixQaExecApprovalsEnabled;
@@ -85,6 +95,7 @@ export type MatrixQaConfigOverrides = {
   execApprovals?: MatrixQaExecApprovalsConfigOverrides;
   groupAllowFrom?: string[];
   groupAllowRoles?: MatrixQaActorRole[];
+  groupMentionPatterns?: string[];
   groupPolicy?: MatrixQaGroupPolicy;
   configuredBotRoles?: MatrixQaActorRole[];
   groupsByKey?: Record<string, MatrixQaGroupConfigOverrides>;
@@ -94,6 +105,7 @@ export type MatrixQaConfigOverrides = {
   textChunkLimit?: number;
   threadBindings?: MatrixQaThreadBindingsConfigOverrides;
   threadReplies?: MatrixQaThreadRepliesMode;
+  audio?: MatrixQaAudioConfigOverrides;
   toolProfile?: "coding" | "messaging" | "minimal";
 };
 
@@ -118,6 +130,7 @@ export type MatrixQaConfigSnapshot = {
   execApprovals?: MatrixQaExecApprovalsConfigOverrides;
   configuredBotRoles: MatrixQaActorRole[];
   groupAllowFrom: string[];
+  groupMentionPatterns: string[];
   groupPolicy: MatrixQaGroupPolicy;
   groupsByKey: Record<string, MatrixQaGroupSnapshot>;
   replyToMode: MatrixQaReplyToMode;
@@ -162,7 +175,7 @@ type MatrixQaAccountExecApprovalsConfig = {
 };
 
 function normalizeMatrixQaAllowlist(entries?: string[]) {
-  return [...new Set((entries ?? []).map((entry) => entry.trim()).filter(Boolean))];
+  return uniqueStrings(normalizeStringEntries(entries ?? []));
 }
 
 function resolveMatrixQaGroupSnapshots(params: {
@@ -226,7 +239,7 @@ function resolveMatrixQaDmAllowFrom(params: {
   const dmParticipantUserIds = params.topology.rooms
     .filter((room) => room.kind === "dm")
     .flatMap((room) => room.memberUserIds.filter((userId) => userId !== params.sutUserId));
-  const dmAllowFrom = [...new Set(dmParticipantUserIds)];
+  const dmAllowFrom = uniqueStrings(dmParticipantUserIds);
   return dmAllowFrom.length > 0 ? dmAllowFrom : [params.driverUserId];
 }
 
@@ -501,6 +514,7 @@ export function buildMatrixQaConfigSnapshot(params: {
     execApprovals: params.overrides?.execApprovals,
     configuredBotRoles: [...(params.overrides?.configuredBotRoles ?? [])],
     groupAllowFrom: resolveMatrixQaGroupAllowFrom(params),
+    groupMentionPatterns: normalizeMatrixQaAllowlist(params.overrides?.groupMentionPatterns),
     groupPolicy: params.overrides?.groupPolicy ?? "allowlist",
     groupsByKey: resolveMatrixQaGroupSnapshots({
       overrides: params.overrides,
@@ -533,6 +547,7 @@ export function summarizeMatrixQaConfigSnapshot(snapshot: MatrixQaConfigSnapshot
     `dm.policy=${snapshot.dm.policy}`,
     `dm.sessionScope=${snapshot.dm.sessionScope}`,
     `dm.threadReplies=${snapshot.dm.threadReplies}`,
+    `groupMentionPatterns=${snapshot.groupMentionPatterns.length > 0 ? snapshot.groupMentionPatterns.join("|") : "<default>"}`,
     `streaming=${snapshot.streaming}`,
     `streaming.preview.toolProgress=${formatMatrixQaBoolean(snapshot.streamingPreviewToolProgress)}`,
     `textChunkLimit=${snapshot.textChunkLimit ?? "<default>"}`,
@@ -544,7 +559,7 @@ export function summarizeMatrixQaConfigSnapshot(snapshot: MatrixQaConfigSnapshot
     `encryption=${formatMatrixQaBoolean(snapshot.encryption)}`,
     `startupVerification=${snapshot.startupVerification ?? "<default>"}`,
     `threadBindings.enabled=${snapshot.threadBindings.enabled ?? "<default>"}`,
-    `threadBindings.spawnSubagentSessions=${snapshot.threadBindings.spawnSubagentSessions ?? "<default>"}`,
+    `threadBindings.spawnSessions=${snapshot.threadBindings.spawnSessions ?? "<default>"}`,
     `approvals.exec.enabled=${formatMatrixQaBoolean(snapshot.approvalForwarding.exec)}`,
     `approvals.plugin.enabled=${formatMatrixQaBoolean(snapshot.approvalForwarding.plugin)}`,
   ].join(", ");
@@ -566,7 +581,7 @@ export function buildMatrixQaConfig(
     topology: MatrixQaProvisionedTopology;
   },
 ): OpenClawConfig {
-  const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "matrix"])];
+  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "matrix"]);
   const snapshot = buildMatrixQaConfigSnapshot({
     driverUserId: params.driverUserId,
     observerUserId: params.observerUserId,
@@ -610,15 +625,35 @@ export function buildMatrixQaConfig(
         }
       : {};
 
+  const toolsConfig =
+    params.overrides?.toolProfile || params.overrides?.audio
+      ? {
+          ...baseCfg.tools,
+          ...(params.overrides?.toolProfile
+            ? {
+                profile: params.overrides.toolProfile,
+              }
+            : {}),
+          ...(params.overrides?.audio
+            ? {
+                media: {
+                  ...baseCfg.tools?.media,
+                  audio: {
+                    ...baseCfg.tools?.media?.audio,
+                    ...params.overrides.audio,
+                  },
+                },
+              }
+            : {}),
+        }
+      : undefined;
+
   return {
     ...baseCfg,
     ...approvalForwardingConfig,
-    ...(params.overrides?.toolProfile
+    ...(toolsConfig
       ? {
-          tools: {
-            ...baseCfg.tools,
-            profile: params.overrides.toolProfile,
-          },
+          tools: toolsConfig,
         }
       : {}),
     ...(params.overrides?.agentDefaults
@@ -644,6 +679,9 @@ export function buildMatrixQaConfig(
       ...baseCfg.messages,
       groupChat: {
         ...baseCfg.messages?.groupChat,
+        ...(snapshot.groupMentionPatterns.length > 0
+          ? { mentionPatterns: snapshot.groupMentionPatterns }
+          : {}),
         visibleReplies: "automatic",
       },
     },

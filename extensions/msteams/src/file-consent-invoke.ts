@@ -1,3 +1,4 @@
+// Msteams plugin module implements file consent invoke behavior.
 import { formatUnknownError } from "./errors.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
@@ -10,7 +11,7 @@ import type { MSTeamsTurnContext } from "./sdk-types.js";
 /**
  * Handle fileConsent/invoke activities for large file uploads.
  */
-export async function handleMSTeamsFileConsentInvoke(
+async function handleMSTeamsFileConsentInvoke(
   context: MSTeamsTurnContext,
   log: MSTeamsMonitorLogger,
 ): Promise<boolean> {
@@ -130,12 +131,15 @@ export async function handleMSTeamsFileConsentInvoke(
   return true;
 }
 
-export async function respondToMSTeamsFileConsentInvoke(
+/**
+ * Run the file-consent invoke handler after the SDK route has acknowledged the
+ * invoke. This intentionally does not send its own invokeResponse; it only does
+ * the delayed upload/update work.
+ */
+export async function runMSTeamsFileConsentInvokeHandler(
   context: MSTeamsTurnContext,
   log: MSTeamsMonitorLogger,
 ): Promise<void> {
-  await context.sendActivity({ type: "invokeResponse", value: { status: 200 } });
-
   try {
     await withRevokedProxyFallback({
       run: async () => await handleMSTeamsFileConsentInvoke(context, log),

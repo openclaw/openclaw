@@ -1,7 +1,8 @@
+// Browser tests cover server.auth token gates http plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { isAuthorizedBrowserRequest } from "./http-auth.js";
-import { getBrowserTestFetch, type BrowserTestFetch } from "./test-fetch.js";
+import { getBrowserTestFetch, type BrowserTestFetch } from "./test-support/fetch.js";
 
 let server: ReturnType<typeof createServer> | null = null;
 let port = 0;
@@ -41,7 +42,9 @@ describe("browser control HTTP auth", () => {
     if (!current) {
       return;
     }
-    await new Promise<void>((resolve) => current.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      current.close(() => resolve());
+    });
   });
 
   it("requires bearer auth for standalone browser HTTP routes", async () => {

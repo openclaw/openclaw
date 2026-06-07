@@ -1,3 +1,4 @@
+// Applies fast-lane reply directives before normal delivery processing.
 import type { ReplyPayload } from "../types.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
@@ -90,9 +91,12 @@ export async function applyInlineDirectivesFastLane(
     currentReasoningLevel,
     currentElevatedLevel,
     ctx,
+    messageProvider: ctx.Provider,
     surface: ctx.Surface,
     gatewayClientScopes: ctx.GatewayClientScopes,
+    commandAuthorized,
     senderIsOwner: params.senderIsOwner,
+    workspaceDir: params.workspaceDir,
   });
 
   if (sessionEntry?.providerOverride) {

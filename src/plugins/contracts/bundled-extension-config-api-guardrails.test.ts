@@ -1,3 +1,4 @@
+// Bundled extension config API guardrail tests cover config API usage in bundled extensions.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +34,7 @@ const BUNDLED_EXTENSION_CONFIG_IMPORT_GUARDS = [
   },
   {
     path: "extensions/googlechat/src/config-schema.ts",
-    allowedSpecifier: "../runtime-api.js",
+    allowedSpecifier: "../config-api.js",
   },
   // Teams keeps a package-local config barrel so production code does not
   // reach through a public plugin-sdk helper seam from inside the same extension.

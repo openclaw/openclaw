@@ -1,19 +1,20 @@
+// Summarizes extra security audit findings for user-facing output.
+import { resolveProviderToolPolicy } from "../agents/agent-tools.policy.js";
+import { parseModelRef } from "../agents/model-selection-normalize.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import { collectAuditModelRefs } from "./audit-model-refs.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
+/** Lightweight audit finding shape used by summary-only audit helpers. */
 export type SecurityAuditFinding = {
   checkId: string;
   severity: "info" | "warn" | "critical";
@@ -23,8 +24,6 @@ export type SecurityAuditFinding = {
 };
 
 const SMALL_MODEL_PARAM_B_MAX = 300;
-
-type ModelRef = { id: string; source: string };
 
 function summarizeGroupPolicy(cfg: OpenClawConfig): {
   open: number;
@@ -55,59 +54,6 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
   return { open, allowlist, other };
 }
 
-function addModel(models: ModelRef[], raw: unknown, source: string) {
-  if (typeof raw !== "string") {
-    return;
-  }
-  const id = raw.trim();
-  if (!id) {
-    return;
-  }
-  models.push({ id, source });
-}
-
-function collectModels(cfg: OpenClawConfig): ModelRef[] {
-  const out: ModelRef[] = [];
-  addModel(
-    out,
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
-    "agents.defaults.model.primary",
-  );
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {
-    addModel(out, fallback, "agents.defaults.model.fallbacks");
-  }
-  addModel(
-    out,
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel),
-    "agents.defaults.imageModel.primary",
-  );
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
-    addModel(out, fallback, "agents.defaults.imageModel.fallbacks");
-  }
-
-  const list = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
-  for (const agent of list ?? []) {
-    if (!agent || typeof agent !== "object") {
-      continue;
-    }
-    const id =
-      typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id : "";
-    const model = (agent as { model?: unknown }).model;
-    if (typeof model === "string") {
-      addModel(out, model, `agents.list.${id}.model`);
-    } else if (model && typeof model === "object") {
-      addModel(out, (model as { primary?: unknown }).primary, `agents.list.${id}.model.primary`);
-      const fallbacks = (model as { fallbacks?: unknown }).fallbacks;
-      if (Array.isArray(fallbacks)) {
-        for (const fallback of fallbacks) {
-          addModel(out, fallback, `agents.list.${id}.model.fallbacks`);
-        }
-      }
-    }
-  }
-  return out;
-}
-
 function extractAgentIdFromSource(source: string): string | null {
   const match = source.match(/^agents\.list\.([^.]*)\./);
   return match?.[1] ?? null;
@@ -118,6 +64,8 @@ function resolveToolPolicies(params: {
   agentTools?: AgentToolsConfig;
   sandboxMode?: "off" | "non-main" | "all";
   agentId?: string | null;
+  modelProvider?: string;
+  modelId?: string;
 }): SandboxToolPolicy[] {
   const policies: SandboxToolPolicy[] = [];
   const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
@@ -136,6 +84,24 @@ function resolveToolPolicies(params: {
     policies.push(agentPolicy);
   }
 
+  const globalProviderPolicy = resolveProviderToolPolicy({
+    byProvider: params.cfg.tools?.byProvider,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  if (globalProviderPolicy) {
+    policies.push(globalProviderPolicy);
+  }
+
+  const agentProviderPolicy = resolveProviderToolPolicy({
+    byProvider: params.agentTools?.byProvider,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  if (agentProviderPolicy) {
+    policies.push(agentProviderPolicy);
+  }
+
   if (params.sandboxMode === "all") {
     policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
   }
@@ -148,7 +114,6 @@ function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
     config: cfg,
     env,
     origin: "bundled",
-    bundledAllowlistCompat: true,
   });
 }
 
@@ -175,6 +140,7 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
   return cfg.browser?.enabled !== false;
 }
 
+/** Produce a concise inventory of major security-relevant surfaces. */
 export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
@@ -205,25 +171,26 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
   ];
 }
 
+/** Flag small-parameter models when they retain web/browser tool exposure. */
 export function collectSmallModelRiskFindings(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const models = collectModels(params.cfg).filter((entry) => !entry.source.includes("imageModel"));
+  const models = collectAuditModelRefs(params.cfg).filter(
+    (entry) => !entry.source.includes("imageModel"),
+  );
   if (models.length === 0) {
     return findings;
   }
 
-  const smallModels = models
-    .map((entry) => {
-      const paramB = inferParamBFromIdOrName(entry.id);
-      if (!paramB || paramB > SMALL_MODEL_PARAM_B_MAX) {
-        return null;
-      }
-      return { ...entry, paramB };
-    })
-    .filter((entry): entry is { id: string; source: string; paramB: number } => Boolean(entry));
+  const smallModels: Array<{ id: string; source: string; paramB: number }> = [];
+  for (const entry of models) {
+    const paramB = inferParamBFromIdOrName(entry.id);
+    if (paramB && paramB <= SMALL_MODEL_PARAM_B_MAX) {
+      smallModels.push({ id: entry.id, source: entry.source, paramB });
+    }
+  }
 
   if (smallModels.length === 0) {
     return findings;
@@ -234,6 +201,11 @@ export function collectSmallModelRiskFindings(params: {
   const exposureSet = new Set<string>();
   for (const entry of smallModels) {
     const agentId = extractAgentIdFromSource(entry.source);
+    // Evaluate each model in its agent context because sandbox/tool policy can
+    // differ per agent and provider override.
+    const modelRef = parseModelRef(entry.id, "openai", {
+      allowPluginNormalization: false,
+    });
     const sandboxMode = resolveSandboxConfigForAgent(params.cfg, agentId ?? undefined).mode;
     const agentTools =
       agentId && params.cfg.agents?.list
@@ -244,6 +216,8 @@ export function collectSmallModelRiskFindings(params: {
       agentTools,
       sandboxMode,
       agentId,
+      modelProvider: modelRef?.provider,
+      modelId: modelRef?.model,
     });
     const exposed: string[] = [];
     if (
@@ -263,7 +237,7 @@ export function collectSmallModelRiskFindings(params: {
     }
     const sandboxLabel = sandboxMode === "all" ? "sandbox=all" : `sandbox=${sandboxMode}`;
     const exposureLabel = exposed.length > 0 ? ` web=[${exposed.join(", ")}]` : " web=[off]";
-    const safe = sandboxMode === "all" && exposed.length === 0;
+    const safe = exposed.length === 0;
     if (!safe) {
       hasUnsafe = true;
     }
@@ -291,7 +265,7 @@ export function collectSmallModelRiskFindings(params: {
       `\n` +
       "Small models are not recommended for untrusted inputs.",
     remediation:
-      'If you must use small models, enable sandboxing for all sessions (agents.defaults.sandbox.mode="all") and disable web_search/web_fetch/browser (tools.deny=["group:web","browser"]).',
+      'If you must use small models, disable web_search/web_fetch/browser globally or for each small model with tools.byProvider["provider/model"].deny=["group:web","browser"]; use agents.defaults.sandbox.mode="all" for defense in depth.',
   });
 
   return findings;

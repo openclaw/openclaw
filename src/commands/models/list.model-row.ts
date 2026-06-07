@@ -1,9 +1,9 @@
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+/** Converts registry/catalog models into printable model-list rows. */
 import { modelKey } from "../../agents/model-ref-shared.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ModelRow } from "./list.types.js";
 
+/** Minimal model shape needed to render a model-list row. */
 export type ListRowModel = {
   id: string;
   name: string;
@@ -14,26 +14,16 @@ export type ListRowModel = {
   contextTokens?: number | null;
 };
 
-export type ModelAuthAvailabilityResolver = (params: {
-  provider: string;
-  cfg: OpenClawConfig;
-  authStore: AuthProfileStore;
-}) => boolean;
+/** Provider-auth predicate used when model-level availability is unavailable. */
+export type ModelAuthAvailabilityResolver = (provider: string) => boolean;
 
-function authStoreHasProviderProfile(authStore: AuthProfileStore, provider: string): boolean {
-  return Object.values(authStore.profiles ?? {}).some(
-    (credential) => credential.provider === provider,
-  );
-}
-
+/** Builds a display row, preserving configured tags and alias metadata. */
 export function toModelRow(params: {
   model?: ListRowModel;
   key: string;
   tags: string[];
   aliases?: string[];
   availableKeys?: Set<string>;
-  cfg?: OpenClawConfig;
-  authStore?: AuthProfileStore;
   allowProviderAvailabilityFallback?: boolean;
   hasAuthForProvider?: ModelAuthAvailabilityResolver;
 }): ModelRow {
@@ -43,8 +33,6 @@ export function toModelRow(params: {
     tags,
     aliases = [],
     availableKeys,
-    cfg,
-    authStore,
     allowProviderAvailabilityFallback = false,
   } = params;
   if (!model) {
@@ -69,17 +57,7 @@ export function toModelRow(params: {
   const available =
     availableKeys !== undefined && !allowProviderAvailabilityFallback
       ? modelIsAvailable
-      : modelIsAvailable ||
-        (cfg && authStore
-          ? (
-              params.hasAuthForProvider ??
-              ((input) => authStoreHasProviderProfile(input.authStore, input.provider))
-            )({
-              provider: model.provider,
-              cfg,
-              authStore,
-            })
-          : false);
+      : modelIsAvailable || (params.hasAuthForProvider?.(model.provider) ?? false);
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {

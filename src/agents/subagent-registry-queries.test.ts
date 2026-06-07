@@ -1,3 +1,5 @@
+// Subagent registry query tests cover liveness, descendant counting, requester
+// lookup, and stale-row handling for in-memory run snapshots.
 import { describe, expect, it } from "vitest";
 import {
   countActiveRunsForSessionFromRuns,
@@ -223,7 +225,7 @@ describe("subagent registry query regressions", () => {
   });
 
   it("regression nested parallel counting, traversal includes child and grandchildren pending states", () => {
-    // Regression guard: nested fan-out once under-counted grandchildren and announced too early.
+    // Nested fan-out once under-counted grandchildren and announced too early.
     const parentSessionKey = "agent:main:subagent:parent-nested";
     const middleSessionKey = `${parentSessionKey}:subagent:middle`;
     const runs = toRunMap([
@@ -526,12 +528,12 @@ describe("subagent registry query regressions", () => {
       }),
     ]);
 
-    expect(resolveRequesterForChildSessionFromRuns(runs, childOneSessionKey)).toMatchObject({
-      requesterSessionKey: parentSessionKey,
-    });
-    expect(resolveRequesterForChildSessionFromRuns(runs, childTwoSessionKey)).toMatchObject({
-      requesterSessionKey: parentSessionKey,
-    });
+    expect(
+      resolveRequesterForChildSessionFromRuns(runs, childOneSessionKey)?.requesterSessionKey,
+    ).toBe(parentSessionKey);
+    expect(
+      resolveRequesterForChildSessionFromRuns(runs, childTwoSessionKey)?.requesterSessionKey,
+    ).toBe(parentSessionKey);
     expect(shouldIgnorePostCompletionAnnounceForSessionFromRuns(runs, parentSessionKey)).toBe(
       false,
     );
@@ -570,9 +572,9 @@ describe("subagent registry query regressions", () => {
       }),
     );
 
-    expect(resolveRequesterForChildSessionFromRuns(runs, childThreeSessionKey)).toMatchObject({
-      requesterSessionKey: parentSessionKey,
-    });
+    expect(
+      resolveRequesterForChildSessionFromRuns(runs, childThreeSessionKey)?.requesterSessionKey,
+    ).toBe(parentSessionKey);
     expect(shouldIgnorePostCompletionAnnounceForSessionFromRuns(runs, parentSessionKey)).toBe(
       false,
     );

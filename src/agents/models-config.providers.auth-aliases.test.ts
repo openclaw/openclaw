@@ -1,3 +1,4 @@
+// Verifies provider auth aliases share trusted env/profile credentials.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
@@ -63,14 +64,39 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 }));
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: loadPluginManifestRegistry,
+  resolveInstalledManifestRegistryIndexFingerprint: () => "test-installed-index",
 }));
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: () => ({ plugins: [] }),
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
   loadPluginManifestRegistryForPluginRegistry: () => loadPluginManifestRegistry(),
 }));
 vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin,
 }));
+
+function expectAuthResult(
+  value: ReturnType<ReturnType<typeof createProviderAuthResolver>>,
+  expected: {
+    apiKey?: string;
+    mode: string;
+    source: string;
+    profileId?: string;
+  },
+) {
+  // Keep auth result assertions focused on persisted marker/source fields
+  // rather than the whole resolver result shape.
+  expect(value.apiKey).toBe(expected.apiKey);
+  expect(value.mode).toBe(expected.mode);
+  expect(value.source).toBe(expected.source);
+  if ("profileId" in expected) {
+    expect(value.profileId).toBe(expected.profileId);
+  }
+}
 
 describe("provider auth aliases", () => {
   beforeEach(async () => {
@@ -89,12 +115,12 @@ describe("provider auth aliases", () => {
       { version: 1, profiles: {} },
     );
 
-    expect(resolveAuth("fixture-provider")).toMatchObject({
+    expectAuthResult(resolveAuth("fixture-provider"), {
       apiKey: "FIXTURE_PROVIDER_API_KEY",
       mode: "api_key",
       source: "env",
     });
-    expect(resolveAuth("fixture-provider-plan")).toMatchObject({
+    expectAuthResult(resolveAuth("fixture-provider-plan"), {
       apiKey: "FIXTURE_PROVIDER_API_KEY",
       mode: "api_key",
       source: "env",
@@ -113,13 +139,13 @@ describe("provider auth aliases", () => {
       },
     });
 
-    expect(resolveAuth("fixture-provider")).toMatchObject({
+    expectAuthResult(resolveAuth("fixture-provider"), {
       apiKey: "FIXTURE_PROVIDER_API_KEY",
       mode: "api_key",
       source: "profile",
       profileId: "fixture-provider:default",
     });
-    expect(resolveAuth("fixture-provider-plan")).toMatchObject({
+    expectAuthResult(resolveAuth("fixture-provider-plan"), {
       apiKey: "FIXTURE_PROVIDER_API_KEY",
       mode: "api_key",
       source: "profile",
@@ -128,6 +154,8 @@ describe("provider auth aliases", () => {
   });
 
   it("ignores provider auth aliases from untrusted workspace plugins during runtime auth lookup", () => {
+    // Workspace plugins cannot alias themselves to bundled provider auth and
+    // inherit its credentials at runtime.
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
@@ -163,12 +191,12 @@ describe("provider auth aliases", () => {
       {},
     );
 
-    expect(resolveAuth("openai")).toMatchObject({
+    expectAuthResult(resolveAuth("openai"), {
       apiKey: "OPENAI_API_KEY",
       mode: "api_key",
       source: "env",
     });
-    expect(resolveAuth("evil-openai")).toMatchObject({
+    expectAuthResult(resolveAuth("evil-openai"), {
       apiKey: undefined,
       mode: "none",
       source: "none",
@@ -219,7 +247,7 @@ describe("provider auth aliases", () => {
       },
     );
 
-    expect(resolveAuth("openai-compatible")).toMatchObject({
+    expectAuthResult(resolveAuth("openai-compatible"), {
       apiKey: "OPENAI_API_KEY",
       mode: "api_key",
       source: "env",

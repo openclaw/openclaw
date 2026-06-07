@@ -1,10 +1,12 @@
+// Detects system command availability for setup and diagnostics.
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 
@@ -26,7 +28,7 @@ export type SystemPresence = {
   ts: number;
 };
 
-export type SystemPresenceUpdate = {
+type SystemPresenceUpdate = {
   key: string;
   previous?: SystemPresence;
   next: SystemPresence;
@@ -37,6 +39,7 @@ export type SystemPresenceUpdate = {
 const entries = new Map<string, SystemPresence>();
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ENTRIES = 200;
+const SELF_INSTANCE_ID = randomUUID();
 
 function normalizePresenceKey(key: string | undefined): string | undefined {
   return normalizeOptionalLowercaseString(key);
@@ -102,6 +105,7 @@ function initSelfPresence() {
     modelIdentifier,
     mode: "gateway",
     reason: "self",
+    instanceId: SELF_INSTANCE_ID,
     text,
     ts: Date.now(),
   };

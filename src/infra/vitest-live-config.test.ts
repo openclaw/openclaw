@@ -1,3 +1,4 @@
+// Covers live Vitest config shape.
 import { describe, expect, it } from "vitest";
 import {
   normalizeConfigPath,
@@ -23,8 +24,9 @@ describe("live vitest config", () => {
       "test/**/*.live.test.ts",
       BUNDLED_PLUGIN_LIVE_TEST_GLOB,
     ]);
-    expect(normalizeConfigPaths(liveConfig.test?.setupFiles)).toContain(
+    expect(normalizeConfigPaths(liveConfig.test?.setupFiles)).toEqual([
+      "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
-    );
+    ]);
   });
 });

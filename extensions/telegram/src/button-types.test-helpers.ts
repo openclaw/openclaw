@@ -1,3 +1,4 @@
+// Telegram helper module supports button types helpers behavior.
 import { describe, expect, it } from "vitest";
 import { buildTelegramInteractiveButtons, resolveTelegramInlineButtons } from "./button-types.js";
 
@@ -11,7 +12,9 @@ export function describeTelegramInteractiveButtonBehavior(): void {
               type: "buttons",
               buttons: [
                 { label: "Approve", value: "approve", style: "success" },
+                { label: "Docs", url: "https://example.com/docs", style: "primary" },
                 { label: "Reject", value: "reject", style: "danger" },
+                { label: "Launch", webApp: { url: "https://example.com/app" } },
                 { label: "Later", value: "later" },
                 { label: "Archive", value: "archive" },
               ],
@@ -25,10 +28,14 @@ export function describeTelegramInteractiveButtonBehavior(): void {
       ).toEqual([
         [
           { text: "Approve", callback_data: "approve", style: "success" },
+          { text: "Docs", url: "https://example.com/docs", style: "primary" },
           { text: "Reject", callback_data: "reject", style: "danger" },
-          { text: "Later", callback_data: "later", style: undefined },
         ],
-        [{ text: "Archive", callback_data: "archive", style: undefined }],
+        [
+          { text: "Launch", web_app: { url: "https://example.com/app" }, style: undefined },
+          { text: "Later", callback_data: "later", style: undefined },
+          { text: "Archive", callback_data: "archive", style: undefined },
+        ],
         [{ text: "Alpha", callback_data: "alpha", style: undefined }],
       ]);
     });
@@ -60,12 +67,43 @@ export function describeTelegramInteractiveButtonBehavior(): void {
             blocks: [
               {
                 type: "buttons",
-                buttons: [{ label: "Retry", value: "retry", style: "primary" }],
+                buttons: [
+                  { label: "Retry", value: "retry", style: "primary" },
+                  { label: "Docs", value: "docs", url: "https://example.com/docs" },
+                ],
               },
             ],
           },
         }),
-      ).toEqual([[{ text: "Retry", callback_data: "retry", style: "primary" }]]);
+      ).toEqual([
+        [
+          { text: "Retry", callback_data: "retry", style: "primary" },
+          { text: "Docs", url: "https://example.com/docs", style: undefined },
+        ],
+      ]);
+    });
+
+    it("prefers legacy interactive buttons over generic presentation buttons", () => {
+      expect(
+        resolveTelegramInlineButtons({
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Generic", value: "generic" }],
+              },
+            ],
+          },
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Legacy", value: "legacy" }],
+              },
+            ],
+          },
+        }),
+      ).toEqual([[{ text: "Legacy", callback_data: "legacy", style: undefined }]]);
     });
   });
 }

@@ -1,9 +1,13 @@
+/** Loads plugin CLI registrations lazily for the command tree and plugin-owned subcommands. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import {
   buildPluginRuntimeLoadOptions,
@@ -19,6 +23,7 @@ import type {
 
 export type PluginCliLoaderOptions = Pick<PluginLoadOptions, "pluginSdkResolution">;
 
+/** Public CLI loader options passed from command bootstrap surfaces. */
 export type PluginCliPublicLoadParams = {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -35,11 +40,13 @@ export type PluginCliRegistryLoadResult = PluginCliLoadContext & {
 
 export type PluginCliCommandGroupEntry = {
   pluginId: string;
+  parentPath: readonly string[];
   placeholders: readonly OpenClawPluginCliCommandDescriptor[];
   names: readonly string[];
   register: (program: OpenClawPluginCliContext["program"]) => Promise<void>;
 };
 
+/** Creates the default plugin CLI logger shared with runtime loading. */
 export function createPluginCliLogger(): PluginLogger {
   return createPluginRuntimeLoaderLogger();
 }
@@ -53,20 +60,24 @@ function buildPluginCliLoaderParams(
   params?: { primaryCommand?: string },
   loaderOptions?: PluginCliLoaderOptions,
 ) {
-  const onlyPluginIds = resolvePrimaryCommandPluginIds(context, params?.primaryCommand);
+  const onlyPluginIds = resolvePrimaryCommandManifestPluginIds(context, params?.primaryCommand);
   return buildPluginRuntimeLoadOptions(context, {
     ...loaderOptions,
-    ...(onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
+    ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
   });
 }
 
-function resolvePrimaryCommandPluginIds(
+function normalizePluginCliRootName(value: string | undefined): string {
+  return normalizeLowercaseStringOrEmpty(value);
+}
+
+function resolvePrimaryCommandManifestPluginIds(
   context: PluginCliLoadContext,
   primaryCommand: string | undefined,
-): string[] {
-  const normalizedPrimary = primaryCommand?.trim();
+): string[] | undefined {
+  const normalizedPrimary = normalizePluginCliRootName(primaryCommand);
   if (!normalizedPrimary) {
-    return [];
+    return undefined;
   }
   return resolveManifestActivationPluginIds({
     trigger: {
@@ -79,6 +90,47 @@ function resolvePrimaryCommandPluginIds(
   });
 }
 
+function listPluginCliRootOwnerIds(registry: PluginRegistry, primaryCommand: string): string[] {
+  const normalizedPrimary = normalizePluginCliRootName(primaryCommand);
+  if (!normalizedPrimary) {
+    return [];
+  }
+  return uniqueStrings(
+    registry.cliRegistrars
+      .filter((entry) => {
+        const parentPath = entry.parentPath ?? [];
+        const roots =
+          parentPath.length > 0
+            ? [parentPath[0]]
+            : [...entry.commands, ...entry.descriptors.map((descriptor) => descriptor.name)];
+        return roots.includes(normalizedPrimary);
+      })
+      .map((entry) => entry.pluginId),
+  );
+}
+
+async function resolvePrimaryCommandPluginIds(
+  context: PluginCliLoadContext,
+  primaryCommand: string | undefined,
+  loaderOptions?: PluginCliLoaderOptions,
+): Promise<string[] | undefined> {
+  const normalizedPrimary = normalizePluginCliRootName(primaryCommand);
+  if (!normalizedPrimary) {
+    return undefined;
+  }
+  const manifestPluginIds = resolvePrimaryCommandManifestPluginIds(context, normalizedPrimary);
+  if (manifestPluginIds && manifestPluginIds.length > 0) {
+    return manifestPluginIds;
+  }
+  const { registry } = await loadPluginCliMetadataRegistryWithContext(
+    context,
+    { primaryCommand: normalizedPrimary },
+    loaderOptions,
+  );
+  return listPluginCliRootOwnerIds(registry, normalizedPrimary);
+}
+
+/** Builds the runtime load context used for CLI-only plugin registry loading. */
 export function resolvePluginCliLoadContext(params: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -109,15 +161,31 @@ export async function loadPluginCliCommandRegistryWithContext(params: {
   primaryCommand?: string;
   loaderOptions?: PluginCliLoaderOptions;
 }): Promise<PluginCliRegistryLoadResult> {
-  const onlyPluginIds = resolvePrimaryCommandPluginIds(params.context, params.primaryCommand);
+  let onlyPluginIds: string[] | undefined;
+  try {
+    onlyPluginIds = await resolvePrimaryCommandPluginIds(
+      params.context,
+      params.primaryCommand,
+      params.loaderOptions,
+    );
+  } catch {
+    onlyPluginIds = resolvePrimaryCommandManifestPluginIds(params.context, params.primaryCommand);
+  }
+  if (onlyPluginIds && onlyPluginIds.length === 0) {
+    return {
+      ...params.context,
+      registry: createEmptyPluginRegistry(),
+    };
+  }
   return {
     ...params.context,
     registry: loadOpenClawPlugins(
       buildPluginRuntimeLoadOptions(params.context, {
         ...params.loaderOptions,
-        ...(onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
+        ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
         activate: false,
         cache: false,
+        forceFullRuntimeForChannelPlugins: true,
         runtimeOptions: {
           nodes: createPluginCliGatewayNodesRuntime(),
         },
@@ -134,11 +202,13 @@ function buildPluginCliCommandGroupEntries(params: {
 }): PluginCliCommandGroupEntry[] {
   return params.registry.cliRegistrars.map((entry) => ({
     pluginId: entry.pluginId,
+    parentPath: entry.parentPath ?? [],
     placeholders: entry.descriptors,
     names: entry.commands,
     register: async (program) => {
       await entry.register({
         program,
+        parentPath: entry.parentPath ?? [],
         config: params.config,
         workspaceDir: params.workspaceDir,
         logger: params.logger,
@@ -163,7 +233,9 @@ export async function loadPluginCliDescriptors(
       params.loaderOptions,
     );
     return collectUniqueCommandDescriptors(
-      registry.cliRegistrars.map((entry) => entry.descriptors),
+      registry.cliRegistrars
+        .filter((entry) => (entry.parentPath ?? []).length === 0)
+        .map((entry) => entry.descriptors),
     );
   } catch {
     return [];
@@ -194,6 +266,24 @@ export async function loadPluginCliRegistrationEntries(params: {
     workspaceDir,
     logger,
   });
+}
+
+export async function resolvePluginCliRootOwnerIds(
+  params: PluginCliPublicLoadParams,
+): Promise<string[] | null> {
+  const primaryCommand = normalizePluginCliRootName(params.primaryCommand);
+  if (!primaryCommand) {
+    return null;
+  }
+  const logger = resolvePluginCliLogger(params.logger);
+  const context = resolvePluginCliLoadContext({
+    cfg: params.cfg,
+    env: params.env,
+    logger,
+  });
+  return (
+    (await resolvePrimaryCommandPluginIds(context, primaryCommand, params.loaderOptions)) ?? null
+  );
 }
 
 export async function loadPluginCliRegistrationEntriesWithDefaults(

@@ -1,3 +1,5 @@
+// Proxy environment helpers mirror undici EnvHttpProxyAgent selection while
+// adding OpenClaw NO_PROXY CIDR/wildcard bypass checks.
 export const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -7,6 +9,7 @@ export const PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 
+/** Return whether any supported proxy environment variable is non-blank. */
 export function hasProxyEnvConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   for (const key of PROXY_ENV_KEYS) {
     const value = env[key];
@@ -18,6 +21,8 @@ export function hasProxyEnvConfigured(env: NodeJS.ProcessEnv = process.env): boo
 }
 
 function normalizeProxyEnvValue(value: string | undefined): string | null | undefined {
+  // Empty lowercase env vars intentionally shadow uppercase values, matching
+  // undici's EnvHttpProxyAgent precedence.
   if (typeof value !== "string") {
     return undefined;
   }
@@ -25,8 +30,11 @@ function normalizeProxyEnvValue(value: string | undefined): string | null | unde
   return trimmed.length > 0 ? trimmed : null;
 }
 
+/** Explicit proxy option shape accepted by undici EnvHttpProxyAgent. */
 export type EnvHttpProxyAgentProxyOptions = {
+  /** Proxy URL used for HTTP requests. */
   httpProxy?: string;
+  /** Proxy URL used for HTTPS requests. */
   httpsProxy?: string;
 };
 
@@ -52,6 +60,7 @@ export function resolveEnvHttpProxyUrl(
   return httpProxy ?? undefined;
 }
 
+/** Return whether EnvHttpProxyAgent-style HTTP/S proxy resolution finds a proxy URL. */
 export function hasEnvHttpProxyConfigured(
   protocol: "http" | "https" = "https",
   env: NodeJS.ProcessEnv = process.env,
@@ -86,10 +95,12 @@ export function resolveEnvHttpProxyAgentOptions(
   return options.httpProxy || options.httpsProxy ? options : undefined;
 }
 
+/** Return whether explicit EnvHttpProxyAgent options can be built from the environment. */
 export function hasEnvHttpProxyAgentConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   return resolveEnvHttpProxyAgentOptions(env) !== undefined;
 }
 
+/** Return whether a target URL should use configured HTTP/S env proxy variables. */
 export function shouldUseEnvHttpProxyForUrl(
   targetUrl: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -119,7 +130,7 @@ export function shouldUseEnvHttpProxyForUrl(
  * - Entries separated by commas OR whitespace (undici splits on `/[,\s]/`)
  * - Case-insensitive
  * - Empty or missing → no bypass
- * - `*` → bypass everything
+ * - Bare `*` value → bypass everything
  * - Exact hostname match
  * - Leading-dot match (`.example.com` matches `foo.example.com`)
  * - Leading `*.` wildcard match (`*.example.com` matches `foo.example.com`);
@@ -127,7 +138,10 @@ export function shouldUseEnvHttpProxyForUrl(
  *   matches (kept in sync with that behavior)
  * - Subdomain suffix match (`openai.com` matches `api.openai.com`)
  * - Optional `:port` suffix; when present, must match target port
- * - IPv6 literals in bracketed form (`[::1]`)
+ * - IPv6 literals in bracketed (`[::1]`) or bare (`::1`) form
+ * - OpenClaw extension: IPv4 CIDR and octet-wildcard entries
+ *   (`100.64.0.0/10`, `100.64.*`) bypass the trusted env proxy mode before
+ *   undici's EnvHttpProxyAgent is selected.
  *
  * Undici does not export its matcher, so this is a targeted reimplementation
  * kept in sync with the upstream file above. Paired with
@@ -153,6 +167,10 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     return false;
   }
 
+  if (raw === "*") {
+    return true;
+  }
+
   const targetPort =
     parsed.port !== ""
       ? parsed.port
@@ -170,10 +188,6 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     if (!entry) {
       continue;
     }
-    if (entry === "*") {
-      return true;
-    }
-
     let entryHost: string;
     let entryPort: string | undefined;
     if (entry.startsWith("[")) {
@@ -184,10 +198,15 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
       entryHost = m[1];
       entryPort = m[2];
     } else {
-      const colonIdx = entry.lastIndexOf(":");
-      if (colonIdx > 0 && /^\d+$/.test(entry.slice(colonIdx + 1))) {
-        entryHost = entry.slice(0, colonIdx);
-        entryPort = entry.slice(colonIdx + 1);
+      const firstColonIdx = entry.indexOf(":");
+      const lastColonIdx = entry.lastIndexOf(":");
+      if (
+        firstColonIdx > -1 &&
+        firstColonIdx === lastColonIdx &&
+        /^\d+$/.test(entry.slice(lastColonIdx + 1))
+      ) {
+        entryHost = entry.slice(0, lastColonIdx);
+        entryPort = entry.slice(lastColonIdx + 1);
       } else {
         entryHost = entry;
       }
@@ -198,10 +217,15 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     }
 
     // Mirror undici: strip optional leading `*` followed by `.` so both
-    // `.example.com` and `*.example.com` normalize to `example.com`.
-    const normalizedEntry = entryHost.replace(/^\*?\./, "");
-    if (!normalizedEntry) {
+    // `.example.com` and `*.example.com` normalize to `example.com`. That also
+    // means apex hosts still match those entries after normalization.
+    const normalizedEntry = entryHost.replace(/^\*\./, "").replace(/^\./, "");
+    if (!normalizedEntry || normalizedEntry === "*") {
       continue;
+    }
+
+    if (matchesIpv4NoProxyPattern(targetHost, normalizedEntry)) {
+      return true;
     }
 
     if (targetHost === normalizedEntry) {
@@ -211,6 +235,64 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
       return true;
     }
   }
-
   return false;
+}
+
+function parseIpv4Address(host: string): number | undefined {
+  const parts = host.split(".");
+  if (parts.length !== 4) {
+    return undefined;
+  }
+  let value = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) {
+      return undefined;
+    }
+    const octet = Number(part);
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
+      return undefined;
+    }
+    value = (value << 8) | octet;
+  }
+  return value >>> 0;
+}
+
+function matchesIpv4NoProxyPattern(targetHost: string, entryHost: string): boolean {
+  const target = parseIpv4Address(targetHost);
+  if (target === undefined) {
+    return false;
+  }
+
+  const cidrMatch = entryHost.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
+  if (cidrMatch) {
+    const network = parseIpv4Address(cidrMatch[1]);
+    const prefixLength = Number(cidrMatch[2]);
+    if (network === undefined || prefixLength < 0 || prefixLength > 32) {
+      return false;
+    }
+    const mask = prefixLength === 0 ? 0 : (0xffffffff << (32 - prefixLength)) >>> 0;
+    return (target & mask) === (network & mask);
+  }
+
+  if (!entryHost.includes("*")) {
+    return false;
+  }
+  const targetParts = targetHost.split(".");
+  const patternParts = entryHost.split(".");
+  if (patternParts.length > 4 || patternParts.length === 0) {
+    return false;
+  }
+  for (let index = 0; index < patternParts.length; index += 1) {
+    const part = patternParts[index];
+    if (part === "*") {
+      if (index === patternParts.length - 1) {
+        return true;
+      }
+      continue;
+    }
+    if (!/^\d{1,3}$/.test(part) || Number(part) !== Number(targetParts[index])) {
+      return false;
+    }
+  }
+  return patternParts.length === targetParts.length;
 }

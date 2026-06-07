@@ -1,6 +1,13 @@
+// Memory Wiki plugin module implements cli behavior.
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isRecord,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
 import {
@@ -26,7 +33,12 @@ import {
   runObsidianOpen,
   runObsidianSearch,
 } from "./obsidian.js";
-import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
+import {
+  getMemoryWikiPage,
+  searchMemoryWiki,
+  WIKI_SEARCH_MODES,
+  type WikiSearchMode,
+} from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import type { MemoryWikiImportedSourceSyncResult } from "./source-sync.js";
 import {
@@ -81,6 +93,7 @@ type WikiSearchCommandOptions = {
   maxResults?: number;
   backend?: ResolvedMemoryWikiConfig["search"]["backend"];
   corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
+  mode?: WikiSearchMode;
 };
 
 type WikiGetCommandOptions = {
@@ -188,10 +201,6 @@ function shouldRouteBridgeRuntimeThroughGateway(config: ResolvedMemoryWikiConfig
   return (
     config.vaultMode === "bridge" && config.bridge.enabled && config.bridge.readMemoryArtifacts
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isBoundedGatewayString(
@@ -330,11 +339,8 @@ function normalizeCliStringList(values?: string[]): string[] | undefined {
   if (!values) {
     return undefined;
   }
-  const normalized = values
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .filter((value, index, all) => all.indexOf(value) === index);
-  return normalized.length > 0 ? normalized : undefined;
+  const uniqueValues = uniqueStrings(normalizeStringEntries(values));
+  return uniqueValues.length > 0 ? uniqueValues : undefined;
 }
 
 function collectCliValues(value: string, acc: string[] = []) {
@@ -427,14 +433,38 @@ function addWikiSearchConfigOptions<T extends Command>(command: T): T {
     );
 }
 
+function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
+  const error = new Error(message) as Error & { code: string; exitCode: number };
+  error.name = "InvalidArgumentError";
+  // Commander recognizes parser failures by code; keep the import type-only for bundled plugin deps.
+  error.code = "commander.invalidArgument";
+  error.exitCode = 1;
+  return error;
+}
+
+function parseWikiConfidenceOption(value: string): number {
+  const trimmed = value.trim();
+  const confidence = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    throw invalidCliArgument("--confidence must be a number between 0 and 1.");
+  }
+  return confidence;
+}
+
+function parseWikiPositiveIntegerOption(value: string, flag: string): number {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw invalidCliArgument(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
 function addWikiApplyMutationOptions<T extends Command>(command: T): T {
   return command
     .option("--source-id <id>", "Source id", collectCliValues)
     .option("--contradiction <text>", "Contradiction note", collectCliValues)
     .option("--question <text>", "Open question", collectCliValues)
-    .option("--confidence <n>", "Confidence score between 0 and 1", (value: string) =>
-      Number(value),
-    )
+    .option("--confidence <n>", "Confidence score between 0 and 1", parseWikiConfidenceOption)
     .option("--status <status>", "Page status");
 }
 
@@ -567,9 +597,13 @@ export async function runWikiSearch(params: {
   maxResults?: number;
   searchBackend?: ResolvedMemoryWikiConfig["search"]["backend"];
   searchCorpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
+  mode?: WikiSearchMode;
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
+  if (params.mode && !(WIKI_SEARCH_MODES as readonly string[]).includes(params.mode)) {
+    throw new Error(`wiki search --mode must be one of: ${WIKI_SEARCH_MODES.join(", ")}.`);
+  }
   await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
   const results = await searchMemoryWiki({
     config: params.config,
@@ -578,6 +612,7 @@ export async function runWikiSearch(params: {
     maxResults: params.maxResults,
     searchBackend: params.searchBackend,
     searchCorpus: params.searchCorpus,
+    mode: params.mode,
   });
   const summary = params.json
     ? JSON.stringify(results, null, 2)
@@ -586,7 +621,7 @@ export async function runWikiSearch(params: {
       : results
           .map(
             (result, index) =>
-              `${index + 1}. ${result.title} (${result.corpus}/${result.kind})\nPath: ${result.path}${typeof result.startLine === "number" && typeof result.endLine === "number" ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${result.provenanceLabel}` : ""}\nSnippet: ${result.snippet}`,
+              `${index + 1}. ${result.title} (${result.corpus}/${result.kind})\nPath: ${result.path}${typeof result.startLine === "number" && typeof result.endLine === "number" ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${result.provenanceLabel}` : ""}${result.matchedClaimId ? `\nClaim: ${result.matchedClaimId}` : ""}${result.evidenceKinds && result.evidenceKinds.length > 0 ? `\nEvidence: ${result.evidenceKinds.join(", ")}` : ""}\nSnippet: ${result.snippet}`,
           )
           .join("\n\n");
   writeOutput(summary, params.stdout);
@@ -935,7 +970,10 @@ export function registerWikiCli(
       .command("search")
       .description("Search wiki pages and, when configured, the active memory corpus")
       .argument("<query>", "Search query")
-      .option("--max-results <n>", "Maximum results", (value: string) => Number(value)),
+      .option("--max-results <n>", "Maximum results", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--max-results"),
+      )
+      .option("--mode <mode>", `Search mode (${WIKI_SEARCH_MODES.join(", ")})`),
   )
     .option("--json", "Print JSON")
     .action(async (query: string, opts: WikiSearchCommandOptions) => {
@@ -946,6 +984,7 @@ export function registerWikiCli(
         maxResults: opts.maxResults,
         searchBackend: opts.backend,
         searchCorpus: opts.corpus,
+        mode: opts.mode,
         json: opts.json,
       });
     });
@@ -955,8 +994,12 @@ export function registerWikiCli(
       .command("get")
       .description("Read a wiki page by id or relative path, with optional active-memory fallback")
       .argument("<lookup>", "Relative path or page id")
-      .option("--from <n>", "Start line", (value: string) => Number(value))
-      .option("--lines <n>", "Number of lines", (value: string) => Number(value)),
+      .option("--from <n>", "Start line", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--from"),
+      )
+      .option("--lines <n>", "Number of lines", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--lines"),
+      ),
   )
     .option("--json", "Print JSON")
     .action(async (lookup: string, opts: WikiGetCommandOptions) => {

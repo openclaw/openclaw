@@ -1,4 +1,6 @@
-import { ChannelType, type Client } from "@buape/carbon";
+// Discord plugin module implements native interaction channel context behavior.
+import { ChannelType } from "../internal/discord.js";
+import type { DiscordChannelInfoClient } from "./message-utils.js";
 import { resolveDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 
 type DiscordInteractionChannel = {
@@ -6,7 +8,7 @@ type DiscordInteractionChannel = {
   type?: ChannelType;
 };
 
-export type DiscordNativeInteractionChannelContext = {
+type DiscordNativeInteractionChannelContext = {
   channelType?: ChannelType;
   isDirectMessage: boolean;
   isGroupDm: boolean;
@@ -21,7 +23,7 @@ export type DiscordNativeInteractionChannelContext = {
 
 export async function resolveDiscordNativeInteractionChannelContext(params: {
   channel: DiscordInteractionChannel | null | undefined;
-  client: Client;
+  client: DiscordChannelInfoClient;
   hasGuild: boolean;
   channelIdFallback: string;
 }): Promise<DiscordNativeInteractionChannelContext> {

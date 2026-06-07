@@ -1,3 +1,4 @@
+// Openrouter API module exposes the plugin public contract.
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 export function createOpenrouterProvider(): ProviderPlugin {
@@ -19,6 +20,7 @@ export function createOpenrouterProvider(): ProviderPlugin {
           groupId: "openrouter",
           groupLabel: "OpenRouter",
           groupHint: "API key",
+          onboardingScopes: ["text-inference", "music-generation"],
         },
       },
     ],

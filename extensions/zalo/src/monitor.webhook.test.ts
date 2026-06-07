@@ -1,3 +1,4 @@
+// Zalo tests cover monitor.webhook plugin behavior.
 import type { RequestListener } from "node:http";
 import {
   createEmptyPluginRegistry,
@@ -34,14 +35,16 @@ const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
 };
 
 function createWebhookRequestHandler(processUpdate?: ZaloWebhookProcessUpdate): RequestListener {
-  return async (req, res) => {
-    const handled = processUpdate
-      ? await handleZaloWebhookRequestInternal(req, res, processUpdate)
-      : await handleZaloWebhookRequest(req, res);
-    if (!handled) {
-      res.statusCode = 404;
-      res.end("not found");
-    }
+  return (req, res) => {
+    void (async () => {
+      const handled = processUpdate
+        ? await handleZaloWebhookRequestInternal(req, res, processUpdate)
+        : await handleZaloWebhookRequest(req, res);
+      if (!handled) {
+        res.statusCode = 404;
+        res.end("not found");
+      }
+    })();
   };
 }
 
@@ -426,7 +429,7 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
-  it("does not throw when replay metadata is partially missing", async () => {
+  it("accepts replay metadata when optional fields are missing", async () => {
     const sink = vi.fn();
     const unregister = registerTarget({ path: "/hook-replay-partial", statusSink: sink });
     const payload = {
@@ -549,7 +552,8 @@ describe("handleZaloWebhookRequest", () => {
       core,
       finalizeInboundContextMock,
       recordInboundSessionMock,
-      fetchRemoteMediaMock,
+      readRemoteMediaBufferMock,
+      saveRemoteMediaMock,
       saveMediaBufferMock,
     } = createImageLifecycleCore();
     const unregister = registerTarget({
@@ -559,6 +563,7 @@ describe("handleZaloWebhookRequest", () => {
         ...DEFAULT_ACCOUNT,
         config: {
           dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     });
@@ -581,9 +586,11 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
 
-    await vi.waitFor(() => expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1));
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
     expectImageLifecycleDelivery({
-      fetchRemoteMediaMock,
+      readRemoteMediaBufferMock,
+      saveRemoteMediaMock,
       saveMediaBufferMock,
       finalizeInboundContextMock,
       recordInboundSessionMock,
@@ -788,18 +795,17 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
 
-    expect(readAllowFromStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalo",
-        accountId: "work",
-      }),
-    );
-    expect(upsertPairingRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalo",
-        id: "123",
-        accountId: "work",
-      }),
-    );
+    expect(readAllowFromStore).toHaveBeenCalledTimes(1);
+    expect(readAllowFromStore).toHaveBeenCalledWith({
+      channel: "zalo",
+      accountId: "work",
+    });
+    expect(upsertPairingRequest).toHaveBeenCalledTimes(1);
+    expect(upsertPairingRequest).toHaveBeenCalledWith({
+      channel: "zalo",
+      accountId: "work",
+      id: "123",
+      meta: { name: "Attacker" },
+    });
   });
 });

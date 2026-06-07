@@ -1,3 +1,4 @@
+// Whatsapp API module exposes the plugin public contract.
 export {
   getActiveWebListener,
   resolveWebAccountId,
@@ -26,8 +27,8 @@ export {
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
   restoreCredsFromBackupIfNeeded,
-  WA_WEB_AUTH_DIR,
   webAuthExists,
+  WA_WEB_AUTH_DIR,
   WHATSAPP_AUTH_UNSTABLE_CODE,
   WhatsAppAuthUnstableError,
   type WhatsAppWebAuthState,
@@ -37,8 +38,6 @@ export {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
   monitorWebChannel,
-  resolveHeartbeatRecipients,
-  runWebHeartbeatOnce,
   SILENT_REPLY_TOKEN,
   stripHeartbeatToken,
   type WebChannelStatus,

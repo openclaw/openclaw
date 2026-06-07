@@ -1,3 +1,4 @@
+// Telegram API module exposes the plugin public contract.
 export { telegramPlugin } from "./src/channel.js";
 export { telegramSetupPlugin } from "./src/channel.setup.js";
 export {
@@ -42,7 +43,6 @@ export {
   buildTelegramThreadParams,
   buildTypingThreadParams,
   describeReplyTarget,
-  expandTextLinks,
   extractTelegramForumFlag,
   extractTelegramLocation,
   getTelegramTextParts,
@@ -182,3 +182,11 @@ export {
 export type { TelegramButtonStyle, TelegramInlineButtons } from "./src/button-types.js";
 export type { StickerMetadata } from "./src/bot/types.js";
 export type { TelegramTokenResolution } from "./src/token.js";
+export {
+  escapeTelegramHtml,
+  markdownToTelegramChunks,
+  markdownToTelegramHtml,
+  markdownToTelegramHtmlChunks,
+  splitTelegramHtmlChunks,
+  type TelegramFormattedChunk,
+} from "./src/format.js";

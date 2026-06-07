@@ -1,15 +1,23 @@
+// Covers shared attempt-execution helpers for prompt materialization and
+// guarded session-store persistence.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../internal-events.js";
 import {
+  persistSessionEntry,
   resolveAcpPromptBody,
   resolveInternalEventTranscriptBody,
 } from "./attempt-execution.shared.js";
 import type { AgentCommandOpts } from "./types.js";
 
 function makeTaskCompletionEvents(): NonNullable<AgentCommandOpts["internalEvents"]> {
+  // The result deliberately contains internal markers to prove child output
+  // cannot spoof OpenClaw runtime-context envelopes.
   return [
     {
       type: "task_completion",
@@ -46,6 +54,8 @@ describe("attempt execution prompt materialization", () => {
 
     const prompt = resolveAcpPromptBody(body, events);
 
+    // ACP receives visible event text, while private runtime envelopes stay out
+    // of the model-facing prompt.
     expect(prompt).toContain("A background task completed.");
     expect(prompt).toContain("inspect ACP delivery");
     expect(prompt).toContain("child result");
@@ -73,5 +83,38 @@ describe("attempt execution prompt materialization", () => {
     expect(transcriptBody).toContain("inspect ACP delivery");
     expect(transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
     expect(transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+  });
+});
+
+describe("persistSessionEntry", () => {
+  it("clears stale local entries when guarded persistence sees no persisted entry", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-store-"));
+    try {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionStore = {
+        main: {
+          sessionId: "stale",
+          updatedAt: 1,
+        },
+      };
+
+      // A guarded write can decline persistence after rereading disk; local
+      // memory must be cleared too so later turns do not reuse stale entries.
+      const persisted = await persistSessionEntry({
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+        entry: {
+          sessionId: "stale",
+          updatedAt: 2,
+        },
+        shouldPersist: (entry) => Boolean(entry),
+      });
+
+      expect(persisted).toBeUndefined();
+      expect(sessionStore.main).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

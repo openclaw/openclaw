@@ -1,3 +1,4 @@
+// Control UI tests cover chat model select state behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveChatModelOverrideValue,
@@ -11,7 +12,6 @@ import {
 } from "./chat-model.test-helpers.ts";
 
 type ChatModelStateInput = Parameters<typeof resolveChatModelSelectState>[0];
-type ResolvedChatModelState = ReturnType<typeof resolveChatModelSelectState>;
 
 function createChatModelState(
   params: Partial<Omit<ChatModelStateInput, "sessionKey">> = {},
@@ -23,19 +23,6 @@ function createChatModelState(
     sessionsResult: createSessionsListResult({ model: null, modelProvider: null }),
     ...params,
   };
-}
-
-function expectOptionValues(
-  resolved: ResolvedChatModelState,
-  params: { include?: string[]; exclude?: string[] },
-) {
-  const values = resolved.options.map((option) => option.value);
-  for (const value of params.include ?? []) {
-    expect(values).toContain(value);
-  }
-  for (const value of params.exclude ?? []) {
-    expect(values).not.toContain(value);
-  }
 }
 
 describe("chat-model-select-state", () => {
@@ -70,7 +57,10 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expectOptionValues(resolved, { include: ["openai/gpt-5-mini"], exclude: ["gpt-5-mini"] });
+    expect(resolved.options).toEqual([
+      { value: "openai/gpt-5", label: "GPT-5" },
+      { value: "openai/gpt-5-mini", label: "GPT-5 Mini" },
+    ]);
   });
 
   it("prefers catalog provider matches over stale session providers", () => {
@@ -95,10 +85,10 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expectOptionValues(resolved, {
-      include: ["openai/gpt-5-mini"],
-      exclude: ["zai/openai/gpt-5-mini"],
-    });
+    expect(resolved.options).toEqual([
+  { value: "openai/gpt-5-mini", label: "openai/gpt-5-mini" },
+  { value: "openai/gpt-5", label: "openai/gpt-5" },
+]);
   });
 
   it("builds picker options without introducing a bare duplicate", () => {
@@ -112,7 +102,10 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expectOptionValues(resolved, { include: ["openai/gpt-5-mini"], exclude: ["gpt-5-mini"] });
+    expect(resolved.options).toEqual([
+      { value: "openai/gpt-5", label: "GPT-5" },
+      { value: "openai/gpt-5-mini", label: "GPT-5 Mini" },
+    ]);
   });
 
   it("uses catalog names for the default label and matching picker options", () => {

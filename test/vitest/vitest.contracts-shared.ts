@@ -1,3 +1,4 @@
+// Vitest contract shared helpers build contract test project configuration.
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
@@ -83,9 +84,6 @@ export function createContractsVitestConfig(
       ...baseTest,
       name: options.name ?? "contracts",
       isolate: false,
-      // Contract shards intentionally run non-isolated and load broad registries.
-      // Use forks so full-suite parallel runs do not hit worker-thread heap limits.
-      pool: "forks",
       runner: nonIsolatedRunnerPath,
       setupFiles: baseTest.setupFiles ?? [],
       include: envIncludePatterns ?? cliIncludePatterns ?? includePatterns,

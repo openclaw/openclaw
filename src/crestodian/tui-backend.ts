@@ -1,5 +1,9 @@
+// Crestodian TUI backend runs setup-helper dialogue inside the shared local TUI shell.
 import { randomUUID } from "node:crypto";
-import type { SessionsPatchParams, SessionsPatchResult } from "../gateway/protocol/index.js";
+import type {
+  SessionsPatchParams,
+  SessionsPatchResult,
+} from "../../packages/gateway-protocol/src/index.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {
@@ -276,6 +280,7 @@ class CrestodianTuiBackend implements TuiBackend {
 
   private async resolveReply(text: string): Promise<string> {
     if (this.pending) {
+      // A pending persistent operation consumes the next reply as approval or cancellation.
       if (isYes(text)) {
         const pending = this.pending;
         this.pending = null;
@@ -294,6 +299,7 @@ class CrestodianTuiBackend implements TuiBackend {
     const operation = await resolveCrestodianOperation(text, capture, this.opts);
 
     if (operation.kind === "open-tui") {
+      // Handoff exits Crestodian's local backend and lets the outer loop open the normal agent TUI.
       this.handoff = operation;
       queueMicrotask(() => this.requestExit?.());
       return "Opening your normal agent TUI. Use /crestodian there to come back.";

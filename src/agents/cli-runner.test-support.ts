@@ -1,17 +1,20 @@
+/** Shared CLI runner test doubles for supervisor, bootstrap, and heartbeat seams. */
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
-import type { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import type { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import type { enqueueSystemEvent } from "../infra/system-events.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import { setCliRunnerExecuteTestDeps } from "./cli-runner/execute.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
+// Shared CLI runner test doubles. They replace supervisor/process and bootstrap
+// dependencies so CLI runner tests can assert process behavior deterministically.
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 type EnqueueSystemEventFn = typeof enqueueSystemEvent;
-type RequestHeartbeatNowFn = typeof requestHeartbeatNow;
+type RequestHeartbeatFn = typeof requestHeartbeat;
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type BootstrapContext = {
   bootstrapFiles: WorkspaceBootstrapFile[];
@@ -21,7 +24,7 @@ type ResolveBootstrapContextForRunMock = Mock<() => Promise<BootstrapContext>>;
 
 export const supervisorSpawnMock: UnknownMock = vi.fn();
 export const enqueueSystemEventMock: UnknownMock = vi.fn();
-export const requestHeartbeatNowMock: UnknownMock = vi.fn();
+export const requestHeartbeatMock: UnknownMock = vi.fn();
 
 const hoisted = vi.hoisted(
   (): {
@@ -38,8 +41,48 @@ const hoisted = vi.hoisted(
 
 setCliRunnerExecuteTestDeps({
   getProcessSupervisor: () => ({
-    spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
-      supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+    spawn: async (params: Parameters<SupervisorSpawnFn>[0]) => {
+      let stdoutDelivered = false;
+      let stderrDelivered = false;
+      // Supervisor tests sometimes return captured output even when streaming
+      // was requested; replay it through callbacks once to match production.
+      const wrappedParams = {
+        ...params,
+        onStdout: params.onStdout
+          ? (chunk: string) => {
+              stdoutDelivered = true;
+              params.onStdout?.(chunk);
+            }
+          : undefined,
+        onStderr: params.onStderr
+          ? (chunk: string) => {
+              stderrDelivered = true;
+              params.onStderr?.(chunk);
+            }
+          : undefined,
+      };
+      const managedRun = (await supervisorSpawnMock(wrappedParams)) as Awaited<
+        ReturnType<SupervisorSpawnFn>
+      >;
+      const wait = managedRun.wait;
+      return {
+        ...managedRun,
+        wait: async () => {
+          const exit = await wait();
+          if (params.captureOutput === false) {
+            // Production streams stdout/stderr through callbacks; replay captured
+            // output once so tests cover streaming and captured-output paths.
+            if (!stdoutDelivered && exit.stdout) {
+              params.onStdout?.(exit.stdout);
+            }
+            if (!stderrDelivered && exit.stderr) {
+              params.onStderr?.(exit.stderr);
+            }
+          }
+          return exit;
+        },
+      };
+    },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
     reconcileOrphans: vi.fn(),
@@ -49,8 +92,8 @@ setCliRunnerExecuteTestDeps({
     text: Parameters<EnqueueSystemEventFn>[0],
     options: Parameters<EnqueueSystemEventFn>[1],
   ) => enqueueSystemEventMock(text, options) as ReturnType<EnqueueSystemEventFn>,
-  requestHeartbeatNow: (options?: Parameters<RequestHeartbeatNowFn>[0]) =>
-    requestHeartbeatNowMock(options) as ReturnType<RequestHeartbeatNowFn>,
+  requestHeartbeat: (options?: Parameters<RequestHeartbeatFn>[0]) =>
+    requestHeartbeatMock(options) as ReturnType<RequestHeartbeatFn>,
 });
 
 setCliRunnerPrepareTestDeps({
@@ -85,6 +128,7 @@ type ManagedRunMock = {
   cancel: Mock<() => void>;
 };
 
+/** Build a managed-run mock returned by the process supervisor test double. */
 export function createManagedRun(
   exit: MockRunExit,
   pid = 1234,
@@ -99,6 +143,7 @@ export function createManagedRun(
   };
 }
 
+/** Queue one successful CLI supervisor run. */
 export function mockSuccessfulCliRun() {
   supervisorSpawnMock.mockResolvedValueOnce(
     createManagedRun({
@@ -114,6 +159,7 @@ export function mockSuccessfulCliRun() {
   );
 }
 
+/** Restore prepare-time CLI runner test dependencies after a test overrides them. */
 export function restoreCliRunnerPrepareTestDeps() {
   setCliRunnerPrepareTestDeps({
     makeBootstrapWarn: () => () => {},

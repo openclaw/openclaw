@@ -1,9 +1,13 @@
+/**
+ * Resolves ACPX plugin config from raw user configuration. It locates the
+ * plugin root, injects optional MCP bridge servers, and applies runtime defaults.
+ */
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatPluginConfigIssue } from "openclaw/plugin-sdk/extension-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AcpxPluginConfigSchema, DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
 import type {
   AcpxPluginConfig,
@@ -13,20 +17,10 @@ import type {
   AcpxMcpServer,
   ResolvedAcpxPluginConfig,
 } from "./config-schema.js";
-export {
-  ACPX_NON_INTERACTIVE_POLICIES,
-  ACPX_PERMISSION_MODES,
-  type AcpxMcpServer,
-  type AcpxNonInteractivePermissionPolicy,
-  type AcpxPermissionMode,
-  type AcpxPluginConfig,
-  type McpServerConfig,
-  type ResolvedAcpxPluginConfig,
-  createAcpxPluginConfigSchema,
-} from "./config-schema.js";
+export { type ResolvedAcpxPluginConfig } from "./config-schema.js";
 
-export const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
-export const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
+const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
+const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
 const requireFromHere = createRequire(import.meta.url);
 
 function isAcpxPluginRoot(dir: string): boolean {
@@ -90,6 +84,7 @@ function resolveAcpxPluginRootFromOpenClawLayout(moduleUrl: string): string | nu
   }
   return null;
 }
+/** Resolve the ACPX plugin root across source, dist, and dist-runtime layouts. */
 export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
   const resolvedRoot = resolveNearestAcpxPluginRoot(moduleUrl);
   // In a live repo checkout, dist/ can be rebuilt out from under the running gateway.
@@ -103,8 +98,6 @@ export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): stri
     resolvedRoot
   );
 }
-
-export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
 
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
 const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy = "fail";
@@ -151,9 +144,14 @@ function resolveTsxImportSpecifier(): string {
   }
 }
 
-export function resolvePluginToolsMcpServerConfig(
-  moduleUrl: string = import.meta.url,
-): McpServerConfig {
+function shellQuoteCommandArg(arg: string): string {
+  if (!/[\s'"\\$|&;<>{}()*?[\]~`]/.test(arg)) {
+    return arg;
+  }
+  return `'${arg.replace(/'/g, "'\"'\"'")}'`;
+}
+
+function resolvePluginToolsMcpServerConfig(moduleUrl: string = import.meta.url): McpServerConfig {
   const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
   const openClawRoot = resolveOpenClawRoot(pluginRoot);
   const distEntry = path.join(openClawRoot, "dist", "mcp", "plugin-tools-serve.js");
@@ -170,9 +168,7 @@ export function resolvePluginToolsMcpServerConfig(
   };
 }
 
-export function resolveOpenClawToolsMcpServerConfig(
-  moduleUrl: string = import.meta.url,
-): McpServerConfig {
+function resolveOpenClawToolsMcpServerConfig(moduleUrl: string = import.meta.url): McpServerConfig {
   const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
   const openClawRoot = resolveOpenClawRoot(pluginRoot);
   const distEntry = path.join(openClawRoot, "dist", "mcp", "openclaw-tools-serve.js");
@@ -219,6 +215,7 @@ function resolveConfiguredMcpServers(params: {
   return resolved;
 }
 
+/** Convert OpenClaw MCP server config into ACPX runtime MCP server entries. */
 export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): AcpxMcpServer[] {
   return Object.entries(mcpServers).map(([name, server]) => ({
     name,
@@ -231,6 +228,7 @@ export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): Ac
   }));
 }
 
+/** Validate and normalize raw ACPX plugin config for runtime startup. */
 export function resolveAcpxPluginConfig(params: {
   rawConfig: unknown;
   workspaceDir?: string;
@@ -254,10 +252,13 @@ export function resolveAcpxPluginConfig(params: {
     moduleUrl: params.moduleUrl,
   });
   const agents = Object.fromEntries(
-    Object.entries(normalized.agents ?? {}).map(([name, entry]) => [
-      normalizeLowercaseStringOrEmpty(name),
-      entry.command.trim(),
-    ]),
+    Object.entries(normalized.agents ?? {}).map(([name, entry]) => {
+      const cmd = entry.command.trim();
+      const cmdArgs = entry.args ?? [];
+      const fullCommand =
+        cmdArgs.length > 0 ? `${cmd} ${cmdArgs.map(shellQuoteCommandArg).join(" ")}` : cmd;
+      return [normalizeLowercaseStringOrEmpty(name), fullCommand];
+    }),
   );
 
   // Lowercase probeAgent so lookups match the registry keys built above, which

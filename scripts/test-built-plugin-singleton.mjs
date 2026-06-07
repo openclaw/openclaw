@@ -1,3 +1,4 @@
+// Smoke-tests the built plugin loader singleton and bundled plugin runtime overlay.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -118,7 +119,6 @@ const registry = loadOpenClawPlugins({
   env: {
     ...process.env,
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "dist-runtime", "extensions"),
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
   },
   config: {
     plugins: {

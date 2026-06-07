@@ -1,3 +1,4 @@
+// Covers provider-driven plugin auto-enable decisions.
 import { afterAll, describe, expect, it } from "vitest";
 import {
   applyPluginAutoEnable,
@@ -71,6 +72,83 @@ describe("applyPluginAutoEnable providers", () => {
 
     expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
     expect(result.changes).toContain("xai web search configured, enabled automatically.");
+  });
+
+  it("auto-enables selected web search provider plugins under restrictive allowlists", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "brave",
+          channels: [],
+          contracts: {
+            webSearchProviders: ["brave"],
+          },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.brave?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "brave"]);
+    expect(result.changes).toContain("brave web search provider selected, enabled automatically.");
+  });
+
+  it("does not auto-enable selected web search provider plugins when web search is disabled", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+        agents: {
+          defaults: {
+            model: "codex/gpt-5.4",
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "brave",
+          channels: [],
+          contracts: {
+            webSearchProviders: ["brave"],
+          },
+        },
+        {
+          id: "codex",
+          channels: [],
+          providers: ["codex"],
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.brave).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["telegram", "codex"]);
+    expect(result.changes).toContain("codex/gpt-5.4 model configured, enabled automatically.");
+    expect(result.changes).not.toContain(
+      "brave web search provider selected, enabled automatically.",
+    );
   });
 
   it("materializes xai setup auto-enable when the plugin-owned x_search tool is configured", () => {
@@ -202,7 +280,7 @@ describe("applyPluginAutoEnable providers", () => {
     });
 
     expect(result.config.plugins?.entries?.openai).toBeUndefined();
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
   });
 
   it("uses manifest-owned provider auto-enable metadata for third-party plugins", () => {
@@ -338,6 +416,6 @@ describe("applyPluginAutoEnable providers", () => {
     });
 
     expect(result.config.plugins?.entries?.acpx?.enabled).toBeUndefined();
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
   });
 });

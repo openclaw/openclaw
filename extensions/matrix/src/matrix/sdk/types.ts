@@ -1,3 +1,4 @@
+// Matrix type declarations define plugin contracts.
 import type { MatrixSyncState } from "../sync-state.js";
 import type {
   MatrixVerificationRequestLike,
@@ -130,7 +131,7 @@ export type MatrixDeviceVerificationStatusLike = {
   signedByOwner?: boolean;
 };
 
-export type MatrixKeyBackupInfo = {
+type MatrixKeyBackupInfo = {
   algorithm: string;
   auth_data: Record<string, unknown>;
   count?: number;
@@ -138,24 +139,24 @@ export type MatrixKeyBackupInfo = {
   version?: string;
 };
 
-export type MatrixKeyBackupTrustInfo = {
+type MatrixKeyBackupTrustInfo = {
   trusted: boolean;
   matchesDecryptionKey: boolean;
 };
 
-export type MatrixRoomKeyBackupRestoreResult = {
+type MatrixRoomKeyBackupRestoreResult = {
   total: number;
   imported: number;
 };
 
-export type MatrixImportRoomKeyProgress = {
+type MatrixImportRoomKeyProgress = {
   stage: string;
   successes?: number;
   failures?: number;
   total?: number;
 };
 
-export type MatrixSecretStorageKeyDescription = {
+type MatrixSecretStorageKeyDescription = {
   passphrase?: unknown;
   name?: string;
   [key: string]: unknown;

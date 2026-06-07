@@ -1,3 +1,4 @@
+// Tests gateway lock file ownership and stale-lock behavior.
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
@@ -9,6 +10,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { acquireGatewayLock, GatewayLockError, type GatewayLockOptions } from "./gateway-lock.js";
+
+type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-lock-" });
 let fixtureRoot = "";
@@ -45,6 +48,14 @@ async function acquireForTest(
     lockDir: resolveTestLockDir(),
     ...opts,
   });
+}
+
+function expectGatewayLock(lock: Awaited<ReturnType<typeof acquireGatewayLock>>): GatewayLock {
+  if (lock === null) {
+    throw new Error("Expected gateway lock");
+  }
+  expect(typeof lock.release).toBe("function");
+  return lock;
 }
 
 function resolveLockPath(env: NodeJS.ProcessEnv) {
@@ -175,7 +186,7 @@ describe("gateway lock", () => {
     vi.useRealTimers();
     const env = await makeEnv();
     const lock = await acquireForTest(env, { timeoutMs: 50 });
-    expect(lock).not.toBeNull();
+    const acquiredLock = expectGatewayLock(lock);
 
     const pending = acquireForTest(env, {
       timeoutMs: 15,
@@ -183,9 +194,9 @@ describe("gateway lock", () => {
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
-    await lock?.release();
+    await acquiredLock.release();
     const lock2 = await acquireForTest(env);
-    await lock2?.release();
+    await expectGatewayLock(lock2).release();
   });
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
@@ -204,9 +215,9 @@ describe("gateway lock", () => {
       pollIntervalMs: 5,
       platform: "linux",
     });
-    expect(lock).not.toBeNull();
+    const acquiredLock = expectGatewayLock(lock);
 
-    await lock?.release();
+    await acquiredLock.release();
     spy.mockRestore();
   });
 
@@ -259,8 +270,7 @@ describe("gateway lock", () => {
       platform: "darwin",
       port: 18789,
     });
-    expect(lock).not.toBeNull();
-    await lock?.release();
+    await expectGatewayLock(lock).release();
     connectSpy.mockRestore();
   });
 
@@ -284,6 +294,33 @@ describe("gateway lock", () => {
     }
   });
 
+  it("bounds oversized lock polling intervals by the acquire timeout", async () => {
+    const env = await makeEnv();
+    await writeRecentLockFile(env);
+    const sleepDelays: number[] = [];
+    let now = 0;
+
+    await expect(
+      acquireGatewayLock({
+        env,
+        allowInTests: true,
+        timeoutMs: 5,
+        pollIntervalMs: Number.MAX_SAFE_INTEGER,
+        staleMs: 10_000,
+        platform: "darwin",
+        now: () => now,
+        sleep: async (ms) => {
+          sleepDelays.push(ms);
+          now = 10;
+        },
+        lockDir: resolveTestLockDir(),
+        readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run"],
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
+
+    expect(sleepDelays).toEqual([5]);
+  });
+
   it("returns null when multi-gateway override is enabled", async () => {
     const env = await makeEnv();
     const lock = await acquireGatewayLock({
@@ -300,6 +337,32 @@ describe("gateway lock", () => {
       lockDir: resolveTestLockDir(),
     });
     expect(lock).toBeNull();
+  });
+
+  it("falls back instead of throwing when lock payload clock is outside Date range", async () => {
+    const env = await makeEnv();
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00Z"));
+    const lock = expectGatewayLock(
+      await acquireGatewayLock({
+        env,
+        allowInTests: true,
+        timeoutMs: 30,
+        pollIntervalMs: 2,
+        now: () => 8_640_000_000_000_001,
+        sleep: async () => {},
+        lockDir: resolveTestLockDir(),
+      }),
+    );
+
+    try {
+      const payload = JSON.parse(await fs.readFile(lock.lockPath, "utf8")) as {
+        createdAt?: string;
+      };
+      expect(payload.createdAt).toBe("2026-05-30T12:00:00.000Z");
+    } finally {
+      dateNowSpy.mockRestore();
+      await lock.release();
+    }
   });
 
   it("wraps unexpected fs errors as GatewayLockError", async () => {
@@ -329,8 +392,7 @@ describe("gateway lock", () => {
       port: 18789,
       readProcessCmdline: () => ["chrome.exe", "--no-sandbox"],
     });
-    expect(lock).not.toBeNull();
-    await lock?.release();
+    await expectGatewayLock(lock).release();
 
     connectSpy.mockRestore();
   });
@@ -394,8 +456,7 @@ describe("gateway lock", () => {
       port: 18789,
       readProcessCmdline: () => ["/Applications/Safari.app/Contents/MacOS/Safari"],
     });
-    expect(lock).not.toBeNull();
-    await lock?.release();
+    await expectGatewayLock(lock).release();
 
     connectSpy.mockRestore();
   });

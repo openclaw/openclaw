@@ -1,9 +1,14 @@
+// Gateway hook mapping resolver.
+// Normalizes hook presets, templates, transforms, and resolved hook actions.
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { HookMappingConfig, HooksConfig } from "../config/types.hooks.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
-import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
@@ -27,19 +32,19 @@ export type HookMappingResolved = {
   transform?: HookMappingTransformResolved;
 };
 
-export type HookMappingTransformResolved = {
+type HookMappingTransformResolved = {
   modulePath: string;
   exportName?: string;
 };
 
-export type HookMappingContext = {
+type HookMappingContext = {
   payload: Record<string, unknown>;
   headers: Record<string, string>;
   url: URL;
   path: string;
 };
 
-export type HookAction =
+type HookAction =
   | {
       kind: "wake";
       text: string;
@@ -62,9 +67,9 @@ export type HookAction =
       timeoutSeconds?: number;
     };
 
-export type HookSessionKeyTemplateSource = "static" | "templated";
+type HookSessionKeyTemplateSource = "static" | "templated";
 
-export type HookMappingResult =
+type HookMappingResult =
   | { ok: true; action: HookAction }
   | { ok: true; action: null; skipped: true }
   | { ok: false; error: string };
@@ -109,6 +114,7 @@ type HookTransformFn = (
   ctx: HookMappingContext,
 ) => HookTransformResult | Promise<HookTransformResult>;
 
+/** Resolve configured hook mappings plus preset mappings into normalized matcher entries. */
 export function resolveHookMappings(
   hooks?: HooksConfig,
   opts?: { configDir?: string },

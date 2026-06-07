@@ -1,3 +1,4 @@
+// Control UI controller manages assistant identity gateway state.
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { loadLocalAssistantIdentity, saveLocalAssistantIdentity } from "../storage.ts";
@@ -90,6 +91,7 @@ export function setAssistantAvatarOverride(
     state.assistantAvatarStatus = "data";
     state.assistantAvatarReason = null;
   } else {
+    state.assistantAvatar = null;
     state.assistantAvatarSource = null;
     state.assistantAvatarStatus = null;
     state.assistantAvatarReason = null;

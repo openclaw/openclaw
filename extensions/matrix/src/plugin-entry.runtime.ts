@@ -1,3 +1,4 @@
+// Matrix plugin module implements plugin entry behavior.
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatMatrixErrorMessage } from "./matrix/errors.js";
@@ -13,13 +14,6 @@ function loadMatrixVerificationRuntime(): Promise<MatrixVerificationRuntime> {
 
 function sendError(respond: (ok: boolean, payload?: unknown) => void, err: unknown) {
   respond(false, { error: formatMatrixErrorMessage(err) });
-}
-
-export async function ensureMatrixCryptoRuntime(
-  ...args: Parameters<typeof import("./matrix/deps.js").ensureMatrixCryptoRuntime>
-): Promise<void> {
-  const { ensureMatrixCryptoRuntime: ensureRuntime } = await import("./matrix/deps.js");
-  await ensureRuntime(...args);
 }
 
 export async function handleVerifyRecoveryKey({

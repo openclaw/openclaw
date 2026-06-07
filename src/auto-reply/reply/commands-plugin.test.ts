@@ -1,3 +1,4 @@
+// Tests plugin command dispatch and plugin-scoped command aliases.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handlePluginCommand } from "./commands-plugin.js";
@@ -63,14 +64,21 @@ describe("handlePluginCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toBe("from plugin");
-    expect(executePluginCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
-        sessionKey: "agent:main:whatsapp:direct:test-user",
-        sessionId: "session-plugin-command",
-        commandBody: "/card",
-      }),
-    );
+    expect(executePluginCommandMock).toHaveBeenCalledTimes(1);
+    const [[commandParams]] = executePluginCommandMock.mock.calls as unknown as Array<
+      [
+        {
+          gatewayClientScopes?: string[];
+          sessionKey?: string;
+          sessionId?: string;
+          commandBody?: string;
+        },
+      ]
+    >;
+    expect(commandParams.gatewayClientScopes).toEqual(["operator.write", "operator.pairing"]);
+    expect(commandParams.sessionKey).toBe("agent:main:whatsapp:direct:test-user");
+    expect(commandParams.sessionId).toBe("session-plugin-command");
+    expect(commandParams.commandBody).toBe("/card");
   });
 
   it("prefers the target session entry from sessionStore for plugin command metadata", async () => {
@@ -93,18 +101,20 @@ describe("handlePluginCommand", () => {
       [params.sessionKey]: {
         sessionId: "target-session",
         sessionFile: "/tmp/target-session.jsonl",
+        authProfileOverride: "openai:owner@example.com",
         updatedAt: Date.now(),
       },
     };
 
     await handlePluginCommand(params, true);
 
-    expect(executePluginCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "target-session",
-        sessionFile: "/tmp/target-session.jsonl",
-      }),
-    );
+    expect(executePluginCommandMock).toHaveBeenCalledTimes(1);
+    const [[commandParams]] = executePluginCommandMock.mock.calls as unknown as Array<
+      [{ authProfileId?: string; sessionId?: string; sessionFile?: string }]
+    >;
+    expect(commandParams.sessionId).toBe("target-session");
+    expect(commandParams.sessionFile).toBe("/tmp/target-session.jsonl");
+    expect(commandParams.authProfileId).toBe("openai:owner@example.com");
   });
 
   it("continues the agent without leaking continueAgent into the reply payload", async () => {

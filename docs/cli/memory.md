@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw memory` (status/index/search/promote/promote-explain/rem-harness)"
 read_when:
   - You want to index or search semantic memory
-  - You’re debugging memory availability or indexing
+  - You're debugging memory availability or indexing
   - You want to promote recalled short-term memory into `MEMORY.md`
 title: "Memory"
 ---
@@ -10,7 +10,9 @@ title: "Memory"
 # `openclaw memory`
 
 Manage semantic memory indexing and search.
-Provided by the active memory plugin (default: `memory-core`; set `plugins.slots.memory = "none"` to disable).
+Provided by the bundled `memory-core` plugin. The command is available when
+`plugins.slots.memory` selects `memory-core` (the default); other memory plugins
+expose their own CLI namespaces.
 
 Related:
 
@@ -51,7 +53,7 @@ openclaw memory index --agent main --verbose
 
 `memory status`:
 
-- `--deep`: probe vector + embedding availability. Plain `memory status` stays fast and does not run a live embedding ping. QMD lexical `searchMode: "search"` skips semantic vector probes and embedding maintenance even with `--deep`.
+- `--deep`: probe local vector-store readiness, embedding-provider readiness, and semantic vector-search readiness. Plain `memory status` stays fast and does not run live embedding or provider discovery work; unknown vector-store or semantic-vector state means it was not probed in that command. QMD lexical `searchMode: "search"` skips semantic vector probes and embedding maintenance even with `--deep`.
 - `--index`: run a reindex if the store is dirty (implies `--deep`).
 - `--fix`: repair stale recall locks and normalize promotion metadata.
 - `--json`: print JSON output.
@@ -168,7 +170,7 @@ Notes:
 - `memory status` includes any extra paths configured via `memorySearch.extraPaths`.
 - If effectively active memory remote API key fields are configured as SecretRefs, the command resolves those values from the active gateway snapshot. If gateway is unavailable, the command fails fast.
 - Gateway version skew note: this command path requires a gateway that supports `secrets.resolve`; older gateways return an unknown-method error.
-- Tune scheduled sweep cadence with `dreaming.frequency`. Deep promotion policy is otherwise internal; use CLI flags on `memory promote` when you need one-off manual overrides.
+- Tune scheduled sweep cadence with `dreaming.frequency`. Deep promotion policy is otherwise internal except for `dreaming.phases.deep.maxPromotedSnippetTokens`, which bounds promoted snippet length while keeping provenance visible. Use CLI flags on `memory promote` when you need one-off manual threshold overrides.
 - `memory rem-harness --path <file-or-dir> --grounded` previews grounded `What Happened`, `Reflections`, and `Possible Lasting Updates` from historical daily notes without writing anything.
 - `memory rem-backfill --path <file-or-dir>` writes reversible grounded diary entries into `DREAMS.md` for UI review.
 - `memory rem-backfill --path <file-or-dir> --stage-short-term` also seeds grounded durable candidates into the live short-term promotion store so the normal deep phase can rank them.

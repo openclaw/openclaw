@@ -1,7 +1,9 @@
+// sessions_send helper tests cover session-key target parsing and ping-pong
+// turn limits for agent-to-agent announce flows.
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
+import { resolveAnnounceTargetFromKey, resolvePingPongTurns } from "./sessions-send-helpers.js";
 
 describe("resolveAnnounceTargetFromKey", () => {
   beforeEach(() => {
@@ -40,6 +42,8 @@ describe("resolveAnnounceTargetFromKey", () => {
   });
 
   it("preserves colon-delimited matrix ids for channel and thread targets", () => {
+    // Matrix room/thread ids can contain colons, so parsing must split only on
+    // known wrappers instead of generic colon segments.
     expect(
       resolveAnnounceTargetFromKey(
         "agent:main:matrix:channel:!room:example.org:thread:$AbC123:example.org",
@@ -61,5 +65,30 @@ describe("resolveAnnounceTargetFromKey", () => {
       to: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       threadId: undefined,
     });
+  });
+});
+
+describe("resolvePingPongTurns", () => {
+  it("defaults to 5 when unset", () => {
+    expect(resolvePingPongTurns(undefined)).toBe(5);
+    expect(resolvePingPongTurns({ session: {} } as never)).toBe(5);
+  });
+
+  it("uses configured values through the 20-turn ceiling", () => {
+    expect(
+      resolvePingPongTurns({ session: { agentToAgent: { maxPingPongTurns: 10 } } } as never),
+    ).toBe(10);
+    expect(
+      resolvePingPongTurns({ session: { agentToAgent: { maxPingPongTurns: 20 } } } as never),
+    ).toBe(20);
+  });
+
+  it("keeps defensive floor and ceiling clamps", () => {
+    expect(
+      resolvePingPongTurns({ session: { agentToAgent: { maxPingPongTurns: -1 } } } as never),
+    ).toBe(0);
+    expect(
+      resolvePingPongTurns({ session: { agentToAgent: { maxPingPongTurns: 50 } } } as never),
+    ).toBe(20);
   });
 });

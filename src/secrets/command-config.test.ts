@@ -1,3 +1,4 @@
+/** Tests command-specific secret assignment collection from config snapshots. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -82,7 +83,7 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
       inactiveRefPaths: new Set(["agents.defaults.memorySearch.remote.apiKey"]),
     });
 
-    expect(result.assignments).toEqual([]);
+    expect(result.assignments).toStrictEqual([]);
     expect(result.diagnostics).toEqual([
       "agents.defaults.memorySearch.remote.apiKey: secret ref is configured on an inactive surface; skipping command-time assignment.",
     ]);

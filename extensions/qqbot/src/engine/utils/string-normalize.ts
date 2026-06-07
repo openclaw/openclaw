@@ -2,8 +2,8 @@
  * String normalization and record-coercion helpers.
  *
  * These are self-contained re-implementations of the functions that
- * the plugin previously imported from `openclaw/plugin-sdk/text-runtime`
- * and `openclaw/plugin-sdk/text-runtime` (via record-coerce / string-coerce).
+ * the plugin previously imported from broad SDK text barrels
+ * and shared record/string coercion helpers.
  *
  * core/ modules use these instead of importing plugin-sdk, keeping the
  * shared layer portable between the built-in and standalone versions.
@@ -12,7 +12,7 @@
 // ---- String coercion ----
 
 /** Return the trimmed string or `null` when the value is not a non-empty string. */
-export function normalizeNullableString(value: unknown): string | null {
+function normalizeNullableString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -39,6 +39,12 @@ export function normalizeStringifiedOptionalString(value: unknown): string | und
   return undefined;
 }
 
+export function normalizeStringifiedEntries(values?: ReadonlyArray<unknown>): string[] {
+  return (values ?? [])
+    .map((entry) => normalizeStringifiedOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
 /** Return the trimmed lowercase string or `undefined`. */
 export function normalizeOptionalLowercaseString(value: unknown): string | undefined {
   return normalizeOptionalString(value)?.toLowerCase();
@@ -49,22 +55,7 @@ export function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return normalizeOptionalLowercaseString(value) ?? "";
 }
 
-/** Return the raw string value or `undefined`. No trimming. */
-export function readStringValue(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-/** Return true when the value is a non-empty trimmed string. */
-export function hasNonEmptyString(value: unknown): value is string {
-  return normalizeOptionalString(value) !== undefined;
-}
-
 // ---- Record coercion ----
-
-/** Coerce a value into a `Record<string, unknown>`, defaulting to `{}`. */
-export function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
 
 /** Coerce a value into a `Record<string, unknown>` or `undefined`. */
 export function asOptionalObjectRecord(value: unknown): Record<string, unknown> | undefined {
@@ -78,37 +69,6 @@ export function readStringField(
 ): string | undefined {
   const v = record?.[key];
   return typeof v === "string" ? v : undefined;
-}
-
-/** Read a number field from a record. */
-export function readNumberField(
-  record: Record<string, unknown> | null | undefined,
-  key: string,
-): number | undefined {
-  const v = record?.[key];
-  return typeof v === "number" ? v : undefined;
-}
-
-/** Read a boolean field from a record. */
-export function readBooleanField(
-  record: Record<string, unknown> | null | undefined,
-  key: string,
-): boolean | undefined {
-  const v = record?.[key];
-  return typeof v === "boolean" ? v : undefined;
-}
-
-/** Coerce a value into a string→string map, filtering out non-string values. */
-export function readStringMap(value: unknown): Record<string, string> {
-  const record = asOptionalObjectRecord(value);
-  if (!record) {
-    return {};
-  }
-  return Object.fromEntries(
-    Object.entries(record).flatMap(([key, entryValue]) =>
-      typeof entryValue === "string" ? [[key, entryValue]] : [],
-    ),
-  );
 }
 
 // ---- Filename normalization ----

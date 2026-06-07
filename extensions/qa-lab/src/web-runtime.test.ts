@@ -1,3 +1,5 @@
+// Qa Lab tests cover web runtime plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -86,6 +88,18 @@ beforeEach(async () => {
   vi.clearAllMocks();
 });
 
+function requireLaunchOptions() {
+  const [call] = launch.mock.calls;
+  if (!call) {
+    throw new Error("expected browser launch call");
+  }
+  const [launchOptions] = call;
+  if (!launchOptions || typeof launchOptions !== "object" || Array.isArray(launchOptions)) {
+    throw new Error("expected browser launch options");
+  }
+  return launchOptions as Record<string, unknown>;
+}
+
 describe("qa web runtime", () => {
   it("opens, interacts with, snapshots, and closes a page", async () => {
     const opened = await qaWebOpenPage({ url: "http://127.0.0.1:3000/chat" });
@@ -102,14 +116,17 @@ describe("qa web runtime", () => {
     const evaluated = await qaWebEvaluate({ pageId: opened.pageId, expression: "'ok'" });
     await closeAllQaWebSessions();
 
-    expect(launch).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "chrome", headless: true }),
-    );
-    expect(goto).toHaveBeenCalledWith("http://127.0.0.1:3000/chat", expect.any(Object));
-    expect(pageWaitForSelector).toHaveBeenCalledWith("textarea", expect.any(Object));
+    const launchOptions = requireLaunchOptions();
+    expect(launchOptions?.channel).toBe("chrome");
+    expect(launchOptions?.headless).toBe(true);
+    expect(goto).toHaveBeenCalledWith("http://127.0.0.1:3000/chat", {
+      waitUntil: "domcontentloaded",
+      timeout: 20_000,
+    });
+    expect(pageWaitForSelector).toHaveBeenCalledWith("textarea", { timeout: 20_000 });
     expect(pageWaitForFunction).toHaveBeenCalled();
-    expect(locatorFill).toHaveBeenCalledWith("hello", expect.any(Object));
-    expect(locatorPress).toHaveBeenCalledWith("Enter", expect.any(Object));
+    expect(locatorFill).toHaveBeenCalledWith("hello", { timeout: 20_000 });
+    expect(locatorPress).toHaveBeenCalledWith("Enter", { timeout: 20_000 });
     expect(snapshot.text).toBe("hello");
     expect(evaluated).toBe("ok");
     expect(contextClose).toHaveBeenCalledTimes(1);
@@ -125,9 +142,44 @@ describe("qa web runtime", () => {
     await expect(qaWebSnapshot({ pageId: first.pageId })).rejects.toThrow(
       `unknown web session: ${first.pageId}`,
     );
-    await expect(qaWebSnapshot({ pageId: second.pageId })).resolves.toMatchObject({
-      text: "hello from body",
-    });
+    const snapshot = await qaWebSnapshot({ pageId: second.pageId });
+    expect(snapshot.text).toBe("hello from body");
     await closeAllQaWebSessions();
+  });
+
+  it("caps oversized web runtime timeouts", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      const opened = await qaWebOpenPage({
+        url: "http://127.0.0.1:3000/chat",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      await qaWebWait({
+        pageId: opened.pageId,
+        selector: "textarea",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      await qaWebEvaluate({
+        pageId: opened.pageId,
+        expression: "'ok'",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      await closeAllQaWebSessions();
+
+      expect(goto).toHaveBeenCalledWith("http://127.0.0.1:3000/chat", {
+        waitUntil: "domcontentloaded",
+        timeout: MAX_TIMER_TIMEOUT_MS,
+      });
+      expect(pageWaitForSelector).toHaveBeenCalledWith("textarea", {
+        timeout: MAX_TIMER_TIMEOUT_MS,
+      });
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+    } finally {
+      clearTimeoutSpy.mockRestore();
+      timeoutSpy.mockRestore();
+    }
   });
 });

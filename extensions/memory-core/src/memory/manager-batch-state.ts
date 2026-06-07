@@ -1,6 +1,7 @@
+// Memory Core plugin module implements manager batch state behavior.
 export const MEMORY_BATCH_FAILURE_LIMIT = 2;
 
-export type MemoryBatchFailureState = {
+type MemoryBatchFailureState = {
   enabled: boolean;
   count: number;
   lastError?: string;

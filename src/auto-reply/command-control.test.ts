@@ -1,3 +1,4 @@
+/** Tests command-control detection and authorization trigger heuristics. */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -13,8 +14,16 @@ import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registr
 installDiscordRegistryHooks();
 
 describe("resolveCommandAuthorization", () => {
-  const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-    allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+  const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
+    const values: string[] = [];
+    for (const entry of allowFrom) {
+      const value = String(entry).trim();
+      if (value) {
+        values.push(value);
+      }
+    }
+    return values;
+  };
 
   function createAllowFromPlugin(
     id: string,
@@ -42,6 +51,20 @@ describe("resolveCommandAuthorization", () => {
     return createAllowFromPlugin(id, () => {
       throw new Error(error);
     });
+  }
+
+  function createOwnerEnforcingAllowFromPlugin(
+    id: string,
+    resolveAllowFrom: () => Array<string | number> | undefined,
+  ) {
+    const entry = createAllowFromPlugin(id, resolveAllowFrom);
+    return {
+      ...entry,
+      plugin: {
+        ...entry.plugin,
+        commands: { enforceOwnerForCommands: true },
+      },
+    };
   }
 
   function registerAllowFromPlugins(...plugins: ReturnType<typeof createAllowFromPlugin>[]) {
@@ -202,7 +225,7 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.isAuthorizedSender).toBe(false);
   });
 
-  it("allows channel-validated native commands when plugin owner enforcement has no owner allowlist", () => {
+  it("rejects channel-validated native commands when plugin owner enforcement has no owner allowlist", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -242,7 +265,7 @@ describe("resolveCommandAuthorization", () => {
     });
 
     expect(auth.senderIsOwner).toBe(false);
-    expect(auth.isAuthorizedSender).toBe(true);
+    expect(auth.isAuthorizedSender).toBe(false);
   });
 
   it("uses explicit owner allowlist when allowFrom is empty", () => {
@@ -325,7 +348,6 @@ describe("resolveCommandAuthorization", () => {
         OriginatingChannel: "telegram",
         From: "owner-123",
         To: "owner-123",
-        ForceSenderIsOwnerFalse: true,
       } as MsgContext,
       cfg,
       commandAuthorized: true,
@@ -354,6 +376,88 @@ describe("resolveCommandAuthorization", () => {
 
     expect(auth.providerId).toBeUndefined();
     expect(auth.isAuthorizedSender).toBe(true);
+  });
+
+  it("does not apply channel-prefixed owner wildcards to webchat command contexts", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:*"] },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "webchat",
+        Surface: "webchat",
+        OriginatingChannel: "webchat",
+        SenderId: "123456789012345678",
+        GatewayClientScopes: ["operator.write"],
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBeUndefined();
+    expect(auth.senderIsOwner).toBe(false);
+  });
+
+  it("does not apply channel-prefixed owner identities to webchat command contexts", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:123456789012345678"] },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "webchat",
+        Surface: "webchat",
+        OriginatingChannel: "webchat",
+        SenderId: "123456789012345678",
+        GatewayClientScopes: ["operator.write"],
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBeUndefined();
+    expect(auth.senderIsOwner).toBe(false);
+  });
+
+  it("applies channel-prefixed owner identities to matching providers", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:123456789012345678"] },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        From: "discord:123456789012345678",
+        SenderId: "123456789012345678",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBe("discord");
+    expect(auth.senderIsOwner).toBe(true);
+  });
+
+  it("does not apply channel-prefixed owner wildcards to mismatched providers", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["telegram:*"] },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        From: "discord:123456789012345678",
+        SenderId: "123456789012345678",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBe("discord");
+    expect(auth.senderIsOwner).toBe(false);
   });
 
   it("preserves external channel command auth in mixed webchat contexts", () => {
@@ -547,6 +651,62 @@ describe("resolveCommandAuthorization", () => {
         commandAuthorized: true,
       });
 
+      expect(auth.isAuthorizedSender).toBe(true);
+    });
+
+    it("requires owner identity before commands.allowFrom when the plugin enforces owner-only commands", () => {
+      registerAllowFromPlugins(createOwnerEnforcingAllowFromPlugin("telegram", () => ["*"]));
+      const cfg = {
+        commands: {
+          allowFrom: {
+            "*": ["*"],
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          From: "telegram:999",
+          SenderId: "999",
+          CommandSource: "native",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(auth.senderIsOwner).toBe(false);
+      expect(auth.isAuthorizedSender).toBe(false);
+    });
+
+    it("keeps commands.allowFrom available to non-owner command users when an owner allowlist is configured", () => {
+      const cfg = {
+        commands: {
+          ownerAllowFrom: ["discord:owner"],
+          allowFrom: {
+            discord: ["helper"],
+          },
+        },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "group",
+          From: "discord:helper",
+          SenderId: "helper",
+          CommandSource: "native",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(auth.senderIsOwner).toBe(false);
       expect(auth.isAuthorizedSender).toBe(true);
     });
 
@@ -853,8 +1013,9 @@ describe("resolveCommandAuthorization", () => {
           commandAuthorized: true,
         });
         expect(warn).toHaveBeenCalledTimes(1);
-        expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("Error");
-        expect(String(warn.mock.calls[0]?.[0] ?? "")).not.toContain("SECRET-TOKEN-123");
+        const warning = String(warn.mock.calls[0]?.[0] ?? "");
+        expect(warning).toContain("Error");
+        expect(warning).not.toContain("SECRET-TOKEN-123");
       } finally {
         warn.mockRestore();
       }
@@ -948,6 +1109,7 @@ describe("control command parsing", () => {
     expect(hasControlCommand("/commands:")).toBe(true);
     expect(hasControlCommand("commands")).toBe(false);
     expect(hasControlCommand("/status")).toBe(true);
+    expect(hasControlCommand("/STATUS")).toBe(true);
     expect(hasControlCommand("/status:")).toBe(true);
     expect(hasControlCommand("status")).toBe(false);
     expect(hasControlCommand("usage")).toBe(false);
@@ -959,6 +1121,7 @@ describe("control command parsing", () => {
       }
     }
     expect(hasControlCommand("/compact")).toBe(true);
+    expect(hasControlCommand("/COMPACT keep CaseSensitivePath")).toBe(true);
     expect(hasControlCommand("/compact:")).toBe(true);
     expect(hasControlCommand("compact")).toBe(false);
   });

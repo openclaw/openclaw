@@ -1,3 +1,4 @@
+// Qa Channel plugin module implements channel actions behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { Type } from "typebox";
@@ -65,7 +66,7 @@ function readQaSendTarget(params: Record<string, unknown>) {
   if (!target) {
     return undefined;
   }
-  if (/^(dm|channel):|^thread:[^/]+\/.+/i.test(target)) {
+  if (/^(dm|channel|group):|^thread:[^/]+\/.+/i.test(target)) {
     return target;
   }
   return buildQaTarget({ chatType: "channel", conversationId: target });

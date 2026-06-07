@@ -1,16 +1,33 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+/** Shared command registry builders used by browser-safe and runtime command lists. */
+import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
+  CommandArgChoiceContext,
   CommandCategory,
   CommandScope,
   CommandTier,
 } from "./commands-registry.types.js";
-import { listThinkingLevels } from "./thinking.js";
+import { BASE_THINKING_LEVELS, type ThinkLevel } from "./thinking.shared.js";
+
+type ListThinkingLevels = (
+  provider?: string | null,
+  model?: string | null,
+  catalog?: CommandArgChoiceContext["catalog"],
+) => string[];
+
+const BROWSER_SAFE_THINKING_LEVELS: ThinkLevel[] = [
+  ...BASE_THINKING_LEVELS,
+  "xhigh",
+  "adaptive",
+  "max",
+];
 
 type DefineChatCommandInput = {
   key: string;
   nativeName?: string;
+  nativeAliases?: string[];
   description: string;
   args?: ChatCommandDefinition["args"];
   argsParsing?: ChatCommandDefinition["argsParsing"];
@@ -25,6 +42,7 @@ type DefineChatCommandInput = {
   tier?: CommandTier;
 };
 
+/** Defines one command with normalized aliases, scope, and argument parsing defaults. */
 export function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
   const aliases = (command.textAliases ?? (command.textAlias ? [command.textAlias] : []))
     .map((alias) => alias.trim())
@@ -36,6 +54,9 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
   return {
     key: command.key,
     nativeName: command.nativeName,
+    nativeAliases: command.nativeAliases
+      ? normalizeStringEntries(command.nativeAliases)
+      : undefined,
     description: command.description,
     acceptsArgs,
     args: command.args,
@@ -49,20 +70,18 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
   };
 }
 
-export function registerAlias(
-  commands: ChatCommandDefinition[],
-  key: string,
-  ...aliases: string[]
-): void {
+function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliases: string[]): void {
   const command = commands.find((entry) => entry.key === key);
   if (!command) {
     throw new Error(`registerAlias: unknown command key: ${key}`);
   }
-  const existing = new Set(
-    command.textAliases
-      .map((alias) => normalizeOptionalLowercaseString(alias))
-      .filter((alias): alias is string => Boolean(alias)),
-  );
+  const existing = new Set<string>();
+  for (const alias of command.textAliases) {
+    const lowered = normalizeOptionalLowercaseString(alias);
+    if (lowered) {
+      existing.add(lowered);
+    }
+  }
   for (const alias of aliases) {
     const trimmed = alias.trim();
     if (!trimmed) {
@@ -80,6 +99,7 @@ export function registerAlias(
   }
 }
 
+/** Validates command registry uniqueness and text/native surface invariants. */
 export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   const keys = new Set<string>();
   const nativeNames = new Set<string>();
@@ -95,17 +115,22 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
       if (nativeName) {
         throw new Error(`Text-only command has native name: ${command.key}`);
       }
+      if (command.nativeAliases?.length) {
+        throw new Error(`Text-only command has native aliases: ${command.key}`);
+      }
       if (command.textAliases.length === 0) {
         throw new Error(`Text-only command missing text alias: ${command.key}`);
       }
     } else if (!nativeName) {
       throw new Error(`Native command missing native name: ${command.key}`);
     } else {
-      const nativeKey = normalizeOptionalLowercaseString(nativeName) ?? "";
-      if (nativeNames.has(nativeKey)) {
-        throw new Error(`Duplicate native command: ${nativeName}`);
+      for (const alias of [nativeName, ...(command.nativeAliases ?? [])]) {
+        const nativeKey = normalizeOptionalLowercaseString(alias) ?? "";
+        if (nativeNames.has(nativeKey)) {
+          throw new Error(`Duplicate native command: ${alias}`);
+        }
+        nativeNames.add(nativeKey);
       }
-      nativeNames.add(nativeKey);
     }
 
     if (command.scope === "native" && command.textAliases.length > 0) {
@@ -125,7 +150,16 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   }
 }
 
-export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
+/** Builds the built-in command list with context-aware thinking choices. */
+export function buildBuiltinChatCommands(
+  params: { listThinkingLevels?: ListThinkingLevels } = {},
+): ChatCommandDefinition[] {
+  const configuredThinkingLevels =
+    params.listThinkingLevels ?? (() => BROWSER_SAFE_THINKING_LEVELS);
+  const listThinkingLevelChoices: ListThinkingLevels = (provider, model, catalog) => {
+    const levels = configuredThinkingLevels(provider, model, catalog);
+    return ["default", ...levels.filter((level) => level !== "default")];
+  };
   const commands: ChatCommandDefinition[] = [
     defineChatCommand({
       key: "help",
@@ -191,6 +225,29 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       tier: "essential",
     }),
     defineChatCommand({
+      key: "goal",
+      nativeName: "goal",
+      description: "Show or control the current goal.",
+      textAlias: "/goal",
+      category: "status",
+      tier: "standard",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "action",
+          description: "status, start, pause, resume, complete, block, clear",
+          type: "string",
+          choices: ["status", "start", "pause", "resume", "complete", "block", "clear"],
+        },
+        {
+          name: "text",
+          description: "Goal objective or note",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "diagnostics",
       nativeName: "diagnostics",
       description: "Explain Gateway diagnostics and Codex feedback upload options.",
@@ -254,8 +311,9 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "btw",
       nativeName: "btw",
+      nativeAliases: ["side"],
       description: "Ask a side question without changing future session context.",
-      textAlias: "/btw",
+      textAliases: ["/btw", "/side"],
       acceptsArgs: true,
       category: "tools",
       tier: "standard",
@@ -372,16 +430,16 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "subagents",
       nativeName: "subagents",
-      description: "List, kill, log, spawn, or steer subagent runs for this session.",
+      description: "Inspect subagent runs for this session.",
       textAlias: "/subagents",
       category: "management",
       tier: "standard",
       args: [
         {
           name: "action",
-          description: "list | kill | log | info | send | steer | spawn",
+          description: "list | log | info",
           type: "string",
-          choices: ["list", "kill", "log", "info", "send", "steer", "spawn"],
+          choices: ["list", "log", "info"],
         },
         {
           name: "target",
@@ -472,34 +530,13 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       tier: "standard",
     }),
     defineChatCommand({
-      key: "kill",
-      nativeName: "kill",
-      description: "Kill a running subagent (or all).",
-      textAlias: "/kill",
-      category: "management",
-      tier: "standard",
-      args: [
-        {
-          name: "target",
-          description: "Label, run id, index, or all",
-          type: "string",
-        },
-      ],
-      argsMenu: "auto",
-    }),
-    defineChatCommand({
       key: "steer",
       nativeName: "steer",
-      description: "Send guidance to a running subagent.",
+      description: "Send guidance to the active run in this session.",
       textAlias: "/steer",
       category: "management",
       tier: "standard",
       args: [
-        {
-          name: "target",
-          description: "Label, run id, or index",
-          type: "string",
-        },
         {
           name: "message",
           description: "Steering message",
@@ -731,7 +768,8 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
           name: "level",
           description: "Thinking level",
           type: "string",
-          choices: ({ provider, model, catalog }) => listThinkingLevels(provider, model, catalog),
+          choices: ({ provider, model, catalog }) =>
+            listThinkingLevelChoices(provider, model, catalog),
         },
       ],
       argsMenu: "auto",
@@ -746,12 +784,11 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "mode",
-          description: "on or off",
+          description: "on, off, or full",
           type: "string",
-          choices: ["on", "off"],
+          choices: ["on", "off", "full"],
         },
       ],
-      argsMenu: "auto",
     }),
     defineChatCommand({
       key: "trace",
@@ -780,9 +817,9 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "mode",
-          description: "status, on, or off",
+          description: "status, on, off, or default",
           type: "string",
-          choices: ["status", "on", "off"],
+          choices: ["status", "on", "off", "default"],
         },
       ],
       argsMenu: "auto",
@@ -893,7 +930,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
           name: "mode",
           description: "queue mode",
           type: "string",
-          choices: ["steer", "interrupt", "followup", "collect", "steer-backlog"],
+          choices: ["steer", "followup", "collect", "interrupt"],
         },
         {
           name: "debounce",

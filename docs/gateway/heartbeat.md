@@ -8,7 +8,7 @@ sidebarTitle: "Heartbeat"
 ---
 
 <Note>
-**Heartbeat vs cron?** See [Automation & Tasks](/automation) for guidance on when to use each.
+**Heartbeat vs cron?** See [Automation](/automation) for guidance on when to use each.
 </Note>
 
 Heartbeat runs **periodic agent turns** in the main session so the model can surface anything that needs attention without spamming you.
@@ -50,8 +50,9 @@ Example config:
         directPolicy: "allow", // default: allow direct/DM targets; set "block" to suppress
         lightContext: true, // optional: only inject HEARTBEAT.md from bootstrap files
         isolatedSession: true, // optional: fresh session each run (no conversation history)
+        skipWhenBusy: true, // optional: also defer when this agent's subagent or nested lanes are busy
         // activeHours: { start: "08:00", end: "24:00" },
-        // includeReasoning: true, // optional: send separate `Reasoning:` message too
+        // includeReasoning: true, // optional: send separate `Thinking` message too
       },
     },
   },
@@ -62,9 +63,11 @@ Example config:
 
 - Interval: `30m` (or `1h` when Anthropic OAuth/token auth is the detected auth mode, including Claude CLI reuse). Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+- Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.list[].heartbeat.timeoutSeconds` for longer heartbeat work.
 - The heartbeat prompt is sent **verbatim** as the user message. The system prompt includes a "Heartbeat" section only when heartbeats are enabled for the default agent, and the run is flagged internally.
 - When heartbeats are disabled with `0m`, normal runs also omit `HEARTBEAT.md` from bootstrap context so the model does not see heartbeat-only instructions.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
+- Heartbeats automatically defer while cron work is active or queued. Set `heartbeat.skipWhenBusy: true` to also defer an agent on its own session-keyed subagent or nested command lanes; sibling agents no longer pause just because another agent has subagent work in flight.
 
 ## What the heartbeat prompt is for
 
@@ -80,6 +83,7 @@ If you want a heartbeat to do something very specific (e.g. "check Gmail PubSub 
 ## Response contract
 
 - If nothing needs attention, reply with **`HEARTBEAT_OK`**.
+- Tool-capable heartbeat runs may instead call `heartbeat_respond` with `notify: false` for no visible update, or `notify: true` plus `notificationText` for an alert. When present, the structured tool response takes precedence over the text fallback.
 - During heartbeat runs, OpenClaw treats `HEARTBEAT_OK` as an ack when it appears at the **start or end** of the reply. The token is stripped and the reply is dropped if the remaining content is **≤ `ackMaxChars`** (default: 300).
 - If `HEARTBEAT_OK` appears in the **middle** of a reply, it is not treated specially.
 - For alerts, **do not** include `HEARTBEAT_OK`; return only the alert text.
@@ -95,10 +99,11 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
       heartbeat: {
         every: "30m", // default: 30m (0m disables)
         model: "anthropic/claude-opus-4-6",
-        includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
+        includeReasoning: false, // default: false (deliver separate Thinking message when available)
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
-        target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "bluebubbles")
+        skipWhenBusy: false, // default: false; true also waits for this agent's subagent/nested lanes
+        target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "imessage")
         to: "+15551234567", // optional channel-specific override
         accountId: "ops-bot", // optional multi-account channel id
         prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
@@ -222,13 +227,16 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   Optional model override for heartbeat runs (`provider/model`).
 </ParamField>
 <ParamField path="includeReasoning" type="boolean" default="false">
-  When enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
+  When enabled, also deliver the separate `Thinking` message when available (same shape as `/reasoning on`).
 </ParamField>
 <ParamField path="lightContext" type="boolean" default="false">
   When true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
 </ParamField>
 <ParamField path="isolatedSession" type="boolean" default="false">
   When true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as cron `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing still uses the main session context.
+</ParamField>
+<ParamField path="skipWhenBusy" type="boolean" default="false">
+  When true, heartbeat runs defer on that agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeats, even without this flag, so local-model hosts do not run cron and heartbeat prompts at the same time.
 </ParamField>
 <ParamField path="session" type="string">
   Optional session key for heartbeat runs.
@@ -268,6 +276,10 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   When true, suppresses tool error warning payloads during heartbeat runs.
 
 </ParamField>
+<ParamField path="timeoutSeconds" type="number" default="global timeout or min(every, 600)">
+  Maximum seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.
+
+</ParamField>
 <ParamField path="activeHours" type="object">
   Restricts heartbeat runs to a time window. Object with `start` (HH:MM, inclusive; use `00:00` for start-of-day), `end` (HH:MM exclusive; `24:00` allowed for end-of-day), and optional `timezone`.
 
@@ -287,7 +299,8 @@ Use `accountId` to target a specific account on multi-account channels like Tele
     - `session` only affects the run context; delivery is controlled by `target` and `to`.
     - To deliver to a specific channel/recipient, set `target` + `to`. With `target: "last"`, delivery uses the last external channel for that session.
     - Heartbeat deliveries allow direct/DM targets by default. Set `directPolicy: "block"` to suppress direct-target sends while still running the heartbeat turn.
-    - If the main queue is busy, the heartbeat is skipped and retried later.
+    - If the main queue, target session lane, cron lane, or an active cron job is busy, the heartbeat is skipped and retried later.
+    - If `skipWhenBusy: true`, this agent's session-keyed subagent and nested lanes also defer heartbeat runs. Other agents' busy lanes do not defer this agent.
     - If `target` resolves to no external destination, the run still happens but no outbound message is sent.
 
   </Accordion>
@@ -368,11 +381,13 @@ channels:
 
 ## HEARTBEAT.md (optional)
 
-If a `HEARTBEAT.md` file exists in the workspace, the default prompt tells the agent to read it. Think of it as your "heartbeat checklist": small, stable, and safe to include every 30 minutes.
+If a `HEARTBEAT.md` file exists in the workspace, the default prompt tells the agent to read it. Think of it as your "heartbeat checklist": small, stable, and safe to consider every 30 minutes.
 
 On normal runs, `HEARTBEAT.md` is only injected when heartbeat guidance is enabled for the default agent. Disabling the heartbeat cadence with `0m` or setting `includeSystemPromptSection: false` omits it from normal bootstrap context.
 
-If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls. That skip is reported as `reason=empty-heartbeat-file`. If the file is missing, the heartbeat still runs and the model decides what to do.
+On the native Codex harness, `HEARTBEAT.md` content is not injected into the turn. If the file exists and has non-whitespace content, the heartbeat collaboration-mode instructions point Codex at the file and tell it to read before proceeding.
+
+If `HEARTBEAT.md` exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls. That skip is reported as `reason=empty-heartbeat-file`. If the file is missing, the heartbeat still runs and the model decides what to do.
 
 Keep it tiny (short checklist or reminders) to avoid prompt bloat.
 
@@ -457,7 +472,7 @@ If you want transparency, enable:
 
 - `agents.defaults.heartbeat.includeReasoning: true`
 
-When enabled, heartbeats will also deliver a separate message prefixed `Reasoning:` (same shape as `/reasoning on`). This can be useful when the agent is managing multiple sessions/codexes and you want to see why it decided to ping you — but it can also leak more internal detail than you want. Prefer keeping it off in group chats.
+When enabled, heartbeats will also deliver a separate message prefixed `Thinking` (same shape as `/reasoning on`). This can be useful when the agent is managing multiple sessions/codexes and you want to see why it decided to ping you — but it can also leak more internal detail than you want. Prefer keeping it off in group chats.
 
 ## Cost awareness
 
@@ -471,13 +486,13 @@ Heartbeats run full agent turns. Shorter intervals burn more tokens. To reduce c
 
 ## Context overflow after heartbeat
 
-If a heartbeat uses a smaller local model, for example an Ollama model with a 32k window, and the next main-session turn reports context overflow, check whether the previous heartbeat left the session on the heartbeat model. OpenClaw's reset message calls this out when the last runtime model matches configured `heartbeat.model`.
+If a heartbeat previously left an existing session on a smaller local model, for example an Ollama model with a 32k window, and the next main-session turn reports context overflow, reset the session runtime model back to the configured primary model. OpenClaw's reset message calls this out when the last runtime model matches configured `heartbeat.model`.
 
-Use `isolatedSession: true` to run heartbeats in a fresh session, combine it with `lightContext: true` for the smallest prompt, or choose a heartbeat model with a context window large enough for the shared session.
+Current heartbeats preserve the shared session's existing runtime model after the run completes. You can still use `isolatedSession: true` to run heartbeats in a fresh session, combine it with `lightContext: true` for the smallest prompt, or choose a heartbeat model with a context window large enough for the shared session.
 
 ## Related
 
-- [Automation & Tasks](/automation) — all automation mechanisms at a glance
+- [Automation](/automation) — all automation mechanisms at a glance
 - [Background Tasks](/automation/tasks) — how detached work is tracked
 - [Timezone](/concepts/timezone) — how timezone affects heartbeat scheduling
 - [Troubleshooting](/automation/cron-jobs#troubleshooting) — debugging automation issues

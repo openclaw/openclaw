@@ -9,9 +9,12 @@ title: "Usage tracking"
 ## What it is
 
 - Pulls provider usage/quota directly from their usage endpoints.
-- No estimated costs; only the provider-reported windows.
-- Human-readable status output is normalized to `X% left`, even when an
-  upstream API reports consumed quota, remaining quota, or only raw counts.
+- No estimated costs; only provider-reported quota windows or account-state
+  summaries.
+- Human-readable quota-window status output is normalized to `X% left`, even
+  when an upstream API reports consumed quota, remaining quota, or only raw
+  counts. Providers without resettable quota windows can show provider summary
+  text instead, such as a balance.
 - Session-level `/status` and `session_status` can fall back to the latest
   transcript usage entry when the live session snapshot is sparse. That
   fallback fills missing token/cache counters, can recover the active runtime
@@ -20,12 +23,12 @@ title: "Usage tracking"
 
 ## Where it shows up
 
-- `/status` in chats: emoji‑rich status card with session tokens + estimated cost (API key only). Provider usage shows for the **current model provider** when available as a normalized `X% left` window.
+- `/status` in chats: emoji-rich status card with session tokens + estimated cost (API key only). Provider usage shows for the **current model provider** when available as a normalized `X% left` window or provider summary text.
 - `/usage off|tokens|full` in chats: per-response usage footer (OAuth shows tokens only).
 - `/usage cost` in chats: local cost summary aggregated from OpenClaw session logs.
 - CLI: `openclaw status --usage` prints a full per-provider breakdown.
 - CLI: `openclaw channels list` prints the same usage snapshot alongside provider config (use `--no-usage` to skip).
-- macOS menu bar: “Usage” section under Context (only if available).
+- macOS menu bar: "Usage" section under Context (only if available).
 
 ## Providers + credentials
 
@@ -39,6 +42,9 @@ title: "Usage tracking"
   `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota
   surface, prefers stored MiniMax OAuth when present, and otherwise falls back
   to `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`.
+  Usage polling derives the Coding Plan host from `models.providers.minimax-portal.baseUrl`
+  or `models.providers.minimax.baseUrl` when configured, and otherwise uses the
+  MiniMax CN host.
   MiniMax's raw `usage_percent` / `usagePercent` fields mean **remaining**
   quota, so OpenClaw inverts them before display; count-based fields win when
   present.
@@ -50,6 +56,9 @@ title: "Usage tracking"
     name in the plan label.
 - **Xiaomi MiMo**: API key via env/config/auth store (`XIAOMI_API_KEY`).
 - **z.ai**: API key via env/config/auth store.
+- **DeepSeek**: API key via env/config/auth store (`DEEPSEEK_API_KEY`).
+  OpenClaw calls DeepSeek's balance endpoint and shows the provider-reported
+  balance as text instead of a percent-left quota window.
 
 Usage is hidden when no usable provider usage auth can be resolved. Providers
 can supply plugin-specific usage auth logic; otherwise OpenClaw falls back to

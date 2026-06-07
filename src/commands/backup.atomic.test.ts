@@ -1,3 +1,4 @@
+// Backup atomicity tests cover temp-file writes, rollback behavior, and backup archive consistency.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -55,6 +56,15 @@ describe("backupCreateCommand atomic archive write", () => {
     };
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    try {
+      await fs.access(targetPath);
+      throw new Error(`expected missing path: ${targetPath}`);
+    } catch (error) {
+      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    }
+  }
+
   it("does not leave a partial final archive behind when tar creation fails", async () => {
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
       archivePrefix: "openclaw-backup-failure-",
@@ -68,9 +78,9 @@ describe("backupCreateCommand atomic archive write", () => {
         }),
       ).rejects.toThrow(/disk full/i);
 
-      await expect(fs.access(outputPath)).rejects.toThrow();
+      await expectPathMissing(outputPath);
       const remaining = await fs.readdir(archiveDir);
-      expect(remaining).toEqual([]);
+      expect(remaining).toStrictEqual([]);
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }

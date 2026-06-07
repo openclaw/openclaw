@@ -1,9 +1,11 @@
+// Mocks plugin setup wizard flows for command and installer tests.
 import { vi, type Mock } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../channels/plugins/setup-wizard.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createRuntimeEnv } from "./plugin-runtime-env.js";
 
+/** Wizard prompt doubles shared by plugin setup flow tests. */
 export type { WizardPrompter } from "../wizard/prompts.js";
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -11,6 +13,7 @@ type QueuedWizardPrompter = {
   intro: AsyncUnknownMock;
   outro: AsyncUnknownMock;
   note: AsyncUnknownMock;
+  plain: AsyncUnknownMock;
   select: AsyncUnknownMock;
   multiselect: AsyncUnknownMock;
   text: AsyncUnknownMock;
@@ -34,6 +37,7 @@ export function createTestWizardPrompter(overrides: Partial<WizardPrompter> = {}
     intro: vi.fn(async () => {}),
     outro: vi.fn(async () => {}),
     note: vi.fn(async () => {}),
+    plain: vi.fn(async () => {}),
     select: selectFirstWizardOption as WizardPrompter["select"],
     multiselect: vi.fn(async () => []),
     text: vi.fn(async () => "") as WizardPrompter["text"],
@@ -55,6 +59,7 @@ export function createQueuedWizardPrompter(params?: {
   const intro = vi.fn(async () => undefined);
   const outro = vi.fn(async () => undefined);
   const note = vi.fn(async () => undefined);
+  const plain = vi.fn(async () => undefined);
   const select = vi.fn(async () => selectValues.shift() ?? "");
   const multiselect = vi.fn(async () => [] as string[]);
   const text = vi.fn(async () => textValues.shift() ?? "");
@@ -68,6 +73,7 @@ export function createQueuedWizardPrompter(params?: {
     intro,
     outro,
     note,
+    plain,
     select,
     multiselect,
     text,
@@ -77,6 +83,7 @@ export function createQueuedWizardPrompter(params?: {
       intro,
       outro,
       note,
+      plain,
       select: select as WizardPrompter["select"],
       multiselect: multiselect as WizardPrompter["multiselect"],
       text: text as WizardPrompter["text"],
@@ -96,6 +103,7 @@ type SetupWizardTestPlugin = {
   config: Record<string, unknown>;
 } & Record<string, unknown>;
 
+// Tests pass plugin-like stubs; require the declarative wizard shape before adapting.
 function isDeclarativeSetupWizard(
   setupWizard: ChannelPlugin["setupWizard"],
 ): setupWizard is SetupWizard {

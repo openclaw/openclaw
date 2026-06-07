@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Qqbot plugin module implements finalize behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
@@ -10,13 +11,6 @@ type SetupRuntime = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["
 function isQQBotAccountConfigured(cfg: OpenClawConfig, accountId: string): boolean {
   const account = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
   return Boolean(account.appId && account.clientSecret);
-}
-
-export async function detectQQBotConfigured(
-  cfg: OpenClawConfig,
-  accountId: string,
-): Promise<boolean> {
-  return isQQBotAccountConfigured(cfg, accountId);
 }
 
 async function linkViaQrCode(params: {

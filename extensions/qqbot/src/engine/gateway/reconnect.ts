@@ -18,7 +18,7 @@ import {
 } from "./constants.js";
 
 /** Actions the caller should take after processing a close event. */
-export interface CloseAction {
+interface CloseAction {
   /** Whether to schedule a reconnect. */
   shouldReconnect: boolean;
   /** Custom delay override (ms), or undefined to use the default backoff. */
@@ -80,7 +80,7 @@ export class ReconnectState {
     const delay =
       customDelay ?? RECONNECT_DELAYS[Math.min(this.attempts, RECONNECT_DELAYS.length - 1)];
     this.attempts++;
-    this.log?.debug?.(`Reconnecting in ${delay}ms (attempt ${this.attempts})`);
+    this.log?.debug?.(`Reconnecting ${this.accountId} in ${delay}ms (attempt ${this.attempts})`);
     return delay;
   }
 

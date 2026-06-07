@@ -1,19 +1,15 @@
-import fsSync from "node:fs";
+// Memory Core provider module implements model/runtime integration.
 import {
-  createLocalEmbeddingProvider,
   DEFAULT_LOCAL_MODEL,
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviderAdapters,
   type MemoryEmbeddingProviderAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+} from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
 import { formatErrorMessage } from "../dreaming-shared.js";
 import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-adapter-registration.js";
 
 const NODE_LLAMA_CPP_RUNTIME_PACKAGE = "node-llama-cpp";
-const NODE_LLAMA_CPP_RUNTIME_VERSION = "3.18.1";
-const NODE_LLAMA_CPP_INSTALL_SPEC = `${NODE_LLAMA_CPP_RUNTIME_PACKAGE}@${NODE_LLAMA_CPP_RUNTIME_VERSION}`;
 
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   providerId: string;
@@ -57,31 +53,15 @@ function formatLocalSetupError(err: unknown): string {
         : undefined,
     missing && detail ? `Detail: ${detail}` : null,
     "To enable local embeddings:",
-    "1) Use Node 24 (recommended for installs/updates; Node 22 LTS, currently 22.14+, remains supported)",
+    "1) Use Node 24 (recommended for installs/updates; Node 22 LTS, currently 22.19+, remains supported)",
     missing
-      ? `2) Install optional local embedding runtime next to OpenClaw: npm i -g ${NODE_LLAMA_CPP_INSTALL_SPEC}`
+      ? `2) Install ${NODE_LLAMA_CPP_RUNTIME_PACKAGE} next to the OpenClaw package or source checkout`
       : null,
     `3) If you use pnpm: pnpm approve-builds (select ${NODE_LLAMA_CPP_RUNTIME_PACKAGE}), then pnpm rebuild ${NODE_LLAMA_CPP_RUNTIME_PACKAGE}`,
     ...listRemoteEmbeddingSetupHints(),
   ]
     .filter(Boolean)
     .join("\n");
-}
-
-function canAutoSelectLocal(modelPath?: string): boolean {
-  const trimmed = modelPath?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (/^(hf:|https?:)/i.test(trimmed)) {
-    return false;
-  }
-  const resolved = resolveUserPath(trimmed);
-  try {
-    return fsSync.statSync(resolved).isFile();
-  } catch {
-    return false;
-  }
 }
 
 const localAdapter: MemoryEmbeddingProviderAdapter = {
@@ -92,6 +72,8 @@ const localAdapter: MemoryEmbeddingProviderAdapter = {
   formatSetupError: formatLocalSetupError,
   shouldContinueAutoSelection: () => true,
   create: async (options) => {
+    const { createLocalEmbeddingProvider } =
+      await import("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
     const provider = await createLocalEmbeddingProvider({
       ...options,
       provider: "local",
@@ -112,11 +94,11 @@ const localAdapter: MemoryEmbeddingProviderAdapter = {
   },
 };
 
-export const builtinMemoryEmbeddingProviderAdapters = [localAdapter] as const;
+const builtinMemoryEmbeddingProviderAdapters = [localAdapter] as const;
 
 export { DEFAULT_LOCAL_MODEL };
 
-export function getBuiltinMemoryEmbeddingProviderAdapter(
+function getBuiltinMemoryEmbeddingProviderAdapter(
   id: string,
 ): MemoryEmbeddingProviderAdapter | undefined {
   return listMemoryEmbeddingProviders().find((adapter) => adapter.id === id);
@@ -168,5 +150,3 @@ export function listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata(): Ar
       };
     });
 }
-
-export { canAutoSelectLocal, formatLocalSetupError };

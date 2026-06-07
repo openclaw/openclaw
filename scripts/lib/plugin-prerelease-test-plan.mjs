@@ -1,16 +1,23 @@
+// Defines the plugin prerelease validation surface and matching test lanes.
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "./docker-e2e-scenarios.mjs";
 
+/** Required behavioral surfaces that plugin prerelease validation must cover. */
 export const PLUGIN_PRERELEASE_REQUIRED_SURFACES = Object.freeze([
   "package-artifact",
   "bundled-lifecycle",
   "external-plugins",
   "update-no-op",
-  "channel-runtime-deps",
+  "installed-plugin-deps",
   "doctor-fix",
   "config-round-trip",
   "gateway-bootstrap",
   "sdk-compatibility",
+  "external-install-boundary",
   "status-diagnostics",
+  "npm-registry-plugin",
+  "clawhub-registry-plugin",
+  "resource-guardrails",
+  "plugin-gateway-rpc",
   "live-ish-availability",
 ]);
 
@@ -20,16 +27,26 @@ const pluginPrereleaseDockerLanes = Object.freeze([
     surfaces: ["package-artifact", "gateway-bootstrap", "status-diagnostics"],
   },
   {
+    lane: "npm-onboard-discord-channel-agent",
+    surfaces: [
+      "package-artifact",
+      "external-plugins",
+      "installed-plugin-deps",
+      "gateway-bootstrap",
+      "status-diagnostics",
+    ],
+  },
+  {
+    lane: "npm-onboard-slack-channel-agent",
+    surfaces: ["package-artifact", "gateway-bootstrap", "status-diagnostics"],
+  },
+  {
     lane: "doctor-switch",
     surfaces: ["package-artifact", "doctor-fix"],
   },
   {
     lane: "update-channel-switch",
-    surfaces: ["package-artifact", "channel-runtime-deps", "update-no-op"],
-  },
-  {
-    lane: "bundled-channel-deps-compat",
-    surfaces: ["package-artifact", "channel-runtime-deps", "gateway-bootstrap"],
+    surfaces: ["package-artifact", "installed-plugin-deps", "update-no-op"],
   },
   {
     lane: "plugins-offline",
@@ -37,7 +54,36 @@ const pluginPrereleaseDockerLanes = Object.freeze([
   },
   {
     lane: "plugins",
-    surfaces: ["external-plugins", "sdk-compatibility", "status-diagnostics"],
+    surfaces: [
+      "external-plugins",
+      "sdk-compatibility",
+      "external-install-boundary",
+      "status-diagnostics",
+    ],
+  },
+  {
+    lane: "kitchen-sink-plugin",
+    surfaces: [
+      "external-plugins",
+      "sdk-compatibility",
+      "external-install-boundary",
+      "status-diagnostics",
+      "npm-registry-plugin",
+      "clawhub-registry-plugin",
+      "resource-guardrails",
+    ],
+  },
+  {
+    lane: "kitchen-sink-rpc",
+    surfaces: [
+      "external-plugins",
+      "sdk-compatibility",
+      "gateway-bootstrap",
+      "status-diagnostics",
+      "npm-registry-plugin",
+      "resource-guardrails",
+      "plugin-gateway-rpc",
+    ],
   },
   {
     lane: "plugin-update",
@@ -96,6 +142,7 @@ function coveredSurfaces(entries) {
   ].toSorted((a, b) => a.localeCompare(b));
 }
 
+/** Build the plugin prerelease plan from Docker lanes and static checks. */
 export function createPluginPrereleaseTestPlan() {
   const dockerLanes = pluginPrereleaseDockerLanes.map((entry) => entry.lane);
   const allEntries = [...pluginPrereleaseDockerLanes, ...staticChecks];
@@ -111,6 +158,7 @@ export function createPluginPrereleaseTestPlan() {
   };
 }
 
+/** Assert that a plugin prerelease plan covers every required surface. */
 export function assertPluginPrereleaseTestPlanComplete(plan = createPluginPrereleaseTestPlan()) {
   const missing = PLUGIN_PRERELEASE_REQUIRED_SURFACES.filter(
     (surface) => !plan.surfaces.includes(surface),

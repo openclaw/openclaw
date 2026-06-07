@@ -1,8 +1,11 @@
+// Runtime session types describe the store hooks shared across config, gateway, and channels.
 import type { MsgContext } from "../../auto-reply/templating.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { SessionMaintenanceMode } from "../types.base.js";
 import type { SessionEntry, GroupKeyResolution } from "./types.js";
 
+/** Runtime hook for reading a session store entry timestamp. */
 export type ReadSessionUpdatedAt = (params: {
   storePath: string;
   sessionKey: string;
@@ -39,7 +42,6 @@ export type SessionMaintenanceApplyReportRuntime = {
 export type SaveSessionStoreOptions = {
   skipMaintenance?: boolean;
   activeSessionKey?: string;
-  allowDropAcpMetaSessionKeys?: string[];
   onWarn?: (warning: SessionMaintenanceWarningRuntime) => void | Promise<void>;
   onMaintenanceApplied?: (report: SessionMaintenanceApplyReportRuntime) => void | Promise<void>;
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfigRuntime>;
@@ -66,6 +68,7 @@ export type UpdateLastRoute = (params: {
   to?: string;
   accountId?: string;
   threadId?: string | number;
+  route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   ctx?: MsgContext;
   groupResolution?: GroupKeyResolution | null;

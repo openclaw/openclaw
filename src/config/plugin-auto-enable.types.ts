@@ -1,5 +1,7 @@
+// Defines plugin auto-enable decision and candidate types.
 import type { OpenClawConfig } from "./types.openclaw.js";
 
+/** Reasons a configured surface can cause a plugin to be auto-enabled. */
 export type PluginAutoEnableCandidate =
   | {
       pluginId: string;
@@ -20,6 +22,11 @@ export type PluginAutoEnableCandidate =
       pluginId: string;
       kind: "agent-harness-runtime-configured";
       runtime: string;
+    }
+  | {
+      pluginId: string;
+      kind: "web-search-provider-selected";
+      providerId: string;
     }
   | {
       pluginId: string;

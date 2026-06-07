@@ -1,7 +1,9 @@
+// Runs the gateway-backed runtime that delivers native approval events.
+import { readConnectErrorDetailCode } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
-import { readConnectErrorDetailCode } from "../gateway/protocol/connect-error-details.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import type {
@@ -20,6 +22,7 @@ export type {
 type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
 
+/** Error raised when the gateway pauses approval reconnects after a terminal startup failure. */
 export class ExecApprovalChannelRuntimeTerminalStartError extends Error {
   readonly detailCode: string | null;
 
@@ -34,6 +37,7 @@ export class ExecApprovalChannelRuntimeTerminalStartError extends Error {
   }
 }
 
+/** Narrows terminal approval runtime startup failures for bootstrap retry policy. */
 export function isExecApprovalChannelRuntimeTerminalStartError(
   error: unknown,
 ): error is ExecApprovalChannelRuntimeTerminalStartError {
@@ -72,6 +76,7 @@ function readGatewayConnectErrorDetailCode(error: unknown): string | null {
   return readConnectErrorDetailCode((error as { details?: unknown }).details);
 }
 
+/** Creates the gateway-backed approval runtime that tracks pending requests and finalization. */
 export function createExecApprovalChannelRuntime<
   TPending,
   TRequest extends ApprovalRequestEvent = ExecApprovalRequest,
@@ -178,6 +183,7 @@ export function createExecApprovalChannelRuntime<
     entry.entries = entries;
     entry.delivering = false;
     if (entry.pendingResolution) {
+      // Resolution can arrive while native delivery is still creating entries; finalize after both.
       pending.delete(request.id);
       log.debug(`resolved ${entry.pendingResolution.id} with ${entry.pendingResolution.decision}`);
       await adapter.finalizeResolved({
@@ -318,6 +324,7 @@ export function createExecApprovalChannelRuntime<
             return;
           }
           readySettled = true;
+          // Hello, close, and reconnect-paused callbacks can race during startup.
           fn();
         };
 
@@ -358,7 +365,18 @@ export function createExecApprovalChannelRuntime<
         await adapter.beforeGatewayClientStart?.();
         gatewayClient = client;
         try {
-          client.start();
+          const readiness = await startGatewayClientWhenEventLoopReady(client, {
+            clientOptions: {
+              preauthHandshakeTimeoutMs: adapter.cfg.gateway?.handshakeTimeoutMs,
+            },
+          });
+          if (!readiness.ready) {
+            throw new Error(
+              readiness.aborted
+                ? "gateway approval runtime start aborted before readiness"
+                : "gateway readiness unavailable before exec approval runtime start",
+            );
+          }
           await ready;
           if (stopClientIfInactive(client)) {
             return;

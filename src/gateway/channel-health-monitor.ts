@@ -1,5 +1,8 @@
+// Gateway channel health monitor.
+// Periodically evaluates channel account health and restarts stale runtimes.
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -23,13 +26,13 @@ const ONE_HOUR_MS = 60 * 60_000;
  * Providers should only publish that timestamp from transport/heartbeat/poll
  * signals, not from ordinary app messages.
  */
-export type ChannelHealthTimingPolicy = {
+type ChannelHealthTimingPolicy = {
   monitorStartupGraceMs: number;
   channelConnectGraceMs: number;
   staleEventThresholdMs: number;
 };
 
-export type ChannelHealthMonitorDeps = {
+type ChannelHealthMonitorDeps = {
   channelManager: ChannelManager;
   checkIntervalMs?: number;
   /** @deprecated use timing.monitorStartupGraceMs */
@@ -73,14 +76,15 @@ function resolveTimingPolicy(
   };
 }
 
+/** Start the periodic channel health monitor and return its stop handle. */
 export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): ChannelHealthMonitor {
   const {
     channelManager,
-    checkIntervalMs = DEFAULT_CHECK_INTERVAL_MS,
     cooldownCycles = DEFAULT_COOLDOWN_CYCLES,
     maxRestartsPerHour = DEFAULT_MAX_RESTARTS_PER_HOUR,
     abortSignal,
   } = deps;
+  const checkIntervalMs = resolveTimerTimeoutMs(deps.checkIntervalMs, DEFAULT_CHECK_INTERVAL_MS);
   const timing = resolveTimingPolicy(deps);
 
   const cooldownMs = cooldownCycles * checkIntervalMs;
@@ -163,7 +167,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           try {
             if (status.running) {
-              await channelManager.stopChannel(channelId as ChannelId, accountId);
+              await channelManager.stopChannel(channelId as ChannelId, accountId, {
+                manual: false,
+              });
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
@@ -174,6 +180,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           }
         }
       }
+    } catch (err) {
+      log.error?.(`health-monitor: check failed: ${String(err)}`);
     } finally {
       checkInFlight = false;
     }
@@ -185,6 +193,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       clearInterval(timer);
       timer = null;
     }
+    abortSignal?.removeEventListener("abort", stop);
   }
 
   if (abortSignal?.aborted) {

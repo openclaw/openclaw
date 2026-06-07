@@ -1,22 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+// Model manifest catalog tests cover loading model catalog entries from plugin manifests.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginRegistrySnapshot: vi.fn(),
+  loadPluginMetadataSnapshot: vi.fn(),
   resolvePluginContributionOwners: vi.fn(),
   getPluginRecord: vi.fn(),
   isPluginEnabled: vi.fn(),
-  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
 }));
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
-  loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
   resolvePluginContributionOwners: mocks.resolvePluginContributionOwners,
   getPluginRecord: mocks.getPluginRecord,
   isPluginEnabled: mocks.isPluginEnabled,
 }));
 
-vi.mock("../../plugins/manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistryForInstalledIndex,
+vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
 }));
 
 const moonshotPlugin = {
@@ -50,13 +50,21 @@ const openrouterPlugin = {
 };
 
 describe("loadStaticManifestCatalogRowsForList", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("loads only static manifest catalog rows without a provider filter", async () => {
     const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
     const index = { plugins: [], diagnostics: [] };
-    mocks.loadPluginRegistrySnapshot.mockReturnValueOnce(index);
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValueOnce({
+    const manifestRegistry = {
       plugins: [openrouterPlugin, moonshotPlugin],
       diagnostics: [],
+    };
+    mocks.loadPluginMetadataSnapshot.mockReturnValueOnce({
+      index,
+      manifestRegistry,
+      plugins: manifestRegistry.plugins,
     });
 
     expect(
@@ -64,20 +72,24 @@ describe("loadStaticManifestCatalogRowsForList", () => {
         cfg: {},
       }).map((row) => row.ref),
     ).toEqual(["moonshot/kimi-k2.6"]);
-    expect(mocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith({
-      index,
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
+      allowWorkspaceScopedCurrent: true,
       config: {},
-      env: undefined,
+      env: process.env,
     });
   });
 
   it("loads refreshable manifest rows as registry-backed supplements", async () => {
     const { loadSupplementalManifestCatalogRowsForList } =
       await import("./list.manifest-catalog.js");
-    mocks.loadPluginRegistrySnapshot.mockReturnValueOnce({ plugins: [], diagnostics: [] });
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValueOnce({
+    const manifestRegistry = {
       plugins: [openrouterPlugin, moonshotPlugin],
       diagnostics: [],
+    };
+    mocks.loadPluginMetadataSnapshot.mockReturnValueOnce({
+      index: { plugins: [], diagnostics: [] },
+      manifestRegistry,
+      plugins: manifestRegistry.plugins,
     });
 
     expect(
@@ -85,5 +97,27 @@ describe("loadStaticManifestCatalogRowsForList", () => {
         cfg: {},
       }).map((row) => row.ref),
     ).toEqual(["moonshot/kimi-k2.6", "openrouter/auto"]);
+  });
+
+  it("uses an injected metadata snapshot instead of loading metadata again", async () => {
+    const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
+    const metadataSnapshot = {
+      index: { plugins: [], diagnostics: [] },
+      manifestRegistry: {
+        plugins: [moonshotPlugin],
+        diagnostics: [],
+      },
+      plugins: [moonshotPlugin],
+    };
+
+    expect(
+      loadStaticManifestCatalogRowsForList({
+        cfg: {},
+        metadataSnapshot: metadataSnapshot as unknown as Parameters<
+          typeof loadStaticManifestCatalogRowsForList
+        >[0]["metadataSnapshot"],
+      }).map((row) => row.ref),
+    ).toEqual(["moonshot/kimi-k2.6"]);
+    expect(mocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 });

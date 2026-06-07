@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager reindex state behavior.
 import {
   hashText,
   normalizeExtraMemoryPaths,
@@ -16,6 +17,19 @@ export type MemoryIndexMeta = {
   ftsTokenizer?: string;
 };
 
+export type MemoryIndexIdentityState =
+  | {
+      status: "valid";
+    }
+  | {
+      status: "missing";
+      reason: string;
+    }
+  | {
+      status: "mismatched";
+      reason: string;
+    };
+
 export function resolveConfiguredSourcesForMeta(sources: Iterable<MemorySource>): MemorySource[] {
   const normalized = Array.from(sources)
     .filter((source): source is MemorySource => source === "memory" || source === "sessions")
@@ -23,7 +37,7 @@ export function resolveConfiguredSourcesForMeta(sources: Iterable<MemorySource>)
   return normalized.length > 0 ? normalized : ["memory"];
 }
 
-export function normalizeMetaSources(meta: MemoryIndexMeta): MemorySource[] {
+function normalizeMetaSources(meta: MemoryIndexMeta): MemorySource[] {
   if (!Array.isArray(meta.sources)) {
     // Backward compatibility for older indexes that did not persist sources.
     return ["memory"];
@@ -38,7 +52,7 @@ export function normalizeMetaSources(meta: MemoryIndexMeta): MemorySource[] {
   return normalized.length > 0 ? normalized : ["memory"];
 }
 
-export function configuredMetaSourcesDiffer(params: {
+function configuredMetaSourcesDiffer(params: {
   meta: MemoryIndexMeta;
   configuredSources: MemorySource[];
 }): boolean {
@@ -73,31 +87,93 @@ export function resolveConfiguredScopeHash(params: {
   );
 }
 
-export function shouldRunFullMemoryReindex(params: {
+export function isMemoryIndexIdentityDirty(params: {
   meta: MemoryIndexMeta | null;
   provider: { id: string; model: string } | null;
   providerKey?: string;
+  providerKeyKnown?: boolean;
   configuredSources: MemorySource[];
   configuredScopeHash: string;
   chunkTokens: number;
   chunkOverlap: number;
   vectorReady: boolean;
+  hasIndexedChunks?: boolean;
   ftsTokenizer: string;
 }): boolean {
+  return resolveMemoryIndexIdentityState(params).status !== "valid";
+}
+
+export function resolveMemoryIndexIdentityState(params: {
+  meta: MemoryIndexMeta | null;
+  provider: { id: string; model: string } | null;
+  providerKey?: string;
+  providerKeyKnown?: boolean;
+  configuredSources: MemorySource[];
+  configuredScopeHash: string;
+  chunkTokens: number;
+  chunkOverlap: number;
+  vectorReady: boolean;
+  hasIndexedChunks?: boolean;
+  ftsTokenizer: string;
+}): MemoryIndexIdentityState {
   const { meta } = params;
-  return (
-    !meta ||
-    (params.provider ? meta.model !== params.provider.model : meta.model !== "fts-only") ||
-    (params.provider ? meta.provider !== params.provider.id : meta.provider !== "none") ||
-    meta.providerKey !== params.providerKey ||
+  if (!meta) {
+    return { status: "missing", reason: "index metadata is missing" };
+  }
+  const expectedModel = params.provider ? params.provider.model : "fts-only";
+  if (meta.model !== expectedModel) {
+    return {
+      status: "mismatched",
+      reason: `index was built for model ${meta.model}, expected ${expectedModel}`,
+    };
+  }
+  const expectedProvider = params.provider ? params.provider.id : "none";
+  if (meta.provider !== expectedProvider) {
+    return {
+      status: "mismatched",
+      reason: `index was built for provider ${meta.provider}, expected ${expectedProvider}`,
+    };
+  }
+  if (params.providerKeyKnown !== false && meta.providerKey !== params.providerKey) {
+    return {
+      status: "mismatched",
+      reason: "index provider settings changed",
+    };
+  }
+  if (
     configuredMetaSourcesDiffer({
       meta,
       configuredSources: params.configuredSources,
-    }) ||
-    meta.scopeHash !== params.configuredScopeHash ||
-    meta.chunkTokens !== params.chunkTokens ||
-    meta.chunkOverlap !== params.chunkOverlap ||
-    (params.vectorReady && !meta.vectorDims) ||
-    (meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer
-  );
+    })
+  ) {
+    return {
+      status: "mismatched",
+      reason: "index sources changed",
+    };
+  }
+  if (meta.scopeHash !== params.configuredScopeHash) {
+    return {
+      status: "mismatched",
+      reason: "index scope changed",
+    };
+  }
+  if (meta.chunkTokens !== params.chunkTokens || meta.chunkOverlap !== params.chunkOverlap) {
+    return {
+      status: "mismatched",
+      reason: "index chunking changed",
+    };
+  }
+  if (params.vectorReady && params.hasIndexedChunks !== false && !meta.vectorDims) {
+    return {
+      status: "mismatched",
+      reason: "index vector dimensions are missing",
+    };
+  }
+  if ((meta.ftsTokenizer ?? "unicode61") !== params.ftsTokenizer) {
+    return {
+      status: "mismatched",
+      reason: "index FTS tokenizer changed",
+    };
+  }
+  return { status: "valid" };
 }

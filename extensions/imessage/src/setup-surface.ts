@@ -1,3 +1,4 @@
+// Imessage plugin module implements setup surface behavior.
 import {
   createDetectedBinaryStatus,
   setSetupChannelEnabled,
@@ -9,7 +10,6 @@ import {
   createIMessageCliPathTextInput,
   imessageCompletionNote,
   imessageDmPolicy,
-  imessageSetupAdapter,
   imessageSetupStatusBase,
   parseIMessageAllowFromEntries,
 } from "./setup-core.js";
@@ -43,4 +43,4 @@ export const imessageSetupWizard: ChannelSetupWizard = {
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
 
-export { imessageSetupAdapter, parseIMessageAllowFromEntries };
+export { parseIMessageAllowFromEntries };

@@ -1,9 +1,15 @@
+/**
+ * Resolves fast-mode state from agent config and runtime defaults.
+ */
 import { normalizeFastMode } from "../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
+import { modelKey } from "./model-ref-shared.js";
 
-export type FastModeState = {
+// Resolves effective fast-mode state from session, agent, model config, then
+// default. Callers keep the source for diagnostics and prompt explanations.
+type FastModeState = {
   enabled: boolean;
   source: "session" | "agent" | "config" | "default";
 };
@@ -13,11 +19,12 @@ function resolveConfiguredFastModeRaw(params: {
   provider: string;
   model: string;
 }): unknown {
-  const modelKey = `${params.provider}/${params.model}`;
-  const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
+  const modelConfig =
+    params.cfg?.agents?.defaults?.models?.[modelKey(params.provider, params.model)];
   return modelConfig?.params?.fastMode ?? modelConfig?.params?.fast_mode;
 }
 
+/** Resolve the effective fast-mode setting and its source. */
 export function resolveFastModeState(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;

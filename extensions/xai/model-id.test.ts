@@ -1,3 +1,4 @@
+// Xai tests cover model id plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeXaiModelId } from "./api.js";
 
@@ -11,7 +12,10 @@ describe("normalizeXaiModelId", () => {
     );
   });
 
-  it("maps older fast and 4.20 ids to the current Pi-backed ids", () => {
+  it("maps older fast and 4.20 ids to the current OpenClaw-backed ids", () => {
+    expect(normalizeXaiModelId("grok-code-fast-1")).toBe("grok-build-0.1");
+    expect(normalizeXaiModelId("grok-code-fast")).toBe("grok-build-0.1");
+    expect(normalizeXaiModelId("grok-code-fast-1-0825")).toBe("grok-build-0.1");
     expect(normalizeXaiModelId("grok-4-fast-reasoning")).toBe("grok-4-fast");
     expect(normalizeXaiModelId("grok-4-1-fast-reasoning")).toBe("grok-4-1-fast");
     expect(normalizeXaiModelId("grok-4.20-reasoning")).toBe("grok-4.20-beta-latest-reasoning");

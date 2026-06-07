@@ -1,9 +1,4 @@
-export {
-  BUILD_STAMP_FILE,
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  RUNTIME_POSTBUILD_STAMP_FILE,
-  isLocalBuildMetadataDistPath,
-} from "./local-build-metadata-paths.mjs";
+export { BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE } from "./local-build-metadata-paths.mjs";
 
 export function resolveGitHead(params?: {
   cwd?: string;

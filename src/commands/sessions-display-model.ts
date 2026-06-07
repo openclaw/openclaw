@@ -1,4 +1,14 @@
+/**
+ * Model display resolution for session listings.
+ *
+ * Session rows may carry persisted model/provider overrides or CLI-runtime
+ * model strings; this module normalizes them into display-ready model refs.
+ */
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  inferUniqueProviderFromConfiguredModels,
+  isCliProvider,
+} from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -14,7 +24,9 @@ type SessionDisplayDefaults = {
   model: string;
 };
 
-function parseModelRef(raw: string, defaultProvider: string): { provider: string; model: string } {
+type SessionDisplayModelRef = { provider: string; model: string };
+
+function parseModelRef(raw: string, defaultProvider: string): SessionDisplayModelRef {
   const trimmed = raw.trim();
   if (!trimmed) {
     return { provider: defaultProvider, model: DEFAULT_MODEL };
@@ -51,6 +63,8 @@ function normalizeStoredOverrideModel(params: {
   }
 
   const providerPrefix = `${providerOverride.toLowerCase()}/`;
+  // Older stores sometimes persisted both providerOverride and a
+  // provider/model modelOverride; trim the duplicate provider for display.
   return {
     providerOverride,
     modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
@@ -59,10 +73,7 @@ function normalizeStoredOverrideModel(params: {
   };
 }
 
-function resolveDefaultModelRef(
-  cfg: OpenClawConfig,
-  agentId?: string,
-): { provider: string; model: string } {
+function resolveDefaultModelRef(cfg: OpenClawConfig, agentId?: string): SessionDisplayModelRef {
   const primary =
     resolveAgentPrimaryModel(cfg, agentId) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
@@ -70,6 +81,7 @@ function resolveDefaultModelRef(
   return parseModelRef(primary, DEFAULT_PROVIDER);
 }
 
+/** Resolves default display values for a session table scoped to an agent. */
 export function resolveSessionDisplayDefaults(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -79,10 +91,54 @@ export function resolveSessionDisplayDefaults(
   };
 }
 
+function normalizeCliRuntimeDisplayRef(
+  cfg: OpenClawConfig,
+  ref: SessionDisplayModelRef,
+  defaultRef: SessionDisplayModelRef,
+): SessionDisplayModelRef {
+  if (!isCliProvider(ref.provider, cfg)) {
+    return ref;
+  }
+  if (ref.model.includes("/")) {
+    // CLI runtimes can store the real provider/model inside the model field;
+    // prefer that embedded provider when it is not another CLI runtime alias.
+    const parsed = parseModelRef(ref.model, defaultRef.provider);
+    if (!isCliProvider(parsed.provider, cfg)) {
+      return parsed;
+    }
+  }
+  const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    cfg,
+    model: ref.model,
+  });
+  if (inferredProvider && !isCliProvider(inferredProvider, cfg)) {
+    return { provider: inferredProvider, model: ref.model };
+  }
+  // If the CLI runtime model cannot be mapped to a concrete provider, fall
+  // back to the configured default provider so rows stay comparable.
+  const parsed = parseModelRef(ref.model, defaultRef.provider);
+  if (!isCliProvider(parsed.provider, cfg)) {
+    return parsed;
+  }
+  return {
+    provider: defaultRef.provider || ref.provider,
+    model: parsed.model || ref.model,
+  };
+}
+
+/** Resolves only the model id to show for a session row. */
 export function resolveSessionDisplayModel(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
 ): string {
+  return resolveSessionDisplayModelRef(cfg, row).model;
+}
+
+/** Resolves provider/model display metadata for a session row. */
+export function resolveSessionDisplayModelRef(
+  cfg: OpenClawConfig,
+  row: SessionDisplayModelRow,
+): SessionDisplayModelRef {
   const agentId = row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined;
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
   const normalizedOverride = normalizeStoredOverrideModel({
@@ -94,10 +150,14 @@ export function resolveSessionDisplayModel(
     return parseModelRef(
       normalizedOverride.modelOverride,
       normalizedOverride.providerOverride ?? defaultRef.provider,
-    ).model;
+    );
   }
   if (row.model) {
-    return parseModelRef(row.model, row.modelProvider ?? defaultRef.provider).model;
+    return normalizeCliRuntimeDisplayRef(
+      cfg,
+      parseModelRef(row.model, row.modelProvider ?? defaultRef.provider),
+      defaultRef,
+    );
   }
-  return defaultRef.model;
+  return defaultRef;
 }

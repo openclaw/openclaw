@@ -1,3 +1,4 @@
+// Covers provider/model gates for strict agentic execution-contract activation.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -74,8 +75,8 @@ describe("resolveEffectiveExecutionContract", () => {
         "openai/gpt-5.4",
         "openai:gpt-5.4",
         "openai/gpt-5o-mini",
-        "openai-codex/gpt-5.4",
-        "openai-codex:gpt-5.4",
+        "openai/gpt-5.4",
+        "openai:gpt-5.4",
         "  openai/gpt-5.4  ",
         " OPENAI:GPT-5.4 ",
       ]) {
@@ -122,6 +123,8 @@ describe("resolveEffectiveExecutionContract", () => {
     });
 
     it("collapses to default on unsupported providers even with gpt-5 model ids", () => {
+      // Model naming alone is insufficient; unsupported providers must not
+      // inherit OpenAI-specific strict-agentic handling by accident.
       expect(
         resolveEffectiveExecutionContract({
           config: emptyConfig,
@@ -137,7 +140,7 @@ describe("resolveEffectiveExecutionContract", () => {
       const config: OpenClawConfig = {
         agents: {
           defaults: {
-            embeddedPi: {
+            embeddedAgent: {
               executionContract: "strict-agentic",
             },
           },
@@ -156,7 +159,7 @@ describe("resolveEffectiveExecutionContract", () => {
       const config: OpenClawConfig = {
         agents: {
           defaults: {
-            embeddedPi: {
+            embeddedAgent: {
               executionContract: "default",
             },
           },
@@ -175,7 +178,7 @@ describe("resolveEffectiveExecutionContract", () => {
       const config: OpenClawConfig = {
         agents: {
           defaults: {
-            embeddedPi: {
+            embeddedAgent: {
               executionContract: "strict-agentic",
             },
           },

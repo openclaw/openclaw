@@ -1,7 +1,7 @@
 ---
 summary: "CLI reference and security model for Crestodian, the configless-safe setup and repair helper"
 read_when:
-  - You run openclaw with no command and want to understand Crestodian
+  - You run openclaw with no command after setup and want to understand Crestodian
   - You need a configless-safe way to inspect or repair OpenClaw
   - You are designing or enabling message-channel rescue mode
 title: "Crestodian"
@@ -12,8 +12,11 @@ title: "Crestodian"
 Crestodian is OpenClaw's local setup, repair, and configuration helper. It is
 designed to stay reachable when the normal agent path is broken.
 
-Running `openclaw` with no command starts Crestodian in an interactive terminal.
-Running `openclaw crestodian` starts the same helper explicitly.
+Running `openclaw` with no command starts classic onboarding first when the
+active config file is missing or has no authored settings (empty or
+metadata-only). After a config file has authored settings, running `openclaw`
+with no command starts Crestodian in an interactive terminal. Running
+`openclaw crestodian` starts the same helper explicitly.
 
 ## What Crestodian shows
 
@@ -71,6 +74,10 @@ agents
 create agent work workspace ~/Projects/work
 models
 set default model openai/gpt-5.5
+plugins list
+plugins search slack
+plugin install clawhub:openclaw-codex-app-server
+plugin uninstall openclaw-codex-app-server
 talk to work agent
 talk to agent for ~/Projects/work
 audit
@@ -88,8 +95,9 @@ Crestodian's startup path is deliberately small. It can run when:
 - no agent has been configured yet
 
 `openclaw --help` and `openclaw --version` still use the normal fast paths.
-Noninteractive `openclaw` exits with a short message instead of printing root
-help, because the no-command product is Crestodian.
+Noninteractive bare `openclaw` exits with a short message instead of printing
+root help. On a fresh install, the message points to non-interactive onboarding;
+after setup, it points to one-shot Crestodian commands.
 
 ## Operations and approval
 
@@ -99,6 +107,8 @@ Read-only operations can run immediately:
 
 - show overview
 - list agents
+- list installed plugins
+- search ClawHub plugins
 - show model/backend status
 - run status or health checks
 - check Gateway reachability
@@ -116,6 +126,8 @@ you pass `--yes` for a direct command:
 - change the default model
 - start, stop, or restart the Gateway
 - create agents
+- install plugins from ClawHub or npm
+- uninstall plugins
 - run doctor repairs that rewrite config or state
 
 Applied writes are recorded in:
@@ -145,9 +157,9 @@ order and tells you what it chose:
 
 - existing explicit model, if already configured
 - `OPENAI_API_KEY` -> `openai/gpt-5.5`
-- `ANTHROPIC_API_KEY` -> `anthropic/claude-opus-4-7`
-- Claude Code CLI -> `claude-cli/claude-opus-4-7`
-- Codex CLI -> `codex-cli/gpt-5.5`
+- `ANTHROPIC_API_KEY` -> `anthropic/claude-opus-4-8`
+- Claude Code CLI -> `claude-cli/claude-opus-4-8`
+- Codex -> `openai/gpt-5.5` through the Codex app-server harness
 
 If none are available, setup still writes the default workspace and leaves the
 model unset. Install or log into Codex/Claude Code, or expose
@@ -161,9 +173,8 @@ planner turn through OpenClaw's normal runtime paths. It first uses the
 configured OpenClaw model. If no configured model is usable yet, it can fall
 back to local runtimes already present on the machine:
 
-- Claude Code CLI: `claude-cli/claude-opus-4-7`
-- Codex app-server harness: `openai/gpt-5.5` with `agentRuntime.id: "codex"`
-- Codex CLI: `codex-cli/gpt-5.5`
+- Claude Code CLI: `claude-cli/claude-opus-4-8`
+- Codex app-server harness: `openai/gpt-5.5`
 
 The model-assisted planner cannot mutate config directly. It must translate the
 request into one of Crestodian's typed commands, then the normal approval and
@@ -240,6 +251,9 @@ Security contract for remote rescue:
 - Require an explicit owner identity. Rescue must not accept wildcard sender
   rules, open group policy, unauthenticated webhooks, or anonymous channels.
 - Owner DMs only by default. Group/channel rescue requires explicit opt-in.
+- Plugin search and list are read-only. Plugin install is local-only by default
+  because it downloads executable code. Plugin uninstall can be allowed as an
+  approved repair operation when rescue policy permits persistent writes.
 - Remote rescue cannot open the local TUI or switch into an interactive agent
   session. Use local `openclaw` for agent handoff.
 - Persistent writes still require approval, even in rescue mode.
@@ -298,16 +312,17 @@ persistent approval roundtrip through the rescue handler:
 pnpm test:live:crestodian-rescue-channel
 ```
 
-Fresh configless setup through Crestodian is covered by:
+Configless setup through explicit Crestodian commands is covered by:
 
 ```bash
 pnpm test:docker:crestodian-first-run
 ```
 
-That lane starts with an empty state dir, routes bare `openclaw` to Crestodian,
-sets the default model, creates an additional agent, configures Discord through
-a plugin enablement plus token SecretRef, validates config, and checks the audit
-log. QA Lab also has a repo-backed scenario for the same Ring 0 flow:
+That lane starts with an empty state dir, verifies the modern onboard Crestodian
+entrypoint, sets the default model, creates an additional agent, configures
+Discord through a plugin enablement plus token SecretRef, validates config, and
+checks the audit log. QA Lab also has a repo-backed scenario for the same Ring 0
+flow:
 
 ```bash
 pnpm openclaw qa suite --scenario crestodian-ring-zero-setup

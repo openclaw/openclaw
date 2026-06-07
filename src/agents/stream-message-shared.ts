@@ -1,6 +1,11 @@
-import type { AssistantMessage, StopReason, Usage } from "@mariozechner/pi-ai";
+/**
+ * Assistant stream message builders.
+ *
+ * Centralizes zero-cost usage records and assistant message construction for simple stream transports.
+ */
+import type { AssistantMessage, StopReason, Usage } from "../llm/types.js";
 
-export type StreamModelDescriptor = {
+type StreamModelDescriptor = {
   api: string;
   provider: string;
   id: string;

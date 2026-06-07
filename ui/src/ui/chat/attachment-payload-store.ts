@@ -1,3 +1,4 @@
+// Control UI chat module implements attachment payload store behavior.
 import type { ChatAttachment } from "../ui-types.ts";
 
 type AttachmentPayload = {
@@ -50,7 +51,7 @@ export function getChatAttachmentPreviewUrl(attachment: ChatAttachment): string 
   );
 }
 
-export function cloneChatAttachmentMetadata(attachment: ChatAttachment): ChatAttachment {
+function cloneChatAttachmentMetadata(attachment: ChatAttachment): ChatAttachment {
   const { dataUrl: _dataUrl, ...metadata } = attachment;
   return metadata;
 }
@@ -76,7 +77,7 @@ export function releaseChatAttachmentPayloads(attachments: readonly ChatAttachme
   }
 }
 
-export function discardChatAttachmentDataUrl(id: string): void {
+function discardChatAttachmentDataUrl(id: string): void {
   const payload = payloads.get(id);
   if (!payload) {
     return;

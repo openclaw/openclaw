@@ -1,3 +1,4 @@
+// Cron reschedule regression tests cover @schedule jobs after schedule changes.
 import { describe, expect, it } from "vitest";
 import { computeJobNextRunAtMs } from "./service/jobs.js";
 import type { CronJob } from "./types.js";
@@ -38,17 +39,6 @@ describe("Cron issue #19676 at-job reschedule", () => {
       schedule: { kind: "at", at: new Date(RESCHEDULED_AT_MS).toISOString() },
       state: { lastStatus: "ok", lastRunAtMs: LAST_RUN_AT_MS },
     });
-    const nowMs = LAST_RUN_AT_MS + 1_000;
-    expect(computeJobNextRunAtMs(job, nowMs)).toBe(RESCHEDULED_AT_MS);
-  });
-
-  it("returns the new atMs when rescheduled via legacy numeric atMs field", () => {
-    const job = createAtJob({
-      state: { lastStatus: "ok", lastRunAtMs: LAST_RUN_AT_MS },
-    });
-    // Simulate legacy numeric atMs field on the schedule object.
-    const schedule = job.schedule as { kind: "at"; atMs?: number };
-    schedule.atMs = RESCHEDULED_AT_MS;
     const nowMs = LAST_RUN_AT_MS + 1_000;
     expect(computeJobNextRunAtMs(job, nowMs)).toBe(RESCHEDULED_AT_MS);
   });

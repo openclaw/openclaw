@@ -1,5 +1,7 @@
+// Thread Ownership plugin entrypoint registers its OpenClaw integration.
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   definePluginEntry,
   fetchWithSsrFGuard,
@@ -27,10 +29,6 @@ function isThreadOwnershipConfig(value: unknown): value is ThreadOwnershipConfig
 
 function resolveThreadToken(value: unknown): string {
   return typeof value === "string" || typeof value === "number" ? String(value) : "";
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function resolveSlackConversationId(value: unknown): string {

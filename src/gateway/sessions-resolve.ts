@@ -1,14 +1,18 @@
-import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseSessionLabel } from "../sessions/session-label.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+// Gateway sessions.resolve implementation helper.
+// Resolves key/sessionId/label selectors into one canonical session key.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
   type SessionsResolveParams,
-} from "./protocol/index.js";
+} from "../../packages/gateway-protocol/src/index.js";
+import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
+import { parseSessionLabel } from "../sessions/session-label.js";
 import {
+  filterAndSortSessionEntries,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   migrateAndPruneGatewaySessionStoreKey,
@@ -62,12 +66,30 @@ function isResolvedSessionKeyVisible(params: {
   if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
     return true;
   }
-  return listSessionsFromStore({
+  return filterAndSortSessionEntries({
     cfg: params.cfg,
-    storePath: params.storePath,
     store: params.store,
+    now: Date.now(),
     opts: resolveSessionVisibilityFilterOptions(params.p),
-  }).sessions.some((session) => session.key === params.key);
+  }).some(([key]) => key === params.key);
+}
+
+function findVisibleSessionIdMatches(params: {
+  cfg: OpenClawConfig;
+  store: Record<string, SessionEntry>;
+  p: SessionsResolveParams;
+  sessionId: string;
+}): Array<[string, SessionEntry]> {
+  const now = Date.now();
+  const entries = filterAndSortSessionEntries({
+    cfg: params.cfg,
+    store: params.store,
+    now,
+    opts: resolveSessionVisibilityFilterOptions(params.p),
+  });
+  return entries.filter(
+    ([key, entry]) => entry?.sessionId === params.sessionId || key === params.sessionId,
+  );
 }
 
 export async function resolveSessionKeyFromResolveParams(params: {
@@ -99,6 +121,8 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasKey) {
+    // Key lookups may hit legacy store aliases. Migrate/prune before returning
+    // the canonical key so later calls operate on one store identity.
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const store = loadSessionStore(target.storePath);
     if (store[target.canonicalKey]) {
@@ -148,29 +172,19 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasSessionId) {
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    const list = listSessionsFromStore({
-      cfg,
-      storePath,
-      store,
-      opts: {
-        includeGlobal: p.includeGlobal === true,
-        includeUnknown: p.includeUnknown === true,
-        spawnedBy: p.spawnedBy,
-        agentId: p.agentId,
-      },
-    });
-    const matches = list.sessions.filter(
-      (session) => session.sessionId === sessionId || session.key === sessionId,
-    );
-    if (matches.length === 0) {
+    // sessionId can collide across stores; delegate selection so exact key
+    // matches and ambiguity rules stay shared with other session-id callers.
+    const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+    const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId });
+    const selection = resolveSessionIdMatchSelection(matches, sessionId);
+    if (selection.kind === "none") {
       return {
         ok: false,
         error: errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${sessionId}`),
       };
     }
-    if (matches.length > 1) {
-      const keys = matches.map((session) => session.key).join(", ");
+    if (selection.kind === "ambiguous") {
+      const keys = selection.sessionKeys.join(", ");
       return {
         ok: false,
         error: errorShape(
@@ -179,11 +193,11 @@ export async function resolveSessionKeyFromResolveParams(params: {
         ),
       };
     }
-    const agentCheckSessionId = validateSessionAgentExists(cfg, matches[0].key);
+    const agentCheckSessionId = validateSessionAgentExists(cfg, selection.sessionKey);
     if (agentCheckSessionId) {
       return agentCheckSessionId;
     }
-    return { ok: true, key: matches[0].key };
+    return { ok: true, key: selection.sessionKey };
   }
 
   const parsedLabel = parseSessionLabel(p.label);
@@ -194,7 +208,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
   const list = listSessionsFromStore({
     cfg,
     storePath,

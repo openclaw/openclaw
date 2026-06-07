@@ -1,10 +1,14 @@
+// Public auto-reply types and reply-payload metadata helpers.
 export type {
   BlockReplyContext,
   GetReplyOptions,
-  ModelSelectedContext,
+  PartialReplyPayload,
   ReplyThreadingPolicy,
-  SourceReplyDeliveryMode,
   TypingPolicy,
 } from "./get-reply-options.types.js";
-export { getReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";
-export type { ReplyPayload, ReplyPayloadMetadata } from "./reply-payload.js";
+export {
+  copyReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "./reply-payload.js";
+export type { ReplyPayload } from "./reply-payload.js";

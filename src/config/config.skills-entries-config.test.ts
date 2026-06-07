@@ -1,3 +1,4 @@
+// Covers skills entry config parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -77,6 +78,18 @@ describe("skills entries config schema", () => {
           skills: [],
         },
         list: [{ id: "writer", skills: [] }],
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts uploaded skill archive install policy", () => {
+    const res = OpenClawSchema.safeParse({
+      skills: {
+        install: {
+          allowUploadedArchives: true,
+        },
       },
     });
 

@@ -1,3 +1,6 @@
+/**
+ * Prepares bundled MCP configuration for CLI runner backends.
+ */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -5,6 +8,7 @@ import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { tryReadJson } from "../../infra/json-files.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
@@ -26,12 +30,7 @@ function resolveBundleMcpMode(mode: CliBundleMcpMode | undefined): CliBundleMcpM
 }
 
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
-  try {
-    const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
-    return { mcpServers: extractMcpServerMap(raw) };
-  } catch {
-    return { mcpServers: {} };
-  }
+  return { mcpServers: extractMcpServerMap(await tryReadJson<unknown>(configPath)) };
 }
 
 function sortJsonValue(value: unknown): unknown {
@@ -58,6 +57,8 @@ function normalizeOpenClawLoopbackUrl(value: string): string {
 }
 
 function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMcpConfig {
+  // The OpenClaw loopback MCP port changes across runs. Replace it before
+  // hashing so resume compatibility tracks config shape, not ephemeral ports.
   const canonicalServers = Object.fromEntries(
     Object.entries(config.mcpServers).map(([name, server]) => {
       if (name !== "openclaw" || typeof server.url !== "string") {
@@ -135,11 +136,13 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     mcpResumeHash,
     env: params.env,
     cleanup: async () => {
+      // Claude config files are generated per run and should not survive cleanup.
       await fs.rm(tempDir, { recursive: true, force: true });
     },
   };
 }
 
+/** Prepare backend args/env/cleanup for bundle MCP injection into a CLI run. */
 export async function prepareCliBundleMcpConfig(params: {
   enabled: boolean;
   mode?: CliBundleMcpMode;
@@ -163,6 +166,8 @@ export async function prepareCliBundleMcpConfig(params: {
   let mergedConfig: BundleMcpConfig = { mcpServers: {} };
 
   if (existingMcpConfigPath) {
+    // Merge any user-provided Claude MCP config first so bundle/plugin config can
+    // override intentionally managed server entries.
     const resolvedExistingPath = path.isAbsolute(existingMcpConfigPath)
       ? existingMcpConfigPath
       : path.resolve(params.workspaceDir, existingMcpConfigPath);

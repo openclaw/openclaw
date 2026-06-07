@@ -1,3 +1,4 @@
+// Tool-call shaped text tests cover detection of text that resembles tool calls.
 import { describe, expect, it } from "vitest";
 import { detectToolCallShapedText } from "./tool-call-shaped-text.js";
 
@@ -27,6 +28,14 @@ describe("detectToolCallShapedText", () => {
       kind: "react_action",
       toolName: "exec",
     });
+  });
+
+  it("detects legacy uppercase TOOL_CALL assistant text", () => {
+    expect(
+      detectToolCallShapedText(
+        '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
+      ),
+    ).toEqual({ kind: "bracketed_tool_call", toolName: "web_search" });
   });
 
   it("ignores normal JSON and prose mentions", () => {

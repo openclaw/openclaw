@@ -1,9 +1,10 @@
+// Zalo plugin module implements actions behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { listEnabledZaloAccounts, resolveZaloAccount } from "./accounts.js";
@@ -44,7 +45,7 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
       const result = await sendMessageZalo(to ?? "", content ?? "", {
         accountId: accountId ?? undefined,
         mediaUrl: mediaUrl ?? undefined,
-        cfg: cfg,
+        cfg,
       });
 
       if (!result.ok) {

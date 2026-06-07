@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Ollama plugin entrypoint registers its OpenClaw integration.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
@@ -6,10 +7,12 @@ import {
   type ProviderAuthContext,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
-  type ProviderDiscoveryContext,
+  type ProviderCatalogContext,
+  type ProviderReplayPolicy,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildApiKeyCredential } from "openclaw/plugin-sdk/provider-auth";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -19,11 +22,20 @@ import {
   OPENAI_COMPATIBLE_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  OLLAMA_DEFAULT_BASE_URL,
+  buildOllamaModelDefinition,
   buildOllamaProvider,
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
+  queryOllamaModelShowInfo,
 } from "./api.js";
+import { resolveThinkingProfile as resolveOllamaThinkingProfile } from "./provider-policy-api.js";
+import {
+  OLLAMA_CLOUD_BASE_URL,
+  OLLAMA_CLOUD_DEFAULT_MODELS,
+  OLLAMA_CLOUD_PROVIDER_ID,
+} from "./src/defaults.js";
 import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
@@ -41,28 +53,22 @@ import { readProviderBaseUrl } from "./src/provider-base-url.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
-  isOllamaCompatProvider,
   resolveConfiguredOllamaProviderConfig,
 } from "./src/stream.js";
 import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 import { checkWsl2CrashLoopRisk } from "./src/wsl2-crash-loop-check.js";
 
-function usesOllamaOpenAICompatTransport(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-}): boolean {
-  return (
-    model.api === "openai-completions" &&
-    isOllamaCompatProvider({
-      provider: typeof model.provider === "string" ? model.provider : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-      api: "openai-completions",
-    })
-  );
+function buildNativeOllamaReplayPolicy(): ProviderReplayPolicy {
+  return {
+    ...buildOpenAICompatibleReplayPolicy("openai-completions", {
+      sanitizeToolCallIds: false,
+    }),
+    sanitizeToolCallIds: false,
+  };
 }
 
 const dynamicModelCache = new Map<string, ProviderRuntimeModel[]>();
+const OLLAMA_CLOUD_DEFAULT_MODEL_REF = `${OLLAMA_CLOUD_PROVIDER_ID}/${OLLAMA_CLOUD_DEFAULT_MODELS[0]}`;
 
 function buildDynamicCacheKey(provider: string, baseUrl: string | undefined): string {
   return `${provider}\0${baseUrl ?? ""}`;
@@ -100,6 +106,42 @@ function toDynamicOllamaModel(params: {
   };
 }
 
+function buildStaticOllamaCloudProvider(): ModelProviderConfig {
+  return {
+    baseUrl: OLLAMA_CLOUD_BASE_URL,
+    api: "ollama",
+    models: OLLAMA_CLOUD_DEFAULT_MODELS.map((model) => buildOllamaModelDefinition(model)),
+  };
+}
+
+async function buildOllamaCloudProvider(): Promise<ModelProviderConfig> {
+  const discovered = await buildOllamaProvider(OLLAMA_CLOUD_BASE_URL, { quiet: true });
+  return discovered.models?.length ? discovered : buildStaticOllamaCloudProvider();
+}
+
+async function resolveRequestedDynamicOllamaModel(params: {
+  provider: string;
+  providerConfig: ModelProviderConfig;
+  modelId: string;
+}): Promise<ProviderRuntimeModel | undefined> {
+  const showInfo = await queryOllamaModelShowInfo(
+    readProviderBaseUrl(params.providerConfig) ?? OLLAMA_DEFAULT_BASE_URL,
+    params.modelId,
+  );
+  if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
+    return undefined;
+  }
+  return toDynamicOllamaModel({
+    provider: params.provider,
+    providerConfig: params.providerConfig,
+    model: buildOllamaModelDefinition(
+      params.modelId,
+      showInfo.contextWindow,
+      showInfo.capabilities,
+    ),
+  });
+}
+
 export default definePluginEntry({
   id: "ollama",
   name: "Ollama Provider",
@@ -119,6 +161,80 @@ export default definePluginEntry({
       return config ? {} : startupPluginConfig;
     };
     api.registerWebSearchProvider(createOllamaWebSearchProvider());
+    api.registerProvider({
+      id: OLLAMA_CLOUD_PROVIDER_ID,
+      label: "Ollama Cloud",
+      docsPath: "/providers/ollama",
+      envVars: ["OLLAMA_API_KEY"],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: OLLAMA_CLOUD_PROVIDER_ID,
+          methodId: "api-key",
+          label: "Ollama Cloud API key",
+          hint: "Hosted models via ollama.com",
+          optionKey: "ollamaCloudApiKey",
+          flagName: "--ollama-cloud-api-key",
+          envVar: "OLLAMA_API_KEY",
+          promptMessage: "Enter Ollama Cloud API key",
+          defaultModel: OLLAMA_CLOUD_DEFAULT_MODEL_REF,
+          noteTitle: "Ollama Cloud",
+          noteMessage: "Manage API keys at https://ollama.com/settings/keys",
+          wizard: {
+            choiceId: "ollama-cloud",
+            choiceLabel: "Ollama Cloud",
+            choiceHint: "Hosted models via ollama.com",
+            groupId: "ollama",
+            groupLabel: "Ollama",
+            groupHint: "Cloud and local open models",
+          },
+        }),
+      ],
+      catalog: {
+        order: "simple",
+        run: async (ctx: ProviderCatalogContext) => {
+          const apiKey = ctx.resolveProviderApiKey(OLLAMA_CLOUD_PROVIDER_ID).apiKey;
+          if (!apiKey) {
+            return null;
+          }
+          return {
+            provider: {
+              ...(await buildOllamaCloudProvider()),
+              apiKey,
+            },
+          };
+        },
+      },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({
+          provider: buildStaticOllamaCloudProvider(),
+        }),
+      },
+      createStreamFn: ({ config, model, provider }) => {
+        return createConfiguredOllamaStreamFn({
+          model,
+          providerBaseUrl:
+            readProviderBaseUrl(
+              resolveConfiguredOllamaProviderConfig({ config, providerId: provider }),
+            ) ?? OLLAMA_CLOUD_BASE_URL,
+        });
+      },
+      ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+      buildReplayPolicy: (ctx) =>
+        ctx.modelApi === "ollama"
+          ? buildNativeOllamaReplayPolicy()
+          : buildOpenAICompatibleReplayPolicy(ctx.modelApi),
+      resolveReasoningOutputMode: () => "native",
+      resolveThinkingProfile: resolveOllamaThinkingProfile,
+      wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
+      matchesContextOverflowError: ({ errorMessage }) =>
+        /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
+        /\btruncating input\b.*\btoo long\b/i.test(errorMessage),
+      buildUnknownModelHint: () =>
+        "Ollama Cloud requires an API key. " +
+        'Set OLLAMA_API_KEY or run "openclaw onboard --auth-choice ollama-cloud". ' +
+        "See: https://docs.openclaw.ai/providers/ollama",
+    });
     api.registerProvider({
       id: OLLAMA_PROVIDER_ID,
       label: "Ollama",
@@ -172,9 +288,9 @@ export default definePluginEntry({
           },
         },
       ],
-      discovery: {
+      catalog: {
         order: "late",
-        run: async (ctx: ProviderDiscoveryContext) =>
+        run: async (ctx: ProviderCatalogContext) =>
           await resolveOllamaDiscoveryResult({
             ctx,
             pluginConfig: resolveCurrentPluginConfig(ctx.config),
@@ -218,18 +334,10 @@ export default definePluginEntry({
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
       buildReplayPolicy: (ctx) =>
         ctx.modelApi === "ollama"
-          ? buildOpenAICompatibleReplayPolicy("openai-completions")
+          ? buildNativeOllamaReplayPolicy()
           : buildOpenAICompatibleReplayPolicy(ctx.modelApi),
-      contributeResolvedModelCompat: ({ model }) =>
-        usesOllamaOpenAICompatTransport(model) ? { supportsUsageInStreaming: true } : undefined,
       resolveReasoningOutputMode: () => "native",
-      resolveThinkingProfile: ({ reasoning }) => ({
-        levels:
-          reasoning === true
-            ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
-            : [{ id: "off" }],
-        defaultLevel: "off",
-      }),
+      resolveThinkingProfile: resolveOllamaThinkingProfile,
       wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
       createEmbeddingProvider: async ({ config, model, provider: embeddingProvider, remote }) => {
         const { provider, client } = await createOllamaEmbeddingProvider({
@@ -268,16 +376,24 @@ export default definePluginEntry({
         }
         const baseUrl = readProviderBaseUrl(providerConfig);
         const provider = await buildOllamaProvider(baseUrl, { quiet: true });
-        dynamicModelCache.set(
-          buildDynamicCacheKey(ctx.provider, baseUrl),
-          (provider.models ?? []).map((model) =>
-            toDynamicOllamaModel({
-              provider: ctx.provider,
-              providerConfig: provider,
-              model,
-            }),
-          ),
+        const dynamicModels = (provider.models ?? []).map((model) =>
+          toDynamicOllamaModel({
+            provider: ctx.provider,
+            providerConfig: provider,
+            model,
+          }),
         );
+        if (!dynamicModels.some((model) => model.id === ctx.modelId)) {
+          const requestedModel = await resolveRequestedDynamicOllamaModel({
+            provider: ctx.provider,
+            providerConfig: provider,
+            modelId: ctx.modelId,
+          });
+          if (requestedModel) {
+            dynamicModels.push(requestedModel);
+          }
+        }
+        dynamicModelCache.set(buildDynamicCacheKey(ctx.provider, baseUrl), dynamicModels);
       },
       resolveDynamicModel: (ctx) => {
         const providerConfig = resolveConfiguredOllamaProviderConfig({

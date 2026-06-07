@@ -1,3 +1,4 @@
+// Scans packaged dist JavaScript for relative imports and missing closure entries.
 import path from "node:path";
 
 const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
@@ -108,10 +109,26 @@ function collectImportSpecifiers(source) {
   return specifiers;
 }
 
+/** Collect missing-file errors for relative imports inside package dist files. */
 export function collectPackageDistImportErrors(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const fileSet = new Set(files);
   const errors = [];
+  const imports = params.imports ?? collectPackageDistImports({ files, readText: params.readText });
+
+  for (const { importerPath, importedPath } of imports) {
+    if (!fileSet.has(importedPath)) {
+      errors.push(`${importerPath} imports missing ${importedPath}`);
+    }
+  }
+
+  return errors;
+}
+
+/** Collect relative dist import edges from package JavaScript files. */
+export function collectPackageDistImports(params) {
+  const files = [...new Set(params.files.map(normalizePackagePath))];
+  const imports = [];
 
   for (const importerPath of files.toSorted((left, right) => left.localeCompare(right))) {
     if (!JS_DIST_FILE_RE.test(importerPath) || importerPath.includes("/node_modules/")) {
@@ -120,12 +137,38 @@ export function collectPackageDistImportErrors(params) {
     const source = params.readText(importerPath);
     for (const specifier of collectImportSpecifiers(source)) {
       const importedPath = resolveDistImportPath(importerPath, specifier);
-      if (!importedPath || fileSet.has(importedPath)) {
+      if (!importedPath) {
         continue;
       }
-      errors.push(`${importerPath} imports missing ${importedPath}`);
+      imports.push({ importerPath, importedPath });
     }
   }
 
-  return errors;
+  return imports;
+}
+
+/** Expand seed dist files to include all reachable relative dist imports. */
+export function expandPackageDistImportClosure(params) {
+  const files = [...new Set(params.files.map(normalizePackagePath))];
+  const fileSet = new Set(files);
+  const expectedSet = new Set(params.seedFiles.map(normalizePackagePath));
+  const imports = params.imports ?? collectPackageDistImports({ files, readText: params.readText });
+  const importsByImporter = new Map();
+  for (const { importerPath, importedPath } of imports) {
+    const importerImports = importsByImporter.get(importerPath) ?? [];
+    importerImports.push(importedPath);
+    importsByImporter.set(importerPath, importerImports);
+  }
+
+  const queue = [...expectedSet].filter((file) => fileSet.has(file));
+  for (const importerPath of queue) {
+    for (const importedPath of importsByImporter.get(importerPath) ?? []) {
+      if (fileSet.has(importedPath) && !expectedSet.has(importedPath)) {
+        expectedSet.add(importedPath);
+        queue.push(importedPath);
+      }
+    }
+  }
+
+  return [...expectedSet].toSorted((left, right) => left.localeCompare(right));
 }

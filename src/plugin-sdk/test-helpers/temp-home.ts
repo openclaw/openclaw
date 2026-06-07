@@ -1,3 +1,4 @@
+// Temp home test helpers create isolated OpenClaw home directories for plugin tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -104,6 +105,7 @@ export async function withTempHome<T>(
   opts: {
     env?: Record<string, EnvValue>;
     prefix?: string;
+    skipHomeCleanup?: boolean;
     skipSessionCleanup?: boolean;
   } = {},
 ): Promise<T> {
@@ -139,22 +141,24 @@ export async function withTempHome<T>(
     }
     restoreExtraEnv(envSnapshot);
     restoreEnv(snapshot);
-    try {
-      if (process.platform === "win32") {
-        await fs.rm(base, {
-          recursive: true,
-          force: true,
-          maxRetries: 10,
-          retryDelay: 50,
-        });
-      } else {
-        await fs.rm(base, {
-          recursive: true,
-          force: true,
-        });
+    if (!opts.skipHomeCleanup) {
+      try {
+        if (process.platform === "win32") {
+          await fs.rm(base, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 50,
+          });
+        } else {
+          await fs.rm(base, {
+            recursive: true,
+            force: true,
+          });
+        }
+      } catch {
+        // ignore cleanup failures in tests
       }
-    } catch {
-      // ignore cleanup failures in tests
     }
   }
 }

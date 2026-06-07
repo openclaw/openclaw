@@ -1,3 +1,4 @@
+// Matrix plugin module implements media behavior.
 import { parseBuffer, type IFileInfo } from "music-metadata";
 import { getMatrixRuntime } from "../../runtime.js";
 import type {
@@ -8,17 +9,17 @@ import type {
   TimedFileInfo,
   VideoFileInfo,
 } from "../sdk.js";
-import {
-  type MatrixMediaContent,
-  type MatrixMediaInfo,
-  type MatrixMediaMsgType,
-  type MatrixRelation,
-  type MediaKind,
+import type {
+  MatrixMediaContent,
+  MatrixMediaInfo,
+  MatrixMediaMsgType,
+  MatrixRelation,
+  MediaKind,
 } from "./types.js";
 
 const getCore = () => getMatrixRuntime();
 
-export function buildMatrixMediaInfo(params: {
+function buildMatrixMediaInfo(params: {
   size: number;
   mimetype?: string;
   durationMs?: number;

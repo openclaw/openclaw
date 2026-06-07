@@ -1,4 +1,5 @@
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+// Covers provider model helper behavior for plugin model registries.
+import type { ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
 import { cloneFirstTemplateModel, matchesExactOrPrefix } from "./provider-model-helpers.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
@@ -40,7 +41,7 @@ function expectClonedTemplateModel(
     expect(model).toBeUndefined();
     return;
   }
-  expect(model).toMatchObject(expected);
+  expect(model).toEqual(expected);
 }
 
 function expectPrefixMatch(params: {

@@ -1,12 +1,15 @@
-import type { CronFailureDestinationConfig } from "../config/types.cron.js";
+/** Resolves cron delivery and failure-notification routing from job config. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalThreadValue,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { CronFailureDestinationConfig } from "../config/types.cron.js";
+import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
+/** Normalized routing plan for a cron job's primary delivery behavior. */
 export type CronDeliveryPlan = {
   mode: CronDeliveryMode;
   channel?: CronMessageChannel;
@@ -18,6 +21,13 @@ export type CronDeliveryPlan = {
   requested: boolean;
 };
 
+/** Returns whether a delivery plan names a concrete channel, recipient, thread, or account. */
+export function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
+  return Boolean(
+    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId != null || plan.accountId,
+  );
+}
+
 function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
@@ -26,6 +36,23 @@ function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   return trimmed as CronMessageChannel;
 }
 
+function resolveAnnounceChannel(params: {
+  channel?: CronMessageChannel;
+  to?: string;
+}): CronMessageChannel {
+  if (params.channel && params.channel !== "last") {
+    return params.channel;
+  }
+  // A prefixed recipient like "slack:C123" is enough to infer the channel when
+  // the cron config intentionally leaves channel at "last" or unset.
+  return (
+    (resolveTargetPrefixedChannel(params.to) as CronMessageChannel | undefined) ??
+    params.channel ??
+    "last"
+  );
+}
+
+/** Resolves primary delivery config into the runtime mode/channel/target plan. */
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const delivery = job.delivery;
   const hasDelivery = delivery && typeof delivery === "object";
@@ -56,7 +83,10 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   );
   if (hasDelivery) {
     const resolvedMode = mode ?? "announce";
-    const channel = resolvedMode === "announce" ? (deliveryChannel ?? "last") : deliveryChannel;
+    const channel =
+      resolvedMode === "announce"
+        ? resolveAnnounceChannel({ channel: deliveryChannel, to })
+        : deliveryChannel;
     return {
       mode: resolvedMode,
       channel: resolvedMode === "webhook" ? undefined : channel,
@@ -74,6 +104,8 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     (job.sessionTarget === "isolated" ||
       job.sessionTarget === "current" ||
       job.sessionTarget.startsWith("session:"));
+  // Isolated/current/session cron jobs default to announce delivery so their
+  // output reaches the initiating session unless the job opts out.
   const resolvedMode = isIsolatedAgentTurn ? "announce" : "none";
 
   return {
@@ -86,6 +118,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   };
 }
 
+/** Normalized destination for notifying about cron execution failures. */
 export type CronFailureDeliveryPlan = {
   mode: "announce" | "webhook";
   channel?: CronMessageChannel;
@@ -93,6 +126,7 @@ export type CronFailureDeliveryPlan = {
   accountId?: string;
 };
 
+/** Job-level failure destination override fields before global defaults are merged. */
 export type CronFailureDestinationInput = {
   channel?: CronMessageChannel;
   to?: string;
@@ -108,6 +142,7 @@ function normalizeFailureMode(value: unknown): "announce" | "webhook" | undefine
   return undefined;
 }
 
+/** Resolves job-level failure notification routing layered over global defaults. */
 export function resolveFailureDestination(
   job: CronJob,
   globalConfig?: CronFailureDestinationConfig,
@@ -136,6 +171,7 @@ export function resolveFailureDestination(
     const hasJobChannelField = "channel" in jobFailureDest;
     const hasJobToField = "to" in jobFailureDest;
     const hasJobAccountIdField = "accountId" in jobFailureDest;
+    const hasJobModeField = "mode" in jobFailureDest;
 
     const jobToExplicitValue = hasJobToField && jobTo !== undefined;
 
@@ -148,9 +184,11 @@ export function resolveFailureDestination(
     if (hasJobAccountIdField) {
       accountId = jobAccountId;
     }
-    if (jobMode !== undefined) {
+    if (hasJobModeField) {
       const globalMode = globalConfig?.mode ?? "announce";
-      if (!jobToExplicitValue && globalMode !== jobMode) {
+      const resolvedJobMode = jobMode ?? "announce";
+      if (!jobToExplicitValue && globalMode !== resolvedJobMode) {
+        // Do not carry an inherited target across modes; an announce chat is not a webhook URL.
         to = undefined;
       }
       mode = jobMode;
@@ -163,17 +201,19 @@ export function resolveFailureDestination(
 
   const resolvedMode = mode ?? "announce";
   if (resolvedMode === "webhook" && !to) {
+    // Webhook failure destinations are only useful with a concrete URL/target.
     return null;
   }
 
   const result: CronFailureDeliveryPlan = {
     mode: resolvedMode,
-    channel: resolvedMode === "announce" ? (channel ?? "last") : undefined,
+    channel: resolvedMode === "announce" ? resolveAnnounceChannel({ channel, to }) : undefined,
     to,
     accountId,
   };
 
   if (delivery && isSameDeliveryTarget(delivery, result)) {
+    // Avoid sending the same failure text through the primary delivery route twice.
     return null;
   }
 
@@ -189,15 +229,17 @@ function isSameDeliveryTarget(
     return false;
   }
 
-  const primaryChannel = delivery.channel;
-  const primaryTo = delivery.to;
-  const primaryAccountId = delivery.accountId;
+  const primaryTo = normalizeOptionalString(delivery.to);
+  const primaryAccountId = normalizeOptionalString(delivery.accountId);
 
   if (failurePlan.mode === "webhook") {
     return primaryMode === "webhook" && primaryTo === failurePlan.to;
   }
 
-  const primaryChannelNormalized = primaryChannel ?? "last";
+  const primaryChannelNormalized = resolveAnnounceChannel({
+    channel: normalizeChannel(delivery.channel),
+    to: primaryTo,
+  });
   const failureChannelNormalized = failurePlan.channel ?? "last";
 
   return (

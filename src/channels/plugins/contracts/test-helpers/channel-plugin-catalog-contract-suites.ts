@@ -1,3 +1,8 @@
+/**
+ * External channel plugin catalog contract suites.
+ *
+ * Writes synthetic manifests and catalog files to prove parser behavior for discovered plugins.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -116,6 +121,7 @@ function expectCatalogEntryMatch(params: {
   ).toMatchObject(params.expected);
 }
 
+/** Installs catalog entry tests shared by plugin registry and manifest suites. */
 export function describeChannelPluginCatalogEntriesContract() {
   describe("channel plugin catalog entries contract", () => {
     it.each([
@@ -288,6 +294,112 @@ export function describeChannelPluginCatalogEntriesContract() {
         },
       },
       {
+        name: "pins bare external prerelease package specs to the entry version",
+        setup: () => {
+          const dir = fs.mkdtempSync(
+            path.join(resolvePreferredOpenClawTmpDir(), "openclaw-catalog-prerelease-"),
+          );
+          const catalogPath = path.join(dir, "catalog.json");
+          writeCatalogFile(catalogPath, {
+            ...createCatalogEntry({
+              packageName: "@openclaw/prerelease-demo-channel",
+              channelId: "prerelease-demo",
+              label: "Prerelease Demo",
+              blurb: "Prerelease package pinning fixture",
+            }),
+            version: "2026.5.3-beta.1",
+          });
+          return {
+            channelId: "prerelease-demo",
+            catalogPaths: [catalogPath],
+            expected: {
+              install: { npmSpec: "@openclaw/prerelease-demo-channel@2026.5.3-beta.1" },
+              installSource: {
+                npm: {
+                  spec: "@openclaw/prerelease-demo-channel@2026.5.3-beta.1",
+                  packageName: "@openclaw/prerelease-demo-channel",
+                  selector: "2026.5.3-beta.1",
+                  selectorKind: "exact-version",
+                  exactVersion: true,
+                },
+              },
+            },
+          };
+        },
+      },
+      {
+        name: "accepts external manifest entries with ClawHub-only install metadata",
+        setup: () => {
+          const dir = fs.mkdtempSync(
+            path.join(resolvePreferredOpenClawTmpDir(), "openclaw-catalog-clawhub-"),
+          );
+          const catalogPath = path.join(dir, "catalog.json");
+          fs.writeFileSync(
+            catalogPath,
+            JSON.stringify({
+              $schema: "./manifest.schema.json",
+              schemaVersion: 1,
+              description:
+                "Extension manifest. Declares plugin packages that OpenClaw can discover during onboarding and install on demand via `openclaw plugins install`.",
+              entries: [
+                {
+                  source: "external",
+                  kind: "channel",
+                  openclaw: {
+                    channel: {
+                      id: "clawhub-chat",
+                      label: "ClawHub Chat",
+                      selectionLabel: "ClawHub Chat",
+                      detailLabel: "ClawHub",
+                      docsPath: "/channels/clawhub-chat",
+                      docsLabel: "clawhub chat",
+                      blurb: "ClawHub-backed chat channel.",
+                      aliases: ["chchat"],
+                      order: 47,
+                    },
+                    install: {
+                      clawhubSpec: "clawhub:openclaw/clawhub-chat@2026.5.2",
+                      defaultChoice: "clawhub",
+                      minHostVersion: ">=2026.5.1",
+                    },
+                  },
+                },
+              ],
+            }),
+          );
+          return {
+            channelId: "clawhub-chat",
+            catalogPaths: [catalogPath],
+            expected: {
+              id: "clawhub-chat",
+              meta: {
+                label: "ClawHub Chat",
+                selectionLabel: "ClawHub Chat",
+                detailLabel: "ClawHub",
+                docsPath: "/channels/clawhub-chat",
+                docsLabel: "clawhub chat",
+                blurb: "ClawHub-backed chat channel.",
+              },
+              install: {
+                clawhubSpec: "clawhub:openclaw/clawhub-chat@2026.5.2",
+                defaultChoice: "clawhub",
+                minHostVersion: ">=2026.5.1",
+              },
+              installSource: {
+                defaultChoice: "clawhub",
+                clawhub: {
+                  spec: "clawhub:openclaw/clawhub-chat@2026.5.2",
+                  packageName: "openclaw/clawhub-chat",
+                  version: "2026.5.2",
+                  exactVersion: true,
+                },
+                warnings: [],
+              },
+            },
+          };
+        },
+      },
+      {
         name: "accepts rich external manifest entries for yuanbao with pinned npm metadata",
         setup: () => {
           const dir = fs.mkdtempSync(
@@ -367,6 +479,7 @@ export function describeChannelPluginCatalogEntriesContract() {
   });
 }
 
+/** Installs catalog path resolution tests that depend on env/home/state paths. */
 export function describeChannelPluginCatalogPathResolutionContract() {
   describe("channel plugin catalog path resolution contract", () => {
     it.each([

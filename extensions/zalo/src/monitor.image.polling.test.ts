@@ -1,3 +1,4 @@
+// Zalo tests cover monitor.image.polling plugin behavior.
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -20,7 +21,8 @@ describe("Zalo polling image handling", () => {
     core,
     finalizeInboundContextMock,
     recordInboundSessionMock,
-    fetchRemoteMediaMock,
+    readRemoteMediaBufferMock,
+    saveRemoteMediaMock,
     saveMediaBufferMock,
   } = createImageLifecycleCore();
 
@@ -57,9 +59,11 @@ describe("Zalo polling image handling", () => {
     });
 
     await settleAsyncWork();
-    expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
     expectImageLifecycleDelivery({
-      fetchRemoteMediaMock,
+      readRemoteMediaBufferMock,
+      saveRemoteMediaMock,
       saveMediaBufferMock,
       finalizeInboundContextMock,
       recordInboundSessionMock,
@@ -99,7 +103,7 @@ describe("Zalo polling image handling", () => {
 
     await settleAsyncWork();
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(fetchRemoteMediaMock).not.toHaveBeenCalled();
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
     expect(finalizeInboundContextMock).not.toHaveBeenCalled();
     expect(recordInboundSessionMock).not.toHaveBeenCalled();

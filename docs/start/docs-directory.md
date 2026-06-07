@@ -39,9 +39,8 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [Telegram](/channels/telegram)
 - [Discord](/channels/discord)
 - [Mattermost](/channels/mattermost)
-- [BlueBubbles (iMessage)](/channels/bluebubbles)
 - [QQ Bot](/channels/qqbot)
-- [iMessage (legacy)](/channels/imessage)
+- [iMessage](/channels/imessage)
 - [Groups](/channels/groups)
 - [WhatsApp group messages](/channels/group-messages)
 - [Media images](/nodes/images)
@@ -52,7 +51,7 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [macOS app](/platforms/macos)
 - [iOS app](/platforms/ios)
 - [Android app](/platforms/android)
-- [Windows (WSL2)](/platforms/windows)
+- [Windows Hub](/platforms/windows)
 - [Linux app](/platforms/linux)
 
 ## Operations and safety

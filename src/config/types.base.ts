@@ -1,15 +1,28 @@
+// Defines base configuration types shared by multiple config sections.
 import type { ChatType } from "../channels/chat-type.js";
 
+/** Reply handling mode for chat command surfaces. */
 export type ReplyMode = "text" | "command";
+/** Typing indicator timing policy shared by channel configs. */
 export type TypingMode = "never" | "instant" | "thinking" | "message";
+/** Session-key ownership model for inbound messages. */
 export type SessionScope = "per-sender" | "global";
+/** DM session-key granularity across peers, channels, and accounts. */
 export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+/** Which source messages outbound replies should thread or quote against. */
 export type ReplyToMode = "off" | "first" | "all" | "batched";
+/** Group-chat admission policy for channels with allowlists. */
 export type GroupPolicy = "open" | "disabled" | "allowlist";
+/** Direct-message admission policy for channels with pairing/allowlists. */
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
+/** How much non-allowlisted context is visible to an agent. */
 export type ContextVisibilityMode = "all" | "allowlist" | "allowlist_quote";
+/** Text splitting strategy for outbound channel delivery. */
 export type TextChunkMode = "length" | "newline";
+/** Preview/progress delivery mode while an agent response is still streaming. */
 export type StreamingMode = "off" | "partial" | "block" | "progress";
+/** How command text is represented in streaming progress previews. */
+export type ChannelStreamingCommandTextMode = "raw" | "status";
 
 export type OutboundRetryConfig = {
   /** Max retry attempts for outbound requests (default: 3). */
@@ -23,15 +36,40 @@ export type OutboundRetryConfig = {
 };
 
 export type BlockStreamingCoalesceConfig = {
+  /** Minimum buffered characters before coalesced block delivery. */
   minChars?: number;
+  /** Maximum buffered characters before a block must be flushed. */
   maxChars?: number;
+  /** Idle time in ms before flushing a partial coalesced block. */
   idleMs?: number;
 };
 
 export type BlockStreamingChunkConfig = {
+  /** Minimum preview chunk size before sending another draft update. */
   minChars?: number;
+  /** Maximum preview chunk size before forcing a draft update. */
   maxChars?: number;
+  /** Preferred natural boundary when splitting preview chunks. */
   breakPreference?: "paragraph" | "newline" | "sentence";
+};
+
+export type ChannelStreamingProgressConfig = {
+  /** Initial progress title. "auto" picks from labels; false hides the title. Default: "auto". */
+  label?: string | false;
+  /** Candidate labels for label="auto". Defaults to OpenClaw's built-in progress labels. */
+  labels?: string[];
+  /** Maximum number of progress lines to keep below the label. Default: 8. */
+  maxLines?: number;
+  /** Maximum characters per compact progress line before truncation. Default: 120. */
+  maxLineChars?: number;
+  /** Progress draft renderer. "text" is the portable fallback; "rich" lets supported channels use structured UI. */
+  render?: "text" | "rich";
+  /** Include compact tool/task progress in the draft. Default: true. */
+  toolProgress?: boolean;
+  /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
+  commandText?: ChannelStreamingCommandTextMode;
+  /** Include assistant commentary/preamble text in the progress draft. Default: false. */
+  commentary?: boolean;
 };
 
 export type ChannelStreamingPreviewConfig = {
@@ -43,6 +81,8 @@ export type ChannelStreamingPreviewConfig = {
    * Default: true.
    */
   toolProgress?: boolean;
+  /** Command/exec progress detail in the preview. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
+  commandText?: ChannelStreamingCommandTextMode;
 };
 
 export type ChannelStreamingBlockConfig = {
@@ -69,19 +109,16 @@ export type ChannelStreamingConfig = {
    */
   nativeTransport?: boolean;
   preview?: ChannelStreamingPreviewConfig;
+  progress?: ChannelStreamingProgressConfig;
   block?: ChannelStreamingBlockConfig;
 };
 
 export type ChannelDeliveryStreamingConfig = Pick<ChannelStreamingConfig, "chunkMode" | "block">;
 
+/** Streaming subset used by channels that render visible preview/progress replies. */
 export type ChannelPreviewStreamingConfig = Pick<
   ChannelStreamingConfig,
-  "mode" | "chunkMode" | "preview" | "block"
->;
-
-export type SlackChannelStreamingConfig = Pick<
-  ChannelStreamingConfig,
-  "mode" | "chunkMode" | "preview" | "block" | "nativeTransport"
+  "mode" | "chunkMode" | "preview" | "progress" | "block"
 >;
 
 export type MarkdownTableMode = "off" | "bullets" | "code" | "block";
@@ -102,7 +139,9 @@ export type HumanDelayConfig = {
 
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
+  /** Channel/provider id match. */
   channel?: string;
+  /** Direct/group/thread classification when the caller has channel metadata. */
   chatType?: ChatType;
   /**
    * Session key prefix match.
@@ -113,11 +152,15 @@ export type SessionSendPolicyMatch = {
   rawKeyPrefix?: string;
 };
 export type SessionSendPolicyRule = {
+  /** Action applied when match criteria select this rule. */
   action: SessionSendPolicyAction;
+  /** Optional match filter; omitted match behaves as a catch-all rule. */
   match?: SessionSendPolicyMatch;
 };
 export type SessionSendPolicyConfig = {
+  /** Fallback action when no send-policy rule matches. */
   default?: SessionSendPolicyAction;
+  /** Ordered allow/deny rules; first matching rule wins. */
   rules?: SessionSendPolicyRule[];
 };
 
@@ -153,6 +196,17 @@ export type SessionThreadBindingsConfig = {
    * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
    */
   maxAgeHours?: number;
+  /**
+   * Allow channel integrations to create thread-bound work sessions from
+   * sessions_spawn or native ACP spawn flows. Channel/account keys can override.
+   * Default: true when thread bindings are enabled.
+   */
+  spawnSessions?: boolean;
+  /**
+   * Default context mode for native subagents spawned into a bound thread.
+   * Default: "fork" so the child starts from the requester transcript.
+   */
+  defaultSpawnContext?: "isolated" | "fork";
 };
 
 export type SessionConfig = {
@@ -170,16 +224,12 @@ export type SessionConfig = {
   store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
-  /**
-   * Max parent transcript token count allowed for thread/session forking.
-   * If parent totalTokens is above this value, OpenClaw skips parent fork and
-   * starts a fresh thread session instead. Set to 0 to disable this guard.
-   */
-  parentForkMaxTokens?: number;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
+  /** Session transcript write-lock acquisition policy. */
+  writeLock?: SessionWriteLockConfig;
   agentToAgent?: {
-    /** Max ping-pong turns between requester/target (0–5). Default: 5. */
+    /** Max ping-pong turns between requester/target (0-20). Default: 5. */
     maxPingPongTurns?: number;
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
@@ -188,18 +238,28 @@ export type SessionConfig = {
   maintenance?: SessionMaintenanceConfig;
 };
 
+export type SessionWriteLockConfig = {
+  /** How long to wait while acquiring a session transcript write lock. Default: 60000. */
+  acquireTimeoutMs?: number;
+  /** When an existing lock can be treated as stale and reclaimed. Default: 1800000. */
+  staleMs?: number;
+  /** Maximum in-process hold time before the watchdog releases the lock. Default: 300000. */
+  maxHoldMs?: number;
+};
+
 export type SessionMaintenanceMode = "enforce" | "warn";
 
+/** Session-store cleanup policy for transcript count, age, archives, and disk budget. */
 export type SessionMaintenanceConfig = {
   /** Whether to enforce maintenance or warn only. Default: "warn". */
   mode?: SessionMaintenanceMode;
   /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
   pruneAfter?: string | number;
-  /** Deprecated. Use pruneAfter instead. */
+  /** @deprecated Use pruneAfter instead. */
   pruneDays?: number;
   /** Maximum number of session entries to keep. Default: 500. */
   maxEntries?: number;
-  /** Deprecated and ignored. Run `openclaw doctor --fix` to remove. */
+  /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
   rotateBytes?: number | string;
   /**
    * Retention for archived reset transcripts (`*.reset.<timestamp>`).
@@ -261,14 +321,20 @@ export type DiagnosticsOtelConfig = {
         toolInputs?: boolean;
         toolOutputs?: boolean;
         systemPrompt?: boolean;
+        toolDefinitions?: boolean;
       };
 };
 
 export type DiagnosticsCacheTraceConfig = {
+  /** Write prompt-cache trace artifacts for debugging deterministic cache input. */
   enabled?: boolean;
+  /** Optional output path for cache trace artifacts. */
   filePath?: string;
+  /** Include normalized messages in cache trace output. */
   includeMessages?: boolean;
+  /** Include prompt payload text in cache trace output. */
   includePrompt?: boolean;
+  /** Include system-message content in cache trace output. */
   includeSystem?: boolean;
 };
 
@@ -276,8 +342,12 @@ export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
   flags?: string[];
-  /** Threshold in ms before a processing session logs "stuck session" diagnostics. */
+  /** Threshold in ms before a processing session with no observed progress logs diagnostics. */
   stuckSessionWarnMs?: number;
+  /** Threshold in ms before eligible stalled active work may be aborted for recovery. */
+  stuckSessionAbortMs?: number;
+  /** Capture a redacted stability snapshot when memory pressure reaches critical. Default: false. */
+  memoryPressureSnapshot?: boolean;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };

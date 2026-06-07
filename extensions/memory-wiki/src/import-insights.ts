@@ -1,8 +1,9 @@
+// Memory Wiki plugin module implements import insights behavior.
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { parseWikiMarkdown } from "./markdown.js";
 import { readQueryableWikiPages } from "./query.js";
 
-export type MemoryWikiImportInsightItem = {
+type MemoryWikiImportInsightItem = {
   pagePath: string;
   title: string;
   riskLevel: "low" | "medium" | "high" | "unknown";
@@ -25,7 +26,7 @@ export type MemoryWikiImportInsightItem = {
   updatedAt?: string;
 };
 
-export type MemoryWikiImportInsightCluster = {
+type MemoryWikiImportInsightCluster = {
   key: string;
   label: string;
   itemCount: number;
@@ -36,7 +37,7 @@ export type MemoryWikiImportInsightCluster = {
   items: MemoryWikiImportInsightItem[];
 };
 
-export type MemoryWikiImportInsightsStatus = {
+type MemoryWikiImportInsightsStatus = {
   sourceType: "chatgpt";
   totalItems: number;
   totalClusters: number;

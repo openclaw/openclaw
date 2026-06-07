@@ -1,3 +1,4 @@
+// Bonjour tests cover ciao plugin behavior.
 import { describe, expect, it } from "vitest";
 
 const { classifyCiaoUnhandledRejection, ignoreCiaoUnhandledRejection } = await import("./ciao.js");
@@ -46,6 +47,20 @@ describe("bonjour-ciao", () => {
       kind: "netmask-assertion",
       formatted:
         "AssertionError: IP address version must match. Netmask cannot have a version different from the address!",
+    });
+  });
+
+  it("classifies ciao self-probe races separately from side effects", () => {
+    expect(
+      classifyCiaoUnhandledRejection(
+        new Error(
+          "Can't probe for a service which is announced already. Received announcing for service OpenClaw Gateway._openclaw._tcp.local.",
+        ),
+      ),
+    ).toEqual({
+      kind: "self-probe",
+      formatted:
+        "Can't probe for a service which is announced already. Received announcing for service OpenClaw Gateway._openclaw._tcp.local.",
     });
   });
 

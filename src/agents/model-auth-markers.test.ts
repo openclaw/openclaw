@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for non-secret model-auth marker helpers.
+ * Verifies core, plugin, env-var, OAuth, AWS, and secret-ref marker handling.
+ */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
@@ -22,6 +26,7 @@ function cleanPluginManifestEnv(): Record<(typeof PLUGIN_MANIFEST_ENV_KEYS)[numb
 }
 
 let listKnownProviderEnvApiKeyNames: typeof import("./model-auth-env-vars.js").listKnownProviderEnvApiKeyNames;
+let CODEX_APP_SERVER_AUTH_MARKER: typeof import("./model-auth-markers.js").CODEX_APP_SERVER_AUTH_MARKER;
 let GCP_VERTEX_CREDENTIALS_MARKER: typeof import("./model-auth-markers.js").GCP_VERTEX_CREDENTIALS_MARKER;
 let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
 let isKnownEnvApiKeyMarker: typeof import("./model-auth-markers.js").isKnownEnvApiKeyMarker;
@@ -39,6 +44,7 @@ async function loadMarkerModules() {
     import("./model-auth-markers.js"),
   ]);
   listKnownProviderEnvApiKeyNames = envVarsModule.listKnownProviderEnvApiKeyNames;
+  CODEX_APP_SERVER_AUTH_MARKER = markersModule.CODEX_APP_SERVER_AUTH_MARKER;
   GCP_VERTEX_CREDENTIALS_MARKER = markersModule.GCP_VERTEX_CREDENTIALS_MARKER;
   NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
   isKnownEnvApiKeyMarker = markersModule.isKnownEnvApiKeyMarker;
@@ -69,20 +75,25 @@ describe("model auth markers", () => {
     expect(isNonSecretApiKeyMarker(resolveOAuthApiKeyMarker("chutes"))).toBe(true);
     expect(isNonSecretApiKeyMarker("ollama-local")).toBe(true);
     expect(isNonSecretApiKeyMarker("lmstudio-local")).toBe(true);
-    expect(isNonSecretApiKeyMarker("codex-app-server")).toBe(true);
+    expect(isNonSecretApiKeyMarker(CODEX_APP_SERVER_AUTH_MARKER)).toBe(true);
     expect(isNonSecretApiKeyMarker(GCP_VERTEX_CREDENTIALS_MARKER)).toBe(true);
   });
 
+  it("recognizes the Codex app-server marker without bundled plugin discovery", async () => {
+    await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await loadMarkerModules();
+      expect(isNonSecretApiKeyMarker(CODEX_APP_SERVER_AUTH_MARKER)).toBe(true);
+    });
+    await withEnvAsync(cleanPluginManifestEnv(), loadMarkerModules);
+  });
+
   it("reads bundled plugin-owned non-secret markers from manifests", () => {
-    expect(listKnownNonSecretApiKeyMarkers()).toEqual(
-      expect.arrayContaining([
-        "codex-app-server",
-        "gcp-vertex-credentials",
-        "lmstudio-local",
-        "minimax-oauth",
-        "ollama-local",
-      ]),
-    );
+    const markers = new Set(listKnownNonSecretApiKeyMarkers());
+    expect(markers.has("codex-app-server")).toBe(true);
+    expect(markers.has("gcp-vertex-credentials")).toBe(true);
+    expect(markers.has("lmstudio-local")).toBe(true);
+    expect(markers.has("minimax-oauth")).toBe(true);
+    expect(markers.has("ollama-local")).toBe(true);
   });
 
   it("does not treat removed provider markers as active auth markers", () => {

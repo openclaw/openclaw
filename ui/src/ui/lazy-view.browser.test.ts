@@ -1,3 +1,4 @@
+// Control UI tests cover lazy view behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
@@ -5,6 +6,17 @@ import { createLazyView, renderLazyView } from "./lazy-view.ts";
 async function flushPromises() {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function expectButtonWithText(container: Element, text: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+    (candidate) => candidate.textContent?.trim() === text,
+  );
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected button with text "${text}"`);
+  }
+  return button;
 }
 
 describe("lazy view rendering", () => {
@@ -18,7 +30,9 @@ describe("lazy view rendering", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Loading panel");
+    expect(
+      container.querySelector(".lazy-view-state--loading .card-title")?.textContent?.trim(),
+    ).toBe("Loading panel");
 
     await flushPromises();
     render(
@@ -27,7 +41,7 @@ describe("lazy view rendering", () => {
     );
 
     expect(onChange).toHaveBeenCalled();
-    expect(container.textContent).toContain("Logs view");
+    expect(container.textContent?.trim()).toBe("Logs view");
   });
 
   it("renders a recoverable error panel when a lazy module import fails", async () => {
@@ -49,14 +63,15 @@ describe("lazy view rendering", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Panel failed to load");
-    expect(container.textContent).toContain("chunk 404");
-
-    const retry = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Retry",
+    expect(
+      container.querySelector(".lazy-view-state--error .card-title")?.textContent?.trim(),
+    ).toBe("Panel failed to load");
+    expect(container.querySelector(".lazy-view-state--error .callout")?.textContent?.trim()).toBe(
+      "chunk 404",
     );
-    expect(retry).not.toBeUndefined();
-    retry?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    const retry = expectButtonWithText(container, "Retry");
+    retry.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await flushPromises();
     render(
       renderLazyView(view, (mod) => mod.label),
@@ -65,6 +80,6 @@ describe("lazy view rendering", () => {
 
     expect(loader).toHaveBeenCalledTimes(2);
     expect(onChange).toHaveBeenCalled();
-    expect(container.textContent).toContain("Recovered");
+    expect(container.textContent?.trim()).toBe("Recovered");
   });
 });

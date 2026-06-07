@@ -15,6 +15,18 @@ There are two kinds of hooks in OpenClaw:
 
 Hooks can also be bundled inside plugins. `openclaw hooks list` shows both standalone hooks and plugin-managed hooks.
 
+## Choose the right surface
+
+OpenClaw has several extension surfaces that look similar but solve different problems:
+
+| If you want to...                                                                                                     | Use...                                | Why                                                                                           |
+| --------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Save a snapshot on `/new`, log `/reset`, call an external API after `message:sent`, or add coarse operator automation | Internal hooks (`HOOK.md`, this page) | File-based hooks are meant for operator-managed side effects and command/lifecycle automation |
+| Rewrite prompts, block tools, cancel outbound messages, or add ordered middleware/policy                              | Typed plugin hooks via `api.on(...)`  | Typed hooks have explicit contracts, priorities, merge rules, and block/cancel semantics      |
+| Add telemetry-only export or observability                                                                            | Diagnostic events                     | Observability is a separate event bus, not a policy hook surface                              |
+
+Use internal hooks when you want automation that behaves like a small installed integration. Use typed plugin hooks when you need runtime lifecycle control.
+
 ## Quick start
 
 ```bash
@@ -101,20 +113,25 @@ const handler = async (event) => {
   console.log(`[my-hook] New command triggered`);
   // Your logic here
 
-  // Optionally send message to user
+  // Optionally send a reply on replyable surfaces
   event.messages.push("Hook executed!");
 };
 
 export default handler;
 ```
 
-Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages` (push to send to user), and `context` (event-specific data). Agent and tool plugin hook contexts can also include `trace`, a read-only W3C-compatible diagnostic trace context that plugins may pass into structured logs for OTEL correlation.
+Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages` (push replies here on replyable surfaces only), and `context` (event-specific data). Agent and tool plugin hook contexts can also include `trace`, a read-only W3C-compatible diagnostic trace context that plugins may pass into structured logs for OTEL correlation.
+
+`event.messages` is only delivered automatically on replyable surfaces such as
+`command:*` and `message:received`. Lifecycle-only events such as
+`agent:bootstrap`, `session:*`, `gateway:*`, or `message:sent` do not have a
+reply channel and ignore pushed messages.
 
 ### Event context highlights
 
 **Command events** (`command:new`, `command:reset`): `context.sessionEntry`, `context.previousSessionEntry`, `context.commandSource`, `context.workspaceDir`, `context.cfg`.
 
-**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`).
+**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries.
 
 **Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`.
 
@@ -133,7 +150,34 @@ lifecycle, not an agent-finalization gate. Plugins that need to inspect a
 natural final answer and ask the agent for one more pass should use the typed
 plugin hook `before_agent_finalize` instead. See [Plugin hooks](/plugins/hooks).
 
-**Gateway lifecycle events**: `gateway:shutdown` includes `reason` and `restartExpectedMs` and fires when gateway shutdown begins. `gateway:pre-restart` includes the same context but only fires when shutdown is part of an expected restart and a finite `restartExpectedMs` value is supplied. During shutdown, each lifecycle hook wait is best-effort and bounded so shutdown continues if a handler stalls.
+**Gateway lifecycle events**: `gateway:shutdown` includes `reason` and `restartExpectedMs` and fires when gateway shutdown begins. `gateway:pre-restart` includes the same context but only fires when shutdown is part of an expected restart and a finite `restartExpectedMs` value is supplied. During shutdown, each lifecycle hook wait is best-effort and bounded so shutdown continues if a handler stalls. The default wait budget is 5 seconds for `gateway:shutdown` and 10 seconds for `gateway:pre-restart`.
+
+Use `gateway:pre-restart` for short restart notices while channels are still available:
+
+```typescript
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+export default async function handler(event) {
+  if (event.type !== "gateway" || event.action !== "pre-restart") {
+    return;
+  }
+
+  const restartInSeconds = Math.ceil(event.context.restartExpectedMs / 1000);
+  await execFileAsync("openclaw", [
+    "system",
+    "event",
+    "--mode",
+    "now",
+    "--text",
+    `Gateway restarting in ~${restartInSeconds}s (${event.context.reason}). Checkpoint now.`,
+  ]);
+}
+```
+
+Between the `gateway:shutdown` (or `gateway:pre-restart`) event and the rest of the shutdown sequence, the gateway also fires a typed `session_end` plugin hook for every session that was still active when the process stopped. The event's `reason` is `shutdown` for a plain SIGTERM/SIGINT stop and `restart` when the close was scheduled as part of an expected restart. This drain is bounded so a slow `session_end` handler cannot block process exit, and sessions that have already been finalized through replace / reset / delete / compaction are skipped to avoid double-firing.
 
 ## Hook discovery
 
@@ -160,12 +204,13 @@ Npm specs are registry-only (package name + optional exact version or dist-tag).
 
 ## Bundled hooks
 
-| Hook                  | Events                         | What it does                                          |
-| --------------------- | ------------------------------ | ----------------------------------------------------- |
-| session-memory        | `command:new`, `command:reset` | Saves session context to `<workspace>/memory/`        |
-| bootstrap-extra-files | `agent:bootstrap`              | Injects additional bootstrap files from glob patterns |
-| command-logger        | `command`                      | Logs all commands to `~/.openclaw/logs/commands.log`  |
-| boot-md               | `gateway:startup`              | Runs `BOOT.md` when the gateway starts                |
+| Hook                  | Events                                            | What it does                                                   |
+| --------------------- | ------------------------------------------------- | -------------------------------------------------------------- |
+| session-memory        | `command:new`, `command:reset`                    | Saves session context to `<workspace>/memory/`                 |
+| bootstrap-extra-files | `agent:bootstrap`                                 | Injects additional bootstrap files from glob patterns          |
+| command-logger        | `command`                                         | Logs all commands to `~/.openclaw/logs/commands.log`           |
+| compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts/ends |
+| boot-md               | `gateway:startup`                                 | Runs `BOOT.md` when the gateway starts                         |
 
 Enable any bundled hook:
 
@@ -177,7 +222,7 @@ openclaw hooks enable <hook-name>
 
 ### session-memory details
 
-Extracts the last 15 user/assistant messages, generates a descriptive filename slug via LLM, and saves to `<workspace>/memory/YYYY-MM-DD-slug.md` using the host local date. Requires `workspace.dir` to be configured.
+Extracts the last 15 user/assistant messages and saves to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using the host local date. Memory capture runs in the background so `/new` and `/reset` acknowledgements are not delayed by transcript reads or optional slug generation. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs with the configured model. Requires `workspace.dir` to be configured.
 
 <a id="bootstrap-extra-files"></a>
 
@@ -206,6 +251,12 @@ Paths resolve relative to workspace. Only recognized bootstrap basenames are loa
 
 Logs every slash command to `~/.openclaw/logs/commands.log`.
 
+<a id="compaction-notifier"></a>
+
+### compaction-notifier details
+
+Sends short status messages into the current conversation when OpenClaw starts and finishes compacting the session transcript. This makes long turns less confusing on chat surfaces because the user can see that the assistant is summarizing context and will continue after compaction.
+
 <a id="boot-md"></a>
 
 ### boot-md details
@@ -218,6 +269,11 @@ Plugins can register typed hooks through the Plugin SDK for deeper integration:
 intercepting tool calls, modifying prompts, controlling message flow, and more.
 Use plugin hooks when you need `before_tool_call`, `before_agent_reply`,
 `before_install`, or other in-process lifecycle hooks.
+
+Plugin-managed internal hooks are different: they participate in this page's
+coarse command/lifecycle event system and show up in `openclaw hooks list` as
+`plugin:<id>`. Use those for side effects and compatibility with hook packs, not
+for ordered middleware or policy gates.
 
 For the complete plugin hook reference, see [Plugin hooks](/plugins/hooks).
 
