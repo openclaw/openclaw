@@ -126,6 +126,7 @@ function createTestRegistryForSetup(
 ): PluginRegistry {
   return {
     plugins: [],
+    statusProviders: [],
     tools: [],
     hooks: [],
     typedHooks: [],

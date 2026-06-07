@@ -89,22 +89,23 @@ methods:
 
 ### Capability registration
 
-| Method                                           | What it registers                     |
-| ------------------------------------------------ | ------------------------------------- |
-| `api.registerProvider(...)`                      | Text inference (LLM)                  |
-| `api.registerAgentHarness(...)`                  | Experimental low-level agent executor |
-| `api.registerCliBackend(...)`                    | Local CLI inference backend           |
-| `api.registerChannel(...)`                       | Messaging channel                     |
-| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider    |
-| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis        |
-| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription      |
-| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions        |
-| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis            |
-| `api.registerImageGenerationProvider(...)`       | Image generation                      |
-| `api.registerMusicGenerationProvider(...)`       | Music generation                      |
-| `api.registerVideoGenerationProvider(...)`       | Video generation                      |
-| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider           |
-| `api.registerWebSearchProvider(...)`             | Web search                            |
+| Method                                           | What it registers                                                |
+| ------------------------------------------------ | ---------------------------------------------------------------- |
+| `api.registerProvider(...)`                      | Text inference (LLM)                                             |
+| `api.registerStatusProvider(...)`                | API-only status provider registration for future status surfaces |
+| `api.registerAgentHarness(...)`                  | Experimental low-level agent executor                            |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend                                      |
+| `api.registerChannel(...)`                       | Messaging channel                                                |
+| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider                               |
+| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis                                   |
+| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription                                 |
+| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions                                   |
+| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis                                       |
+| `api.registerImageGenerationProvider(...)`       | Image generation                                                 |
+| `api.registerMusicGenerationProvider(...)`       | Music generation                                                 |
+| `api.registerVideoGenerationProvider(...)`       | Video generation                                                 |
+| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                      |
+| `api.registerWebSearchProvider(...)`             | Web search                                                       |
 
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must
 also be listed in `contracts.embeddingProviders` in the plugin manifest. This

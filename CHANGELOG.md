@@ -112,6 +112,7 @@ Docs: https://docs.openclaw.ai
 - Skill Workshop: add the Control UI navigation, styled dashboard, proposal today view, revision dialog, file preview modal, searchable preview files, reusable session handoff, and localized strings.
 - Plugins: externalize Tokenjuice as the official `@openclaw/tokenjuice` plugin with npm and ClawHub publish metadata.
 - Plugins: externalize the GitHub Copilot agent runtime as the official `@openclaw/copilot` plugin with npm and ClawHub publish metadata.
+- Plugins/SDK: add an API-only `registerStatusProvider` seam so plugins can register typed status providers for future status surfaces without monkeypatching the TUI. Resolves #64086; refs #53774. Thanks @dodge1218.
 - iOS: add hosted push relay defaults, realtime Talk playback, and a guarded WebSocket ping path for more reliable mobile sessions. (#88096, #88105, #88231)
 - iOS: support native iPad display layouts.
 - Android: add installed-app inspection commands, notification picker helpers, and updated-system-app classification.
