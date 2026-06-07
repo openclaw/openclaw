@@ -26,6 +26,7 @@ import { shortenHomePath } from "../utils.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { formatCliCommand } from "./command-format.js";
 import {
+  exitNativeHookRelayProcess,
   resolveNativeHookRelayProcessDeadlineMs,
   runNativeHookRelayCli,
   type NativeHookRelayCliOptions,
@@ -553,14 +554,16 @@ export function registerHooksCli(program: Command): void {
           // runNativeHookRelayCli reports invalid --timeout and returns a nonzero code.
         }
         const deadlineTimer = setSafeTimeout(() => {
-          restoreTerminalState("native hook relay deadline", { resumeStdinIfPaused: false });
-          process.exit(124);
+          void (async () => {
+            restoreTerminalState("native hook relay deadline", { resumeStdinIfPaused: false });
+            await exitNativeHookRelayProcess(124);
+          })();
         }, resolveNativeHookRelayProcessDeadlineMs(timeoutMs));
         deadlineTimer.unref?.();
         try {
           const exitCode = await runNativeHookRelayCli(opts);
           restoreTerminalState("runtime exit", { resumeStdinIfPaused: false });
-          process.exit(exitCode);
+          await exitNativeHookRelayProcess(exitCode);
         } finally {
           clearTimeout(deadlineTimer);
         }

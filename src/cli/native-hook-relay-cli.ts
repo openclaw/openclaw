@@ -55,7 +55,7 @@ export async function runNativeHookRelayCli(
   try {
     timeoutMs = parseTimeoutMsWithFallback(opts.timeout, 5_000);
   } catch (error) {
-    writeText(stderr, formatRelayCliError("invalid native hook timeout", error));
+    await writeTextAsync(stderr, formatRelayCliError("invalid native hook timeout", error));
     return 1;
   }
 
@@ -64,7 +64,7 @@ export async function runNativeHookRelayCli(
     const rawInput = await readStreamText(stdin, MAX_NATIVE_HOOK_STDIN_BYTES, timeoutMs);
     rawPayload = rawInput.trim() ? JSON.parse(rawInput) : null;
   } catch (error) {
-    writeText(stderr, formatRelayCliError("failed to read native hook input", error));
+    await writeTextAsync(stderr, formatRelayCliError("failed to read native hook input", error));
     return 1;
   }
 
@@ -78,20 +78,20 @@ export async function runNativeHookRelayCli(
       registrationTimeoutMs: 100,
       timeoutMs,
     });
-    writeText(stdout, response.stdout);
-    writeText(stderr, response.stderr);
+    await writeTextAsync(stdout, response.stdout);
+    await writeTextAsync(stderr, response.stderr);
     return response.exitCode;
   } catch (error) {
     if (isNativeHookRelayBridgeStaleRegistrationError(error)) {
-      writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
+      await writeTextAsync(stderr, formatRelayCliError("native hook relay unavailable", error));
       const response = renderNativeHookRelayUnavailableResponse({
         provider,
         event,
         preToolUseUnavailable: opts.preToolUseUnavailable,
         message: "Native hook relay unavailable",
       });
-      writeText(stdout, response.stdout);
-      writeText(stderr, response.stderr);
+      await writeTextAsync(stdout, response.stdout);
+      await writeTextAsync(stderr, response.stderr);
       return response.exitCode;
     }
     // Fall through to the gateway path for embedded/local gateway cases and
@@ -105,21 +105,47 @@ export async function runNativeHookRelayCli(
       timeoutMs,
       scopes: [ADMIN_SCOPE],
     });
-    writeText(stdout, response.stdout);
-    writeText(stderr, response.stderr);
+    await writeTextAsync(stdout, response.stdout);
+    await writeTextAsync(stderr, response.stderr);
     return response.exitCode;
   } catch (error) {
-    writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
+    await writeTextAsync(stderr, formatRelayCliError("native hook relay unavailable", error));
     const response = renderNativeHookRelayUnavailableResponse({
       provider,
       event,
       preToolUseUnavailable: opts.preToolUseUnavailable,
       message: "Native hook relay unavailable",
     });
-    writeText(stdout, response.stdout);
-    writeText(stderr, response.stderr);
+    await writeTextAsync(stdout, response.stdout);
+    await writeTextAsync(stderr, response.stderr);
     return response.exitCode;
   }
+}
+
+export type NativeHookRelayProcessExitDeps = {
+  stdout?: NodeJS.WritableStream;
+  stderr?: NodeJS.WritableStream;
+  exit?: (code: number) => never;
+};
+
+/** Drain relay stdout/stderr so Codex receives complete hook decision JSON before exit. */
+export async function flushNativeHookRelayProcessStreams(
+  stdout: NodeJS.WritableStream = process.stdout,
+  stderr: NodeJS.WritableStream = process.stderr,
+): Promise<void> {
+  await Promise.all([flushWritableStream(stdout), flushWritableStream(stderr)]);
+}
+
+/** Flush relay output streams, then force-exit the relay CLI process. */
+export async function exitNativeHookRelayProcess(
+  exitCode: number,
+  deps: NativeHookRelayProcessExitDeps = {},
+): Promise<never> {
+  const stdout = deps.stdout ?? process.stdout;
+  const stderr = deps.stderr ?? process.stderr;
+  const exit = deps.exit ?? process.exit;
+  await flushNativeHookRelayProcessStreams(stdout, stderr);
+  exit(exitCode);
 }
 
 function readRequiredOption(value: string | undefined, name: string): string {
@@ -174,10 +200,53 @@ function destroyReadableStream(stream: NodeJS.ReadableStream): void {
   }
 }
 
-function writeText(stream: NodeJS.WritableStream, value: string | undefined): void {
-  if (value) {
-    stream.write(value);
+async function writeTextAsync(
+  stream: NodeJS.WritableStream,
+  value: string | undefined,
+): Promise<void> {
+  if (!value) {
+    return;
   }
+  await writeChunkAsync(stream, value);
+}
+
+function writeChunkAsync(stream: NodeJS.WritableStream, chunk: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if ((stream as NodeJS.WriteStream).destroyed || stream.writable === false) {
+      resolve();
+      return;
+    }
+    try {
+      const onDone = (err?: Error | null) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve();
+      };
+      const canContinue = stream.write(chunk, onDone);
+      if (!canContinue) {
+        stream.once("drain", () => {
+          // The write callback still signals completion for this chunk.
+        });
+      }
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+async function flushWritableStream(stream: NodeJS.WritableStream): Promise<void> {
+  if ((stream as NodeJS.WriteStream).destroyed || stream.writable === false) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    try {
+      stream.write("", () => resolve());
+    } catch {
+      resolve();
+    }
+  });
 }
 
 function formatRelayCliError(prefix: string, error: unknown): string {

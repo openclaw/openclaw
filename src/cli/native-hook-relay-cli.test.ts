@@ -1,9 +1,11 @@
 // Native hook relay CLI tests cover relay command registration and runtime delegation.
-import { Readable } from "node:stream";
+import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createReadableTextStream,
   createWritableTextBuffer,
+  exitNativeHookRelayProcess,
+  flushNativeHookRelayProcessStreams,
   resolveNativeHookRelayProcessDeadlineMs,
   runNativeHookRelayCli,
 } from "./native-hook-relay-cli.js";
@@ -458,5 +460,73 @@ describe("native hook relay CLI", () => {
     expect(exitCode).toBe(0);
     expect(stdout.text()).toBe("");
     expect(stderr.text()).toContain("native hook relay unavailable");
+  });
+
+  it("flushes relay process streams after pending writes complete", async () => {
+    const events: string[] = [];
+    const stdout = new Writable({
+      write(chunk, _encoding, callback) {
+        setTimeout(() => {
+          events.push(chunk.length === 0 ? "flush" : "payload");
+          callback();
+        }, 20);
+      },
+    });
+    const stderr = createWritableTextBuffer();
+
+    stdout.write("payload");
+    const flushPromise = flushNativeHookRelayProcessStreams(stdout, stderr);
+    expect(events).toEqual([]);
+    await flushPromise;
+    expect(events).toEqual(["payload", "flush"]);
+  });
+
+  it("exits only after async stdout deny JSON has been written", async () => {
+    const events: string[] = [];
+    const chunks: Buffer[] = [];
+    const stdout = new Writable({
+      write(chunk, _encoding, callback) {
+        setTimeout(() => {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+          if (buffer.byteLength > 0) {
+            chunks.push(buffer);
+            events.push("payload");
+          } else {
+            events.push("flush");
+          }
+          callback();
+        }, 20);
+      },
+    });
+    const stderr = createWritableTextBuffer();
+    const callGateway = vi.fn(async () => {
+      throw new Error("generation must be non-empty string");
+    });
+    const exit = vi.fn((_code: number) => {
+      events.push("exit");
+    }) as (code: number) => never;
+
+    const exitCode = await runNativeHookRelayCli(
+      { provider: "codex", relayId: "relay-1", event: "pre_tool_use" },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    await exitNativeHookRelayProcess(exitCode, { stdout, stderr, exit });
+
+    expect(events).toEqual(["payload", "flush", "exit"]);
+    expect(JSON.parse(Buffer.concat(chunks).toString("utf8"))).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Native hook relay unavailable",
+      },
+    });
+    expect(exit).toHaveBeenCalledWith(0);
   });
 });
