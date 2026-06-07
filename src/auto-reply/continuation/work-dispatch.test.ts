@@ -3,6 +3,9 @@ const turnGrants: unknown[] = [];
 const systemEvents: unknown[] = [];
 const activeSessions = new Set<string>();
 let mainQueueSize = 0;
+let gatewayDraining = false;
+let replyError: Error | undefined;
+let drainAfterReply = false;
 const mockSessionStore: Record<string, unknown> = {};
 
 vi.mock("../../config/config.js", () => ({
@@ -32,11 +35,18 @@ vi.mock("../reply/reply-run-registry.js", () => ({
 
 vi.mock("../../process/command-queue.js", () => ({
   getQueueSize: () => mainQueueSize,
+  isGatewayDraining: () => gatewayDraining,
 }));
 
 vi.mock("../reply/get-reply.js", () => ({
   getReplyFromConfig: vi.fn(async (context: unknown, options: unknown, cfg: unknown) => {
+    if (replyError) {
+      throw replyError;
+    }
     turnGrants.push({ context, options, cfg });
+    if (drainAfterReply) {
+      gatewayDraining = true;
+    }
     return [{ text: "ok" }];
   }),
 }));
@@ -223,6 +233,9 @@ describe("durable continuation_work dispatch", () => {
     systemEvents.length = 0;
     activeSessions.clear();
     mainQueueSize = 0;
+    gatewayDraining = false;
+    replyError = undefined;
+    drainAfterReply = false;
     for (const key of Object.keys(mockSessionStore)) {
       delete mockSessionStore[key];
     }
@@ -353,6 +366,9 @@ describe("durable continuation_work dispatch", () => {
 
     activeSessions.clear();
     mainQueueSize = 0;
+    gatewayDraining = false;
+    replyError = undefined;
+    drainAfterReply = false;
     await vi.advanceTimersByTimeAsync(1_000);
     await flushTimers();
 
@@ -426,6 +442,9 @@ describe("durable continuation_work dispatch", () => {
     });
 
     mainQueueSize = 0;
+    gatewayDraining = false;
+    replyError = undefined;
+    drainAfterReply = false;
     await vi.advanceTimersByTimeAsync(1_000);
     await flushTimers();
 
@@ -471,6 +490,119 @@ describe("durable continuation_work dispatch", () => {
           SessionKey: sessionKey,
           Body: expect.stringContaining("running recovery"),
         }),
+      }),
+    ]);
+  });
+
+  it("requeues instead of succeeding when the gateway starts draining during the turn grant", async () => {
+    const sessionKey = "agent:main:draining";
+    mockSessionStore[sessionKey] = { sessionKey };
+    drainAfterReply = true;
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "drain proof",
+    });
+
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(result).toEqual({ dispatched: 0, failed: 0 });
+    expect([...mockFlows.values()][0]).toMatchObject({
+      status: "queued",
+      currentStep: "Requeued same-session continuation wake",
+    });
+
+    drainAfterReply = false;
+    gatewayDraining = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTimers();
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({ Body: expect.stringContaining("drain proof") }),
+      }),
+      expect.objectContaining({
+        context: expect.objectContaining({ Body: expect.stringContaining("drain proof") }),
+      }),
+    ]);
+  });
+
+  it("requeues transient turn-grant errors instead of failing the durable work", async () => {
+    const sessionKey = "agent:main:transient-error";
+    mockSessionStore[sessionKey] = { sessionKey };
+    replyError = new Error("provider unavailable");
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "transient proof",
+    });
+
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(result).toEqual({ dispatched: 0, failed: 0 });
+    const flow = [...mockFlows.values()][0];
+    expect(flow).toMatchObject({
+      status: "queued",
+      currentStep: "Requeued same-session continuation wake",
+    });
+    expect(flow?.stateJson).toMatchObject({ retryCount: 1 });
+
+    replyError = undefined;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushTimers();
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({ Body: expect.stringContaining("transient proof") }),
+      }),
+    ]);
+  });
+
+  it("does not let a hedge reclaim freshly running continuation work", async () => {
+    const sessionKey = "agent:main:fresh-running";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "fresh running",
+    });
+    const runningFlow = [...mockFlows.values()][0];
+    if (!runningFlow) {
+      throw new Error("expected mock flow");
+    }
+    runningFlow.status = "running";
+    runningFlow.updatedAt = Date.now();
+
+    await scheduleContinuationWork({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 1,
+      },
+      request: { delaySeconds: 0, reason: "new queued" },
+      config: { ...config, defaultDelayMs: 0, minDelayMs: 0 },
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await flushTimers();
+
+    expect(runningFlow.status).toBe("running");
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({ Body: expect.stringContaining("new queued") }),
       }),
     ]);
   });

@@ -42,6 +42,7 @@ const PendingWorkStateSchema = z.object({
   traceparent: z.string().optional(),
   releasedAt: z.number().int().nonnegative().optional(),
   turnGrantedAt: z.number().int().nonnegative().optional(),
+  retryCount: z.number().int().nonnegative().optional(),
 });
 
 type PendingWorkState = z.infer<typeof PendingWorkStateSchema>;
@@ -59,6 +60,7 @@ export type PendingContinuationWork = {
   parentRunId?: string;
   chainId?: string;
   traceparent?: string;
+  retryCount?: number;
   flowId?: string;
   expectedRevision?: number;
 };
@@ -97,6 +99,7 @@ function workToRuntime(flow: TaskFlowRecord, state: PendingWorkState): PendingCo
     ...(state.parentRunId ? { parentRunId: state.parentRunId } : {}),
     ...(state.chainId ? { chainId: state.chainId } : {}),
     ...(state.traceparent ? { traceparent: state.traceparent } : {}),
+    ...(state.retryCount !== undefined ? { retryCount: state.retryCount } : {}),
     flowId: flow.flowId,
     expectedRevision: flow.revision,
   };
@@ -234,7 +237,7 @@ export function markPendingWorkTurnGranted(work: PendingContinuationWork): boole
 
 export function requeuePendingWork(
   work: PendingContinuationWork,
-  params: { dueAt: number; summary: string },
+  params: { dueAt: number; summary: string; retryCount?: number },
 ): boolean {
   if (!work.flowId || work.expectedRevision === undefined) {
     return false;
@@ -252,6 +255,7 @@ export function requeuePendingWork(
       maxChainLength: work.maxChainLength,
     }),
     dueAt: params.dueAt,
+    ...(params.retryCount !== undefined ? { retryCount: params.retryCount } : {}),
   };
   const updated = updateFlowRecordByIdExpectedRevision({
     flowId: work.flowId,

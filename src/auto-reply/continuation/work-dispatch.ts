@@ -24,7 +24,10 @@ import {
 const log = createSubsystemLogger("continuation/work-dispatch");
 const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
 const BUSY_RETRY_MS = 1_000;
+const TRANSIENT_ERROR_RETRY_MS = 5_000;
+const MAX_TRANSIENT_ERROR_RETRY_COUNT = 8;
 const CONTINUATION_TURN_BUSY_REASON = "requests-in-flight";
+const CONTINUATION_TURN_DRAINING_REASON = "draining";
 const MAIN_COMMAND_LANE = "main";
 const RUNNING_WORK_RECOVERY_STALE_MS = 60_000;
 
@@ -52,7 +55,11 @@ function armWorkTimer(sessionKey: string, fireAt: number): void {
   const handle = setTimeout(() => {
     workTimers.delete(sessionKey);
     log.info(`[continuation:work-hedge-fired] session=${sessionKey}`);
-    void dispatchPendingContinuationWork({ sessionKey, recoverRunning: true })
+    void dispatchPendingContinuationWork({
+      sessionKey,
+      recoverRunning: true,
+      includeRunningUpdatedAtOrBefore: Date.now() - RUNNING_WORK_RECOVERY_STALE_MS,
+    })
       .then(() => undefined)
       .catch((err: unknown) => {
         const message = formatErrorMessage(err);
@@ -69,6 +76,21 @@ export function resetContinuationWorkDispatchForTests(): void {
     clearTimeout(handle);
   }
   workTimers.clear();
+}
+
+function isRetryableContinuationSkipReason(reason: string): boolean {
+  return isRetryableHeartbeatBusySkipReason(reason) || reason === CONTINUATION_TURN_DRAINING_REASON;
+}
+
+function requeueWorkForRetry(
+  work: PendingContinuationWork,
+  params: { dueAt: number; summary: string; retryCount?: number },
+): boolean {
+  const requeued = requeuePendingWork(work, params);
+  if (requeued) {
+    armWorkTimer(work.sessionKey, params.dueAt);
+  }
+  return requeued;
 }
 
 function formatContinuationWakeText(work: PendingContinuationWork): string {
@@ -98,7 +120,7 @@ async function driveContinuationTurn(
     { parseAgentSessionKey },
     { getReplyFromConfig },
     { replyRunRegistry },
-    { getQueueSize },
+    { getQueueSize, isGatewayDraining },
   ] = await Promise.all([
     import("../../config/config.js"),
     import("../../config/sessions/paths.js"),
@@ -112,6 +134,9 @@ async function driveContinuationTurn(
   // Same-session continuations grant a normal turn directly. Do not route through
   // heartbeat wake registration/active-hours gates, which are agent-schedule policy
   // and can strand subagent sessions that are otherwise eligible for a turn.
+  if (isGatewayDraining()) {
+    return { status: "skipped", reason: CONTINUATION_TURN_DRAINING_REASON };
+  }
   if (replyRunRegistry.isActive(work.sessionKey)) {
     return { status: "skipped", reason: CONTINUATION_TURN_BUSY_REASON };
   }
@@ -152,6 +177,9 @@ async function driveContinuationTurn(
     },
     cfg,
   );
+  if (isGatewayDraining()) {
+    return { status: "skipped", reason: CONTINUATION_TURN_DRAINING_REASON };
+  }
   return { status: "ran" };
 }
 
@@ -203,23 +231,33 @@ export async function dispatchPendingContinuationWork(params: {
         `[system:continuation-warning] continue_work turn was not granted (${skippedReason}).`,
         { sessionKey: work.sessionKey, trusted: true },
       );
-      if (isRetryableHeartbeatBusySkipReason(skippedReason)) {
+      if (isRetryableContinuationSkipReason(skippedReason)) {
         const retryDueAt = Date.now() + BUSY_RETRY_MS;
-        const requeued = requeuePendingWork(work, {
+        requeueWorkForRetry(work, {
           dueAt: retryDueAt,
-          summary: `Retryable busy skip: ${skippedReason}`,
+          summary: `Retryable continuation skip: ${skippedReason}`,
         });
-        if (requeued) {
-          armWorkTimer(work.sessionKey, retryDueAt);
-        }
       } else {
         markPendingWorkFailed(work, `Continuation turn was not granted: ${skippedReason}`);
         failed++;
       }
     } catch (err) {
       const message = formatErrorMessage(err);
-      markPendingWorkFailed(work, message);
-      failed++;
+      const retryCount = (work.retryCount ?? 0) + 1;
+      if (retryCount <= MAX_TRANSIENT_ERROR_RETRY_COUNT) {
+        const retryDueAt = Date.now() + TRANSIENT_ERROR_RETRY_MS;
+        log.warn(
+          `[continuation:work-drive-error-retry] flowId=${work.flowId ?? "none"} session=${work.sessionKey} retry=${retryCount}/${MAX_TRANSIENT_ERROR_RETRY_COUNT} error=${message}`,
+        );
+        requeueWorkForRetry(work, {
+          dueAt: retryDueAt,
+          summary: `Transient continuation turn error: ${message}`,
+          retryCount,
+        });
+      } else {
+        markPendingWorkFailed(work, message);
+        failed++;
+      }
     }
   }
   return { dispatched, failed };
