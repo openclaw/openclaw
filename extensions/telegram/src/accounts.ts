@@ -168,11 +168,13 @@ export function resolveTelegramAccount(params: {
     } satisfies ResolvedTelegramAccount;
   };
 
-  // If accountId is omitted, prefer a configured account token over failing on
-  // the implicit "default" account. This keeps env-based setups working while
-  // making config-only tokens work for things like heartbeats.
+  // No accountId means "configured default": resolve it up front
+  // (channels.telegram.defaultAccount / default-agent binding) so multi-bot
+  // outbound sends honor it instead of the implicit env/top-level "default" bot.
+  // Matches the nextcloud-talk resolver. (#61012)
+  const resolvedAccountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   return resolveAccountWithDefaultFallback({
-    accountId: params.accountId,
+    accountId: resolvedAccountId,
     normalizeAccountId,
     resolvePrimary: resolve,
     hasCredential: (account) => account.tokenSource !== "none",
