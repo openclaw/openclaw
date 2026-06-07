@@ -108,8 +108,8 @@ function resolveTelegramNativeReplyRootThreadId(params: {
     return undefined;
   }
 
-  const chainRootId = [...params.replyChain]
-    .reverse()
+  const chainRootId = params.replyChain
+    .toReversed()
     .map((entry) => normalizeTelegramNativeThreadMessageId(entry.messageId))
     .find(Boolean);
   const directReplyId =
