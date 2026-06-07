@@ -141,7 +141,30 @@ function diffSnapshots(
 }
 
 export function collectPromptCacheToolNames(tools: Array<{ name?: string }>): string[] {
-  return tools.map((tool) => tool.name?.trim()).filter((name): name is string => Boolean(name));
+  const names: string[] = [];
+  for (const key of Object.keys(tools)) {
+    const index = Number(key);
+    if (!Number.isInteger(index)) {
+      continue;
+    }
+    let tool: { name?: string } | undefined;
+    try {
+      tool = tools[index];
+    } catch {
+      continue;
+    }
+    let rawName: string | undefined;
+    try {
+      rawName = tool?.name;
+    } catch {
+      continue;
+    }
+    const name = rawName?.trim();
+    if (name) {
+      names.push(name);
+    }
+  }
+  return names;
 }
 
 export function beginPromptCacheObservation(params: {
