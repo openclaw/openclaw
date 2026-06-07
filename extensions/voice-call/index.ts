@@ -177,7 +177,12 @@ const voiceCallConfigSchema = {
 const VoiceCallToolSchema = Type.Union([
   Type.Object({
     action: Type.Literal("initiate_call"),
-    to: Type.Optional(Type.String({ description: "Call target" })),
+    to: Type.Optional(
+      Type.String({
+        description:
+          "Call target. Telephony providers: an E.164 phone number. The Microsoft Teams (msteams) provider: the target user's Azure AD object id, optionally prefixed \"user:\" (e.g. the inbound chat sender's MsteamsAadObjectId — use this to call a Teams chat user back).",
+      }),
+    ),
     message: Type.String({ description: "Intro message" }),
     mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
     sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
