@@ -83,6 +83,10 @@ const VideoFrameSchema = z.object({
   height: z.number().int().positive(),
   mime: z.string().min(1),
   dataBase64: z.string().min(1),
+  // Who this frame belongs to (group calls): the subscribed speaker for "camera", the sharer for
+  // "screenshare". Best-effort — absent for anonymous/guest participants or older workers.
+  participantId: z.string().min(1).optional(),
+  participantName: z.string().min(1).optional(),
 });
 
 const InboundMessageSchema = z.discriminatedUnion("type", [
@@ -163,6 +167,8 @@ export interface MsteamsMediaStreamConfig {
     height: number;
     mime: string;
     dataBase64: string;
+    participantId?: string;
+    participantName?: string;
   }) => void;
 }
 
@@ -503,6 +509,8 @@ export class MsteamsMediaStream {
           height: parsed.height,
           mime: parsed.mime,
           dataBase64: parsed.dataBase64,
+          participantId: parsed.participantId,
+          participantName: parsed.participantName,
         });
         break;
       }
