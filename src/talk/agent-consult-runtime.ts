@@ -224,6 +224,8 @@ export async function consultRealtimeVoiceAgent(params: {
   lane: string;
   runIdPrefix: string;
   args: unknown;
+  /** Optional images (e.g. a sampled call video frame) for a vision-capable agent run. */
+  images?: RunEmbeddedAgentParams["images"];
   transcript: RealtimeVoiceAgentConsultTranscriptEntry[];
   surface: string;
   userLabel: string;
@@ -302,6 +304,7 @@ export async function consultRealtimeVoiceAgent(params: {
       assistantLabel: params.assistantLabel,
       questionSourceLabel: params.questionSourceLabel,
     }),
+    images: params.images,
     provider: params.provider,
     model: params.model,
     thinkLevel: params.thinkLevel ?? "high",
