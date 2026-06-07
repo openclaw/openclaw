@@ -16,6 +16,7 @@ type AgentPayloadLike = {
   presentation?: unknown;
   interactive?: unknown;
   channelData?: unknown;
+  attachments?: unknown;
   isError?: unknown;
   isReasoning?: unknown;
 };
@@ -170,6 +171,7 @@ export function hasVisibleAgentPayload(
       hasNonEmptyString(record.text) ||
       hasNonEmptyString(record.mediaUrl) ||
       hasNonEmptyStringArray(record.mediaUrls) ||
+      hasNonEmptyArray(record.attachments) ||
       record.presentation ||
       record.interactive ||
       record.channelData,

@@ -5,6 +5,7 @@
  */
 import {
   formatGeneratedAttachmentLines,
+  mediaUrlsFromGeneratedAttachments,
   type AgentGeneratedAttachment,
 } from "./generated-attachments.js";
 import {
@@ -61,6 +62,16 @@ function formatChildResultDataBlock(value: string): string {
   );
 }
 
+function formatGeneratedMediaDirectiveLines(event: AgentTaskCompletionInternalEvent): string[] {
+  const mediaUrls = Array.from(
+    new Set([...(event.mediaUrls ?? []), ...mediaUrlsFromGeneratedAttachments(event.attachments)]),
+  ).filter((value) => value.trim().length > 0);
+  if (mediaUrls.length === 0) {
+    return [];
+  }
+  return ["Generated media:", ...mediaUrls.map((mediaUrl) => `MEDIA:${mediaUrl}`)];
+}
+
 function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): string {
   const sessionKey = sanitizeSingleLineField(event.childSessionKey, "unknown");
   const sessionId = sanitizeSingleLineField(event.childSessionId ?? "unknown", "unknown");
@@ -69,6 +80,7 @@ function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): str
   const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
   const result = formatChildResultDataBlock(event.result);
   const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
+  const mediaDirectiveLines = formatGeneratedMediaDirectiveLines(event);
   const lines = [
     "[Internal task completion event]",
     `source: ${event.source}`,
@@ -82,6 +94,9 @@ function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): str
   ];
   if (attachmentLines.length > 0) {
     lines.push("", ...attachmentLines);
+  }
+  if (mediaDirectiveLines.length > 0) {
+    lines.push("", ...mediaDirectiveLines);
   }
   if (event.statsLine?.trim()) {
     lines.push("", sanitizeMultilineField(event.statsLine, ""));
@@ -98,6 +113,7 @@ function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInter
   const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
   const result = formatChildResultDataBlock(event.result);
   const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
+  const mediaDirectiveLines = formatGeneratedMediaDirectiveLines(event);
   const lines = [
     "A background task completed. Use this result to reply to the user in your normal assistant voice.",
     "",
@@ -112,6 +128,9 @@ function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInter
   ];
   if (attachmentLines.length > 0) {
     lines.push("", ...attachmentLines);
+  }
+  if (mediaDirectiveLines.length > 0) {
+    lines.push("", ...mediaDirectiveLines);
   }
   if (event.statsLine?.trim()) {
     lines.push("", sanitizeMultilineField(event.statsLine, ""));
