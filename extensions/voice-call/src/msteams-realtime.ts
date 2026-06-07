@@ -44,7 +44,7 @@ import {
   type MsteamsLogger,
   type MsteamsSession,
 } from "./msteams-media-stream.js";
-import type { MsteamsVideoFrame } from "./msteams-video-frame.js";
+import { describeMsteamsVideoFrameOwner, type MsteamsVideoFrame } from "./msteams-video-frame.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 import { readArgText } from "./utils.js";
@@ -580,11 +580,12 @@ export function createMsteamsRealtimeCall(params: {
         runIdPrefix: `voice-realtime-look:${callId}`,
         args: event.args,
         images: [{ type: "image", data: frame.dataBase64, mimeType: frame.mime }],
-        surface: frame.participantName
-          ? `a live Microsoft Teams call — the attached image is ${frame.participantName}'s ${
-              frame.source === "screenshare" ? "shared screen" : "camera"
-            }`
-          : "a live Microsoft Teams call (a participant is sharing video)",
+        surface: (() => {
+          const owner = describeMsteamsVideoFrameOwner(frame);
+          return owner
+            ? `a live Microsoft Teams call — the attached image is ${owner}`
+            : "a live Microsoft Teams call (a participant is sharing video)";
+        })(),
         extraSystemPrompt: MSTEAMS_REALTIME_LOOK_SYSTEM_PROMPT,
         toolPolicy,
         timeoutMs: voiceConfig.responseTimeoutMs,
