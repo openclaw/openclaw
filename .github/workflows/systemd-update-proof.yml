@@ -1,0 +1,89 @@
+name: Systemd Update Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: Published baseline package to install before update
+        default: openclaw@2026.6.1-beta.2
+        required: true
+        type: string
+      profile:
+        description: Isolated OpenClaw profile used by the proof
+        default: pr91044proof
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.profile }}
+  cancel-in-progress: true
+
+jobs:
+  systemd-update-proof:
+    name: Systemd update proof / ${{ matrix.scenario }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - intact-systemd-update
+          - missing-supervisor-systemd-update
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.15.0
+          cache: pnpm
+
+      - name: Activate pnpm
+        run: |
+          corepack enable
+          corepack pnpm --version
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
+
+      - name: Build package tarball
+        run: |
+          node scripts/package-openclaw-for-docker.mjs \
+            --output-dir .artifacts/systemd-package \
+            --output-name openclaw-current.tgz
+
+      - name: Prepare real systemd user manager
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          sudo loginctl enable-linger "$USER" || true
+          sudo systemctl start "user@${uid}.service" || true
+          export XDG_RUNTIME_DIR="/run/user/${uid}"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+          systemctl --user status --no-pager
+          echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS}" >> "$GITHUB_ENV"
+
+      - name: Run real systemd package-update proof
+        env:
+          OPENCLAW_CURRENT_PACKAGE_TGZ: ${{ github.workspace }}/.artifacts/systemd-package/openclaw-current.tgz
+          OPENCLAW_SYSTEMD_PROOF_ARTIFACT_DIR: ${{ github.workspace }}/.artifacts/systemd-update-proof/${{ matrix.scenario }}
+          OPENCLAW_SYSTEMD_PROOF_BASELINE_SPEC: ${{ inputs.baseline }}
+          OPENCLAW_SYSTEMD_PROOF_PROFILE: ${{ inputs.profile }}
+          OPENCLAW_SYSTEMD_PROOF_SCENARIO: ${{ matrix.scenario }}
+        run: |
+          chmod +x scripts/e2e/systemd-update-proof.sh
+          scripts/e2e/systemd-update-proof.sh
+
+      - name: Upload proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: systemd-update-proof-${{ matrix.scenario }}
+          path: .artifacts/systemd-update-proof/${{ matrix.scenario }}
+          if-no-files-found: warn
