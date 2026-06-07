@@ -81,6 +81,11 @@ vi.mock("ws", () => ({
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist: () => ({
+    allowRfc2544BenchmarkRange: true,
+    allowIpv6UniqueLocalRange: true,
+    hostnameAllowlist: ["api.openai.com"],
+  }),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
@@ -309,6 +314,11 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expectRecordFields(request, "fetch request", {
       url: "https://api.openai.com/v1/realtime/client_secrets",
       auditContext: "openai-realtime-bridge-session",
+      policy: {
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+        hostnameAllowlist: ["api.openai.com"],
+      },
     });
     expectRecordFields(requireFetchInit(), "fetch init", { method: "POST" });
     expectRecordFields(requireFetchHeaders(), "fetch headers", {
@@ -467,6 +477,11 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     expectRecordFields(requireFetchRequest(), "fetch request", {
       url: "https://api.openai.com/v1/realtime/client_secrets",
+      policy: {
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+        hostnameAllowlist: ["api.openai.com"],
+      },
     });
     expectRecordFields(requireFetchInit(), "fetch init", { method: "POST" });
     expectRecordFields(requireFetchHeaders(), "fetch headers", {
