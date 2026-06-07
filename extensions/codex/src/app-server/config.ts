@@ -630,7 +630,7 @@ export function isTrustedCodexModelBackedOpenAIProvider(params: {
   agentDir?: string;
   codexConfigToml?: string | null;
 }): boolean {
-  if (!isNativeOpenAIBaseUrl(params.env?.OPENAI_BASE_URL ?? params.env?.OPENAI_API_BASE)) {
+  if (!openAIBaseUrlEnvOverridesAreTrustedForModelBackedReview(params.env)) {
     return false;
   }
   const codexBaseUrlOverrides = readCodexBaseUrlOverridesForModelBackedReview(params);
@@ -1400,6 +1400,12 @@ function isNativeOpenAIBaseUrl(value: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+function openAIBaseUrlEnvOverridesAreTrustedForModelBackedReview(
+  env: NodeJS.ProcessEnv | undefined,
+): boolean {
+  return [env?.OPENAI_BASE_URL, env?.OPENAI_API_BASE].every(isNativeOpenAIBaseUrl);
 }
 
 function isNativeChatGPTBaseUrl(value: unknown): boolean {

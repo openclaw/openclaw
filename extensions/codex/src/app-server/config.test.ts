@@ -420,6 +420,16 @@ describe("Codex app-server config", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).toBe(false);
+    expect(
+      canUseCodexModelBackedApprovalsReviewerForModel({
+        modelProvider: "openai",
+        model: "gpt-5.5",
+        env: {
+          OPENAI_BASE_URL: "",
+          OPENAI_API_BASE: "http://localhost:8080/v1",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(false);
   });
 
   it("uses user approvals when Codex native OpenAI config is local", () => {
