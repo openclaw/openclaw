@@ -2,6 +2,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeChannel } from "./runtime-channel.js";
 
+describe("createRuntimeChannel", () => {
+  it("keeps deprecated channel turn aliases wired to inbound helpers", () => {
+    const channel = createRuntimeChannel();
+
+    expect(channel.turn).toBe(channel.inbound);
+    expect(channel.turn.buildContext).toBe(channel.inbound.buildContext);
+    expect(channel.turn.run).toBe(channel.inbound.run);
+    expect(channel.turn.runPreparedReply).toBe(channel.inbound.runPreparedReply);
+    expect(channel.turn.dispatchReply).toBe(channel.inbound.dispatchReply);
+  });
+});
+
 function requireWatcherEvent(mock: ReturnType<typeof vi.fn>, index: number) {
   const event = mock.mock.calls[index]?.[0] as { type?: string } | undefined;
   if (!event) {

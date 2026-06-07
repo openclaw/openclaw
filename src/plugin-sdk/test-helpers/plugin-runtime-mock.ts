@@ -729,6 +729,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         buildContext: buildChannelInboundEventContextMock,
         runPreparedReply: runPreparedChannelTurnMock,
       },
+      turn: {
+        run: runChannelTurnMock,
+        dispatchReply:
+          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["dispatchReply"],
+        buildContext: buildChannelInboundEventContextMock,
+        runPreparedReply: runPreparedChannelTurnMock,
+      },
       threadBindings: {
         setIdleTimeoutBySessionKey:
           vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setIdleTimeoutBySessionKey"],
@@ -811,5 +818,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
   };
 
-  return mergeDeep(base, overrides);
+  const runtime = mergeDeep(base, overrides);
+  runtime.channel.turn = runtime.channel.inbound;
+  return runtime;
 }

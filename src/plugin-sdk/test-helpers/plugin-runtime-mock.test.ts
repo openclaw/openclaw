@@ -17,11 +17,11 @@ describe("createPluginRuntimeMock", () => {
     expect(vi.isMockFunction(debouncer.cancelKey)).toBe(true);
   });
 
-  it("exposes channel inbound helpers without the removed turn aliases", async () => {
+  it("exposes channel inbound helpers through the deprecated turn alias", async () => {
     const runtime = createPluginRuntimeMock();
     const channel = "test";
 
-    expect("turn" in runtime.channel).toBe(false);
+    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
 
     const input = vi.fn((raw: { id: string }) => ({
       id: raw.id,
@@ -81,6 +81,20 @@ describe("createPluginRuntimeMock", () => {
         dispatched: true,
       }),
     );
+  });
+
+  it("reflects inbound overrides through the deprecated turn alias", async () => {
+    const run = vi.fn(async () => ({ admission: { kind: "deny" }, dispatched: false }));
+    const runtime = createPluginRuntimeMock({
+      channel: {
+        inbound: { run },
+      },
+    });
+
+    await runtime.channel.turn.run({ channel: "test", raw: {}, adapter: {} });
+
+    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it("routes untrusted group prompt facts into untrusted structured context", () => {

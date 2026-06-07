@@ -57,7 +57,9 @@ prefer message adapters and durable message helpers.
 
 ## Migration
 
-The old `runtime.channel.turn.*` runtime aliases were removed. Use:
+The old `runtime.channel.turn.*` runtime aliases remain as a deprecated
+compatibility surface for shipped plugins compiled before the inbound rename.
+New and migrated plugins should use:
 
 - `runtime.channel.inbound.run(...)` for raw inbound events.
 - `runtime.channel.inbound.dispatchReply(...)` for assembled reply contexts.
