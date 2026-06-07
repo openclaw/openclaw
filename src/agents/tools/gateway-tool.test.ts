@@ -214,7 +214,7 @@ describe("gateway tool restart continuation", () => {
     });
   });
 
-  it("uses the runtime session, not model-supplied params, for scheduler ownership (#86742)", async () => {
+  it("uses the runtime session, not model-supplied params, for scheduler ownership and sentinel routing (#86742)", async () => {
     const tool = createGatewayTool({
       agentSessionKey: "agent:main:session-A",
       config: {},
@@ -228,7 +228,7 @@ describe("gateway tool restart continuation", () => {
 
     expect(requireScheduledRestartArgs().sessionKey).toBe("agent:main:session-A");
     await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
-    expect(requireRestartSentinelPayload().sessionKey).toBe("agent:main:session-B");
+    expect(requireRestartSentinelPayload().sessionKey).toBe("agent:main:session-A");
   });
 
   it("reports continuationQueued=false when a coalesced restart belongs to another session (#86742)", async () => {

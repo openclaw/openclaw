@@ -395,9 +395,8 @@ export function createGatewayTool(opts?: {
           throw new Error("Gateway restart is disabled (commands.restart=false).");
         }
         const sessionKey =
-          normalizeOptionalString(params.sessionKey) ??
-          normalizeOptionalString(opts?.agentSessionKey);
-        const ownerSessionKey = normalizeOptionalString(opts?.agentSessionKey) ?? sessionKey;
+          normalizeOptionalString(opts?.agentSessionKey) ??
+          normalizeOptionalString(params.sessionKey);
         const delayMs = readNonNegativeIntegerParam(params, "delayMs");
         const reason = normalizeOptionalString(params.reason)?.slice(0, 200);
         const note = normalizeOptionalString(params.note);
@@ -430,9 +429,9 @@ export function createGatewayTool(opts?: {
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
-          // Ownership uses runtime session identity, not model-supplied routing
-          // params, so another session cannot claim the pending continuation.
-          sessionKey: ownerSessionKey,
+          // Ownership and sentinel routing use the same trusted session identity,
+          // so model-supplied params cannot queue work into another session.
+          sessionKey,
           emitHooks: {
             beforeEmit: async () => {
               sentinelPath = await writeRestartSentinel(payload);
