@@ -294,6 +294,7 @@ const readUsageFromSessionLog = (
       promptTokens: number;
       total: number;
       model?: string;
+      costUsd?: number;
     }
   | undefined => {
   // Transcripts are stored at the session file path (fallback: ~/.openclaw/sessions/<SessionId>.jsonl)
@@ -351,6 +352,7 @@ const readUsageFromSessionLog = (
       promptTokens,
       total,
       model,
+      costUsd: snapshot.costUsd,
     };
   } catch {
     return undefined;
@@ -630,6 +632,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   let outputTokens = entry?.outputTokens;
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
+  let transcriptCostUsd: number | undefined;
   const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
   const allowTranscriptContextUsage = entry?.totalTokensFresh !== false;
   let totalTokens =
@@ -691,6 +694,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
         cacheWrite = logUsage.cacheWrite;
       }
+      transcriptCostUsd = logUsage.costUsd;
     }
   }
 
@@ -960,15 +964,17 @@ export function buildStatusMessage(args: StatusArgs): string {
       })
     : undefined;
   const cost = hasUsage
-    ? estimateUsageCost({
-        usage: {
-          input: inputTokens ?? undefined,
-          output: outputTokens ?? undefined,
-          cacheRead: cacheRead ?? undefined,
-          cacheWrite: cacheWrite ?? undefined,
-        },
-        cost: costConfig,
-      })
+    ? (typeof transcriptCostUsd === "number" && Number.isFinite(transcriptCostUsd)
+        ? transcriptCostUsd
+        : estimateUsageCost({
+            usage: {
+              input: inputTokens ?? undefined,
+              output: outputTokens ?? undefined,
+              cacheRead: cacheRead ?? undefined,
+              cacheWrite: cacheWrite ?? undefined,
+            },
+            cost: costConfig,
+          }))
     : undefined;
   const costLabel = hasUsage ? formatUsd(cost) : undefined;
 
