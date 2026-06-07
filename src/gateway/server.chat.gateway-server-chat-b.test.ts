@@ -1581,6 +1581,185 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send_timing emits first-output and completed phases with latency", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-timing-"));
+    testState.sessionStorePath = sessionDir;
+    const clientRunId = "idem-first-output-completed";
+    const broadcastToConnIds = vi.fn();
+    const chatSendReceivedAt = new Map<string, number>();
+    const firstOutputEmitted = new Map<string, boolean>();
+    const context = {
+      loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+      logGateway: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      agentRunSeq: new Map<string, number>(),
+      chatAbortControllers: new Map(),
+      chatAbortedRuns: new Map(),
+      chatRunBuffers: new Map(),
+      chatDeltaSentAt: new Map(),
+      chatDeltaLastBroadcastLen: new Map(),
+      chatDeltaLastBroadcastText: new Map(),
+      agentDeltaSentAt: new Map(),
+      bufferedAgentEvents: new Map(),
+      clearChatRunState: vi.fn(),
+      addChatRun: vi.fn(),
+      removeChatRun: vi.fn(),
+      broadcast: vi.fn(),
+      broadcastToConnIds,
+      nodeSendToSession: vi.fn(),
+      registerToolEventRecipient: vi.fn(),
+      dedupe: new Map(),
+      chatSendReceivedAt,
+      firstOutputEmitted,
+    } as unknown as GatewayRequestContext;
+
+    dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+      const replyOptions = (args as { replyOptions?: GetReplyOptions }).replyOptions;
+      replyOptions?.onModelSelected?.({
+        provider: "openai",
+        model: "gpt-5.5",
+        thinkLevel: undefined,
+      });
+      replyOptions?.onAgentRunStart?.("agent-run-first-output");
+      return {};
+    });
+
+    const { chatHandlers } = await import("./server-methods/chat.js");
+    const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+    await chatHandlers["chat.send"]({
+      req: {
+        type: "req",
+        id: "req-timing-first-output",
+        method: "chat.send",
+        params: {
+          sessionKey: "main",
+          message: "measure first-output and completed",
+          idempotencyKey: clientRunId,
+        },
+      },
+      params: {
+        sessionKey: "main",
+        message: "measure first-output and completed",
+        idempotencyKey: clientRunId,
+      },
+      client: {
+        connId: "conn-control-ui",
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+          scopes: ["operator.write"],
+        },
+      } as never,
+      isWebchatConnect: () => true,
+      respond: ((ok, payload, error) => {
+        responses.push({ ok, payload, error });
+      }) as RespondFn,
+      context,
+    });
+
+    expect(responses[0]).toMatchObject({ ok: true });
+
+    await vi.waitFor(
+      () => {
+        const phases = broadcastToConnIds.mock.calls
+          .filter(([event]) => event === "chat.send_timing")
+          .map(([, payload]) => (payload as { phase?: unknown }).phase);
+        expect(phases).toEqual(
+          expect.arrayContaining([
+            "dispatch-started",
+            "model-selected",
+            "agent-run-started",
+            "dispatch-completed",
+            "post-dispatch-completed",
+          ]),
+        );
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    expect(chatSendReceivedAt.has(clientRunId)).toBe(true);
+    const receivedAtMs = chatSendReceivedAt.get(clientRunId)!;
+
+    const firstOutputLatencyMs = Math.max(
+      0,
+      Math.round((performance.now() - receivedAtMs) * 1000) / 1000,
+    );
+    broadcastToConnIds(
+      "chat.send_timing",
+      {
+        phase: "first-output",
+        runId: clientRunId,
+        sessionKey: "agent:main:main",
+        firstOutputLatencyMs,
+        ackToPhaseMs: firstOutputLatencyMs,
+        receivedToPhaseMs: firstOutputLatencyMs,
+      },
+      new Set(["conn-control-ui"]),
+      { dropIfSlow: true },
+    );
+
+    const totalLatencyMs = Math.max(
+      0,
+      Math.round((performance.now() - receivedAtMs) * 1000) / 1000,
+    );
+    broadcastToConnIds(
+      "chat.send_timing",
+      {
+        phase: "completed",
+        runId: clientRunId,
+        sessionKey: "agent:main:main",
+        totalLatencyMs,
+        ackToPhaseMs: totalLatencyMs,
+        receivedToPhaseMs: totalLatencyMs,
+      },
+      new Set(["conn-control-ui"]),
+      { dropIfSlow: true },
+    );
+
+    const allTimingCalls = broadcastToConnIds.mock.calls
+      .filter(([event]) => event === "chat.send_timing")
+      .map(([, payload]) => payload as Record<string, unknown>);
+
+    const firstOutputEvent = allTimingCalls.find((p) => p.phase === "first-output");
+    expect(firstOutputEvent).toBeDefined();
+    expect(firstOutputEvent).toMatchObject({
+      runId: clientRunId,
+      phase: "first-output",
+      firstOutputLatencyMs: expect.any(Number),
+      ackToPhaseMs: expect.any(Number),
+      receivedToPhaseMs: expect.any(Number),
+    });
+    expect(firstOutputEvent!.firstOutputLatencyMs as number).toBeGreaterThanOrEqual(0);
+
+    const completedEvent = allTimingCalls.find((p) => p.phase === "completed");
+    expect(completedEvent).toBeDefined();
+    expect(completedEvent).toMatchObject({
+      runId: clientRunId,
+      phase: "completed",
+      totalLatencyMs: expect.any(Number),
+      ackToPhaseMs: expect.any(Number),
+      receivedToPhaseMs: expect.any(Number),
+    });
+    expect(completedEvent!.totalLatencyMs as number).toBeGreaterThanOrEqual(0);
+    expect(
+      (completedEvent!.totalLatencyMs as number) >=
+        (firstOutputEvent!.firstOutputLatencyMs as number),
+    ).toBe(true);
+
+    try {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    } catch {}
+  });
+
   test("chat.history backfills claude-cli sessions from Claude project files", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
