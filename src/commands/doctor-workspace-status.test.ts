@@ -17,7 +17,22 @@ const mocks = vi.hoisted(() => ({
   listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
   listTasksForFlowId: vi.fn<(flowId: string) => unknown[]>((_flowId: string) => []),
   loadInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
-  detectPluginVersionDrift: vi.fn(() => ({ gatewayVersion: "9.9.9-test", drifts: [] })),
+  detectPluginVersionDrift: vi.fn(
+    () =>
+      ({
+        gatewayVersion: "9.9.9-test",
+        drifts: [],
+      }) as {
+        gatewayVersion: string;
+        drifts: Array<{
+          pluginId: string;
+          installedVersion: string;
+          gatewayVersion: string;
+          source: string;
+          packageName?: string;
+        }>;
+      },
+  ),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -49,12 +64,11 @@ vi.mock("../version.js", () => ({
 }));
 
 vi.mock("../plugins/installed-plugin-index-record-reader.js", () => ({
-  loadInstalledPluginIndexInstallRecords: (...args: unknown[]) =>
-    mocks.loadInstalledPluginIndexInstallRecords(...args),
+  loadInstalledPluginIndexInstallRecords: mocks.loadInstalledPluginIndexInstallRecords,
 }));
 
 vi.mock("../plugins/plugin-version-drift.js", () => ({
-  detectPluginVersionDrift: (...args: unknown[]) => mocks.detectPluginVersionDrift(...args),
+  detectPluginVersionDrift: mocks.detectPluginVersionDrift,
 }));
 
 async function runNoteWorkspaceStatusForTest(
@@ -231,8 +245,14 @@ describe("noteWorkspaceStatus", () => {
           pluginId: "codex",
           installedVersion: "2026.5.30-beta.1",
           gatewayVersion: "2026.6.2",
-          source: "npm",
+          source: "npm" as const,
           packageName: "@openclaw/codex",
+        } as {
+          pluginId: string;
+          installedVersion: string;
+          gatewayVersion: string;
+          source: string;
+          packageName?: string;
         },
       ],
     });
