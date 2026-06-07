@@ -19,6 +19,11 @@ export async function reparseProgramFromActionArgs(
 ): Promise<void> {
   const actionCommand = actionArgs.at(-1) as Command | undefined;
   const root = actionCommand?.parent ?? program;
+  // `rawArgs` is Commander's internal argv slice for the sub-command.  It is not
+  // part of the public TypeScript interface, so it is accessed via a cast.  If
+  // Commander removes or renames this property in a future version, the cast
+  // silently returns undefined and parseArgv falls back to the reconstructed
+  // fallbackArgv — which may omit flags passed positionally.
   const rawArgs = (root as Command & { rawArgs?: string[] }).rawArgs;
   const fallbackArgv = buildFallbackArgv(program, actionCommand);
   const parseArgv = buildParseArgv({
