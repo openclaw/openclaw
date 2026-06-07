@@ -1,4 +1,5 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
+import { createFeedQueryToolFactory } from "./src/feed-query-tool.js";
 import { closePool } from "./src/mysql-client.js";
 import { installSqlQueryLogging } from "./src/mysql-query-logger.js";
 
@@ -8,6 +9,11 @@ export default definePluginEntry({
   description:
     "Search feed monitor data from external MySQL with topic-based access control and LLM-powered queries.",
   register(api: OpenClawPluginApi) {
+    // Structured, topic-scoped query tool for rabbitmq-<userId> chat agents.
+    // Authorization resolves server-side from entity_auth; the factory hides
+    // the tool from every other agent.
+    api.registerTool(createFeedQueryToolFactory(api), { name: "feed_query" });
+
     // Register a background service for MySQL pool lifecycle
     api.registerService({
       id: "feed-search",
