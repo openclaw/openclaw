@@ -25,13 +25,14 @@ import {
   resolveVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { resolveModelRuntimeLabel } from "../../agents/model-selection-cli.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListView = ModelCatalogBrowseView;
-type ModelsListEntry = ModelCatalogEntry & { available?: boolean };
+type ModelsListEntry = ModelCatalogEntry & { available?: boolean; runtimeLabel?: string };
 type ModelsListAvailability = boolean | undefined;
 type ModelsListProviderAuthChecker = (
   provider: string,
@@ -223,21 +224,25 @@ async function buildPublicModelsListEntry(params: {
   providerAuthChecker?: ModelsListProviderAuthChecker;
 }): Promise<ModelsListEntry> {
   const publicEntry = omitRuntimeModelParams(params.entry);
+  const runtimeLabel = resolveModelRuntimeLabel(params.entry.provider, params.entry.id, params.cfg);
+  const withRuntimeLabel: ModelsListEntry = runtimeLabel
+    ? { ...publicEntry, runtimeLabel }
+    : publicEntry;
   if (modelCatalogEntryHasUnknownSecretRefAvailability(params.cfg, params.entry)) {
     return {
-      ...publicEntry,
+      ...withRuntimeLabel,
       available: false,
     };
   }
   if (!params.providerAuthChecker) {
-    return publicEntry;
+    return withRuntimeLabel;
   }
   const available = await resolveModelsListEntryAvailability(
     params.providerAuthChecker,
     params.entry,
   );
   return {
-    ...publicEntry,
+    ...withRuntimeLabel,
     available: available ?? false,
   };
 }

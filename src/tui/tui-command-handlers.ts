@@ -175,10 +175,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       const items = models.map((model) => {
         const ref = modelKey(model.provider, model.id);
+        const description =
+          model.runtimeLabel ?? (model.name && model.name !== model.id ? model.name : "");
         return {
           value: ref,
           label: ref,
-          description: model.name && model.name !== model.id ? model.name : "",
+          description,
         };
       });
       const selector = createSearchableSelectList(items, 9);
