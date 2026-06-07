@@ -415,7 +415,7 @@ function buildTimeSection(params: { userTimezone?: string }) {
   if (!params.userTimezone) {
     return [];
   }
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  return ["## Time Zone", `Time zone: ${params.userTimezone}`, ""];
 }
 
 function buildAssistantOutputDirectivesSection(params: {
