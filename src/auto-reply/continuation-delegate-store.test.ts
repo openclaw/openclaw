@@ -1,27 +1,18 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
-  addDelayedContinuationReservation,
   cancelPendingDelegates,
-  clearDelayedContinuationReservations,
   consumeStagedPostCompactionDelegates,
-  delayedContinuationReservationCount,
   enqueuePendingDelegate,
-  highestDelayedContinuationReservationHop,
-  listDelayedContinuationReservations,
-  removeDelayedContinuationReservation,
   consumePendingDelegates,
   pendingDelegateCount,
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
-  takeDelayedContinuationReservation,
 } from "./continuation-delegate-store.js";
 
 describe("continuation-delegate-store", () => {
   beforeEach(() => {
     cancelPendingDelegates("test-session");
     cancelPendingDelegates("other-session");
-    clearDelayedContinuationReservations("test-session");
-    clearDelayedContinuationReservations("other-session");
   });
 
   it("returns empty array when no delegates pending", () => {
@@ -115,158 +106,6 @@ describe("continuation-delegate-store", () => {
 
     const delegates = consumePendingDelegates("test-session");
     expect(delegates[0].delayMs).toBe(0);
-  });
-});
-
-describe("delayed continuation reservations", () => {
-  beforeEach(() => {
-    clearDelayedContinuationReservations("test-session");
-    clearDelayedContinuationReservations("other-session");
-  });
-
-  it("adds and lists reservations for a session", () => {
-    addDelayedContinuationReservation("test-session", {
-      id: "reservation-1",
-      source: "tool",
-      task: "inspect shard health",
-      createdAt: 1,
-      fireAt: 2,
-      plannedHop: 4,
-      silentWake: true,
-    });
-
-    expect(listDelayedContinuationReservations("test-session")).toEqual([
-      {
-        id: "reservation-1",
-        source: "tool",
-        task: "inspect shard health",
-        createdAt: 1,
-        fireAt: 2,
-        plannedHop: 4,
-        silentWake: true,
-      },
-    ]);
-    expect(delayedContinuationReservationCount("test-session")).toBe(1);
-  });
-
-  it("isolates reservations by session key", () => {
-    addDelayedContinuationReservation("test-session", {
-      id: "reservation-a",
-      source: "bracket",
-      task: "session A task",
-      createdAt: 1,
-      fireAt: 2,
-      plannedHop: 1,
-    });
-    addDelayedContinuationReservation("other-session", {
-      id: "reservation-b",
-      source: "tool",
-      task: "session B task",
-      createdAt: 1,
-      fireAt: 2,
-      plannedHop: 1,
-    });
-
-    expect(delayedContinuationReservationCount("test-session")).toBe(1);
-    expect(delayedContinuationReservationCount("other-session")).toBe(1);
-    expect(listDelayedContinuationReservations("test-session")[0]?.task).toBe("session A task");
-    expect(listDelayedContinuationReservations("other-session")[0]?.task).toBe("session B task");
-  });
-
-  it("takes one reservation by id and leaves the others intact", () => {
-    addDelayedContinuationReservation("test-session", {
-      id: "reservation-1",
-      source: "tool",
-      task: "first",
-      createdAt: 1,
-      fireAt: 2,
-      plannedHop: 1,
-    });
-    addDelayedContinuationReservation("test-session", {
-      id: "reservation-2",
-      source: "tool",
-      task: "second",
-      createdAt: 2,
-      fireAt: 3,
-      plannedHop: 2,
-    });
-
-    expect(takeDelayedContinuationReservation("test-session", "reservation-1")).toMatchObject({
-      id: "reservation-1",
-      task: "first",
-    });
-    expect(listDelayedContinuationReservations("test-session")).toEqual([
-      expect.objectContaining({ id: "reservation-2", task: "second" }),
-    ]);
-    expect(delayedContinuationReservationCount("test-session")).toBe(1);
-    expect(highestDelayedContinuationReservationHop("test-session")).toBe(2);
-  });
-
-  it("remove is idempotent for unknown reservation ids", () => {
-    addDelayedContinuationReservation("test-session", {
-      id: "reservation-1",
-      source: "tool",
-      task: "first",
-      createdAt: 1,
-      fireAt: 2,
-      plannedHop: 1,
-    });
-
-    expect(removeDelayedContinuationReservation("test-session", "missing")).toBe(false);
-    expect(removeDelayedContinuationReservation("test-session", "reservation-1")).toBe(true);
-    expect(removeDelayedContinuationReservation("test-session", "reservation-1")).toBe(false);
-    expect(delayedContinuationReservationCount("test-session")).toBe(0);
-  });
-
-  it("clear removes all reservations for a session", () => {
-    addDelayedContinuationReservation("test-session", {
-      id: "reservation-1",
-      source: "bracket",
-      task: "first",
-      createdAt: 1,
-      fireAt: 2,
-      plannedHop: 1,
-    });
-    addDelayedContinuationReservation("test-session", {
-      id: "reservation-2",
-      source: "tool",
-      task: "second",
-      createdAt: 2,
-      fireAt: 3,
-      plannedHop: 2,
-    });
-
-    clearDelayedContinuationReservations("test-session");
-
-    expect(listDelayedContinuationReservations("test-session")).toEqual([]);
-    expect(delayedContinuationReservationCount("test-session")).toBe(0);
-  });
-
-  it("tracks the highest planned hop across outstanding reservations", () => {
-    addDelayedContinuationReservation("test-session", {
-      id: "reservation-1",
-      source: "bracket",
-      task: "first",
-      createdAt: 1,
-      fireAt: 2,
-      plannedHop: 2,
-    });
-    addDelayedContinuationReservation("test-session", {
-      id: "reservation-2",
-      source: "tool",
-      task: "second",
-      createdAt: 2,
-      fireAt: 3,
-      plannedHop: 5,
-    });
-
-    expect(highestDelayedContinuationReservationHop("test-session")).toBe(5);
-
-    removeDelayedContinuationReservation("test-session", "reservation-2");
-    expect(highestDelayedContinuationReservationHop("test-session")).toBe(2);
-
-    clearDelayedContinuationReservations("test-session");
-    expect(highestDelayedContinuationReservationHop("test-session")).toBe(0);
   });
 });
 

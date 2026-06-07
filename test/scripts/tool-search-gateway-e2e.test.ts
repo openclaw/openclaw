@@ -1,6 +1,7 @@
 // Tool Search Gateway E2E tests cover tool search gateway e2e script behavior.
 import { describe, expect, it } from "vitest";
 import {
+  assertToolSearchLaneResults,
   fetchJson,
   readToolSearchGatewayFetchLimits,
 } from "../../scripts/tool-search-gateway-e2e.ts";
@@ -83,5 +84,56 @@ describe("tool search gateway e2e fetch helper", () => {
       code: "ETOOBIG",
       message: "HTTP response from https://qa.example.invalid/debug/requests exceeded 16 bytes",
     });
+  });
+});
+
+describe("tool search gateway e2e lane assertions", () => {
+  const targetTool = "fake_plugin_tool_17";
+  const normal = {
+    gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+    providerDeclaredToolCount: 36,
+    providerPlannedTools: [targetTool],
+    providerRawBytes: 12_000,
+    sessionLogToolMentions: {
+      [targetTool]: 1,
+    },
+  };
+
+  it("accepts code lane proof only when the target plugin tool output is present", () => {
+    expect(() =>
+      assertToolSearchLaneResults({
+        normal,
+        targetTool,
+        code: {
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: 1,
+          providerPlannedTools: ["tool_search_code"],
+          providerRawBytes: 4_000,
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects code lane output that only echoes the target tool name", () => {
+    expect(() =>
+      assertToolSearchLaneResults({
+        normal,
+        targetTool,
+        code: {
+          gatewayOutputText: targetTool,
+          providerDeclaredToolCount: 1,
+          providerPlannedTools: ["tool_search_code"],
+          providerRawBytes: 4_000,
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).toThrow(`code lane did not bridge-call ${targetTool}`);
   });
 });

@@ -365,8 +365,11 @@ openclaw_e2e_wait_mock_openai() {
 }
 openclaw_e2e_start_gateway() { openclaw_e2e_start_tracked_process "$3" node "$1" gateway --port "$2" --bind loopback --allow-unconfigured; }
 openclaw_e2e_exec_gateway() { exec node "$1" gateway --port "$2" --bind "${3:-loopback}" --allow-unconfigured >"$4" 2>&1; }
+openclaw_e2e_gateway_log_port() {
+  grep '\[gateway\] ready' "$1" 2>/dev/null | sed -nE 's/.*(127\.0\.0\.1|localhost):([0-9]+).*/\2/p' | tail -n 1
+}
 openclaw_e2e_wait_gateway_ready() {
-  local pid="$1" log="$2" attempts="${3:-300}" _
+  local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" _ saw_ready_log=false
   for _ in $(seq 1 "$attempts"); do
     ! kill -0 "$pid" >/dev/null 2>&1 && {
       echo "Gateway exited before becoming ready"
@@ -374,10 +377,20 @@ openclaw_e2e_wait_gateway_ready() {
       tail -n 120 "$log" 2>/dev/null || true
       return 1
     }
-    grep -q '\[gateway\] ready' "$log" 2>/dev/null && return 0
+    if grep -q '\[gateway\] ready' "$log" 2>/dev/null; then
+      saw_ready_log=true
+      [ "$readiness_mode" = "legacy-ready-log-ok" ] && return 0
+      [ -n "$ready_port" ] || ready_port="$(openclaw_e2e_gateway_log_port "$log")"
+      [ -n "$ready_port" ] || ready_port="${OPENCLAW_E2E_GATEWAY_READY_PORT:-18789}"
+      openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" ok 400 && return 0
+    fi
     sleep 0.25
   done
-  echo "Gateway did not become ready"
+  if [ "$saw_ready_log" = "true" ]; then
+    echo "Gateway log reported ready, but /readyz probe never succeeded"
+  else
+    echo "Gateway did not become ready"
+  fi
   tail -n 120 "$log" 2>/dev/null || true
   return 1
 }

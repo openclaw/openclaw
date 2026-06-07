@@ -20,16 +20,30 @@ const MANUAL_EXEC_TOKEN = "proof-manual-exec-token";
 const PLUGIN_EXEC_TOKEN = "proof-plugin-exec-token";
 const OPENAI_PROFILE = "openai:secretref-proof";
 const OPENAI_LIVE_PROOF_MODEL = "openai/gpt-5.5";
-const COMMAND_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS, 120000);
-const READY_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_READY_MS, 120000);
-const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_RPC_MS, 15000);
+const COMMAND_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS,
+  120000,
+  "OPENCLAW_SECRET_PROOF_COMMAND_MS",
+);
+const READY_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_READY_MS,
+  120000,
+  "OPENCLAW_SECRET_PROOF_READY_MS",
+);
+const RPC_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_RPC_MS,
+  15000,
+  "OPENCLAW_SECRET_PROOF_RPC_MS",
+);
 const TEARDOWN_GRACE_MS = readPositiveInt(
   process.env.OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS,
   5000,
+  "OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS",
 );
 const OUTPUT_CAPTURE_LIMIT_BYTES = readPositiveInt(
   process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES,
   4 * 1024 * 1024,
+  "OPENCLAW_SECRET_PROOF_OUTPUT_BYTES",
 );
 const RESULTS_PATH =
   process.env.OPENCLAW_SECRET_PROOF_RESULTS_PATH?.trim() ||
@@ -42,13 +56,19 @@ function requireFullMatrix() {
   return process.env.OPENCLAW_SECRET_PROOF_FULL === "1";
 }
 
-function readPositiveInt(raw, fallback) {
+function readPositiveInt(raw, fallback, label) {
   const text = String(raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
   const parsed = Number(text);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
+  return parsed;
 }
 
 function remainingDeadlineMs(started, timeoutMs) {
@@ -303,7 +323,7 @@ function runCommand(command, args, options = {}) {
       }
       abortSignal?.removeEventListener("abort", abort);
       removeParentSignalHandlers();
-      const result = { code: code ?? 0, signal, stdout: stdout.text(), stderr: stderr.text() };
+      const result = { code, signal, stdout: stdout.text(), stderr: stderr.text() };
       if (aborted) {
         reject(new Error(scrub(`command aborted: ${command} ${args.join(" ")}`)));
         return;
@@ -311,6 +331,18 @@ function runCommand(command, args, options = {}) {
       if (timedOut) {
         terminateProcessTree(child, "SIGKILL");
         reject(new Error(scrub(`command timed out: ${command} ${args.join(" ")}`)));
+        return;
+      }
+      if (result.signal && options.allowFailure !== true) {
+        reject(
+          new Error(
+            scrub(
+              `command terminated by signal (${result.signal}): ${command} ${args.join(" ")}\n${
+                result.stderr || result.stdout
+              }`,
+            ),
+          ),
+        );
         return;
       }
       if (result.code !== 0 && options.allowFailure !== true) {

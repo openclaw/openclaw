@@ -5,10 +5,9 @@ import { describe, expect, it } from "vitest";
 import {
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
-  isRetryableCodexHarnessLiveError,
   isExpectedCodexModelsCommandText,
   isExpectedCodexStatusCommandText,
-  shouldSkipRetryableCodexHarnessLiveError,
+  isRetryableCodexHarnessLiveError,
 } from "./gateway-codex-harness.live-helpers.js";
 
 const includesExpectedCodexModelsCommandText = (text: string) =>
@@ -24,19 +23,16 @@ function expectRecognizedCodexModelsCommandText(text: string): void {
 }
 
 describe("gateway codex harness live helpers", () => {
-  it("does not skip sessions.list timeouts when the Codex subagent probe is enabled", () => {
+  it("classifies sessions.list timeouts as retryable live Codex errors", () => {
     const error = new Error("gateway request timeout for sessions.list");
 
     expect(isRetryableCodexHarnessLiveError(error)).toBe(true);
-    expect(shouldSkipRetryableCodexHarnessLiveError(error, { subagentProbe: false })).toBe(true);
-    expect(shouldSkipRetryableCodexHarnessLiveError(error, { subagentProbe: true })).toBe(false);
   });
 
   it("does not classify unrelated live Codex errors as retryable gateway timeouts", () => {
     const error = new Error("subagent child did not emit lifecycle event");
 
     expect(isRetryableCodexHarnessLiveError(error)).toBe(false);
-    expect(shouldSkipRetryableCodexHarnessLiveError(error, { subagentProbe: false })).toBe(false);
   });
 
   it("accepts the current codex status prose from the live harness", () => {

@@ -17,11 +17,15 @@ import {
   getFreeGatewayPort,
   matchesCliBackendReply,
   parseImageMode,
-  resolveCliModelSwitchProbeTarget,
+  parseJsonStringArray,
+  isCliBackendLiveTimeoutPayload,
   resolveCliBackendLiveArgs,
   resolveCliBackendLiveModelSelection,
-  parseJsonStringArray,
+  resolveCliBackendLiveProviderSkipDecision,
+  resolveCliModelSwitchProbeTarget,
   restoreCliBackendLiveEnv,
+  shouldAllowCliBackendLiveProviderSkip,
+  shouldRetryCliBackendLiveTimeout,
   shouldRunCliImageProbe,
   shouldRunCliModelSwitchProbe,
   shouldRunCliMcpProbe,
@@ -48,6 +52,7 @@ const CLI_CI_SAFE_CODEX_CONFIG = isTruthyEnvValue(
 const CLI_MCP_SCHEMA_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CLI_BACKEND_MCP_SCHEMA_PROBE,
 );
+const CLI_ALLOW_PROVIDER_SKIP = shouldAllowCliBackendLiveProviderSkip();
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
 const MCP_SCHEMA_PROBE_PLUGIN_ID = "mcp-schema-probe";
@@ -56,16 +61,22 @@ const MCP_SCHEMA_PROBE_TOOL_NAME = "mcp_schema_probe_no_args";
 const DEFAULT_PROVIDER = "claude-cli";
 const DEFAULT_MODEL =
   resolveCliBackendLiveTest(DEFAULT_PROVIDER)?.defaultModelRef ?? "claude-cli/claude-sonnet-4-6";
-// The cron/MCP live probe now tolerates more cancelled tool-call retries in CI,
-// so the outer test budget needs enough headroom to finish those retries.
-const CLI_BACKEND_LIVE_TIMEOUT_MS = 20 * 60_000;
 const CLI_BACKEND_REQUEST_TIMEOUT_MS = parsePositiveIntegerEnv(
   "OPENCLAW_LIVE_CLI_BACKEND_REQUEST_TIMEOUT_MS",
   15 * 60_000,
 );
-const CLI_BACKEND_AGENT_TIMEOUT_SECONDS = Math.max(
-  1,
-  Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000) - 10,
+const CLI_BACKEND_CODEX_TIMEOUT_RETRY_ATTEMPTS = 2;
+const CLI_BACKEND_CODEX_TIMEOUT_RETRY_SLEEP_MS = 5_000;
+const CLI_BACKEND_RETRY_WRAPPED_AGENT_REQUESTS = 2;
+const CLI_BACKEND_CODEX_TIMEOUT_RETRY_SEQUENCE_MS =
+  CLI_BACKEND_REQUEST_TIMEOUT_MS * CLI_BACKEND_CODEX_TIMEOUT_RETRY_ATTEMPTS +
+  CLI_BACKEND_CODEX_TIMEOUT_RETRY_SLEEP_MS * (CLI_BACKEND_CODEX_TIMEOUT_RETRY_ATTEMPTS - 1);
+// The cron/MCP live probe and Codex timeout retry need enough outer-test headroom
+// to finish both the initial agent request and one follow-up probe.
+const CLI_BACKEND_LIVE_TIMEOUT_MS = Math.max(
+  20 * 60_000,
+  CLI_BACKEND_CODEX_TIMEOUT_RETRY_SEQUENCE_MS * CLI_BACKEND_RETRY_WRAPPED_AGENT_REQUESTS +
+    2 * 60_000,
 );
 
 function parsePositiveIntegerEnv(name: string, fallback: number): number {
@@ -92,6 +103,19 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+type CliBackendAgentAttemptTimeouts = {
+  agentTimeoutSeconds: number;
+  requestTimeoutMs: number;
+};
+
+function resolveCliBackendAgentAttemptTimeouts(): CliBackendAgentAttemptTimeouts {
+  const requestTimeoutMs = CLI_BACKEND_REQUEST_TIMEOUT_MS;
+  return {
+    requestTimeoutMs,
+    agentTimeoutSeconds: Math.max(1, Math.ceil(requestTimeoutMs / 1000) - 10),
+  };
 }
 
 function openAiProviderConfigForCodexCli(
@@ -137,25 +161,72 @@ async function requestWithProviderCapacityRetry<T>(
       return await request();
     } catch (error) {
       if (!isProviderCapacityError(error) || attempt >= maxAttempts) {
-        if (
-          shouldSkipLiveProviderDrift({
-            error,
-            allowAuth: true,
-            allowBilling: true,
-          })
-        ) {
-          console.warn(`SKIP: ${label} skipped because provider account/auth drift blocked it.`);
-          return undefined;
+        const driftSkip = shouldSkipLiveProviderDrift({
+          error,
+          allowAuth: true,
+          allowBilling: true,
+        });
+        if (driftSkip) {
+          const decision = resolveCliBackendLiveProviderSkipDecision({
+            allowProviderSkip: CLI_ALLOW_PROVIDER_SKIP,
+            label,
+            providerId,
+            reasonLabel: driftSkip.label,
+          });
+          if (decision.action === "skip") {
+            console.warn(`SKIP: ${decision.message}`);
+            return undefined;
+          }
+          throw new Error(decision.message, { cause: error });
         }
         if (providerId === "claude-cli" && isProviderCapacityError(error)) {
-          console.warn(`SKIP: ${label} skipped because Claude API stayed overloaded.`);
-          return undefined;
+          const decision = resolveCliBackendLiveProviderSkipDecision({
+            allowProviderSkip: CLI_ALLOW_PROVIDER_SKIP,
+            label,
+            providerId,
+            reasonLabel: "Claude API capacity",
+          });
+          if (decision.action === "skip") {
+            console.warn(`SKIP: ${decision.message}`);
+            return undefined;
+          }
+          throw new Error(decision.message, { cause: error });
         }
         throw error;
       }
       logCliBackendLiveStep("provider-capacity-retry", { label, attempt });
       await sleep(15_000 * attempt);
     }
+  }
+  return undefined;
+}
+
+async function requestWithCodexTimeoutRetry<T>(
+  providerId: string,
+  label: string,
+  request: (timeouts: CliBackendAgentAttemptTimeouts) => Promise<T>,
+): Promise<T | undefined> {
+  const maxAttempts = providerId === "codex-cli" ? CLI_BACKEND_CODEX_TIMEOUT_RETRY_ATTEMPTS : 1;
+  const retrySleepMs = providerId === "codex-cli" ? CLI_BACKEND_CODEX_TIMEOUT_RETRY_SLEEP_MS : 0;
+  const attemptTimeouts = resolveCliBackendAgentAttemptTimeouts();
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const payload = await requestWithProviderCapacityRetry(providerId, label, () =>
+      request(attemptTimeouts),
+    );
+    if (!payload) {
+      return undefined;
+    }
+    if (!isCliBackendLiveTimeoutPayload(payload)) {
+      return payload;
+    }
+    if (shouldRetryCliBackendLiveTimeout({ providerId, payload, attempt, maxAttempts })) {
+      logCliBackendLiveStep("agent-timeout-retry", { providerId, label, attempt, maxAttempts });
+      await sleep(retrySleepMs);
+      continue;
+    }
+    throw new Error(
+      `${label} for provider "${providerId}" timed out waiting for a model response.`,
+    );
   }
   return undefined;
 }
@@ -430,33 +501,30 @@ describeLive("gateway live (cli backend)", () => {
         const memoryNonce = randomBytes(3).toString("hex").toUpperCase();
         const memoryToken = `CLI-MEM-${memoryNonce}`;
         logCliBackendLiveStep("agent-request:start", { sessionKey, nonce });
-        const payload = await requestWithProviderCapacityRetry(providerId, "agent request", () =>
-          client.request(
-            "agent",
-            {
-              sessionKey,
-              idempotencyKey: `idem-${randomUUID()}`,
-              message:
-                providerId === "codex-cli"
-                  ? `Do not inspect files or run tools. Reply with exactly: CLI-BACKEND-${nonce}.`
-                  : enableCliModelSwitchProbe
-                    ? `Please include the token CLI-BACKEND-${nonce} in your reply.` +
-                      ` Also remember this session note for later: ${memoryToken}.` +
-                      " Do not include the note in your reply."
-                    : `Please include the token CLI-BACKEND-${nonce} in your reply.`,
-              deliver: false,
-              timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
-            },
-            { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
-          ),
+        const payload = await requestWithCodexTimeoutRetry(
+          providerId,
+          "agent request",
+          (timeouts) =>
+            client.request(
+              "agent",
+              {
+                sessionKey,
+                idempotencyKey: `idem-${randomUUID()}`,
+                message:
+                  providerId === "codex-cli"
+                    ? `Do not inspect files or run tools. Reply with exactly: CLI-BACKEND-${nonce}.`
+                    : enableCliModelSwitchProbe
+                      ? `Please include the token CLI-BACKEND-${nonce} in your reply.` +
+                        ` Also remember this session note for later: ${memoryToken}.` +
+                        " Do not include the note in your reply."
+                      : `Please include the token CLI-BACKEND-${nonce} in your reply.`,
+                deliver: false,
+                timeout: timeouts.agentTimeoutSeconds,
+              },
+              { expectFinal: true, timeoutMs: timeouts.requestTimeoutMs },
+            ),
         );
         if (!payload) {
-          return;
-        }
-        if (providerId === "codex-cli" && payload?.status === "timeout") {
-          console.warn(
-            "SKIP: Codex CLI backend live smoke timed out waiting for a model response.",
-          );
           return;
         }
         if (payload?.status !== "ok") {
@@ -503,10 +571,10 @@ describeLive("gateway live (cli backend)", () => {
               `sessions.patch failed for model switch: ${JSON.stringify(patchPayload)}`,
             );
           }
-          const switchPayload = await requestWithProviderCapacityRetry(
+          const switchPayload = await requestWithCodexTimeoutRetry(
             providerId,
             "agent model-switch request",
-            () =>
+            (timeouts) =>
               client.request(
                 "agent",
                 {
@@ -517,9 +585,9 @@ describeLive("gateway live (cli backend)", () => {
                     `What session note did I ask you to remember earlier? ` +
                     `Reply with exactly: CLI backend SWITCH OK ${switchNonce} <remembered-note>.`,
                   deliver: false,
-                  timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
+                  timeout: timeouts.agentTimeoutSeconds,
                 },
-                { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+                { expectFinal: true, timeoutMs: timeouts.requestTimeoutMs },
               ),
           );
           if (!switchPayload) {
@@ -539,10 +607,10 @@ describeLive("gateway live (cli backend)", () => {
         } else if (CLI_RESUME) {
           const resumeNonce = randomBytes(3).toString("hex").toUpperCase();
           logCliBackendLiveStep("agent-resume:start", { sessionKey, resumeNonce });
-          const resumePayload = await requestWithProviderCapacityRetry(
+          const resumePayload = await requestWithCodexTimeoutRetry(
             providerId,
             "agent resume request",
-            () =>
+            (timeouts) =>
               client.request(
                 "agent",
                 {
@@ -553,9 +621,9 @@ describeLive("gateway live (cli backend)", () => {
                       ? `Do not inspect files or run tools. Reply with exactly: CLI-RESUME-${resumeNonce}.`
                       : `Reply with exactly: CLI backend RESUME OK ${resumeNonce}.`,
                   deliver: false,
-                  timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
+                  timeout: timeouts.agentTimeoutSeconds,
                 },
-                { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+                { expectFinal: true, timeoutMs: timeouts.requestTimeoutMs },
               ),
           );
           if (!resumePayload) {

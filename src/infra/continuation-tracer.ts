@@ -109,14 +109,10 @@ export type ContinuationSpanAttrs = {
    *   - `"cap.chain"` — `continuationChainCount` reached `maxChainLength`
    *   - `"cap.cost"` — accumulated input+output tokens exceeded `costCapTokens`
    *   - `"cap.delegates_per_turn"` — per-turn delegate-budget cap
-   *   - `"reservation.missing"` — fire-time: reservation already cleared
-   *     (compaction, explicit cancel, session teardown) between
-   *     `setTimeout` arming and callback fire
    *
    * The enum captures anything that prevented follow-through, not only cap
-   * axes. Cap is one shape of gate; reservation loss is another. Future
-   * siblings such as `reservation.evicted`, `session.gone`, or
-   * `compaction.cleared` slot under the same span name.
+   * axes. Cap is one shape of gate; transport or policy loss can add future
+   * siblings under the same span name.
    */
   readonly "disabled.reason"?: string;
   /**
@@ -574,10 +570,9 @@ export function emitContinuationDelegateSpan(args: {
  * three reject-specific axes:
  *
  *  - `disabled.reason` (`"cap.chain" | "cap.cost" |
- *    "cap.delegates_per_turn" | "reservation.missing" |
+ *    "cap.delegates_per_turn" |
  *    "policy.cross_session_targeting"`): which gate
- *    prevented follow-through. The family covers cap axes and non-cap gates
- *    such as fire-time reservation loss.
+ *    prevented follow-through. The family covers cap axes and non-cap gates.
  *  - `signal.kind` ({@link ContinuationDisabledSignalKind}): the kind of
  *    signal that was rejected. Values derived from {@link CONTINUATION_SIGNAL_KINDS} SSOT.
  *  - `delegate.delivery` / `delegate.mode`: only set when the rejected
@@ -603,7 +598,6 @@ export function emitContinuationDisabledSpan(args: {
     | "cap.chain"
     | "cap.cost"
     | "cap.delegates_per_turn"
-    | "reservation.missing"
     | "policy.cross_session_targeting";
   signalKind: ContinuationDisabledSignalKind;
   delegateDelivery?: "immediate" | "timer" | undefined;
@@ -649,19 +643,15 @@ export function emitContinuationDisabledSpan(args: {
  *
  * Callsite invariants:
  *
- *  - Emit BEFORE `takeDelayedContinuationReservation` runs — the fire
- *    event is wall-clock truth ("the timer fired"); whatever happens next
- *    (spawn, reservation-missing log-and-return) is a separate concern
- *    and gets its own sibling span (`continuation.disabled` with
- *    `reason = reservation.missing` for the existing log-and-return
- *    divergence; future `continuation.delegate.error` for hard faults).
- *  - `chainId` is **closed-over from dispatch-time** as a captured local
- *    in the `setTimeout` closure. The helper never re-reads
- *    `activeSessionEntry?.continuationChainId` at fire-time. This matches
- *    the no-mint-on-fire invariant and prevents races with compaction or
- *    session mutation between arm and fire.
+ *  - Emit at the common TaskFlow dispatch fire seam — the fire event is
+ *    wall-clock truth ("the delayed delegate matured"); whatever happens next
+ *    (spawn accepted/rejected/failed) is recorded by the dispatch span and
+ *    system-event breadcrumbs.
+ *  - `chainId` is supplied by the common dispatch path before spawn. The helper
+ *    never re-reads session state at fire-time, which prevents races with
+ *    compaction or session mutation between arm and fire.
  *  - `chainId` is **always defined** at delegate-fire time — chain
- *    reservation mints before `setTimeout`. The signature encodes
+ *    dispatch mints before spawn. The signature encodes
  *    this with the non-optional `string` type. **Defense-in-depth:**
  *    helper no-ops gracefully (logs + returns) if `undefined` slips
  *    through anyway, so a future invariant break never crashes
@@ -674,8 +664,7 @@ export function emitContinuationDisabledSpan(args: {
  *    re-evaluate any cap (`cap.chain | cap.cost | cap.delegates_per_turn`)
  *    at fire-time. Fire-time gating is a future-policy seam.
  *
- * `chainStepRemainingAtDispatch` reflects dispatch-time headroom
- * (reservation snapshot), not callback-time
+ * `chainStepRemainingAtDispatch` reflects dispatch-time headroom, not callback-time
  * live state. Rationale: trace continuity with the dispatch span (same
  * `chain.id`, same step counter) so consumers can pair `dispatch` /
  * `fire` events without reasoning about between-tick mutations. If a
@@ -736,15 +725,14 @@ export function emitContinuationDelegateFireSpan(args: {
  * Emit a `continuation.work.fire` span at the bracket-work timer-callback
  * seam. Symmetric to `emitContinuationDelegateFireSpan`
  * but scope-narrower: WORK-fire has NO fire-time divergence in current bytes
- * (no reservation system at the bracket-work seam — `enqueueSystemEvent` and
- * `requestHeartbeatNow` are synchronous and non-divergent), so 5c emits a
- * single span with no `continuation.disabled` sibling — unlike 5b which paired
- * fire+disabled(`reservation.missing`).
+ * (`enqueueSystemEvent` and `requestHeartbeatNow` are synchronous and
+ * non-divergent), so 5c emits a single span with no `continuation.disabled`
+ * sibling.
  *
  * `continuation.work.fire` uses a separate helper because work-fire has no
- * reservation-missing sibling path, unlike delegate-fire. `reason.preview` is
- * captured from dispatch-time closure state so operator triage can pair
- * `continuation.work` and `continuation.work.fire` spans.
+ * delegate dispatch outcome. `reason.preview` is captured from dispatch-time
+ * closure state so operator triage can pair `continuation.work` and
+ * `continuation.work.fire` spans.
  *
  * Provenance pins:
  *  - `chainId` is closed-over from dispatch-time `persistContinuationChainState`

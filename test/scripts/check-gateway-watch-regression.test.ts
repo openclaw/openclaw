@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   appendBoundedWatchLog,
+  collectGatewayWatchFindings,
   hasGatewayReadyLog,
   parseArgs,
   runTimedWatch,
@@ -114,6 +115,34 @@ describe("check-gateway-watch-regression", () => {
     );
     expect(coalesced.triggered).toBe(true);
     expect(coalesced.reason).toBe("config_newer");
+  });
+
+  it("fails the regression gate when gateway watch never becomes ready", () => {
+    const findings = collectGatewayWatchFindings({
+      cpuMs: 0,
+      distRuntimeByteGrowth: 0,
+      distRuntimeFileGrowth: 0,
+      options: {
+        cpuFailMs: 8000,
+        cpuWarnMs: 1000,
+        distRuntimeByteGrowthMax: 2 * 1024 * 1024,
+        distRuntimeFileGrowthMax: 200,
+        windowMs: 10_000,
+      },
+      watchBuildReason: null,
+      watchResult: {
+        idleCpuMs: 0,
+        readyBeforeWindow: false,
+        spawnError: null,
+        timingFileMissing: false,
+      },
+      watchTriggeredBuild: false,
+    });
+
+    expect(findings.failures).toContain(
+      "gateway:watch did not report ready before the idle CPU window",
+    );
+    expect(findings.warnings).toEqual([]);
   });
 
   it("refreshes restored build stamps only for skip-build config mtime drift", () => {

@@ -204,6 +204,22 @@ describe("npm Telegram RTT driver", () => {
     expect(result.stderr).toContain("invalid OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: 0");
   });
 
+  it("rejects empty scenario selections before live Telegram calls", () => {
+    const result = runDriver({ OPENCLAW_NPM_TELEGRAM_SCENARIOS: "," });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "OPENCLAW_NPM_TELEGRAM_SCENARIOS must include at least one RTT scenario",
+    );
+  });
+
+  it("rejects unknown scenario selections before live Telegram calls", () => {
+    const result = runDriver({ OPENCLAW_NPM_TELEGRAM_SCENARIOS: "does-not-exist" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("unknown OPENCLAW_NPM_TELEGRAM_SCENARIOS: does-not-exist");
+  });
+
   it("bounds stalled Telegram Bot API response bodies", async () => {
     const { result, elapsedMs } = stalledBodyCase;
 

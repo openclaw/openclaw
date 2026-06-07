@@ -341,14 +341,11 @@ describe("bundled plugin install/uninstall probe", () => {
   });
 
   it("rejects loose runtime output limit env values instead of parsing prefixes", async () => {
-    const runtimeSmoke = await importRuntimeSmokeWithEnv({
-      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: "5chars",
-    });
-
-    expect(runtimeSmoke.appendBoundedOutput({ text: "", truncatedChars: 0 }, "abcdef")).toEqual({
-      text: "abcdef",
-      truncatedChars: 0,
-    });
+    await expect(
+      importRuntimeSmokeWithEnv({
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: "5chars",
+      }),
+    ).rejects.toThrow("invalid OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: 5chars");
   });
 
   it("keeps runtime log tail reads bounded", async () => {
@@ -366,18 +363,11 @@ describe("bundled plugin install/uninstall probe", () => {
   });
 
   it("rejects loose runtime log scan byte env values instead of parsing prefixes", async () => {
-    const runtimeSmoke = await importRuntimeSmokeWithEnv({
-      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES: "64bytes",
-    });
-    const root = makePackageRoot();
-    const logPath = path.join(root, "gateway.log");
-    fs.writeFileSync(logPath, `${"old log line\n".repeat(20)}[gateway] ready\n`, "utf8");
-
-    const tail = runtimeSmoke.readFileTail(logPath);
-
-    expect(Buffer.byteLength(tail)).toBeGreaterThan(64);
-    expect(tail).toContain("old log line");
-    expect(tail).toContain("[gateway] ready");
+    await expect(
+      importRuntimeSmokeWithEnv({
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES: "64bytes",
+      }),
+    ).rejects.toThrow("invalid OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES: 64bytes");
   });
 
   it("remembers runtime ready logs after they fall outside the tail", async () => {

@@ -1,13 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const delegateCounts = vi.hoisted(() => ({
-  delayedReservations: 0,
   pendingDelegates: 0,
   stagedPostCompaction: 0,
 }));
 
 vi.mock("./delegate-store.js", () => ({
-  delayedContinuationReservationCount: () => delegateCounts.delayedReservations,
   pendingDelegateCount: () => delegateCounts.pendingDelegates,
   stagedPostCompactionDelegateCount: () => delegateCounts.stagedPostCompaction,
 }));
@@ -26,7 +24,6 @@ import {
 } from "./state.js";
 
 beforeEach(() => {
-  delegateCounts.delayedReservations = 0;
   delegateCounts.pendingDelegates = 0;
   delegateCounts.stagedPostCompaction = 0;
   resetContinuationStateForTests();
@@ -166,7 +163,7 @@ describe("continuation timer state", () => {
 });
 
 describe("hasDelegatePending", () => {
-  it("derives pending state from pending, staged, and delayed TaskFlow counts", () => {
+  it("derives pending state from pending and staged TaskFlow counts", () => {
     expect(hasDelegatePending("session")).toBe(false);
 
     delegateCounts.pendingDelegates = 1;
@@ -174,10 +171,6 @@ describe("hasDelegatePending", () => {
 
     delegateCounts.pendingDelegates = 0;
     delegateCounts.stagedPostCompaction = 1;
-    expect(hasDelegatePending("session")).toBe(true);
-
-    delegateCounts.stagedPostCompaction = 0;
-    delegateCounts.delayedReservations = 1;
     expect(hasDelegatePending("session")).toBe(true);
   });
 });
