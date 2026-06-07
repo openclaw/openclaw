@@ -6,11 +6,9 @@ import {
   normalizeDmAllowAuditEntries,
   resolveDmAllowAuditState,
 } from "../channels/message-access/dm-allow-state.js";
-import {
-  readChannelIngressStoreAllowFromForDmPolicy,
-  resolveChannelIngressEffectiveAllowFromLists,
-} from "../channels/message-access/runtime.js";
-import type { ChannelId } from "../channels/plugins/types.public.js";
+import { resolveChannelIngressEffectiveAllowFromLists } from "../channels/message-access/effective-allow-from.js";
+import { readChannelIngressStoreAllowFromForDmPolicy } from "../channels/message-access/store-allow-from.js";
+import type { ChannelId } from "../channels/plugins/channel-id.types.js";
 import type { GroupPolicy } from "../config/types.base.js";
 import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 

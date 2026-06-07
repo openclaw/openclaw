@@ -5,7 +5,7 @@
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ChannelId } from "../plugins/types.public.js";
-import { readChannelIngressStoreAllowFromForDmPolicy } from "./runtime.js";
+import { readChannelIngressStoreAllowFromForDmPolicy } from "./store-allow-from.js";
 
 function readDmAllowAuditEntryValue(entry: unknown): string | number | undefined {
   if (typeof entry === "string" || typeof entry === "number") {
