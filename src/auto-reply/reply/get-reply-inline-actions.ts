@@ -1,3 +1,4 @@
+/** Handles inline slash commands, skill invocations, and abort actions before model runs. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -26,6 +27,10 @@ import {
   shouldSkipMessageByAbortCutoff,
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
+import {
+  takeCommandSessionMetadataChangesFromTargets,
+  type CommandSessionMetadataChange,
+} from "./command-session-metadata.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
@@ -39,6 +44,10 @@ type SkillCommandsRuntime = typeof import("../../skills/discovery/chat-commands.
 type SkillToolDispatchRuntime = typeof import("../../skills/runtime/tool-dispatch.js");
 type AbortCutoffRuntime = typeof import("./abort-cutoff.runtime.js");
 type CommandsRuntime = typeof import("./commands.runtime.js");
+
+type InternalGetReplyOptions = GetReplyOptions & {
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
+};
 
 const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
@@ -120,6 +129,7 @@ function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefin
   return /^(?:<@[!&]?[A-Za-z0-9._:-]+>|<!(?:here|channel|everyone)>|[:,.!?-]|\s)+$/u.test(trimmed);
 }
 
+/** Result of attempting to handle an inbound message as an inline action. */
 export type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
@@ -177,6 +187,7 @@ function extractBlockedToolReason(result: unknown): string | null {
   return typeof reason === "string" && reason.trim() ? reason.trim() : null;
 }
 
+/** Handles inline actions or returns continue when the message should become a model turn. */
 export async function handleInlineActions(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
@@ -258,6 +269,13 @@ export async function handleInlineActions(params: {
     abortedLastRun: initialAbortedLastRun,
     skillFilter,
   } = params;
+  const internalOpts = opts as InternalGetReplyOptions | undefined;
+  const notifyInlineCommandSessionMetadataChanges = () => {
+    const changes = takeCommandSessionMetadataChangesFromTargets([sessionCtx, ctx]);
+    if (changes) {
+      internalOpts?.onSessionMetadataChanges?.(changes);
+    }
+  };
 
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
@@ -546,6 +564,7 @@ export async function handleInlineActions(params: {
       commandBodyNormalized: inlineCommand.command,
     };
     const inlineResult = await runCommands(inlineCommandContext);
+    notifyInlineCommandSessionMetadataChanges();
     if (inlineResult.reply) {
       if (!inlineCommand.cleaned) {
         typing.cleanup();
@@ -596,6 +615,7 @@ export async function handleInlineActions(params: {
   const commandBodyBeforeRun = command.commandBodyNormalized;
   const bodyBeforeRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
   const commandResult = await runCommands(command);
+  notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
     typing.cleanup();
     return { kind: "reply", reply: markCommandReplyForDelivery(commandResult.reply) };

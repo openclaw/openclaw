@@ -1,3 +1,4 @@
+// Memory Wiki tests cover apply plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -26,6 +27,31 @@ describe("applyMemoryWikiMutation", () => {
         confidence: "0.4",
       }),
     ).toMatchObject({ confidence: 0.4 });
+  });
+
+  it("normalizes CLI-style wiki mutation operation aliases", () => {
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "synthesis",
+        title: "Alpha Synthesis",
+        body: "Alpha summary body.",
+        sourceIds: ["source.alpha"],
+      }),
+    ).toMatchObject({
+      op: "create_synthesis",
+      title: "Alpha Synthesis",
+    });
+
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "metadata",
+        lookup: "entity.alpha",
+        sourceIds: ["source.alpha"],
+      }),
+    ).toMatchObject({
+      op: "update_metadata",
+      lookup: "entity.alpha",
+    });
   });
 
   it("rejects out-of-range string confidence in wiki mutations", () => {

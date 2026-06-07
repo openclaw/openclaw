@@ -595,6 +595,9 @@ public struct SendParams: Codable, Sendable {
     public let message: String?
     public let mediaurl: String?
     public let mediaurls: [String]?
+    public let buffer: String?
+    public let filename: String?
+    public let contenttype: String?
     public let asvoice: Bool?
     public let gifplayback: Bool?
     public let channel: String?
@@ -613,6 +616,9 @@ public struct SendParams: Codable, Sendable {
         message: String?,
         mediaurl: String?,
         mediaurls: [String]?,
+        buffer: String? = nil,
+        filename: String? = nil,
+        contenttype: String? = nil,
         asvoice: Bool?,
         gifplayback: Bool?,
         channel: String?,
@@ -630,6 +636,9 @@ public struct SendParams: Codable, Sendable {
         self.message = message
         self.mediaurl = mediaurl
         self.mediaurls = mediaurls
+        self.buffer = buffer
+        self.filename = filename
+        self.contenttype = contenttype
         self.asvoice = asvoice
         self.gifplayback = gifplayback
         self.channel = channel
@@ -649,6 +658,9 @@ public struct SendParams: Codable, Sendable {
         case message
         case mediaurl = "mediaUrl"
         case mediaurls = "mediaUrls"
+        case buffer
+        case filename
+        case contenttype = "contentType"
         case asvoice = "asVoice"
         case gifplayback = "gifPlayback"
         case channel
@@ -4681,6 +4693,7 @@ public struct ModelChoice: Codable, Sendable {
     public let name: String
     public let provider: String
     public let alias: String?
+    public let available: Bool?
     public let contextwindow: Int?
     public let reasoning: Bool?
 
@@ -4689,6 +4702,7 @@ public struct ModelChoice: Codable, Sendable {
         name: String,
         provider: String,
         alias: String?,
+        available: Bool? = nil,
         contextwindow: Int?,
         reasoning: Bool?)
     {
@@ -4696,6 +4710,7 @@ public struct ModelChoice: Codable, Sendable {
         self.name = name
         self.provider = provider
         self.alias = alias
+        self.available = available
         self.contextwindow = contextwindow
         self.reasoning = reasoning
     }
@@ -4705,6 +4720,7 @@ public struct ModelChoice: Codable, Sendable {
         case name
         case provider
         case alias
+        case available
         case contextwindow = "contextWindow"
         case reasoning
     }
@@ -5479,6 +5495,62 @@ public struct SkillsProposalReviseParams: Codable, Sendable {
         case description
         case goal
         case evidence
+    }
+}
+
+public struct SkillsProposalRequestRevisionParams: Codable, Sendable {
+    public let agentid: String?
+    public let targetagentid: String?
+    public let proposalid: String
+    public let instructions: String
+    public let sessionkey: String
+    public let sessionid: String?
+    public let idempotencykey: String
+
+    public init(
+        agentid: String? = nil,
+        targetagentid: String?,
+        proposalid: String,
+        instructions: String,
+        sessionkey: String,
+        sessionid: String?,
+        idempotencykey: String)
+    {
+        self.agentid = agentid
+        self.targetagentid = targetagentid
+        self.proposalid = proposalid
+        self.instructions = instructions
+        self.sessionkey = sessionkey
+        self.sessionid = sessionid
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case targetagentid = "targetAgentId"
+        case proposalid = "proposalId"
+        case instructions
+        case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct SkillsProposalRequestRevisionResult: Codable, Sendable {
+    public let runid: String
+    public let status: AnyCodable
+
+    public init(
+        runid: String,
+        status: AnyCodable)
+    {
+        self.runid = runid
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+        case status
     }
 }
 
@@ -6978,6 +7050,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let timeoutms: Int?
     public let systeminputprovenance: [String: AnyCodable]?
     public let systemprovenancereceipt: String?
+    public let suppresscommandinterpretation: Bool?
     public let idempotencykey: String
 
     public init(
@@ -6996,6 +7069,7 @@ public struct ChatSendParams: Codable, Sendable {
         timeoutms: Int?,
         systeminputprovenance: [String: AnyCodable]?,
         systemprovenancereceipt: String?,
+        suppresscommandinterpretation: Bool?,
         idempotencykey: String)
     {
         self.sessionkey = sessionkey
@@ -7013,6 +7087,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.timeoutms = timeoutms
         self.systeminputprovenance = systeminputprovenance
         self.systemprovenancereceipt = systemprovenancereceipt
+        self.suppresscommandinterpretation = suppresscommandinterpretation
         self.idempotencykey = idempotencykey
     }
 
@@ -7032,6 +7107,7 @@ public struct ChatSendParams: Codable, Sendable {
         case timeoutms = "timeoutMs"
         case systeminputprovenance = "systemInputProvenance"
         case systemprovenancereceipt = "systemProvenanceReceipt"
+        case suppresscommandinterpretation = "suppressCommandInterpretation"
         case idempotencykey = "idempotencyKey"
     }
 }
