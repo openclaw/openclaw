@@ -1,5 +1,6 @@
 // Coverage for registry-backed model forward-compatibility fallbacks.
 import { describe, it, vi } from "vitest";
+import { buildOpenAIProvider } from "../../../extensions/openai/api.js";
 import {
   buildForwardCompatTemplate,
   expectResolvedForwardCompatFallbackWithRegistryResult,
@@ -84,6 +85,32 @@ function createRuntimeHooks() {
   return createProviderRuntimeTestMock({
     handledDynamicProviders: ["anthropic", "claude-cli", "zai", "openai"],
   });
+}
+
+function createRuntimeHooksWithOpenAIProviderNormalization() {
+  const runtimeHooks = createRuntimeHooks();
+  const openAIProvider = buildOpenAIProvider();
+  return {
+    ...runtimeHooks,
+    runProviderDynamicModel(params: {
+      provider: string;
+      context: { provider: string; modelId: string };
+    }) {
+      if (params.provider === "openai") {
+        return openAIProvider.resolveDynamicModel?.(params.context as never);
+      }
+      return runtimeHooks.runProviderDynamicModel(params as never);
+    },
+    normalizeProviderResolvedModelWithPlugin(params: {
+      provider: string;
+      context: { provider: string; modelId: string; model: unknown };
+    }) {
+      if (params.provider === "openai") {
+        return openAIProvider.normalizeResolvedModel?.(params.context as never);
+      }
+      return runtimeHooks.normalizeProviderResolvedModelWithPlugin(params as never);
+    },
+  };
 }
 
 function createRegistry(
@@ -199,4 +226,53 @@ describe("resolveModel forward-compat tail", () => {
   );
 
   it("builds a zai forward-compat fallback for glm-5", runZaiForwardCompatFallback);
+
+  it("keeps Codex Spark text-only after OpenAI provider normalization", () => {
+    const result = resolveModelWithRegistry({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      agentDir: "/tmp/agent",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              api: "openai-chatgpt-responses",
+              models: [],
+            },
+          },
+        },
+      } as never,
+      modelRegistry: createRegistry([
+        {
+          provider: "openai",
+          modelId: "gpt-5.4",
+          model: buildForwardCompatTemplate({
+            id: "gpt-5.4",
+            name: "gpt-5.4",
+            provider: "openai",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            input: ["text", "image"],
+            contextWindow: 1_050_000,
+            maxTokens: 128_000,
+          }),
+        },
+      ]),
+      runtimeHooks: createRuntimeHooksWithOpenAIProviderNormalization(),
+    });
+
+    expectResolvedForwardCompatFallbackWithRegistryResult({
+      result,
+      expectedModel: {
+        provider: "openai",
+        id: "gpt-5.3-codex-spark",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        input: ["text"],
+        contextWindow: 128_000,
+        contextTokens: 128_000,
+        maxTokens: 128_000,
+      },
+    });
+  });
 });

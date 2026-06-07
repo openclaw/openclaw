@@ -109,6 +109,13 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
   OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
 ] as const;
+const OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS = [
+  OPENAI_CODEX_GPT_55_MODEL_ID,
+  OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
+  OPENAI_CODEX_GPT_54_MODEL_ID,
+  OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
+  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+] as const;
 
 function isOpenAIOrLegacyCodexProvider(provider: string | undefined): boolean {
   const normalized = normalizeProviderId(provider ?? "");
@@ -153,16 +160,17 @@ function hasImageInput(input: unknown): boolean {
 function matchesOpenAICodexImageCapableModel(modelId: string, modelName?: string): boolean {
   return [modelId, modelName]
     .filter((value): value is string => typeof value === "string")
-    .some((candidate) => matchesExactOrPrefix(candidate, OPENAI_CODEX_MODERN_MODEL_IDS));
+    .some((candidate) => matchesExactOrPrefix(candidate, OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS));
 }
 
 /**
  * Restore native `["text", "image"]` input capability on resolved Codex rows
- * for the known modern model IDs (gpt-5.4, gpt-5.4-mini, gpt-5.4-pro, gpt-5.5,
- * gpt-5.5-pro). Persisted/configured model rows can omit the `input` field
- * entirely when they were written by older OpenClaw versions. When that row wins
- * the catalog merge, `modelSupportsInput(entry, "image")` returns false and the
- * gateway's `chat.send` handler offloads inbound images as `media://inbound/<id>`
+ * for known image-capable modern model IDs (gpt-5.4, gpt-5.4-mini,
+ * gpt-5.4-pro, gpt-5.5, gpt-5.5-pro). Persisted/configured model rows can
+ * omit the `input` field entirely when they were written by older OpenClaw
+ * versions. When that row wins the catalog merge,
+ * `modelSupportsInput(entry, "image")` returns false and the gateway's
+ * `chat.send` handler offloads inbound images as `media://inbound/<id>`
  * claim-check URIs instead of inlining them.
  *
  * Mirrors the Anthropic precedent set by upstream #83756.
