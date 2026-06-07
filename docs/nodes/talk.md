@@ -25,20 +25,6 @@ a realtime `talk.session` instead of using the local STT/TTS loop. Missing
 `talk.realtime.transport`, or any transport other than `gateway-relay`, keeps
 native Talk on the fallback STT/TTS path.
 
-For macOS relay proof, capture unified logs from the signed app while toggling
-Talk and speaking a short turn:
-
-```bash
-log stream --style compact --predicate 'subsystem == "ai.openclaw" AND (category == "talk.runtime" OR category == "talk.realtime")'
-```
-
-The relay path emits provider-neutral markers for `talk realtime relay start`,
-`talk realtime relay session created`, `talk realtime relay microphone audio
-forwarded`, `talk realtime relay output audio received`, `talk realtime relay
-output playback`, and `talk realtime relay cancel output`. The fallback path
-emits `talk realtime relay failed; falling back to speech pipeline` when relay
-startup fails and native STT/TTS resumes.
-
 Browser realtime Talk forwards provider tool calls through `talk.client.toolCall`; browser clients do not call `chat.send` directly for realtime consults.
 While a realtime consult is active, Talk clients can use `talk.client.steer` or
 `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or
