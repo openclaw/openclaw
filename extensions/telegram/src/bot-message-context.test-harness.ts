@@ -23,6 +23,7 @@ type BuildTelegramMessageContextForTestParams = {
   message: Record<string, unknown>;
   me?: Record<string, unknown>;
   allMedia?: TelegramMediaRef[];
+  replyChain?: BuildTelegramMessageContextParams["replyChain"];
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
   accountId?: string;
@@ -112,6 +113,7 @@ export async function buildTelegramMessageContextForTest(
       me: { id: 7, username: "bot", ...params.me },
     } as never,
     allMedia: params.allMedia ?? [],
+    replyChain: params.replyChain ?? [],
     storeAllowFrom: [],
     options: params.options ?? {},
     bot: {

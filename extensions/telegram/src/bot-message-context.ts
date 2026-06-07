@@ -86,6 +86,50 @@ type TelegramStatusReactionController = {
   restoreInitial: () => void | Promise<void>;
 };
 
+function normalizeTelegramNativeThreadMessageId(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(Math.trunc(value));
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function resolveTelegramNativeReplyRootThreadId(params: {
+  isGroup: boolean;
+  isForum: boolean;
+  resolvedThreadId?: number;
+  msg: BuildTelegramMessageContextParams["primaryCtx"]["message"];
+  replyChain: NonNullable<BuildTelegramMessageContextParams["replyChain"]>;
+}): string | undefined {
+  if (!params.isGroup || !params.isForum) {
+    return undefined;
+  }
+
+  const chainRootId = [...params.replyChain]
+    .reverse()
+    .map((entry) => normalizeTelegramNativeThreadMessageId(entry.messageId))
+    .find(Boolean);
+  const directReplyId =
+    params.msg.reply_to_message?.forum_topic_created ||
+    params.msg.reply_to_message?.forum_topic_edited ||
+    params.msg.reply_to_message?.forum_topic_closed ||
+    params.msg.reply_to_message?.forum_topic_reopened
+      ? undefined
+      : normalizeTelegramNativeThreadMessageId(params.msg.reply_to_message?.message_id);
+  const rootMessageId =
+    chainRootId ?? directReplyId ?? normalizeTelegramNativeThreadMessageId(params.msg.message_id);
+  if (!rootMessageId) {
+    return undefined;
+  }
+
+  const topicPrefix =
+    params.resolvedThreadId != null ? `topic:${Math.trunc(params.resolvedThreadId)}:` : "";
+  return `${topicPrefix}message:${rootMessageId}`;
+}
+
 export type TelegramMessageContext = {
   ctxPayload: TelegramMessageContextPayload["ctxPayload"];
   turn: TelegramMessageContextPayload["turn"];
@@ -262,9 +306,11 @@ export const buildTelegramMessageContext = async ({
       normalizeAccountId(resolveDefaultTelegramAccountId(freshCfg)) &&
     candidate.matchedBy === "default";
   const isNamedAccountFallback = requiresExplicitAccountBinding(route);
+  const hasExplicitTopicRoute = isGroup && Boolean(topicConfig?.agentId?.trim());
   // Named-account groups still require an explicit binding; DMs get a
-  // per-account fallback session key below to preserve isolation.
-  if (isNamedAccountFallback && isGroup) {
+  // per-account fallback session key below to preserve isolation. An explicit
+  // account-scoped topic agent is a configured group route, not a fallback.
+  if (isNamedAccountFallback && isGroup && !hasExplicitTopicRoute) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
@@ -413,10 +459,26 @@ export const buildTelegramMessageContext = async ({
     dmThreadId,
     botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
   });
+  const nativeReplyRootThreadId =
+    bindingMode.kind !== "none"
+      ? undefined
+      : resolveTelegramNativeReplyRootThreadId({
+          isGroup,
+          isForum,
+          resolvedThreadId,
+          msg,
+          replyChain,
+        });
   const threadKeys =
     useDmThreadSession && dmThreadId != null
       ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
-      : null;
+      : nativeReplyRootThreadId
+        ? resolveThreadSessionKeys({
+            baseSessionKey,
+            threadId: nativeReplyRootThreadId,
+            parentSessionKey: baseSessionKey,
+          })
+        : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   route = {
     ...route,
