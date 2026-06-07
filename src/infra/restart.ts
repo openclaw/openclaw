@@ -754,6 +754,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   reason?: string;
   audit?: RestartAuditInfo;
   emitHooks?: RestartEmitHooks;
+  preservePendingEmitHooksOnDeferralBypass?: boolean;
   sessionKey?: string;
   skipDeferral?: boolean;
   skipCooldown?: boolean;
@@ -810,9 +811,13 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       );
       clearActiveDeferralPolls();
       pendingRestartReason = reason;
-      // Hookless forced restarts may bypass stale unowned deferral hooks, but a
-      // session-owned hook is an accepted continuation slot and must still emit.
-      if (opts?.emitHooks || pendingRestartSessionKey === undefined) {
+      // Hookless forced restarts that own no sentinel may preserve an accepted
+      // pending hook; update/handoff callers rely on the default clear path.
+      const preservePendingHooks =
+        opts?.preservePendingEmitHooksOnDeferralBypass === true &&
+        opts?.emitHooks === undefined &&
+        pendingRestartSessionKey !== undefined;
+      if (!preservePendingHooks) {
         pendingRestartEmitHooks = opts?.emitHooks;
         pendingRestartSessionKey = opts?.sessionKey;
       }

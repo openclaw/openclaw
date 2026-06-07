@@ -752,6 +752,40 @@ describe("infra runtime", () => {
       }
     });
 
+    it("clears a session-owned preparation hook when a forced update owns the sentinel (#86742)", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const beforeEmit = vi.fn(async () => {});
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        setPreRestartDeferralCheck(() => 5);
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "session-A",
+          sessionKey: "agent:main:session-A",
+          emitHooks: { beforeEmit },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
+        const forced = scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "update.run",
+          skipDeferral: true,
+        });
+
+        expect(forced.coalesced).toBe(false);
+        expect(forced.emitHooksQueued).toBe(false);
+        expect(beforeEmit).not.toHaveBeenCalled();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
     it("preserves a session-owned preparation hook when a hookless forced restart bypasses active deferral (#86742)", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const beforeEmit = vi.fn(async () => {});
@@ -770,7 +804,8 @@ describe("infra runtime", () => {
 
         const forced = scheduleGatewaySigusr1Restart({
           delayMs: 0,
-          reason: "update.run",
+          preservePendingEmitHooksOnDeferralBypass: true,
+          reason: "gateway.restart.safe",
           skipDeferral: true,
         });
 
@@ -781,7 +816,7 @@ describe("infra runtime", () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+        expect(peekGatewaySigusr1RestartReason()).toBe("gateway.restart.safe");
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
