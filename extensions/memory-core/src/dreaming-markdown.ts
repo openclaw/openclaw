@@ -11,6 +11,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
@@ -143,6 +144,24 @@ async function resolveDreamsPath(workspaceDir: string): Promise<string> {
   return path.join(workspaceDir, DREAMS_FILENAMES[0]);
 }
 
+async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
+  const stat = await fs.lstat(dreamsPath).catch((err: unknown) => {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  });
+  if (!stat) {
+    return;
+  }
+  if (stat.isSymbolicLink()) {
+    throw new Error("Refusing to write symlinked DREAMS.md");
+  }
+  if (!stat.isFile()) {
+    throw new Error("Refusing to write non-file DREAMS.md");
+  }
+}
+
 export async function writeDeepDreamingToDreamsMd(params: {
   workspaceDir: string;
   bodyLines: string[];
@@ -165,7 +184,16 @@ export async function writeDeepDreamingToDreamsMd(params: {
     endMarker: DEEP_SLEEP_END_MARKER,
     body,
   });
-  await fs.writeFile(dreamsPath, withTrailingNewline(updated), "utf-8");
+  const content = withTrailingNewline(updated);
+  await assertSafeDreamsPath(dreamsPath);
+  await replaceFileAtomic({
+    filePath: dreamsPath,
+    content,
+    mode: 0o600,
+    preserveExistingMode: true,
+    tempPrefix: `${path.basename(dreamsPath)}.dreams`,
+    throwOnCleanupError: true,
+  });
   return dreamsPath;
 }
 
