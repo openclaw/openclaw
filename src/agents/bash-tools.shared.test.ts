@@ -133,12 +133,14 @@ describe("deriveSessionName", () => {
     expect(deriveSessionName("cmd 'a b\\' next")).toBe("cmd a b\\");
   });
 
-  it("returns a label without catastrophic backtracking on an unterminated quote followed by backslashes", () => {
-    const malicious = `node "${"\\".repeat(50000)}`;
-    const start = process.hrtime.bigint();
-    const label = deriveSessionName(malicious);
-    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
-    expect(typeof label).toBe("string");
-    expect(elapsedMs).toBeLessThan(100);
+  it("returns a label without catastrophic backtracking on unterminated quoted backslash runs", () => {
+    for (const quote of [`"`, `'`]) {
+      const malicious = `node ${quote}${"\\".repeat(50000)}`;
+      const start = process.hrtime.bigint();
+      const label = deriveSessionName(malicious);
+      const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+      expect(typeof label).toBe("string");
+      expect(elapsedMs).toBeLessThan(100);
+    }
   });
 });
