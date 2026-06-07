@@ -29,6 +29,20 @@ type GatewaySmokeDeps = {
   stdout?: (message: string) => void;
 };
 
+function hasChatHistoryMessages(
+  response: unknown,
+): response is { payload: { messages: unknown[] } } {
+  if (response === null || typeof response !== "object") {
+    return false;
+  }
+  const payload = (response as { payload?: unknown }).payload;
+  return (
+    payload !== null &&
+    typeof payload === "object" &&
+    Array.isArray((payload as { messages?: unknown }).messages)
+  );
+}
+
 export async function runGatewaySmoke(
   input: { token: string; urlRaw: string },
   deps: GatewaySmokeDeps = {},
@@ -83,6 +97,10 @@ export async function runGatewaySmoke(
     const historyRes = await request("chat.history", { sessionKey: "main" }, 15000);
     if (!historyRes.ok) {
       stderr(`chat.history failed: ${String(historyRes.error)}`);
+      return 4;
+    }
+    if (!hasChatHistoryMessages(historyRes)) {
+      stderr("chat.history failed: missing messages array");
       return 4;
     }
 

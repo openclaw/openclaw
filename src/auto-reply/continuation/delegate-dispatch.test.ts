@@ -235,6 +235,70 @@ describe("hedge timer ref/handle cleanup", () => {
       { sessionKey, trusted: true },
     );
     expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(true);
+    expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(true);
+  });
+  it("does not carry current-turn reserved delegate slots into hedge-fired dispatch", async () => {
+    const sessionKey = "session-hedge-reserved-slot";
+    enqueuePendingDelegate(sessionKey, { task: "deferred work", delayMs: 30_000 });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: {
+        enabled: true,
+        defaultDelayMs: 15_000,
+        minDelayMs: 5_000,
+        maxDelayMs: 300_000,
+        maxChainLength: 10,
+        costCapTokens: 500_000,
+        maxDelegatesPerTurn: 1,
+        crossSessionTargeting: "disabled",
+      },
+      reservedDelegateSlots: 1,
+    });
+
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("maxDelegatesPerTurn exceeded"),
+      expect.anything(),
+    );
+  });
+
+  it("persists advanced chain state after hedge-fired dispatch when a callback is provided", async () => {
+    const sessionKey = "session-hedge-persist-chain";
+    const persistChainState = vi.fn();
+    enqueuePendingDelegate(sessionKey, { task: "deferred persisted work", delayMs: 30_000 });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: 123, accumulatedChainTokens: 456 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      loadFreshChainState: () => ({
+        currentChainCount: 0,
+        chainStartedAt: 123,
+        accumulatedChainTokens: 456,
+      }),
+      persistChainState,
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+
+    expect(persistChainState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentChainCount: 1,
+        chainStartedAt: 123,
+        accumulatedChainTokens: 456,
+      }),
+    );
   });
 });
 

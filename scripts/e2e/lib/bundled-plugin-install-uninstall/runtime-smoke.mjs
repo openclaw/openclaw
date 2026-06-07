@@ -8,42 +8,33 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 const TOKEN = "bundled-plugin-runtime-smoke-token";
-const OUTPUT_CAPTURE_CHARS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS,
+const OUTPUT_CAPTURE_CHARS = readPositiveIntEnv(
+  "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS",
   1024 * 1024,
 );
-const LOG_SCAN_BYTES = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES,
+const LOG_SCAN_BYTES = readPositiveIntEnv(
+  "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES",
   256 * 1024,
 );
-const GATEWAY_LOG_CAPTURE_BYTES = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_GATEWAY_LOG_BYTES,
+const GATEWAY_LOG_CAPTURE_BYTES = readPositiveIntEnv(
+  "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_GATEWAY_LOG_BYTES",
   16 * 1024 * 1024,
 );
-const WATCHDOG_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS, 1000);
-const READY_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS,
-  900000,
-);
-const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_MS, 60000);
-const RPC_READY_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS,
+const WATCHDOG_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS", 1000);
+const READY_TIMEOUT_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS", 900000);
+const RPC_TIMEOUT_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_MS", 60000);
+const RPC_READY_TIMEOUT_MS = readPositiveIntEnv(
+  "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS",
   210000,
 );
-const COMMAND_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_COMMAND_MS,
-  120000,
-);
-const HTTP_PROBE_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS,
-  5000,
-);
-const GATEWAY_TEARDOWN_GRACE_MS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS,
+const COMMAND_TIMEOUT_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_COMMAND_MS", 120000);
+const HTTP_PROBE_TIMEOUT_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS", 5000);
+const GATEWAY_TEARDOWN_GRACE_MS = readPositiveIntEnv(
+  "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS",
   10000,
 );
-const GATEWAY_TEARDOWN_KILL_GRACE_MS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_KILL_GRACE_MS,
+const GATEWAY_TEARDOWN_KILL_GRACE_MS = readPositiveIntEnv(
+  "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_KILL_GRACE_MS",
   1000,
 );
 const GATEWAY_READY_LOG_NEEDLE = Buffer.from("[gateway] ready");
@@ -62,13 +53,23 @@ const activeGatewayChildren = new Set();
 const parentSignalHandlers = new Map();
 let parentCleanupInstalled = false;
 
-function readPositiveInt(raw, fallback) {
+function readPositiveIntEnv(name, fallback) {
+  return readPositiveInt(process.env[name], fallback, name);
+}
+
+function readPositiveInt(raw, fallback, name) {
   const text = String(raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
   const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return parsed;
 }
 
 function readJson(file) {
@@ -866,7 +867,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   const manifest = loadManifest(pluginDir, pluginRoot);
   const plan = buildPluginPlan(manifest);
   const port =
-    readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE, 19000) + pluginIndex * 3;
+    readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE", 19000) + pluginIndex * 3;
   const config = ensureGatewayConfig(
     activateSmokePlugin(readConfig(), pluginId, plan.channels),
     port,
@@ -1196,9 +1197,7 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
     return;
   }
   const port =
-    readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE, 19000) +
-    pluginIndex * 3 +
-    1;
+    readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE", 19000) + pluginIndex * 3 + 1;
   const env = createIsolatedStateEnv(`tts-disabled-${pluginId}`);
   writeConfig(
     ensureGatewayConfig(
@@ -1251,9 +1250,7 @@ async function smokeOpenAiTts(pluginIndex) {
     return;
   }
   const port =
-    readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE, 19000) +
-    pluginIndex * 3 +
-    2;
+    readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE", 19000) + pluginIndex * 3 + 2;
   const env = createIsolatedStateEnv("tts-openai-live");
   writeConfig(
     ensureGatewayConfig(

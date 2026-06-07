@@ -341,6 +341,26 @@ describe("request_compaction tool", () => {
     });
   });
 
+  it("threads focus to the compaction customInstructions slot", async () => {
+    const tool = makeTool();
+    const result = await executeTool(tool, {
+      reason: "thermal evacuation complete",
+      focus: "preserve the b683 fix-spec and the open path-b question",
+    });
+    await flushBackgroundCompaction();
+
+    expect(result).toMatchObject({
+      status: "compaction_requested",
+      reason: "thermal evacuation complete",
+    });
+    expect(mockTriggerCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "thermal evacuation complete",
+        customInstructions: "preserve the b683 fix-spec and the open path-b question",
+      }),
+    );
+  });
+
   it("keeps traceparent absent when the optional carrier is omitted", async () => {
     const tool = makeTool();
 

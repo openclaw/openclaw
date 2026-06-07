@@ -17,6 +17,8 @@ import {
   assertCommandResourceCeiling,
   assertDiagnosticStabilityClean,
   assertExpectedKitchenSinkToolEntries,
+  assertGatewayHealthPayload,
+  assertGatewayStatusPayload,
   assertKitchenSinkSearchInvokeResult,
   assertKitchenSinkTextInvokeResult,
   assertResourceCeiling,
@@ -64,19 +66,42 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(result.stdout).not.toContain("temp root preserved");
   });
 
+  it("prints help before parsing malformed runtime guardrails", async () => {
+    const result = await runCommand(
+      process.execPath,
+      ["scripts/e2e/kitchen-sink-rpc-walk.mjs", "--help"],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB: "1e3",
+        },
+      },
+    );
+
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs");
+  });
+
   it("detects short and long help flags", () => {
     expect(shouldPrintHelp(["--help"])).toBe(true);
     expect(shouldPrintHelp(["-h"])).toBe(true);
     expect(shouldPrintHelp([])).toBe(false);
   });
 
-  it("keeps loose numeric env values from corrupting runtime guardrails", () => {
+  it("rejects loose numeric env values before they bypass runtime guardrails", () => {
     expect(readPositiveInt(undefined, 60_000)).toBe(60_000);
+    expect(readPositiveInt("", 60_000)).toBe(60_000);
     expect(readPositiveInt("1000", 60_000)).toBe(1000);
     expect(readPositiveInt(" 1000 ", 60_000)).toBe(1000);
-    expect(readPositiveInt("1e3", 60_000)).toBe(60_000);
-    expect(readPositiveInt("1000ms", 60_000)).toBe(60_000);
-    expect(readPositiveInt("0", 60_000)).toBe(60_000);
+    expect(() => readPositiveInt("1e3", 60_000, "OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB")).toThrow(
+      'OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB must be a positive integer. Got: "1e3"',
+    );
+    expect(() => readPositiveInt("1000ms", 60_000, "OPENCLAW_KITCHEN_SINK_RPC_READY_MS")).toThrow(
+      'OPENCLAW_KITCHEN_SINK_RPC_READY_MS must be a positive integer. Got: "1000ms"',
+    );
+    expect(() => readPositiveInt("0", 60_000, "OPENCLAW_KITCHEN_SINK_RPC_PORT")).toThrow(
+      'OPENCLAW_KITCHEN_SINK_RPC_PORT must be a positive integer. Got: "0"',
+    );
   });
 
   it("cleans up the generated temporary home tree", async () => {
@@ -275,6 +300,30 @@ describe("kitchen-sink RPC gateway teardown", () => {
 
       expect(calls).toBe(1);
       expect(Date.now() - startedAt).toBeLessThan(500);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("requires /readyz body.ready before accepting gateway readiness", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-ready-body-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, "[gateway] ready\n");
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(new Response('{"ready":false}', { status: 200 }))
+        .mockResolvedValueOnce(new Response('{"ready":true}', { status: 200 }));
+
+      await expect(
+        waitForGatewayReady({ exitCode: null, signalCode: null }, 9, logPath, {
+          fetchImpl,
+          pollDelayMs: 1,
+          timeoutMs: 100,
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -519,6 +568,36 @@ setInterval(() => {}, 1000);
     expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
+  it("rejects required command resource proof when sampling captures nothing", async () => {
+    const samples: unknown[] = [];
+
+    await expect(
+      runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
+        requireResourceSample: true,
+        resourceLabel: "plugins install",
+        resourceSampleIntervalMs: 1,
+        resourceSamples: samples,
+        sampleProcessImpl: async () => null,
+      }),
+    ).rejects.toThrow("plugins install RSS sample was not captured");
+
+    expect(samples).toEqual([]);
+  });
+
+  it("includes sampler errors in required command resource proof failures", async () => {
+    await expect(
+      runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
+        requireResourceSample: true,
+        resourceLabel: "plugins install",
+        resourceSampleIntervalMs: 1,
+        resourceSamples: [],
+        sampleProcessImpl: async () => {
+          throw new Error("ps failed");
+        },
+      }),
+    ).rejects.toThrow("plugins install RSS sample was not captured: ps failed");
+  });
+
   it("rejects command spawn failures as Error objects", async () => {
     await expect(runCommand("openclaw-definitely-missing-command", [])).rejects.toMatchObject({
       code: "ENOENT",
@@ -682,6 +761,24 @@ describe("kitchen-sink RPC command catalog assertions", () => {
       }),
     ).toThrow("Kitchen Sink text tool output missed expected fixture");
   });
+
+  it("rejects tool invocation canaries outside the structured result fields", () => {
+    expect(() =>
+      assertKitchenSinkSearchInvokeResult({
+        ok: true,
+        source: "plugin",
+        output: { note: "prompt mentioned Kitchen Sink image fixture" },
+      }),
+    ).toThrow("Kitchen Sink search tool output missed expected fixture");
+
+    expect(() =>
+      assertKitchenSinkTextInvokeResult({
+        ok: true,
+        source: "plugin",
+        output: { text: "Kitchen Sink prompt echoed tool:kitchen_sink_text" },
+      }),
+    ).toThrow("Kitchen Sink text tool output missed expected fixture");
+  });
 });
 
 describe("kitchen-sink RPC diagnostics assertions", () => {
@@ -725,6 +822,57 @@ describe("kitchen-sink RPC diagnostics assertions", () => {
             truncated: 0,
             chunked: 1,
           },
+        },
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe("kitchen-sink RPC health/status assertions", () => {
+  it("rejects empty health and status RPC payloads", () => {
+    expect(() => assertGatewayHealthPayload({})).toThrow("health payload missing");
+    expect(() => assertGatewayStatusPayload({})).toThrow("status payload missing");
+  });
+
+  it("accepts minimally valid gateway health and status RPC payloads", () => {
+    expect(() =>
+      assertGatewayHealthPayload({
+        ok: true,
+        ts: Date.now(),
+        durationMs: 12,
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        heartbeatSeconds: 30,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: {
+          path: "/tmp/openclaw-sessions.sqlite",
+          count: 0,
+          recent: [],
+        },
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      assertGatewayStatusPayload({
+        heartbeat: {
+          defaultAgentId: "main",
+          agents: [],
+        },
+        channelSummary: [],
+        queuedSystemEvents: [],
+        tasks: {},
+        taskAudit: {},
+        sessions: {
+          paths: [],
+          count: 0,
+          defaults: {
+            model: null,
+            contextTokens: null,
+          },
+          recent: [],
+          byAgent: [],
         },
       }),
     ).not.toThrow();
@@ -1086,6 +1234,15 @@ describe("kitchen-sink RPC process sampling", () => {
 
   it("fails when process sampling does not capture RSS", () => {
     expect(() => assertResourceCeiling(null)).toThrow("gateway RSS sample was not captured");
+  });
+
+  it("fails zero-valued process RSS samples", () => {
+    expect(() => assertResourceCeiling({ rssMiB: 0 })).toThrow(
+      "gateway RSS sample was invalid: 0 MiB",
+    );
+    expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 0, rssMiB: 128 })).toThrow(
+      "command aggregate RSS sample was invalid: 0 MiB",
+    );
   });
 
   it("fails missing command samples and command RSS spikes", () => {

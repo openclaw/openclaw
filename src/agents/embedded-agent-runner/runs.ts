@@ -16,11 +16,11 @@ import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
-import { getDiagnosticSessionState } from "../../logging/diagnostic-session-state.js";
 import {
   diagnosticLogger as diag,
   logMessageQueued,
   logSessionStateChange,
+  updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
@@ -767,11 +767,7 @@ export function updateActiveEmbeddedRunSessionFile(
   }
   clearActiveRunSessionFiles(sessionId);
   setActiveRunSessionFile(sessionFile, sessionId);
-  // Sync the rotated session-file into diagnostic state so heartbeat-recovery
-  // observes the current path rather than the pre-rotation one.
-  if (sessionFile) {
-    getDiagnosticSessionState({ sessionId, sessionFile });
-  }
+  updateDiagnosticSessionFile({ sessionId, sessionFile });
 }
 
 export function clearActiveEmbeddedRun(

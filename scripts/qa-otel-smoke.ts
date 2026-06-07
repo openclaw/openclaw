@@ -705,6 +705,7 @@ function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
   const capturedMetrics: CapturedMetric[] = [];
   const capturedLogRecords: CapturedLogRecord[] = [];
   const capturedBodyText: Partial<Record<OtlpSignal, string[]>> = {};
+  const sockets = new Set<Socket>();
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       if (req.method !== "POST" || !req.url) {
@@ -803,6 +804,13 @@ function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
       res.end();
     })();
   });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => {
+      sockets.delete(socket);
+    });
+  });
+  let closePromise: Promise<void> | undefined;
 
   return {
     capturedRequests,
@@ -821,11 +829,24 @@ function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
       return address.port;
     },
     async close(): Promise<void> {
-      await new Promise<void>((resolve, reject) => {
+      closePromise ??= new Promise<void>((resolve, reject) => {
+        closeLocalOtlpReceiverConnections(server, sockets);
         server.close((err) => (err ? reject(err) : resolve()));
+        closeLocalOtlpReceiverConnections(server, sockets);
       });
+      await closePromise;
     },
   };
+}
+
+function closeLocalOtlpReceiverConnections(
+  server: ReturnType<typeof createServer>,
+  sockets: Set<Socket>,
+): void {
+  for (const socket of sockets) {
+    socket.destroy();
+  }
+  server.closeAllConnections();
 }
 
 async function reserveLocalPort(): Promise<number> {

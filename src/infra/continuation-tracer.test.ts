@@ -898,27 +898,6 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
     ).not.toThrow();
   });
 
-  it("accepts disabledReason='reservation.missing'", () => {
-    const { tracer, spans } = makeRecordingTracer();
-    setContinuationTracer(tracer);
-    emitContinuationDisabledSpan({
-      chainId: "019dcf57-b536-77cc-834b-b803d9262099",
-      chainStepRemaining: 4,
-      disabledReason: "reservation.missing",
-      signalKind: "tool-delegate",
-      delegateDelivery: "timer",
-      delegateMode: "silent-wake",
-    });
-    expect(spans[0].options?.attributes).toMatchObject({
-      "disabled.reason": "reservation.missing",
-      "signal.kind": "tool-delegate",
-      "delegate.delivery": "timer",
-      "delegate.mode": "silent-wake",
-      "chain.id": "019dcf57-b536-77cc-834b-b803d9262099",
-      "continuation.disabled": true,
-    });
-  });
-
   it("accepts disabledReason='policy.cross_session_targeting'", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);

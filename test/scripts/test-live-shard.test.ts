@@ -1,15 +1,21 @@
 // Test Live Shard tests cover test live shard script behavior.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   LIVE_TEST_SHARDS,
   RELEASE_LIVE_TEST_SHARDS,
+  addLiveShardReportArgs,
   buildLiveShardPnpmArgs,
+  buildLiveShardReportPath,
   buildLiveShardSpawnParams,
   collectAllLiveTestFiles,
   parseLiveShardArgs,
+  removeLiveShardReportFile,
   selectLiveShardFiles,
+  validateLiveShardReportPayload,
 } from "../../scripts/test-live-shard.mjs";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 
@@ -165,6 +171,99 @@ describe("scripts/test-live-shard", () => {
       "-t",
       "smoke",
     ]);
+  });
+
+  it("adds JSON report evidence without dropping operator output", () => {
+    const reportPath = buildLiveShardReportPath("native-live-src-agents", {
+      OPENCLAW_LIVE_SHARD_REPORT_DIR: ".artifacts/live-proof",
+    });
+
+    expect(reportPath).toBe(".artifacts/live-proof/native-live-src-agents.vitest.json");
+    expect(addLiveShardReportArgs(["-t", "smoke"], reportPath)).toEqual([
+      "-t",
+      "smoke",
+      "--reporter=default",
+      "--reporter=json",
+      "--outputFile.json=.artifacts/live-proof/native-live-src-agents.vitest.json",
+    ]);
+    expect(
+      buildLiveShardPnpmArgs(
+        ["src/agents/xai.live.test.ts"],
+        addLiveShardReportArgs([], reportPath),
+      ),
+    ).toContain("--reporter=json");
+  });
+
+  it("fails live shard reports with no passing tests", () => {
+    expect(validateLiveShardReportPayload({ numPassedTests: 1, numTotalTests: 3 })).toEqual({
+      ok: true,
+    });
+    expect(validateLiveShardReportPayload({ numPassedTests: 4, numTotalTests: 3 })).toEqual({
+      ok: false,
+      reason: "Vitest report numPassedTests exceeds numTotalTests.",
+    });
+    expect(validateLiveShardReportPayload({ numPassedTests: 0, numTotalTests: 3 })).toEqual({
+      ok: false,
+      reason: "Vitest report has no passing live tests.",
+    });
+    expect(validateLiveShardReportPayload({ numPassedTests: 0, numTotalTests: 0 })).toEqual({
+      ok: false,
+      reason: "Vitest report has no passing live tests.",
+    });
+    expect(validateLiveShardReportPayload({ numPassedTests: 0 })).toEqual({
+      ok: false,
+      reason: "Vitest report numTotalTests must be a non-negative integer.",
+    });
+  });
+
+  it("requires live shard report evidence for each selected file", () => {
+    const payload = {
+      numPassedTests: 1,
+      numTotalTests: 2,
+      testResults: [
+        {
+          name: path.join(process.cwd(), "src/gateway/gateway-acp-bind.live.test.ts"),
+          assertionResults: [{ status: "passed" }],
+        },
+      ],
+    };
+
+    expect(
+      validateLiveShardReportPayload(payload, ["src/gateway/gateway-acp-bind.live.test.ts"]),
+    ).toEqual({ ok: true });
+    expect(
+      validateLiveShardReportPayload(payload, [
+        "src/gateway/gateway-acp-bind.live.test.ts",
+        "src/gateway/gateway-cli-backend.live.test.ts",
+      ]),
+    ).toEqual({
+      ok: false,
+      reason:
+        "Vitest report missing selected live test file evidence: src/gateway/gateway-cli-backend.live.test.ts",
+    });
+    expect(
+      validateLiveShardReportPayload({ numPassedTests: 1, numTotalTests: 1 }, [
+        "src/gateway/gateway-acp-bind.live.test.ts",
+      ]),
+    ).toEqual({
+      ok: false,
+      reason: "Vitest report is missing testResults file evidence.",
+    });
+  });
+
+  it("removes stale live shard reports before running a shard", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-shard-"));
+    const reportPath = path.join(root, "stale.vitest.json");
+    writeFileSync(reportPath, JSON.stringify({ numPassedTests: 1, numTotalTests: 1 }), "utf8");
+
+    try {
+      removeLiveShardReportFile(reportPath);
+
+      expect(existsSync(reportPath)).toBe(false);
+      expect(() => removeLiveShardReportFile(reportPath)).not.toThrow();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("spawns live shard children in a cleanup-friendly process group", () => {

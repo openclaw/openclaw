@@ -25,20 +25,13 @@ import {
 // ---------------------------------------------------------------------------
 
 export {
-  addDelayedContinuationReservation,
   cancelPendingDelegates,
-  clearDelayedContinuationReservations,
   consumePendingDelegates,
-  delayedContinuationReservationCount,
   enqueuePendingDelegate,
-  highestDelayedContinuationReservationHop,
-  listDelayedContinuationReservations,
   markPendingDelegateFailed,
   pendingDelegateCount,
-  removeDelayedContinuationReservation,
   resetDelegateStoreForTests,
   stagedPostCompactionDelegateCount,
-  takeDelayedContinuationReservation,
 } from "./continuation/delegate-store.js";
 
 // ---------------------------------------------------------------------------

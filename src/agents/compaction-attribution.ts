@@ -7,6 +7,7 @@ export type RequestCompactionInvocation = {
   diagId: string;
   trigger: "volitional";
   reason: string;
+  customInstructions?: string;
   contextUsage: number;
   requestedAtMs: number;
   traceparent?: string;

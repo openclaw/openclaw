@@ -38,11 +38,7 @@ import {
   normalizeContinuationTargetKey,
   normalizeContinuationTargetKeys,
 } from "./targeting.js";
-import type {
-  DelayedContinuationReservation,
-  PendingContinuationDelegate,
-  StagedPostCompactionDelegate,
-} from "./types.js";
+import type { PendingContinuationDelegate, StagedPostCompactionDelegate } from "./types.js";
 
 const log = createSubsystemLogger("continuation/delegate-store");
 
@@ -157,7 +153,9 @@ function buildDelegateState(delegate: PendingContinuationDelegate): PendingDeleg
     ...(delegate.mode === "silent" ? { silent: true } : {}),
     ...(delegate.mode === "silent-wake" ? { silentWake: true } : {}),
     ...(delegate.mode === "post-compaction" ? { postCompaction: true } : {}),
-    ...(delegate.firstArmedAt !== undefined ? { firstArmedAt: delegate.firstArmedAt } : {}),
+    ...(delegate.firstArmedAt !== undefined || delegate.delayMs !== undefined
+      ? { firstArmedAt: delegate.firstArmedAt ?? Date.now() }
+      : {}),
     ...(targetSessionKey ? { targetSessionKey } : {}),
     ...(targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
@@ -711,74 +709,6 @@ export function stagedPostCompactionDelegateCount(sessionKey: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// Delayed continuation reservations (volatile, justified)
-// Timer handles are process-scoped — timers themselves don't survive restart,
-// so the reservation tracking doesn't need to either.
-// ---------------------------------------------------------------------------
-
-const delayedReservations = new Map<string, DelayedContinuationReservation[]>();
-
-export function addDelayedContinuationReservation(
-  sessionKey: string,
-  reservation: DelayedContinuationReservation,
-): void {
-  const existing = delayedReservations.get(sessionKey);
-  if (existing) {
-    existing.push(reservation);
-  } else {
-    delayedReservations.set(sessionKey, [reservation]);
-  }
-}
-
-export function takeDelayedContinuationReservation(
-  sessionKey: string,
-  reservationId: string,
-): DelayedContinuationReservation | null {
-  const list = delayedReservations.get(sessionKey);
-  if (!list) {
-    return null;
-  }
-  const idx = list.findIndex((r) => r.id === reservationId);
-  if (idx === -1) {
-    return null;
-  }
-  const [reservation] = list.splice(idx, 1);
-  if (list.length === 0) {
-    delayedReservations.delete(sessionKey);
-  }
-  return reservation;
-}
-
-export function delayedContinuationReservationCount(sessionKey: string): number {
-  return delayedReservations.get(sessionKey)?.length ?? 0;
-}
-
-export function highestDelayedContinuationReservationHop(sessionKey: string): number {
-  const list = delayedReservations.get(sessionKey);
-  if (!list || list.length === 0) {
-    return 0;
-  }
-  return Math.max(...list.map((r) => r.plannedHop));
-}
-
-export function clearDelayedContinuationReservations(sessionKey: string): void {
-  delayedReservations.delete(sessionKey);
-}
-
-export function listDelayedContinuationReservations(
-  sessionKey: string,
-): DelayedContinuationReservation[] {
-  return [...(delayedReservations.get(sessionKey) ?? [])];
-}
-
-export function removeDelayedContinuationReservation(
-  sessionKey: string,
-  reservationId: string,
-): boolean {
-  return takeDelayedContinuationReservation(sessionKey, reservationId) !== null;
-}
-
-// ---------------------------------------------------------------------------
 // Continue-work request store intentionally stays absent: tool-based
 // `continue_work` flows through the closure requestContinuation callback in
 // agent-runner-execution.ts, then surfaces on the run outcome. Keeping this
@@ -790,7 +720,6 @@ export function removeDelayedContinuationReservation(
 // ---------------------------------------------------------------------------
 
 export function resetDelegateStoreForTests(): void {
-  delayedReservations.clear();
   continuationQueueDiagnosticsLastSampleAt = undefined;
   continuationQueueDiagnosticsHistory.length = 0;
 }

@@ -1093,56 +1093,27 @@ export function createFollowupRunner(params: {
         const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
         const tailEntry = (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
         const chainState = loadContinuationChainState(tailEntry, turnTokens);
-        const dispatchResult = await dispatchToolDelegates({
-          sessionKey,
-          chainState,
-          ctx: {
-            sessionKey,
-            agentChannel: queued.originatingChannel ?? undefined,
-            agentAccountId: queued.originatingAccountId ?? undefined,
-            agentTo: queued.originatingTo ?? undefined,
-            agentThreadId: queued.originatingThreadId ?? undefined,
-          },
-          maxChainLength: resolveLiveContinuationRuntimeConfig(runtimeConfig).maxChainLength,
-          // Hedge re-arm must see fresh chain state.
-          loadFreshChainState: () => loadContinuationChainState(tailEntry, 0),
-        });
-        // Persist the advanced chain state back to the session
-        // entry after dispatch. Without this the followup-path counter never
-        // advances and `maxChainLength` enforcement breaks across hops.
-        //
-        // Persist even when `dispatched === 0`. The chainState
-        // returned from `dispatchToolDelegates` carries the fresh
-        // `accumulatedChainTokens` from `loadContinuationChainState(tailEntry,
-        // turnTokens)` regardless of whether any delegate spawned. Guarding on
-        // `dispatched > 0` drops the token total on followup-only chains
-        // (delayed-only delegates, all-deferred dispatches, or pure
-        // continue_work turns), causing token-budget drift across hops.
-        if (dispatchResult && tailEntry) {
+        const persistDispatchChainState = async (nextState: typeof chainState): Promise<void> => {
+          if (!tailEntry) {
+            return;
+          }
           persistContinuationChainState({
             sessionEntry: tailEntry,
-            count: dispatchResult.chainState.currentChainCount,
-            startedAt: dispatchResult.chainState.chainStartedAt,
-            tokens: dispatchResult.chainState.accumulatedChainTokens,
+            count: nextState.currentChainCount,
+            startedAt: nextState.chainStartedAt,
+            tokens: nextState.accumulatedChainTokens,
             // Carry the advanced/minted chain id so the next drain reloads it
             // instead of re-minting a fresh one (stable chain correlation).
-            ...(dispatchResult.chainState.chainId
-              ? { chainId: dispatchResult.chainState.chainId }
-              : {}),
+            ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
           });
           // The in-memory mutation above is orphaned for disk. The followup
           // path's only durable writer is `persistRunSessionUsage`
-          // → `updateSessionStoreEntry`, which `loadSessionStore(...,
-          // skipCache: true)` and patches usage fields only —
+          // -> `updateSessionStoreEntry`, which `loadSessionStore(...,
+          // skipCache: true)` and patches usage fields only --
           // `continuationChain*` is not in that patch shape. Without an
           // explicit `updateSessionStore` call the followup-only token chain
           // never reaches disk; cost-cap and `maxChainLength` enforcement
           // see stale values across cache eviction or gateway restart.
-          //
-          // Mirror agent-runner's explicit `updateSessionStore` with
-          // `resolveSessionStoreEntry`
-          // legacy-key cleanup so the chain fields land alongside the
-          // disk-canonical entry.
           if (storePath && sessionKey) {
             try {
               await updateSessionStoreFromStoreModule(storePath, (store) => {
@@ -1150,15 +1121,13 @@ export function createFollowupRunner(params: {
                 if (resolved.existing) {
                   store[resolved.normalizedKey] = {
                     ...resolved.existing,
-                    continuationChainCount: dispatchResult.chainState.currentChainCount,
-                    continuationChainStartedAt: dispatchResult.chainState.chainStartedAt,
-                    continuationChainTokens: dispatchResult.chainState.accumulatedChainTokens,
+                    continuationChainCount: nextState.currentChainCount,
+                    continuationChainStartedAt: nextState.chainStartedAt,
+                    continuationChainTokens: nextState.accumulatedChainTokens,
                     // Persist the chain id to disk too so it survives gateway
                     // restart / cache eviction and the next drain does not
                     // re-mint a fresh id.
-                    ...(dispatchResult.chainState.chainId
-                      ? { continuationChainId: dispatchResult.chainState.chainId }
-                      : {}),
+                    ...(nextState.chainId ? { continuationChainId: nextState.chainId } : {}),
                   };
                   for (const legacyKey of resolved.legacyKeys) {
                     delete store[legacyKey];
@@ -1173,6 +1142,35 @@ export function createFollowupRunner(params: {
               );
             }
           }
+        };
+        const dispatchResult = await dispatchToolDelegates({
+          sessionKey,
+          chainState,
+          ctx: {
+            sessionKey,
+            agentChannel: queued.originatingChannel ?? undefined,
+            agentAccountId: queued.originatingAccountId ?? undefined,
+            agentTo: queued.originatingTo ?? undefined,
+            agentThreadId: queued.originatingThreadId ?? undefined,
+          },
+          maxChainLength: resolveLiveContinuationRuntimeConfig(runtimeConfig).maxChainLength,
+          // Hedge re-arm must see fresh chain state.
+          loadFreshChainState: () => loadContinuationChainState(tailEntry, 0),
+          persistChainState: persistDispatchChainState,
+        });
+        // Persist the advanced chain state back to the session
+        // entry after dispatch. Without this the followup-path counter never
+        // advances and `maxChainLength` enforcement breaks across hops.
+        //
+        // Persist even when `dispatched === 0`. The chainState
+        // returned from `dispatchToolDelegates` carries the fresh
+        // `accumulatedChainTokens` from `loadContinuationChainState(tailEntry,
+        // turnTokens)` regardless of whether any delegate spawned. Guarding on
+        // `dispatched > 0` drops the token total on followup-only chains
+        // (delayed-only delegates, all-deferred dispatches, or pure
+        // continue_work turns), causing token-budget drift across hops.
+        if (dispatchResult) {
+          await persistDispatchChainState(dispatchResult.chainState);
         }
       }
 
