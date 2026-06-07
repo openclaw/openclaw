@@ -119,6 +119,122 @@ describe("MsteamsProvider (stub surface)", () => {
     }
   });
 
+  it("initiateCall throws when workerBaseUrl / tenantId / sharedSecret / target are missing", async () => {
+    const baseInput = {
+      callId: "internal-x",
+      from: "msteams-bot",
+      to: "user:aad-123",
+      webhookUrl: "http://localhost/voice/webhook",
+    } as unknown as Parameters<MsteamsProvider["initiateCall"]>[0];
+
+    // workerBaseUrl missing.
+    await expect(
+      new MsteamsProvider({ sharedSecret: SECRET, outbound: { enabled: true } }).initiateCall(
+        baseInput,
+      ),
+    ).rejects.toThrow(/workerBaseUrl is not configured/);
+
+    // sharedSecret missing (no HMAC key to sign the place-call request).
+    await expect(
+      new MsteamsProvider({
+        outbound: { enabled: true, workerBaseUrl: "https://worker.example", tenantId: "tenant-1" },
+      }).initiateCall(baseInput),
+    ).rejects.toThrow(/sharedSecret is not configured/);
+
+    // tenantId missing.
+    await expect(
+      new MsteamsProvider({
+        sharedSecret: SECRET,
+        outbound: { enabled: true, workerBaseUrl: "https://worker.example" },
+      }).initiateCall(baseInput),
+    ).rejects.toThrow(/tenantId is not configured/);
+
+    // Empty target user object id (to resolves to "").
+    await expect(
+      new MsteamsProvider({
+        sharedSecret: SECRET,
+        outbound: { enabled: true, workerBaseUrl: "https://worker.example", tenantId: "tenant-1" },
+      }).initiateCall({ ...baseInput, to: "user:" }),
+    ).rejects.toThrow(/userObjectId \(to\) is required/);
+  });
+
+  it("initiateCall surfaces a worker non-2xx response and a missing callId", async () => {
+    const provider = new MsteamsProvider({
+      sharedSecret: SECRET,
+      outbound: { enabled: true, workerBaseUrl: "https://worker.example", tenantId: "tenant-1" },
+    });
+    const input = {
+      callId: "internal-err",
+      from: "msteams-bot",
+      to: "user:aad-123",
+      webhookUrl: "http://localhost/voice/webhook",
+    } as unknown as Parameters<MsteamsProvider["initiateCall"]>[0];
+
+    // Worker rejects: the status + body tail are surfaced.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("user not found", { status: 404, statusText: "Not Found" })),
+    );
+    try {
+      await expect(provider.initiateCall(input)).rejects.toThrow(/worker returned 404/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    // Worker accepts but omits the callId: we cannot correlate the media WS later.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({}), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    try {
+      await expect(provider.initiateCall(input)).rejects.toThrow(/did not include a callId/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("initiateCall attaches the caught error as the cause when the worker request fails", async () => {
+    const provider = new MsteamsProvider({
+      sharedSecret: SECRET,
+      outbound: { enabled: true, workerBaseUrl: "https://worker.example", tenantId: "tenant-1" },
+    });
+    const networkError = new Error("ECONNREFUSED");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw networkError;
+      }),
+    );
+    try {
+      await provider
+        .initiateCall({
+          callId: "internal-cause",
+          from: "msteams-bot",
+          to: "user:aad-123",
+          webhookUrl: "http://localhost/voice/webhook",
+        } as unknown as Parameters<MsteamsProvider["initiateCall"]>[0])
+        .then(
+          () => {
+            throw new Error("expected initiateCall to reject");
+          },
+          (err: unknown) => {
+            expect(err).toBeInstanceOf(Error);
+            expect((err as Error).message).toMatch(/request to worker failed/);
+            // The original network error is preserved for diagnostics.
+            expect((err as Error).cause).toBe(networkError);
+          },
+        );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("hangupCall is a no-op when no session exists", async () => {
     const p = new MsteamsProvider({});
     await expect(p.hangupCall(STUB_HANGUP_INPUT)).resolves.toBeUndefined();
@@ -206,7 +322,12 @@ describe("MsteamsProvider (audio loop wiring)", () => {
   });
 
   async function setup(opts?: {
-    outbound?: { enabled: boolean; workerBaseUrl?: string; tenantId?: string };
+    outbound?: {
+      enabled: boolean;
+      workerBaseUrl?: string;
+      tenantId?: string;
+      answerTimeoutMs?: number;
+    };
   }): Promise<{
     port: number;
     captured: { current?: CapturedStt };
@@ -663,6 +784,99 @@ describe("MsteamsProvider (audio loop wiring)", () => {
       await waitFor(() => (captured.current?.session.connect.mock.calls.length ?? 0) === 1);
       expect(manager.getCallByProviderCallId(graphCallId)?.callId).toBe(internalCall?.callId);
       ws.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("finalizes a placed outbound call that never connects back within answerTimeoutMs", async () => {
+    const { manager } = await setup({
+      outbound: {
+        enabled: true,
+        workerBaseUrl: "https://worker.example",
+        tenantId: "tenant-1",
+        // Short safety-net so the no-answer path fires fast in the test.
+        answerTimeoutMs: 120,
+      },
+    });
+    const graphCallId = "graph-noanswer-1";
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ callId: graphCallId }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const placed = await manager.initiateCall("user:aad-noanswer", undefined, {
+        message: "Your report is ready.",
+        mode: "notify",
+      });
+      expect(placed.success).toBe(true);
+      // Hold the live record: finalizeCall sets endReason in place, then removes it
+      // from activeCalls, so we read endReason from the captured reference.
+      const record = manager.getCallByProviderCallId(graphCallId);
+      expect(record?.callId).toBeDefined();
+
+      // The media WS never connects: the no-answer timer fires and finalizes the
+      // CallRecord so it does not linger as active (no leak).
+      await waitFor(() => record?.endReason !== undefined);
+      expect(record?.endReason).toBe("timeout");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("closes a late callee answer after the outbound no-answer timeout instead of treating it as inbound", async () => {
+    const { port, captured, manager } = await setup({
+      outbound: {
+        enabled: true,
+        workerBaseUrl: "https://worker.example",
+        tenantId: "tenant-1",
+        answerTimeoutMs: 120,
+      },
+    });
+    const graphCallId = "graph-late-1";
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ callId: graphCallId }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const placed = await manager.initiateCall("user:aad-late", undefined, {
+        message: "Your report is ready.",
+        mode: "notify",
+      });
+      expect(placed.success).toBe(true);
+      // Hold the live record (removed from activeCalls once finalized).
+      const record = manager.getCallByProviderCallId(graphCallId);
+
+      // Wait for the no-answer timer to finalize the call.
+      await waitFor(() => record?.endReason !== undefined);
+
+      // The callee answers late: the worker opens the media WS with the same callId.
+      // It must be closed (already finalized), NOT attached or registered as a fresh
+      // inbound call — so no new STT session is created.
+      const { ws } = await connect(port, graphCallId);
+      const closed = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+      ws.send(
+        JSON.stringify({
+          type: "session.start",
+          callId: graphCallId,
+          threadId: "thread-late",
+          caller: { aadId: "bot" },
+          direction: "outbound",
+          recordingStatus: "active",
+        }),
+      );
+
+      await closed;
+      // No bridge state was created for the late connect.
+      expect(captured.current).toBeUndefined();
     } finally {
       vi.unstubAllGlobals();
     }
