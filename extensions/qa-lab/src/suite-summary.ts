@@ -6,7 +6,7 @@ import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
 
 type QaSuiteSummaryScenario = {
   name: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip" | "skipped";
   steps: unknown[];
   details?: string;
   runtimeParity?: RuntimeParityResult;
@@ -59,6 +59,16 @@ export type QaSuiteSummaryJson = {
 
 type QaSuiteScenarioStatus = Pick<QaSuiteSummaryScenario, "status">;
 
+function readNonNegativeCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : null;
+}
+
+function isQaSuiteBlockingStatus(status: unknown): boolean {
+  return status !== "pass";
+}
+
 export function countQaSuiteFailedScenarios(
   scenarios: ReadonlyArray<QaSuiteScenarioStatus>,
 ): number {
@@ -71,6 +81,18 @@ export function countQaSuiteFailedScenarios(
   return failed;
 }
 
+export function countQaSuiteFailedOrSkippedScenarios(
+  scenarios: ReadonlyArray<QaSuiteScenarioStatus>,
+): number {
+  let blocking = 0;
+  for (const scenario of scenarios) {
+    if (isQaSuiteBlockingStatus(scenario.status)) {
+      blocking += 1;
+    }
+  }
+  return blocking;
+}
+
 export function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): number | null {
   if (!summary || typeof summary !== "object") {
     return null;
@@ -81,10 +103,7 @@ export function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): num
     };
     scenarios?: Array<QaSuiteScenarioStatus>;
   };
-  const countedFailures =
-    typeof payload.counts?.failed === "number" && Number.isFinite(payload.counts.failed)
-      ? Math.max(0, Math.floor(payload.counts.failed))
-      : null;
+  const countedFailures = readNonNegativeCount(payload.counts?.failed);
   const scenarioFailures = Array.isArray(payload.scenarios)
     ? countQaSuiteFailedScenarios(payload.scenarios)
     : null;
@@ -95,6 +114,37 @@ export function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): num
     return scenarioFailures;
   }
   return countedFailures;
+}
+
+export function readQaSuiteFailedOrSkippedScenarioCountFromSummary(
+  summary: unknown,
+): number | null {
+  if (!summary || typeof summary !== "object") {
+    return null;
+  }
+  const payload = summary as {
+    counts?: {
+      failed?: unknown;
+      skipped?: unknown;
+    };
+    scenarios?: Array<QaSuiteScenarioStatus>;
+  };
+  const countedFailures = readNonNegativeCount(payload.counts?.failed);
+  const countedSkipped = readNonNegativeCount(payload.counts?.skipped);
+  const countedBlocking =
+    countedFailures !== null || countedSkipped !== null
+      ? (countedFailures ?? 0) + (countedSkipped ?? 0)
+      : null;
+  const scenarioBlocking = Array.isArray(payload.scenarios)
+    ? countQaSuiteFailedOrSkippedScenarios(payload.scenarios)
+    : null;
+  if (countedBlocking !== null && scenarioBlocking !== null) {
+    return Math.max(countedBlocking, scenarioBlocking);
+  }
+  if (scenarioBlocking !== null) {
+    return scenarioBlocking;
+  }
+  return countedBlocking;
 }
 
 export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string): Promise<number> {
@@ -122,5 +172,35 @@ export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string
   }
   throw new Error(
     `QA summary at ${summaryPath} did not include counts.failed or scenarios[].status.`,
+  );
+}
+
+export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
+  summaryPath: string,
+): Promise<number> {
+  let summaryText: string;
+  try {
+    summaryText = await fs.readFile(summaryPath, "utf8");
+  } catch (error) {
+    throw new Error(
+      `Could not read QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(summaryText) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  const blockingScenarioCount = readQaSuiteFailedOrSkippedScenarioCountFromSummary(payload);
+  if (blockingScenarioCount !== null) {
+    return blockingScenarioCount;
+  }
+  throw new Error(
+    `QA summary at ${summaryPath} did not include counts.failed, counts.skipped, or scenarios[].status.`,
   );
 }

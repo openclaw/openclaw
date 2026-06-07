@@ -447,6 +447,31 @@ describe("google transport stream", () => {
     expect(result.content[2]).toHaveProperty("thoughtSignature", "Y2FsbF9zaWdfMQ==");
   });
 
+  it("strips redundant google provider prefixes from Gemini API model paths", async () => {
+    guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+
+    const model = buildGeminiModel({
+      id: "google/gemini-3-flash-preview",
+      name: "Gemini 3 Flash Preview",
+    });
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        { apiKey: "gemini-api-key" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(guardedCall[0]).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:streamGenerateContent?alt=sse",
+    );
+  });
+
   it("merges tool-call thought signatures from sibling SSE parts", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([

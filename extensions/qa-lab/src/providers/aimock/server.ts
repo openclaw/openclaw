@@ -19,6 +19,7 @@ type AimockRequestSnapshot = {
   plannedToolCallId?: string;
   plannedToolName?: string;
   toolOutputCallId?: string;
+  toolOutputStructuredError?: true;
 };
 
 function writeJson(res: ServerResponse, status: number, body: unknown) {
@@ -100,6 +101,21 @@ function extractToolOutputCallId(body: ChatCompletionRequest | null | undefined)
   return "";
 }
 
+function extractToolOutputStructuredError(body: ChatCompletionRequest | null | undefined) {
+  const messages = requestMessages(body);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as {
+      role?: unknown;
+      isError?: unknown;
+      is_error?: unknown;
+    };
+    if (message?.role === "tool") {
+      return message.isError === true || message.is_error === true;
+    }
+  }
+  return false;
+}
+
 function countImageInputs(value: unknown): number {
   if (Array.isArray(value)) {
     return value.reduce((sum, entry) => sum + countImageInputs(entry), 0);
@@ -170,6 +186,7 @@ function toRequestSnapshot(entry: JournalEntry): AimockRequestSnapshot {
     plannedToolCallId: extractPlannedToolCallId(entry),
     plannedToolName: extractPlannedToolName(entry),
     toolOutputCallId: extractToolOutputCallId(body) || undefined,
+    ...(extractToolOutputStructuredError(body) ? { toolOutputStructuredError: true } : {}),
   };
 }
 

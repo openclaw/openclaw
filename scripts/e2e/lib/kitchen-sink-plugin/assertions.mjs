@@ -150,26 +150,44 @@ function scanLogFiles(roots, onFile) {
   let scannedFiles = 0;
   let visitedEntries = 0;
   for (const root of roots) {
-    const pending = [root];
+    const pending = [{ entry: root, counted: false }];
     while (pending.length > 0) {
-      const entry = pending.pop();
+      const pendingEntry = pending.pop();
+      const entry = pendingEntry?.entry;
       if (!entry || !fs.existsSync(entry)) {
         continue;
       }
-      visitedEntries += 1;
-      if (visitedEntries > LOG_SCAN_MAX_ENTRIES) {
-        throw new Error(
-          `kitchen-sink log scan exceeded ${LOG_SCAN_MAX_ENTRIES} filesystem entries`,
-        );
+      if (!pendingEntry.counted) {
+        visitedEntries += 1;
+        if (visitedEntries > LOG_SCAN_MAX_ENTRIES) {
+          throw new Error(
+            `kitchen-sink log scan exceeded ${LOG_SCAN_MAX_ENTRIES} filesystem entries`,
+          );
+        }
       }
-      const stat = fs.lstatSync(entry);
-      if (stat.isSymbolicLink()) {
+      const entryType = pendingEntry.dirent ?? fs.lstatSync(entry);
+      if (entryType.isSymbolicLink()) {
         continue;
       }
-      if (stat.isDirectory()) {
-        const children = fs.readdirSync(entry).toSorted((left, right) => right.localeCompare(left));
-        for (const child of children) {
-          pending.push(path.join(entry, child));
+      if (entryType.isDirectory()) {
+        const dir = fs.opendirSync(entry);
+        try {
+          let child;
+          while ((child = dir.readSync()) !== null) {
+            visitedEntries += 1;
+            if (visitedEntries > LOG_SCAN_MAX_ENTRIES) {
+              throw new Error(
+                `kitchen-sink log scan exceeded ${LOG_SCAN_MAX_ENTRIES} filesystem entries`,
+              );
+            }
+            pending.push({
+              counted: true,
+              dirent: child,
+              entry: path.join(entry, child.name),
+            });
+          }
+        } finally {
+          dir.closeSync();
         }
         continue;
       }

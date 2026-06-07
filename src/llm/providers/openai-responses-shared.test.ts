@@ -354,6 +354,53 @@ describe("convertResponsesMessages", () => {
     });
     expect(functionCall).not.toHaveProperty("id");
   });
+
+  it("keeps encrypted reasoning replay item ids when requested", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: nativeOpenAIModel.api,
+            provider: nativeOpenAIModel.provider,
+            model: nativeOpenAIModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need continuity.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_foundry_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+            ],
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false, replayResponsesItemIds: true },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    expect(input.find((item) => item.type === "reasoning")).toMatchObject({
+      type: "reasoning",
+      id: "rs_foundry_prior",
+      encrypted_content: "ciphertext",
+      summary: [],
+    });
+  });
 });
 
 describe("processResponsesStream", () => {

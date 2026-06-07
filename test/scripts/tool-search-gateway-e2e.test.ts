@@ -159,4 +159,28 @@ describe("tool search gateway e2e lane assertions", () => {
       }),
     ).toThrow(`code lane did not bridge-call ${targetTool}`);
   });
+
+  it("rejects normal lane output that only echoes the target tool name", () => {
+    expect(() =>
+      assertToolSearchLaneResults({
+        targetTool,
+        normal: {
+          ...normal,
+          sessionLogToolMentions: {
+            [targetTool]: 0,
+          },
+        },
+        code: {
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: 1,
+          providerPlannedTools: ["tool_search_code"],
+          providerRawBytes: 4_000,
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).toThrow(`normal lane did not call ${targetTool}`);
+  });
 });

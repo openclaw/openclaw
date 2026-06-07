@@ -116,13 +116,13 @@ start_kitchen_sink_clawhub_fixture_server() {
       return 0
     fi
     if ! kill -0 "$server_pid" 2>/dev/null; then
-      cat "$server_log"
+      print_kitchen_sink_log "$server_log"
       return 1
     fi
     sleep 0.1
   done
 
-  cat "$server_log"
+  print_kitchen_sink_log "$server_log"
   ps -p "$server_pid" -o pid=,stat=,etime=,command= || true
   echo "Timed out waiting for kitchen-sink ClawHub fixture server." >&2
   return 1

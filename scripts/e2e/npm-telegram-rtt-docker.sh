@@ -305,6 +305,7 @@ run_logged docker_e2e_docker_run_cmd run --rm \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
 
 export HOME="$(mktemp -d "/tmp/openclaw-npm-telegram-rtt.XXXXXX")"
 export NPM_CONFIG_PREFIX="/npm-global"
@@ -336,7 +337,7 @@ dump_logs() {
     "$gateway_log"; do
     if [ -f "$file" ]; then
       echo "--- $file ---" >&2
-      sed -n '1,260p' "$file" >&2 || true
+      openclaw_e2e_print_log "$file" >&2
     fi
   done
 }
@@ -411,7 +412,7 @@ for _ in $(seq 1 60); do
 done
 if [ "$mock_ready" != "1" ]; then
   echo "Mock OpenAI server did not become ready" >&2
-  cat "$mock_log" >&2 || true
+  openclaw_e2e_print_log "$mock_log" >&2
   exit 1
 fi
 
