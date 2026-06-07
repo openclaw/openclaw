@@ -1271,6 +1271,14 @@ start_gateway() {
 
 ensure_gateway_started() {
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
+      gateway_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE" 2>/dev/null || true)"
+      openclaw_e2e_wait_gateway_ready "$gateway_pid" "$SYSTEMCTL_SHIM_DAEMON_LOG" 360
+    else
+      echo "systemctl shim did not record a restarted gateway pid" >&2
+      cat "$SYSTEMCTL_SHIM_LOG" >&2 || true
+      return 1
+    fi
     return 0
   fi
   start_gateway
