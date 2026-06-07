@@ -527,7 +527,11 @@ export function createMsteamsRealtimeCall(params: {
         args: event.args,
         images: [{ type: "image", data: frame.dataBase64, mimeType: frame.mime }],
         transcript: [...transcript],
-        surface: "a live Microsoft Teams call (the caller is sharing video)",
+        surface: frame.participantName
+          ? `a live Microsoft Teams call — the attached image is ${frame.participantName}'s ${
+              frame.source === "screenshare" ? "shared screen" : "camera"
+            }`
+          : "a live Microsoft Teams call (a participant is sharing video)",
         userLabel: "Caller",
         assistantLabel: "Agent",
         questionSourceLabel: "caller",

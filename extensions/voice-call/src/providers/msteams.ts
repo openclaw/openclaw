@@ -600,21 +600,27 @@ export class MsteamsProvider implements VoiceCallProvider {
     mime: string;
     dataBase64: string;
     ts: number;
+    participantId?: string;
+    participantName?: string;
   }): void {
     if (this.requireRecordingStatus() && !this.recordingActiveByCall.get(info.callId)) {
       return;
     }
     const frames = this.latestVideoFrames.get(info.callId) ?? {};
     frames[info.source] = {
+      source: info.source,
       dataBase64: info.dataBase64,
       mime: info.mime,
       width: info.width,
       height: info.height,
       ts: info.ts,
+      participantId: info.participantId,
+      participantName: info.participantName,
     };
     this.latestVideoFrames.set(info.callId, frames);
     this.logger?.debug?.(
-      `MsteamsProvider: video.frame ${info.callId} ${info.source} ${info.width}x${info.height}`,
+      `MsteamsProvider: video.frame ${info.callId} ${info.source} ${info.width}x${info.height}` +
+        (info.participantName ? ` from ${info.participantName}` : ""),
     );
   }
 
@@ -739,9 +745,16 @@ export class MsteamsProvider implements VoiceCallProvider {
     // re-sent every turn (the agent retains it in context), bounding image cost.
     const frame = this.getLatestVideoFrame(state.providerCallId);
     let images: Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+    let userMessageForModel = userMessage;
     if (frame && frame.dataBase64 !== state.lastVisionFrame) {
       images = [{ type: "image", data: frame.dataBase64, mimeType: frame.mime }];
       state.lastVisionFrame = frame.dataBase64;
+      // Tell the model whose tile it is (group calls): without attribution the agent can't reason
+      // about "who is saying what". Best-effort — omitted for anonymous/guest/1:1 frames.
+      if (frame.participantName) {
+        const kind = frame.source === "screenshare" ? "shared screen" : "camera";
+        userMessageForModel = `[Attached image is ${frame.participantName}'s ${kind}]\n${userMessage}`;
+      }
     }
 
     const result = await generateVoiceResponse({
@@ -752,7 +765,7 @@ export class MsteamsProvider implements VoiceCallProvider {
       sessionKey: call.sessionKey,
       from: call.from,
       transcript: call.transcript,
-      userMessage,
+      userMessage: userMessageForModel,
       images,
     });
 

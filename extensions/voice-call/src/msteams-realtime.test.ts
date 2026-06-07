@@ -334,6 +334,7 @@ describe("createMsteamsRealtimeCall", () => {
         voiceConfig: { realtime: {}, agentId: "main" } as unknown as VoiceCallConfig,
         cfg: {} as unknown as OpenClawConfig,
         getLatestFrame: () => ({
+          source: "screenshare",
           dataBase64: "AQID",
           mime: "image/jpeg",
           width: 1280,
@@ -374,6 +375,7 @@ describe("createMsteamsRealtimeCall", () => {
         voiceConfig: { realtime: {}, agentId: "main" } as unknown as VoiceCallConfig,
         cfg: {} as unknown as OpenClawConfig,
         getLatestFrame: () => ({
+          source: "screenshare",
           dataBase64: frameData,
           mime: "image/jpeg",
           width: 100,
