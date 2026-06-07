@@ -57,6 +57,29 @@ describe("resolveChannelGroupPolicy", () => {
     expect(policy.allowed).toBe(true);
   });
 
+  it("does not treat inherited object keys as configured groups", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groups: {
+            "123@g.us": { requireMention: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: "constructor",
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(false);
+    expect(policy.groupConfig).toBeUndefined();
+  });
+
   it("blocks all groups when groupPolicy=disabled", () => {
     const cfg = {
       channels: {

@@ -13,6 +13,7 @@ type PromptAccountConfig = {
 type PromptParams = {
   accountConfig?: PromptAccountConfig | null;
   groupId?: string | null;
+  groupSubject?: string | null;
   peerId?: string | null;
 };
 
@@ -164,4 +165,49 @@ describe("resolveWhatsAppSystemPrompt", () => {
       ).toBe("wildcard prompt");
     },
   );
+
+  it("returns a group system prompt keyed by exact group subject", () => {
+    expect(
+      resolveWhatsAppGroupSystemPrompt({
+        groupId: "1203630@g.us",
+        groupSubject: "Family Chat",
+        accountConfig: {
+          groups: {
+            "Family Chat": { systemPrompt: "family prompt" },
+          },
+        },
+      }),
+    ).toBe("family prompt");
+  });
+
+  it("prefers a group system prompt keyed by stable JID over group subject", () => {
+    expect(
+      resolveWhatsAppGroupSystemPrompt({
+        groupId: "1203630@g.us",
+        groupSubject: "Family Chat",
+        accountConfig: {
+          groups: {
+            "1203630@g.us": { systemPrompt: "jid prompt" },
+            "Family Chat": { systemPrompt: "family prompt" },
+          },
+        },
+      }),
+    ).toBe("jid prompt");
+  });
+
+  it("does not use the group subject prompt when the stable JID entry exists without a prompt", () => {
+    expect(
+      resolveWhatsAppGroupSystemPrompt({
+        groupId: "1203630@g.us",
+        groupSubject: "Family Chat",
+        accountConfig: {
+          groups: {
+            "1203630@g.us": {},
+            "Family Chat": { systemPrompt: "family prompt" },
+            "*": { systemPrompt: "wildcard prompt" },
+          },
+        },
+      }),
+    ).toBe("wildcard prompt");
+  });
 });

@@ -34,6 +34,7 @@ export async function resolveGroupActivationFor(params: {
   agentId: string;
   sessionKey: string;
   conversationId: string;
+  groupSubject?: string | null;
 }) {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.agentId,
@@ -68,7 +69,7 @@ export async function resolveGroupActivationFor(params: {
   const requireMention = resolveWhatsAppInboundPolicy({
     cfg: params.cfg,
     accountId: params.accountId,
-  }).resolveConversationRequireMention(params.conversationId);
+  }).resolveConversationRequireMention(params.conversationId, params.groupSubject);
   const defaultActivation = !requireMention ? "always" : "mention";
   return normalizeGroupActivation(activation) ?? defaultActivation;
 }

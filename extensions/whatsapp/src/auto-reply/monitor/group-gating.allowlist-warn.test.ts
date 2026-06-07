@@ -89,7 +89,7 @@ describe("applyGroupGating allowlist drop warning", () => {
     expect(result).toEqual({ shouldProcess: false });
     expect(warn).toHaveBeenCalledTimes(1);
     expect(params.logVerbose).toHaveBeenCalledWith(
-      'Dropping message from unregistered WhatsApp group unregistered@g.us. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.',
+      'Dropping message from unregistered WhatsApp group unregistered@g.us. Add the group JID or exact group name to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.',
     );
     const [context, message] = warn.mock.calls[0] ?? [];
     expect(context).toMatchObject({
@@ -99,6 +99,35 @@ describe("applyGroupGating allowlist drop warning", () => {
     });
     expect(message).toContain("unregistered@g.us");
     expect(message).toContain("channels.whatsapp.groups");
+  });
+
+  it("allows groups registered by exact group subject", async () => {
+    const warn = vi.fn<WarnLogger>();
+    const msg = {
+      ...makeUnregisteredGroupMsg("unregistered@g.us"),
+      groupSubject: "Registered Group",
+    };
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groups: {
+            "Registered Group": {},
+          },
+          groupAllowFrom: ["+15550000002"],
+        },
+      },
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+    } as ApplyGroupGatingParams["cfg"];
+
+    const result = await applyGroupGating(makeParams(msg, warn, cfg));
+
+    expect(result).toEqual({ shouldProcess: true });
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("names the account-scoped groups path for non-default accounts", async () => {

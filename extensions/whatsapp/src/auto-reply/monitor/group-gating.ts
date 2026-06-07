@@ -141,6 +141,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   });
   const conversationGroupPolicy = inboundPolicy.resolveConversationGroupPolicy(
     params.conversationId,
+    params.msg.groupSubject,
   );
   if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
     const accountId = inboundPolicy.account.accountId;
@@ -148,12 +149,17 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     if (shouldWarnForGroupDrop(warnKey)) {
       const groupsPath = resolveWhatsAppGroupsConfigPath({ cfg: params.cfg, accountId });
       params.replyLogger.warn(
-        { conversationId: params.conversationId, accountId, groupsPath },
-        `WhatsApp group ${params.conversationId} not in ${groupsPath} — inbound dropped. Add the group JID to ${groupsPath} (or add "*" there to admit all groups). Sender authorization still applies.`,
+        {
+          conversationId: params.conversationId,
+          groupSubject: params.msg.groupSubject,
+          accountId,
+          groupsPath,
+        },
+        `WhatsApp group ${params.conversationId} not in ${groupsPath} — inbound dropped. Add the group JID or exact group name to ${groupsPath} (or add "*" there to admit all groups). Sender authorization still applies.`,
       );
     }
     params.logVerbose(
-      `Dropping message from unregistered WhatsApp group ${params.conversationId}. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.`,
+      `Dropping message from unregistered WhatsApp group ${params.conversationId}. Add the group JID or exact group name to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.`,
     );
     return { shouldProcess: false };
   }
@@ -211,6 +217,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     conversationId: params.conversationId,
+    groupSubject: params.msg.groupSubject,
   });
   const requireMention = activation !== "always";
   const replyContext = getReplyContext(params.msg, params.authDir);

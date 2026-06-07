@@ -279,6 +279,7 @@ content and identifiers.
     1. **Group membership allowlist** (`channels.whatsapp.groups`)
        - if `groups` is omitted, all groups are eligible
        - if `groups` is present, it acts as a group allowlist (`"*"` allowed)
+       - keys can be WhatsApp group JIDs or exact current group names; JIDs stay most stable when a group is renamed
 
     2. **Group sender policy** (`channels.whatsapp.groupPolicy` + `groupAllowFrom`)
        - `open`: sender allowlist bypassed
@@ -691,7 +692,7 @@ Behavior notes:
     - mention gating (`requireMention` + mention patterns)
     - duplicate keys in `openclaw.json` (JSON5): later entries override earlier ones, so keep a single `groupPolicy` per scope
 
-    If `channels.whatsapp.groups` is present, WhatsApp can still observe messages from other groups, but OpenClaw drops them before session routing. Add the group JID to `channels.whatsapp.groups` or add `groups["*"]` to admit all groups while keeping sender authorization under `groupPolicy` and `groupAllowFrom`.
+    If `channels.whatsapp.groups` is present, WhatsApp can still observe messages from other groups, but OpenClaw drops them before session routing. Add the group JID or exact current group name to `channels.whatsapp.groups`, or add `groups["*"]` to admit all groups while keeping sender authorization under `groupPolicy` and `groupAllowFrom`.
 
   </Accordion>
 
@@ -708,7 +709,7 @@ Resolution hierarchy for group messages:
 
 The effective `groups` map is determined first: if the account defines its own `groups`, it fully replaces the root `groups` map (no deep merge). Prompt lookup then runs on the resulting single map:
 
-1. **Group-specific system prompt** (`groups["<groupId>"].systemPrompt`): used when the specific group entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`), the wildcard is suppressed and no system prompt is applied.
+1. **Group-specific system prompt** (`groups["<groupId-or-exact-name>"].systemPrompt`): used when the specific group entry exists in the map **and** its `systemPrompt` key is defined. If both the stable group JID and exact group name match, the JID entry wins. If `systemPrompt` is an empty string (`""`), the wildcard is suppressed and no system prompt is applied.
 2. **Group wildcard system prompt** (`groups["*"].systemPrompt`): used when the specific group entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
 
 Resolution hierarchy for direct messages:
@@ -726,7 +727,7 @@ The effective `direct` map is determined first: if the account defines its own `
 
 Important behavior:
 
-- `channels.whatsapp.groups` is both a per-group config map and the chat-level group allowlist. At either the root or account scope, `groups["*"]` means "all groups are admitted" for that scope.
+- `channels.whatsapp.groups` is both a per-group config map and the chat-level group allowlist. At either the root or account scope, `groups["*"]` means "all groups are admitted" for that scope. Specific keys can be stable group JIDs such as `120363406415684625@g.us` or exact current group names such as `Family Chat`.
 - Only add a wildcard group `systemPrompt` when you already want that scope to admit all groups. If you still want only a fixed set of group IDs to be eligible, do not use `groups["*"]` for the prompt default. Instead, repeat the prompt on each explicitly allowlisted group entry.
 - Group admission and sender authorization are separate checks. `groups["*"]` widens the set of groups that can reach group handling, but it does not by itself authorize every sender in those groups. Sender access is still controlled separately by `channels.whatsapp.groupPolicy` and `channels.whatsapp.groupAllowFrom`.
 - `channels.whatsapp.direct` does not have the same side effect for DMs. `direct["*"]` only provides a default direct-chat config after a DM is already admitted by `dmPolicy` plus `allowFrom` or pairing-store rules.
