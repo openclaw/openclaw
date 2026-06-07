@@ -129,6 +129,10 @@ describe("deriveSessionName", () => {
     expect(deriveSessionName('tar "a\\b c"')).toBe("tar a\\b c");
   });
 
+  it("treats backslash as literal inside single-quoted spans", () => {
+    expect(deriveSessionName("cmd 'a b\\' next")).toBe("cmd a b\\");
+  });
+
   it("returns a label without catastrophic backtracking on an unterminated quote followed by backslashes", () => {
     const malicious = `node "${"\\".repeat(50000)}`;
     const start = process.hrtime.bigint();
