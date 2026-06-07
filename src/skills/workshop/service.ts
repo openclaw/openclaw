@@ -80,15 +80,25 @@ const MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES = 160;
 export async function listSkillProposals(
   options: SkillProposalScopeOptions = {},
 ): Promise<SkillProposalManifest> {
-  const manifest = await readSkillProposalManifest();
   if (!options.workspaceDir) {
-    return manifest;
+    return readSkillProposalManifest();
   }
+
+  // Derive stale status from workspace state without persisting.
+  // Durable stale marking via markProposalStale() stays in lifecycle paths.
+  const staleReasons = await detectStaleProposals(options.workspaceDir);
+
+  const manifest = await readSkillProposalManifest();
   const proposals: SkillProposalManifest["proposals"] = [];
   for (const proposal of manifest.proposals) {
     const record = await readSkillProposalRecord(proposal.id);
     if (record && isProposalInWorkspace(record, options.workspaceDir)) {
-      proposals.push(proposal);
+      const reason = staleReasons.get(proposal.id);
+      if (reason && proposal.status === "pending") {
+        proposals.push({ ...proposal, status: "stale" as const });
+      } else {
+        proposals.push(proposal);
+      }
     }
   }
   return { ...manifest, proposals };
@@ -193,6 +203,21 @@ export async function inspectSkillProposal(
   if (options.workspaceDir && !isProposalInWorkspace(read.record, options.workspaceDir)) {
     return null;
   }
+
+  // Derive stale status from workspace state (same detection as
+  // listSkillProposals) so list and inspect are consistent.
+  if (options.workspaceDir && read.record.status === "pending") {
+    const staleReasons = await detectStaleProposals(options.workspaceDir);
+    const reason = staleReasons.get(proposalId);
+    if (reason) {
+      return hydrateProposalSupportFiles({
+        record: { ...read.record, status: "stale" as const },
+        content: read.content,
+        supportFiles: read.supportFiles,
+      });
+    }
+  }
+
   return await hydrateProposalSupportFiles(read);
 }
 
@@ -626,14 +651,7 @@ async function readApplyTargetState(
       record.target.currentContentHash &&
       hashSkillProposalContent(previousContent) !== record.target.currentContentHash
     ) {
-      const stale = {
-        ...record,
-        status: "stale" as const,
-        updatedAt: new Date().toISOString(),
-        staleAt: new Date().toISOString(),
-        statusReason: "Target skill changed after proposal creation.",
-      };
-      await updateSkillProposalRecord({ record: stale });
+      await markProposalStale(record, "Target skill changed after proposal creation.");
       throw new Error("Target skill changed after proposal creation; proposal marked stale.");
     }
   }
@@ -971,6 +989,87 @@ function isProposalInWorkspace(record: SkillProposalRecord, workspaceDir: string
   } catch {
     return false;
   }
+}
+
+/**
+ * Detects pending proposals whose target skill state has diverged from
+ * the proposal's expectation. Returns a map of proposal id → reason for
+ * proposals that should be displayed as stale.
+ *
+ * This is a read-only check — it does NOT persist any state. Callers
+ * (like `listSkillProposals`) use the result to show derived stale status
+ * without mutating proposal records.
+ */
+/**
+ * Persist stale status for workspace proposals whose target skill already
+ * exists (create) or is missing (update). Uses the same target-lock +
+ * still-pending recheck pattern as apply/revise paths so a concurrent
+ * apply cannot be reclassified after the fact.
+ *
+ * Idempotent: already-stale proposals are left unchanged.
+ */
+async function reconcileStaleWorkspaceProposals(workspaceDir: string): Promise<void> {
+  const staleReasons = await detectStaleProposals(workspaceDir);
+  if (staleReasons.size === 0) {
+    return;
+  }
+
+  for (const [proposalId, reason] of staleReasons) {
+    try {
+      const initial = await readSkillProposalRecord(proposalId);
+      if (!initial || initial.status !== "pending") {
+        continue;
+      }
+      await withSkillProposalTargetLock(initial, async () => {
+        const record = await readSkillProposalRecord(proposalId);
+        if (!record || record.status !== "pending") {
+          return;
+        }
+        await markProposalStale(record, reason);
+      });
+    } catch {
+      // Lock contention or concurrent mutation — skip this proposal.
+      // The next list/inspect call will reconcile it.
+    }
+  }
+}
+
+async function detectStaleProposals(workspaceDir: string): Promise<Map<string, string>> {
+  const staleMap = new Map<string, string>();
+  const manifest = await readSkillProposalManifest();
+
+  for (const entry of manifest.proposals) {
+    if (entry.status !== "pending") {
+      continue;
+    }
+
+    const record = await readSkillProposalRecord(entry.id);
+    if (!record) {
+      continue;
+    }
+    if (!isProposalInWorkspace(record, workspaceDir)) {
+      continue;
+    }
+
+    let reason: string | null = null;
+    if (record.kind === "create") {
+      const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
+      if (currentContent !== null) {
+        reason = "Target skill already exists in workspace.";
+      }
+    } else if (record.kind === "update") {
+      const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
+      if (currentContent === null) {
+        reason = "Target skill is missing from workspace.";
+      }
+    }
+
+    if (reason) {
+      staleMap.set(entry.id, reason);
+    }
+  }
+
+  return staleMap;
 }
 
 async function markProposalStale(record: SkillProposalRecord, reason: string): Promise<void> {

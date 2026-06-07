@@ -894,4 +894,72 @@ describe("skill workshop proposals", () => {
       fs.access(path.join(workspaceDir, "skills", "tamper-guard", "SKILL.md")),
     ).rejects.toThrow();
   });
+
+  it("reconciles pending create proposals as stale when the target skill already exists", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Auto Helper",
+      description: "Automation helper skill",
+      content: "# Auto Helper\n\nAuto steps.\n",
+    });
+    expect(proposal.record.status).toBe("pending");
+
+    // Manually create the target skill (simulating manual install after
+    // the workshop agent's apply timed out).
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "auto-helper"),
+      name: "auto-helper",
+      description: "Manually installed",
+      body: "# Auto Helper\n\nManually installed.\n",
+    });
+
+    // listSkillProposals should reconcile and mark the proposal stale.
+    const manifest = await listSkillProposals({ workspaceDir });
+    const entry = manifest.proposals.find((p) => p.id === proposal.record.id);
+    expect(entry?.status).toBe("stale");
+  });
+
+  it("reconciles pending update proposals as stale when the target skill is missing", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "remove-me");
+    await writeSkill({
+      dir: skillDir,
+      name: "remove-me",
+      description: "Will be removed",
+      body: "# Remove Me\n",
+    });
+    const skillFile = path.join(skillDir, "SKILL.md");
+
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "remove-me",
+      content: "# Remove Me\n\nUpdated.\n",
+    });
+    expect(proposal.record.status).toBe("pending");
+
+    // Remove the target skill (simulating manual deletion).
+    await fs.unlink(skillFile);
+
+    // listSkillProposals should reconcile and mark the proposal stale.
+    const manifest = await listSkillProposals({ workspaceDir });
+    const entry = manifest.proposals.find((p) => p.id === proposal.record.id);
+    expect(entry?.status).toBe("stale");
+  });
+
+  it("keeps pending proposals as pending when no reconciliation is needed", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Keep Pending",
+      description: "Should stay pending",
+      content: "# Keep Pending\n",
+    });
+    expect(proposal.record.status).toBe("pending");
+
+    // No manual skill creation — the proposal should remain pending.
+    const manifest = await listSkillProposals({ workspaceDir });
+    const entry = manifest.proposals.find((p) => p.id === proposal.record.id);
+    expect(entry?.status).toBe("pending");
+  });
 });
