@@ -13,7 +13,11 @@
  */
 
 import crypto from "node:crypto";
-import { getSubagentRunByChildSessionKey } from "../../agents/subagent-registry-read.js";
+import {
+  getSubagentRunByChildSessionKey,
+  hasLiveContinuationDelegateChildRun,
+  isSubagentRunLive,
+} from "../../agents/subagent-registry-read.js";
 import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import type { SpawnSubagentContext } from "../../agents/subagent-spawn.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
@@ -183,8 +187,11 @@ function deriveContinuationChildSessionKey(sessionKey: string, flowId: string): 
 }
 
 function hasActiveSubagentRegistryRun(childSessionKey: string): boolean {
-  const trackedRun = getSubagentRunByChildSessionKey(childSessionKey);
-  return Boolean(trackedRun && typeof trackedRun.endedAt !== "number");
+  return isSubagentRunLive(getSubagentRunByChildSessionKey(childSessionKey));
+}
+
+function hasAcceptedContinuationChildRun(childSessionKey: string, flowId: string): boolean {
+  return hasLiveContinuationDelegateChildRun({ childSessionKey, flowId });
 }
 
 function markDelegateFailed(
@@ -380,7 +387,11 @@ export async function dispatchToolDelegates(params: {
       const childSessionKey = delegate.flowId
         ? deriveContinuationChildSessionKey(sessionKey, delegate.flowId)
         : undefined;
-      if (childSessionKey && hasActiveSubagentRegistryRun(childSessionKey)) {
+      if (
+        childSessionKey &&
+        (hasActiveSubagentRegistryRun(childSessionKey) ||
+          (delegate.flowId && hasAcceptedContinuationChildRun(childSessionKey, delegate.flowId)))
+      ) {
         markPendingDelegateSpawnAccepted(delegate, childSessionKey);
         dispatchSpan.setStatus("OK");
         dispatched++;
@@ -508,7 +519,7 @@ export async function recoverPendingContinuationDelegates(
     const result = await dispatchToolDelegates({
       sessionKey,
       chainState: params.chainState ?? loadContinuationChainState(sessionStore[sessionKey]),
-      ctx: { sessionKey, ...params.ctx },
+      ctx: { ...params.ctx, sessionKey },
       maxChainLength: params.maxChainLength ?? runtimeConfig.maxChainLength,
       recoverRunningDelegates: true,
     });

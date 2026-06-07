@@ -538,9 +538,10 @@ export function markPendingDelegateSpawnAccepted(
   const current = getTaskFlowById(delegate.flowId);
   const state = current ? decodeDelegateState(current) : undefined;
   const now = Date.now();
+  const expectedRevision = delegate.expectedRevision;
   const finished = finishFlow({
     flowId: delegate.flowId,
-    expectedRevision: delegate.expectedRevision,
+    expectedRevision,
     currentStep: "Accepted by continuation subagent",
     stateJson: {
       ...(state ?? { kind: "continuation_delegate", task: delegate.task }),
@@ -549,6 +550,11 @@ export function markPendingDelegateSpawnAccepted(
     updatedAt: now,
     endedAt: now,
   });
+  if (!finished.applied) {
+    log.warn(
+      `[continuation:delegate-accept-not-committed] flowId=${delegate.flowId} expectedRevision=${expectedRevision} acceptance was not committed`,
+    );
+  }
   return finished.applied;
 }
 

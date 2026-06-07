@@ -34,6 +34,8 @@ vi.mock("../../agents/subagent-spawn.js", () => ({
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({
   getSubagentRunByChildSessionKey: () => null,
+  hasLiveContinuationDelegateChildRun: () => false,
+  isSubagentRunLive: () => false,
 }));
 
 vi.mock("../../infra/system-events.js", () => ({

@@ -201,13 +201,18 @@ export type SpawnSubagentParams = {
   continuationTargetSessionKeys?: string[];
   continuationFanoutMode?: "tree" | "all";
   traceparent?: string;
-  /** Durable continuation delegate flow id; used to derive an idempotent child session key. */
+  /** Durable continuation delegate flow id; used to derive idempotent child session/run keys. */
   continuationDelegateFlowId?: string;
 };
 
 function deriveContinuationDelegateChildSessionKey(targetAgentId: string, flowId: string): string {
   const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
   return `agent:${targetAgentId}:subagent:continuation-${digest}`;
+}
+
+function deriveContinuationDelegateChildRunId(flowId: string): string {
+  const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
+  return `continuation-delegate-${digest}`;
 }
 
 export type SpawnSubagentContext = {
@@ -1582,7 +1587,9 @@ export async function spawnSubagentDirect(
   }
   const contextEnginePreparation = contextEnginePrepareResult.preparation;
 
-  const childIdem = crypto.randomUUID();
+  const childIdem = params.continuationDelegateFlowId
+    ? deriveContinuationDelegateChildRunId(params.continuationDelegateFlowId)
+    : crypto.randomUUID();
   let childRunId: string = childIdem;
   const deliverInitialChildRunDirectly =
     requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;

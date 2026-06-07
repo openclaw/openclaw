@@ -136,6 +136,7 @@ import {
   consumeStagedPostCompactionDelegates,
   enqueuePendingDelegate,
   markPendingDelegateFailed,
+  markPendingDelegateSpawnAccepted,
   pendingDelegateCount,
   resetDelegateStoreForTests,
   stagePostCompactionDelegate,
@@ -164,6 +165,7 @@ function queueRawPendingFlow(sessionKey: string, stateJson: Record<string, unkno
 
 beforeEach(() => {
   mockFlows.clear();
+  loggerRecords.length = 0;
   flowIdCounter = 0;
   resetDelegateStoreForTests();
 });
@@ -183,6 +185,21 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(delegates).toHaveLength(1);
     expect(delegates[0].task).toBe("check CI");
     expect(pendingDelegateCount("session-1")).toBe(0);
+  });
+
+  it("logs when acceptance cannot be committed after a claim", () => {
+    enqueuePendingDelegate("session-accept-conflict", { task: "accept conflict" });
+    const [delegate] = consumePendingDelegates("session-accept-conflict");
+    expect(delegate).toBeDefined();
+    const flow = mockFlows.get(delegate.flowId!);
+    expect(flow).toBeDefined();
+    flow!.revision = flow!.revision + 1;
+
+    expect(markPendingDelegateSpawnAccepted(delegate, "agent:main:subagent:child")).toBe(false);
+    expect(loggerRecords).toContainEqual({
+      level: "warn",
+      message: `[continuation:delegate-accept-not-committed] flowId=${delegate.flowId} expectedRevision=${delegate.expectedRevision} acceptance was not committed`,
+    });
   });
 
   it("handles multi-delegate fan-out (FIFO order)", () => {
