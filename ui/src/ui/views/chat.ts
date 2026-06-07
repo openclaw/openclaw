@@ -11,6 +11,7 @@ import {
 } from "../chat/attachment-payload-store.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
+  MAX_CHAT_ATTACHMENT_BYTES,
   isSupportedChatAttachmentFile,
 } from "../chat/attachment-support.ts";
 import { buildChatItems } from "../chat/build-chat-items.ts";
@@ -375,6 +376,14 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     if (!file) {
       continue;
     }
+    if (!isSupportedChatAttachmentFile(file)) {
+      if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+        window.alert(
+          `File "${file.name}" exceeds the ${Math.round(MAX_CHAT_ATTACHMENT_BYTES / 1024 / 1024)} MB limit.`,
+        );
+      }
+      continue;
+    }
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       const dataUrl = reader.result as string;
@@ -396,6 +405,11 @@ function handleFileSelect(e: Event, props: ChatProps) {
   let pending = 0;
   for (const file of input.files) {
     if (!isSupportedChatAttachmentFile(file)) {
+      if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+        window.alert(
+          `File "${file.name}" exceeds the ${Math.round(MAX_CHAT_ATTACHMENT_BYTES / 1024 / 1024)} MB limit.`,
+        );
+      }
       continue;
     }
     pending++;
@@ -423,6 +437,11 @@ function handleDrop(e: DragEvent, props: ChatProps) {
   let pending = 0;
   for (const file of files) {
     if (!isSupportedChatAttachmentFile(file)) {
+      if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+        window.alert(
+          `File "${file.name}" exceeds the ${Math.round(MAX_CHAT_ATTACHMENT_BYTES / 1024 / 1024)} MB limit.`,
+        );
+      }
       continue;
     }
     pending++;

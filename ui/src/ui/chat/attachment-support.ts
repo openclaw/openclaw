@@ -3,11 +3,12 @@ export const CHAT_ATTACHMENT_ACCEPT =
   ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 
 /**
- * Maximum file size for chat attachments (4 MB).
+ * Maximum file size for chat attachments (20 MB).
+ * Aligned with the gateway default (agents.defaults.mediaMaxMb = 20).
  * Files larger than this would produce base64 payloads that exceed the
  * WebSocket JSON-RPC frame limit and cause "Maximum call stack size exceeded".
  */
-export const MAX_CHAT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+export const MAX_CHAT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 export function isSupportedChatAttachmentMimeType(mimeType: string | null | undefined): boolean {
   return typeof mimeType === "string" && !mimeType.startsWith("video/");
