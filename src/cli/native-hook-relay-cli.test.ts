@@ -1,12 +1,55 @@
 // Native hook relay CLI tests cover relay command registration and runtime delegation.
-import { describe, expect, it, vi } from "vitest";
+import { Readable } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createReadableTextStream,
   createWritableTextBuffer,
+  resolveNativeHookRelayProcessDeadlineMs,
   runNativeHookRelayCli,
 } from "./native-hook-relay-cli.js";
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("native hook relay CLI", () => {
+  it("derives a hard process deadline from --timeout", () => {
+    expect(resolveNativeHookRelayProcessDeadlineMs(5_000)).toBe(12_000);
+  });
+
+  it("times out when stdin never reaches EOF", async () => {
+    vi.useFakeTimers();
+    const callGateway = vi.fn();
+    const stderr = createWritableTextBuffer();
+    const stdin = new Readable({
+      read() {
+        // Simulate a harness that leaves the stdin pipe open indefinitely.
+      },
+    });
+
+    const runPromise = runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        timeout: "1000",
+      },
+      {
+        stdin,
+        stderr,
+        callGateway: callGateway as never,
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(1);
+    expect(stderr.text()).toContain("native hook stdin read timed out after 1000ms");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("reads Codex hook JSON from stdin and forwards it to the gateway relay", async () => {
     const callGateway = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
     const stdout = createWritableTextBuffer();

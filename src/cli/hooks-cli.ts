@@ -5,6 +5,7 @@ import {
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -22,8 +23,14 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
+import { setSafeTimeout } from "../utils/timer-delay.js";
 import { formatCliCommand } from "./command-format.js";
-import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
+import {
+  resolveNativeHookRelayProcessDeadlineMs,
+  runNativeHookRelayCli,
+  type NativeHookRelayCliOptions,
+} from "./native-hook-relay-cli.js";
+import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
 
@@ -539,7 +546,24 @@ export function registerHooksCli(program: Command): void {
     .option("--timeout <ms>", "Gateway timeout in ms", "5000")
     .action(async (opts: NativeHookRelayCliOptions) =>
       runHooksCliAction(async () => {
-        process.exitCode = await runNativeHookRelayCli(opts);
+        let timeoutMs = 5_000;
+        try {
+          timeoutMs = parseTimeoutMsWithFallback(opts.timeout, 5_000);
+        } catch {
+          // runNativeHookRelayCli reports invalid --timeout and returns a nonzero code.
+        }
+        const deadlineTimer = setSafeTimeout(() => {
+          restoreTerminalState("native hook relay deadline", { resumeStdinIfPaused: false });
+          process.exit(124);
+        }, resolveNativeHookRelayProcessDeadlineMs(timeoutMs));
+        deadlineTimer.unref?.();
+        try {
+          const exitCode = await runNativeHookRelayCli(opts);
+          restoreTerminalState("runtime exit", { resumeStdinIfPaused: false });
+          process.exit(exitCode);
+        } finally {
+          clearTimeout(deadlineTimer);
+        }
       }),
     );
 
