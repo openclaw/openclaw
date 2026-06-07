@@ -2946,12 +2946,19 @@ describe("matrix monitor handler draft streaming", () => {
     ) => Promise<void> | void;
     onAssistantMessageStart?: () => void;
     suppressDefaultToolProgressMessages?: boolean;
-    onToolStart?: (payload: { name?: string }) => Promise<void>;
+    onToolStart?: (payload: {
+      name?: string;
+      args?: unknown;
+      detailMode?: string;
+    }) => Promise<void>;
     onItemEvent?: (payload: {
+      itemId?: string;
+      kind?: string;
       progressText?: string;
       summary?: string;
       title?: string;
       name?: string;
+      status?: string;
     }) => Promise<void>;
     onPlanUpdate?: (payload: {
       phase: string;
@@ -3104,6 +3111,73 @@ describe("matrix monitor handler draft streaming", () => {
     expectFinalizedPreviewEdit("$draft1", "Done");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("hides raw command text in Matrix progress previews by default", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+    });
+    const { opts, finish } = await dispatch();
+
+    await opts.onReplyStart?.();
+    await opts.onItemEvent?.({
+      itemId: "cmd-1",
+      kind: "command",
+      name: "exec",
+      progressText: "gh pr edit 89920 --body private-details",
+    });
+    await opts.onItemEvent?.({
+      itemId: "cmd-1",
+      kind: "command",
+      name: "exec",
+      progressText: "gh pr edit 89920 --body private-details",
+    });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(singleTextMessageBody()).toContain("🛠️ Exec");
+    expect(singleTextMessageBody()).not.toContain("gh pr edit");
+    expect(singleTextMessageBody()).not.toContain("private-details");
+    await finish();
+  });
+
+  it("allows Matrix progress previews to opt into raw command text", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+      accountConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            commandText: "raw",
+          },
+        },
+      } as never,
+    });
+    const { opts, finish } = await dispatch();
+
+    await opts.onReplyStart?.();
+    await opts.onItemEvent?.({
+      itemId: "cmd-1",
+      kind: "command",
+      name: "exec",
+      progressText: "gh pr edit 89920 --body explicit-raw-command",
+    });
+    await opts.onItemEvent?.({
+      itemId: "cmd-1",
+      kind: "command",
+      name: "exec",
+      progressText: "gh pr edit 89920 --body explicit-raw-command",
+    });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(singleTextMessageBody()).toContain("gh pr edit 89920");
+    expect(singleTextMessageBody()).toContain("explicit-raw-command");
     await finish();
   });
 

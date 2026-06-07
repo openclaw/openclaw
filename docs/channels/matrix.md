@@ -230,6 +230,7 @@ Notes:
 - If a preview grows past Matrix's per-event size limit, OpenClaw stops preview streaming and falls back to final-only delivery.
 - Media replies always send attachments normally. If a stale preview can no longer be reused safely, OpenClaw redacts it before sending the final media reply.
 - Tool-progress preview updates are enabled by default when Matrix preview streaming is active. Set `streaming.preview.toolProgress: false` to keep preview edits for answer text but leave tool progress on the normal delivery path.
+- Matrix command/exec progress lines hide raw command text by default and show status-only labels. Set `streaming.preview.commandText: "raw"` or `streaming.progress.commandText: "raw"` only for trusted debug rooms where command arguments are safe to expose.
 - Preview edits cost extra Matrix API calls. Leave `streaming: "off"` if you want the most conservative rate-limit profile.
 
 ## Voice messages

@@ -102,6 +102,8 @@ export type MatrixStreamingConfig = {
   preview?: {
     /** Show tool/progress activity in the live draft preview. Default: true. */
     toolProgress?: boolean;
+    /** Command/exec detail in compact progress lines. Default: status. */
+    commandText?: import("openclaw/plugin-sdk/channel-outbound").ChannelStreamingCommandTextMode;
   };
 };
 
