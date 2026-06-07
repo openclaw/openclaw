@@ -58,7 +58,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     Other useful CLI checks: `openclaw status --all`, `openclaw logs --follow`,
     `openclaw gateway status`, `openclaw health --verbose`.
 
-    Quick debug loop: [First 60 seconds if something is broken](#first-60-seconds-if-something-is-broken).
+    Quick debug loop: [First 60 seconds if something is broken](/help/faq#first-60-seconds-if-something-is-broken).
     Install docs: [Install](/install), [Installer flags](/install/installer), [Updating](/install/updating).
 
   </Accordion>
@@ -67,14 +67,14 @@ and troubleshooting see the main [FAQ](/help/faq).
     Common heartbeat skip reasons:
 
     - `quiet-hours`: outside the configured active-hours window
-    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank/header-only scaffolding
+    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank, comment, header, fence, or empty-checklist scaffolding
     - `no-tasks-due`: `HEARTBEAT.md` task mode is active but none of the task intervals are due yet
     - `alerts-disabled`: all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off)
 
     In task mode, due timestamps are only advanced after a real heartbeat run
     completes. Skipped runs do not mark tasks as completed.
 
-    Docs: [Heartbeat](/gateway/heartbeat), [Automation & Tasks](/automation).
+    Docs: [Heartbeat](/gateway/heartbeat), [Automation](/automation).
 
   </Accordion>
 
@@ -162,7 +162,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     If you want extra headroom (logs, media, other services), **2GB is recommended**, but it's
     not a hard minimum.
 
-    Tip: a small Pi/VPS can host the Gateway, and you can pair **nodes** on your laptop/phone for
+    Tip: a small Raspberry Pi/VPS can host the Gateway, and you can pair **nodes** on your laptop/phone for
     local screen/camera/canvas or command execution. See [Nodes](/nodes).
 
   </Accordion>
@@ -226,7 +226,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     up **memory + bootstrap files**, but **not** session history or auth. Those live
     under `~/.openclaw/` (for example `~/.openclaw/agents/<agentId>/sessions/`).
 
-    Related: [Migrating](/install/migrating), [Where things live on disk](#where-things-live-on-disk),
+    Related: [Migrating](/install/migrating), [Where things live on disk](/help/faq#where-things-live-on-disk),
     [Agent workspace](/concepts/agent-workspace), [Doctor](/gateway/doctor),
     [Remote mode](/gateway/remote).
 
@@ -387,7 +387,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     - Add that directory to your user PATH (no `\bin` suffix needed on Windows; on most systems it is `%AppData%\npm`).
     - Close and reopen PowerShell after updating PATH.
 
-    If you want the smoothest Windows setup, use **WSL2** instead of native Windows.
+    For desktop setup, use the native **Windows Hub** app. For terminal-only
+    setup, the PowerShell installer and WSL2 Gateway paths are both supported.
     Docs: [Windows](/platforms/windows).
 
   </Accordion>
@@ -534,7 +535,7 @@ and troubleshooting see the main [FAQ](/help/faq).
 
     Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
     [Qwen Cloud](/providers/qwen),
-    [MiniMax](/providers/minimax), [GLM Models](/providers/glm),
+    [MiniMax](/providers/minimax), [Z.AI (GLM)](/providers/zai),
     [Local models](/gateway/local-models), [Models](/concepts/models).
 
   </Accordion>
@@ -561,7 +562,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     safer, more predictable choice. If you want other subscription-style hosted
     options in OpenClaw, see [OpenAI](/providers/openai), [Qwen / Model
     Cloud](/providers/qwen), [MiniMax](/providers/minimax), and [GLM
-    Models](/providers/glm).
+    Models](/providers/zai).
 
   </Accordion>
 
@@ -578,9 +579,10 @@ and troubleshooting see the main [FAQ](/help/faq).
 
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
-    Anthropic's 1M context beta (`context1m: true`). That only works when your
-    credential is eligible for long-context billing (API key billing or the
-    OpenClaw Claude-login path with Extra Usage enabled).
+    Anthropic's 1M context window (a GA-capable 1M Claude 4.x model or legacy
+    `context1m: true` config). That only works when your credential is eligible
+    for long-context billing (API key billing or the OpenClaw Claude-login path
+    with Extra Usage enabled).
 
     Tip: set a **fallback model** so OpenClaw can keep replying while a provider is rate-limited.
     See [Models](/cli/models), [OAuth](/concepts/oauth), and
@@ -594,26 +596,30 @@ and troubleshooting see the main [FAQ](/help/faq).
 
   <Accordion title="How does Codex auth work?">
     OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Use
-    `openai-codex/gpt-5.5` for Codex OAuth through the default PI runner. Use
-    `openai/gpt-5.5` for direct OpenAI API-key access. GPT-5.5 can also use
-    subscription/OAuth via `openai-codex/gpt-5.5` or native Codex app-server
-    runs with `openai/gpt-5.5` and `agentRuntime.id: "codex"`.
+    `openai/gpt-5.5` for the common setup: ChatGPT/Codex subscription auth plus
+    native Codex app-server execution. Legacy Codex GPT refs are
+    legacy config repaired by `openclaw doctor --fix`. Direct OpenAI API-key
+    access remains available for non-agent OpenAI API surfaces and for agent
+    models through an ordered `openai` API-key profile.
     See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
-  <Accordion title="Why does OpenClaw still mention openai-codex?">
-    `openai-codex` is the provider and auth-profile id for ChatGPT/Codex OAuth.
-    It is also the explicit PI model prefix for Codex OAuth:
+  <Accordion title="Why does OpenClaw still mention legacy OpenAI Codex prefix?">
+    `openai` is the provider and auth-profile id for both OpenAI API keys and
+    ChatGPT/Codex OAuth. You may still see legacy OpenAI Codex prefix in legacy config and
+    migration warnings.
+    Older configs also used it as a model prefix:
 
-    - `openai/gpt-5.5` = current direct OpenAI API-key route in PI
-    - `openai-codex/gpt-5.5` = Codex OAuth route in PI
-    - `openai/gpt-5.5` + `agentRuntime.id: "codex"` = native Codex app-server route
-    - `openai-codex:...` = auth profile id, not a model ref
+    - `openai/gpt-5.5` = ChatGPT/Codex subscription auth with native Codex runtime for agent turns
+    - legacy Codex GPT-5.5 ref = legacy model route repaired by `openclaw doctor --fix`
+    - `openai/gpt-5.5` plus an ordered `openai` API-key profile = API-key auth for an OpenAI agent model
+    - legacy Codex auth profile ids = legacy auth profile id migrated by `openclaw doctor --fix`
 
     If you want the direct OpenAI Platform billing/limit path, set
     `OPENAI_API_KEY`. If you want ChatGPT/Codex subscription auth, sign in with
-    `openclaw models auth login --provider openai-codex` and use
-    `openai-codex/*` model refs for PI runs.
+    `openclaw models auth login --provider openai`. Keep the model ref as
+    `openai/gpt-5.5`; legacy Codex model refs are legacy config that
+    `openclaw doctor --fix` rewrites.
 
   </Accordion>
 
@@ -667,22 +673,22 @@ and troubleshooting see the main [FAQ](/help/faq).
     No. OpenClaw runs on macOS or Linux (Windows via WSL2). A Mac mini is optional - some people
     buy one as an always-on host, but a small VPS, home server, or Raspberry Pi-class box works too.
 
-    You only need a Mac **for macOS-only tools**. For iMessage, use [BlueBubbles](/channels/bluebubbles) (recommended) - the BlueBubbles server runs on any Mac, and the Gateway can run on Linux or elsewhere. If you want other macOS-only tools, run the Gateway on a Mac or pair a macOS node.
+    You only need a Mac **for macOS-only tools**. For iMessage, use [iMessage](/channels/imessage) with `imsg` on any Mac signed into Messages. If the Gateway runs on Linux or elsewhere, set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg` on that Mac. If you want other macOS-only tools, run the Gateway on a Mac or pair a macOS node.
 
-    Docs: [BlueBubbles](/channels/bluebubbles), [Nodes](/nodes), [Mac remote mode](/platforms/mac/remote).
+    Docs: [iMessage](/channels/imessage), [Nodes](/nodes), [Mac remote mode](/platforms/mac/remote).
 
   </Accordion>
 
   <Accordion title="Do I need a Mac mini for iMessage support?">
     You need **some macOS device** signed into Messages. It does **not** have to be a Mac mini -
-    any Mac works. **Use [BlueBubbles](/channels/bluebubbles)** (recommended) for iMessage - the BlueBubbles server runs on macOS, while the Gateway can run on Linux or elsewhere.
+    any Mac works. **Use [iMessage](/channels/imessage)** with `imsg`; the Gateway can run on that Mac, or it can run elsewhere with an SSH wrapper `cliPath`.
 
     Common setups:
 
-    - Run the Gateway on Linux/VPS, and run the BlueBubbles server on any Mac signed into Messages.
+    - Run the Gateway on Linux/VPS, and set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg` on a Mac signed into Messages.
     - Run everything on the Mac if you want the simplest single-machine setup.
 
-    Docs: [BlueBubbles](/channels/bluebubbles), [Nodes](/nodes),
+    Docs: [iMessage](/channels/imessage), [Nodes](/nodes),
     [Mac remote mode](/platforms/mac/remote).
 
   </Accordion>
@@ -793,7 +799,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm
     ```
 
-    Backup tips: see [Backup strategy](#where-things-live-on-disk).
+    Backup tips: see [Backup strategy](/help/faq#where-things-live-on-disk).
 
   </Accordion>
 
@@ -820,7 +826,7 @@ and troubleshooting see the main [FAQ](/help/faq).
   <Accordion title="How important is it to run OpenClaw on a dedicated machine?">
     Not required, but **recommended for reliability and isolation**.
 
-    - **Dedicated host (VPS/Mac mini/Pi):** always-on, fewer sleep/reboot interruptions, cleaner permissions, easier to keep running.
+    - **Dedicated host (VPS/Mac mini/Raspberry Pi):** always-on, fewer sleep/reboot interruptions, cleaner permissions, easier to keep running.
     - **Shared laptop/desktop:** totally fine for testing and active use, but expect pauses when the machine sleeps or updates.
 
     If you want the best of both worlds, keep the Gateway on a dedicated host and pair your laptop as a **node** for local screen/camera/exec tools. See [Nodes](/nodes).
@@ -850,7 +856,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     - **Recommended:** 2GB RAM or more if you run multiple channels, browser automation, or media tools.
     - **OS:** Ubuntu LTS or another modern Debian/Ubuntu.
 
-    If you are on Windows, **WSL2 is the easiest VM style setup** and has the best tooling
+    If you are on Windows, use **Windows Hub** for desktop setup, or WSL2 when
+    you specifically want a Linux-style Gateway VM with broad tooling
     compatibility. See [Windows](/platforms/windows), [VPS hosting](/vps).
     If you are running macOS in a VM, see [macOS VM](/install/macos-vm).
 

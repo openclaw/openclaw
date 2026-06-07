@@ -1,7 +1,16 @@
+/**
+ * Reads and refreshes credentials stored by external CLI runtimes such as
+ * Claude Code, Codex, Gemini, and MiniMax.
+ */
 import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -14,6 +23,7 @@ const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
 const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
 const GEMINI_CLI_CREDENTIALS_RELATIVE_PATH = ".gemini/oauth_creds.json";
+const CODEX_CLI_FALLBACK_EXPIRY_MS = 60 * 60 * 1000;
 
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLAUDE_CLI_KEYCHAIN_ACCOUNT = "Claude Code";
@@ -30,6 +40,7 @@ let codexCliCache: CachedValue<CodexCliCredential> | null = null;
 let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 let geminiCliCache: CachedValue<GeminiCliCredential> | null = null;
 
+/** Clears in-memory CLI credential caches for isolated tests. */
 export function resetCliCredentialCachesForTest(): void {
   claudeCliCache = null;
   codexCliCache = null;
@@ -37,6 +48,7 @@ export function resetCliCredentialCachesForTest(): void {
   geminiCliCache = null;
 }
 
+/** Credential shape parsed from Claude Code CLI storage. */
 export type ClaudeCliCredential =
   | {
       type: "oauth";
@@ -52,6 +64,7 @@ export type ClaudeCliCredential =
       expires: number;
     };
 
+/** Credential shape parsed from Codex CLI storage. */
 export type CodexCliCredential = {
   type: "oauth";
   provider: OAuthProvider;
@@ -62,6 +75,7 @@ export type CodexCliCredential = {
   idToken?: string;
 };
 
+/** Credential shape parsed from MiniMax portal CLI storage. */
 export type MiniMaxCliCredential = {
   type: "oauth";
   provider: "minimax-portal";
@@ -70,6 +84,7 @@ export type MiniMaxCliCredential = {
   expires: number;
 };
 
+/** Credential shape parsed from Gemini CLI storage. */
 export type GeminiCliCredential = {
   type: "oauth";
   provider: "google-gemini-cli";
@@ -221,9 +236,10 @@ function decodeJwtExpiryMs(token: string): number | null {
   try {
     const payloadRaw = Buffer.from(parts[1], "base64url").toString("utf8");
     const payload = JSON.parse(payloadRaw) as { exp?: unknown };
-    return typeof payload.exp === "number" && Number.isFinite(payload.exp) && payload.exp > 0
-      ? payload.exp * 1000
-      : null;
+    if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= 0) {
+      return null;
+    }
+    return asDateTimestampMs(payload.exp * 1000) ?? null;
   } catch {
     return null;
   }
@@ -249,9 +265,10 @@ function readCodexKeychainAuthRecord(options?: {
   codexHome?: string;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
+  allowKeychainPrompt?: boolean;
 }): Record<string, unknown> | null {
   const { platform, execSyncImpl, codexHome } = resolveCodexKeychainParams(options);
-  if (platform !== "darwin") {
+  if (platform !== "darwin" || options?.allowKeychainPrompt === false) {
     return null;
   }
   const account = computeCodexKeychainAccount(codexHome);
@@ -273,10 +290,16 @@ function readCodexKeychainAuthRecord(options?: {
   }
 }
 
+function resolveCodexFallbackExpiryMs(nowMs?: number): number | undefined {
+  const baseMs = nowMs === undefined ? undefined : Math.floor(nowMs);
+  return resolveExpiresAtMsFromDurationMs(CODEX_CLI_FALLBACK_EXPIRY_MS, { nowMs: baseMs });
+}
+
 function readCodexKeychainCredentials(options?: {
   codexHome?: string;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
+  allowKeychainPrompt?: boolean;
 }): CodexCliCredential | null {
   const parsed = readCodexKeychainAuthRecord(options);
   if (!parsed) {
@@ -299,21 +322,23 @@ function readCodexKeychainCredentials(options?: {
       typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
         ? new Date(lastRefreshRaw).getTime()
         : Date.now();
-    const fallbackExpiry = Number.isFinite(lastRefresh)
-      ? lastRefresh + 60 * 60 * 1000
-      : Date.now() + 60 * 60 * 1000;
+    const fallbackExpiry =
+      resolveCodexFallbackExpiryMs(lastRefresh) ?? resolveCodexFallbackExpiryMs();
     const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
+    if (expires === undefined) {
+      return null;
+    }
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
     const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : undefined;
 
     log.info("read codex credentials from keychain", {
       source: "keychain",
-      expires: new Date(expires).toISOString(),
+      expires: timestampMsToIsoString(expires),
     });
 
     return {
       type: "oauth",
-      provider: "openai-codex" as OAuthProvider,
+      provider: "openai" as OAuthProvider,
       access: accessToken,
       refresh: refreshToken,
       expires,
@@ -421,6 +446,7 @@ function readClaudeCliKeychainCredentials(
   }
 }
 
+/** Reads Claude CLI credentials from macOS Keychain or the CLI credential file. */
 export function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
@@ -448,6 +474,7 @@ export function readClaudeCliCredentials(options?: {
   return parseClaudeCliOauthCredential(data.claudeAiOauth);
 }
 
+/** @deprecated Anthropic provider-owned CLI credential helper; do not use from third-party plugins. */
 export function readClaudeCliCredentialsCached(options?: {
   allowKeychainPrompt?: boolean;
   ttlMs?: number;
@@ -458,17 +485,6 @@ export function readClaudeCliCredentialsCached(options?: {
   const platform = options?.platform ?? process.platform;
   const ttlMs = options?.ttlMs ?? 0;
   const credentialsPath = resolveClaudeCliCredentialsPath(options?.homeDir);
-  const keychainCacheKey = `${credentialsPath}:keychain`;
-  if (
-    ttlMs > 0 &&
-    platform === "darwin" &&
-    options?.allowKeychainPrompt === false &&
-    claudeCliCache?.cacheKey === keychainCacheKey &&
-    claudeCliCache.value &&
-    Date.now() - claudeCliCache.readAt < ttlMs
-  ) {
-    return claudeCliCache.value;
-  }
   const keychainIntent =
     platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
   return readCachedCliCredential({
@@ -488,6 +504,7 @@ export function readClaudeCliCredentialsCached(options?: {
   });
 }
 
+/** Writes refreshed Claude OAuth tokens back to the Claude CLI macOS Keychain item. */
 export function writeClaudeCliKeychainCredentials(
   newCredentials: OAuthCredentials,
   options?: { execFileSync?: ExecFileSyncFn },
@@ -533,7 +550,7 @@ export function writeClaudeCliKeychainCredentials(
     );
 
     log.info("wrote refreshed credentials to claude cli keychain", {
-      expires: new Date(newCredentials.expires).toISOString(),
+      expires: timestampMsToIsoString(newCredentials.expires),
     });
     return true;
   } catch (error) {
@@ -544,6 +561,7 @@ export function writeClaudeCliKeychainCredentials(
   }
 }
 
+/** Writes refreshed Claude OAuth tokens back to the Claude CLI credential file. */
 export function writeClaudeCliFileCredentials(
   newCredentials: OAuthCredentials,
   options?: ClaudeCliFileOptions,
@@ -575,7 +593,7 @@ export function writeClaudeCliFileCredentials(
 
     saveJsonFile(credPath, data);
     log.info("wrote refreshed credentials to claude cli file", {
-      expires: new Date(newCredentials.expires).toISOString(),
+      expires: timestampMsToIsoString(newCredentials.expires),
     });
     return true;
   } catch (error) {
@@ -586,6 +604,7 @@ export function writeClaudeCliFileCredentials(
   }
 }
 
+/** Writes refreshed Claude OAuth tokens to the preferred Claude CLI credential store. */
 export function writeClaudeCliCredentials(
   newCredentials: OAuthCredentials,
   options?: ClaudeCliWriteOptions,
@@ -606,13 +625,16 @@ export function writeClaudeCliCredentials(
   return writeFile(newCredentials, { homeDir: options?.homeDir });
 }
 
+/** Reads Codex CLI OAuth credentials from Keychain or CODEX_HOME auth.json. */
 export function readCodexCliCredentials(options?: {
   codexHome?: string;
+  allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
   const keychain = readCodexKeychainCredentials({
     codexHome: options?.codexHome,
+    allowKeychainPrompt: options?.allowKeychainPrompt,
     platform: options?.platform,
     execSync: options?.execSync,
   });
@@ -642,18 +664,21 @@ export function readCodexCliCredentials(options?: {
     return null;
   }
 
-  let fallbackExpiry: number;
+  let fallbackExpiry: number | undefined;
   try {
     const stat = fs.statSync(authPath);
-    fallbackExpiry = stat.mtimeMs + 60 * 60 * 1000;
+    fallbackExpiry = resolveCodexFallbackExpiryMs(stat.mtimeMs);
   } catch {
-    fallbackExpiry = Date.now() + 60 * 60 * 1000;
+    fallbackExpiry = resolveCodexFallbackExpiryMs();
   }
   const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
+  if (expires === undefined) {
+    return null;
+  }
 
   return {
     type: "oauth",
-    provider: "openai-codex" as OAuthProvider,
+    provider: "openai" as OAuthProvider,
     access: accessToken,
     refresh: refreshToken,
     expires,
@@ -662,20 +687,27 @@ export function readCodexCliCredentials(options?: {
   };
 }
 
+/** Reads Codex CLI credentials with optional short-lived cache and file fingerprinting. */
 export function readCodexCliCredentialsCached(options?: {
   codexHome?: string;
+  allowKeychainPrompt?: boolean;
   ttlMs?: number;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
+  const platform = options?.platform ?? process.platform;
+  const ttlMs = options?.ttlMs ?? 0;
   const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
+  const keychainIntent =
+    platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
   return readCachedCliCredential({
-    ttlMs: options?.ttlMs ?? 0,
+    ttlMs,
     cache: codexCliCache,
-    cacheKey: `${options?.platform ?? process.platform}|${authPath}`,
+    cacheKey: `${platform}|${authPath}:${keychainIntent}`,
     read: () =>
       readCodexCliCredentials({
         codexHome: options?.codexHome,
+        allowKeychainPrompt: options?.allowKeychainPrompt,
         platform: options?.platform,
         execSync: options?.execSync,
       }),
@@ -686,6 +718,7 @@ export function readCodexCliCredentialsCached(options?: {
   });
 }
 
+/** Reads MiniMax CLI credentials with optional short-lived cache. */
 export function readMiniMaxCliCredentialsCached(options?: {
   ttlMs?: number;
   homeDir?: string;
@@ -703,6 +736,7 @@ export function readMiniMaxCliCredentialsCached(options?: {
   });
 }
 
+/** Reads Gemini CLI credentials with optional short-lived cache. */
 export function readGeminiCliCredentialsCached(options?: {
   ttlMs?: number;
   homeDir?: string;

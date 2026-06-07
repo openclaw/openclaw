@@ -1,3 +1,4 @@
+// Ack reaction tests cover acknowledgement reaction behavior for inbound channel events.
 import { describe, expect, it, vi } from "vitest";
 import {
   createAckReactionHandle,
@@ -191,7 +192,11 @@ describe("createAckReactionHandle", () => {
       remove,
     });
 
-    expect(handle).toMatchObject({ ackReactionValue: "👀", remove });
+    expect(handle).toEqual({
+      ackReactionPromise: handle?.ackReactionPromise,
+      ackReactionValue: "👀",
+      remove,
+    });
     expect(send).toHaveBeenCalledTimes(1);
     await expect(handle?.ackReactionPromise).resolves.toBe(true);
   });

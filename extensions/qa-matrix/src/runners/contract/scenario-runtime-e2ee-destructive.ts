@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime e2ee destructive behavior.
 import { randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -32,7 +33,10 @@ import {
   isMatrixQaExactMarkerReply,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
-import { waitForMatrixSyncStoreWithCursor } from "./scenario-runtime-state-files.js";
+import {
+  deleteMatrixSyncStoreCursor,
+  waitForMatrixSyncStoreWithCursor,
+} from "./scenario-runtime-state-files.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
 type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
@@ -87,7 +91,7 @@ async function cleanupMatrixQaTempDevices(
 ): Promise<void> {
   await client.stop().catch(() => undefined);
   const uniqueDeviceIds = [
-    ...new Set(deviceIds.filter((deviceId): deviceId is string => !!deviceId)),
+    ...new Set(deviceIds.filter((deviceId): deviceId is string => Boolean(deviceId))),
   ];
   if (uniqueDeviceIds.length > 0) {
     await client.deleteOwnDevices(uniqueDeviceIds).catch(() => undefined);
@@ -1416,7 +1420,7 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
     });
     await context.restartGatewayAfterStateMutation(
       async () => {
-        await rm(syncStore.pathname, { force: true });
+        await deleteMatrixSyncStoreCursor(syncStore);
       },
       {
         timeoutMs: context.timeoutMs,

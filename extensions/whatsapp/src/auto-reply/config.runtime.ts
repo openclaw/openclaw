@@ -1,8 +1,7 @@
+// Whatsapp helper module supports config behavior.
 export {
   evaluateSessionFreshness,
   loadSessionStore,
-  recordSessionMetaFromInbound,
-  resolveGroupSessionKey,
   resolveSessionKey,
   resolveSessionResetPolicy,
   resolveSessionResetType,
@@ -16,7 +15,3 @@ export {
   getRuntimeConfigSourceSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 export { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-export {
-  resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
-} from "openclaw/plugin-sdk/channel-policy";

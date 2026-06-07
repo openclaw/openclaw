@@ -1,4 +1,5 @@
-import type { proto } from "@whiskeysockets/baileys";
+// Whatsapp tests cover extract plugin behavior.
+import type { proto } from "baileys";
 import { describe, expect, it } from "vitest";
 import { extractMentionedJids, hasInboundUserContent } from "./extract.js";
 

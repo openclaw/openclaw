@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Finds core/plugin architecture boundary smells in TypeScript sources.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +11,7 @@ import {
   resolveRepoSpecifier,
   writeLine,
 } from "./lib/guard-inventory-utils.mjs";
+import { mapWithConcurrency } from "./lib/source-file-scan-cache.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   resolveSourceRoots,
@@ -164,21 +166,22 @@ function scanRuntimeServiceLocatorSmells(source, filePath) {
   return entries;
 }
 
+/**
+ * Collects architecture smell findings from the configured source roots.
+ */
 export async function collectArchitectureSmells() {
   if (!architectureSmellsPromise) {
     architectureSmellsPromise = (async () => {
       const files = (await collectTypeScriptFilesFromRoots(scanRoots)).toSorted((left, right) =>
         normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
       );
-      const entriesByFile = await Promise.all(
-        files.map(async (filePath) => {
-          const source = await fs.readFile(filePath, "utf8");
-          const entries = scanPluginSdkExtensionFacadeSmells(source, filePath);
-          entries.push(...scanRuntimeTypeImplementationSmells(source, filePath));
-          entries.push(...scanRuntimeServiceLocatorSmells(source, filePath));
-          return entries;
-        }),
-      );
+      const entriesByFile = await mapWithConcurrency(files, undefined, async (filePath) => {
+        const source = await fs.readFile(filePath, "utf8");
+        const entries = scanPluginSdkExtensionFacadeSmells(source, filePath);
+        entries.push(...scanRuntimeTypeImplementationSmells(source, filePath));
+        entries.push(...scanRuntimeServiceLocatorSmells(source, filePath));
+        return entries;
+      });
       return entriesByFile.flat().toSorted(compareEntries);
     })();
     try {
@@ -216,9 +219,10 @@ function formatInventoryHuman(inventory) {
   return lines.join("\n");
 }
 
-export async function runArchitectureSmellsCheck(argv = process.argv.slice(2), io) {
+async function runArchitectureSmellsCheck(argv, io) {
+  const args = argv ?? process.argv.slice(2);
   const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
-  const json = argv.includes("--json");
+  const json = args.includes("--json");
   const inventory = await collectArchitectureSmells();
 
   if (json) {
@@ -231,7 +235,10 @@ export async function runArchitectureSmellsCheck(argv = process.argv.slice(2), i
   return 0;
 }
 
-export async function main(argv = process.argv.slice(2), io) {
+/**
+ * Runs the architecture smell check and writes human/JSON output.
+ */
+export async function main(argv, io) {
   return await runArchitectureSmellsCheck(argv, io);
 }
 

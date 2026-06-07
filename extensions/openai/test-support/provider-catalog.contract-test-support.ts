@@ -1,3 +1,4 @@
+// Openai provider module implements model/runtime integration.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -74,11 +75,9 @@ export function describeOpenAIProviderCatalogContract() {
       })
     ).providers;
     const openaiProvider = requireRegisteredProvider(openaiProviders, "openai", "provider");
-    const { augmentModelCatalogWithProviderPlugins, resetProviderRuntimeHookCacheForTest } =
-      await importProviderRuntimeCatalogModule();
+    const { augmentModelCatalogWithProviderPlugins } = await importProviderRuntimeCatalogModule();
     return {
       augmentModelCatalogWithProviderPlugins,
-      resetProviderRuntimeHookCacheForTest,
       openaiProviders,
       openaiProvider,
     };
@@ -89,8 +88,7 @@ export function describeOpenAIProviderCatalogContract() {
     { timeout: PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS },
     () => {
       beforeEach(async () => {
-        const { resetProviderRuntimeHookCacheForTest, openaiProviders } = await contractDepsPromise;
-        resetProviderRuntimeHookCacheForTest();
+        const { openaiProviders } = await contractDepsPromise;
 
         resolvePluginProvidersMock.mockReset();
         resolvePluginProvidersMock.mockImplementation((params?: { onlyPluginIds?: string[] }) => {
@@ -106,7 +104,6 @@ export function describeOpenAIProviderCatalogContract() {
           switch (params.provider) {
             case "azure-openai-responses":
             case "openai":
-            case "openai-codex":
               return ["openai"];
             default:
               return undefined;
@@ -121,7 +118,7 @@ export function describeOpenAIProviderCatalogContract() {
         const { openaiProvider } = await contractDepsPromise;
         expectCodexMissingAuthHint(
           (params) => openaiProvider.buildMissingAuthMessage?.(params.context) ?? undefined,
-          "openai-codex/gpt-5.5",
+          "openai/gpt-5.5",
         );
       });
 

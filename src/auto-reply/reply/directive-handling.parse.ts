@@ -1,5 +1,7 @@
+// Parses inline reply directives into typed execution and routing options.
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
+import { isSessionDefaultDirectiveValue } from "../thinking.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -20,11 +22,13 @@ import {
 import { extractQueueDirective } from "./queue/directive.js";
 import type { QueueDropPolicy, QueueMode } from "./queue/types.js";
 
+/** Parsed inline directives removed from a user message before agent execution. */
 export type InlineDirectives = {
   cleaned: string;
   hasThinkDirective: boolean;
   thinkLevel?: ThinkLevel;
   rawThinkLevel?: string;
+  clearThinkLevel: boolean;
   hasVerboseDirective: boolean;
   verboseLevel?: VerboseLevel;
   rawVerboseLevel?: string;
@@ -34,6 +38,7 @@ export type InlineDirectives = {
   hasFastDirective: boolean;
   fastMode?: boolean;
   rawFastMode?: string;
+  clearFastMode: boolean;
   hasReasoningDirective: boolean;
   reasoningLevel?: ReasoningLevel;
   rawReasoningLevel?: string;
@@ -72,6 +77,7 @@ export type InlineDirectives = {
   hasQueueOptions: boolean;
 };
 
+/** Parses supported inline directives in the same order they are stripped from text. */
 export function parseInlineDirectives(
   body: string,
   options?: {
@@ -168,11 +174,13 @@ export function parseInlineDirectives(
     hasOptions: hasQueueOptions,
   } = extractQueueDirective(modelCleaned);
 
+  // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
     cleaned: queueCleaned,
     hasThinkDirective,
     thinkLevel,
     rawThinkLevel,
+    clearThinkLevel: hasThinkDirective && isSessionDefaultDirectiveValue(rawThinkLevel),
     hasVerboseDirective,
     verboseLevel,
     rawVerboseLevel,
@@ -182,6 +190,7 @@ export function parseInlineDirectives(
     hasFastDirective,
     fastMode,
     rawFastMode,
+    clearFastMode: hasFastDirective && isSessionDefaultDirectiveValue(rawFastMode),
     hasReasoningDirective,
     reasoningLevel,
     rawReasoningLevel,

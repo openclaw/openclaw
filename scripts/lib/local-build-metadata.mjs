@@ -1,21 +1,13 @@
+// Writes local build metadata stamps into dist output after build phases.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import {
-  BUILD_STAMP_FILE,
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  RUNTIME_POSTBUILD_STAMP_FILE,
-  isLocalBuildMetadataDistPath,
-} from "./local-build-metadata-paths.mjs";
+import { BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE } from "./local-build-metadata-paths.mjs";
 
-export {
-  BUILD_STAMP_FILE,
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  RUNTIME_POSTBUILD_STAMP_FILE,
-  isLocalBuildMetadataDistPath,
-};
+export { BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE };
 
+/** Resolve the current git HEAD for build stamp metadata. */
 export function resolveGitHead(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const spawnSyncImpl = params.spawnSync ?? spawnSync;
@@ -35,6 +27,7 @@ export function resolveGitHead(params = {}) {
   }
 }
 
+/** Write the local build stamp containing timestamp and git head. */
 export function writeBuildStamp(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
@@ -51,6 +44,7 @@ export function writeBuildStamp(params = {}) {
   return buildStampPath;
 }
 
+/** Write the runtime postbuild stamp containing sync timestamp and git head. */
 export function writeRuntimePostBuildStamp(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;

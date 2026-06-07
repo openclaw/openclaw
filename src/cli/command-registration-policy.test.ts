@@ -1,3 +1,4 @@
+// Command registration policy tests cover CLI registration boundaries and duplicate guards.
 import { describe, expect, it } from "vitest";
 import {
   shouldEagerRegisterSubcommands,
@@ -47,6 +48,34 @@ describe("command-registration-policy", () => {
       shouldSkipPluginCommandRegistration({
         argv: ["node", "openclaw", "help", "voicecall"],
         primary: "help",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "auth", "login"],
+        primary: "auth",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "tool", "image_generate"],
+        primary: "tool",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "tools", "effective"],
+        primary: "tools",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "googlemeet", "login"],
+        primary: "googlemeet",
         hasBuiltinPrimary: false,
       }),
     ).toBe(false);

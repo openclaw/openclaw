@@ -1,8 +1,18 @@
+// Crestodian assistant prompts constrain fuzzy requests to one validated command.
 import type { CrestodianOverview } from "./overview.js";
 
+/**
+ * Prompt construction and response parsing for Crestodian assistant planning.
+ *
+ * The assistant is constrained to return one safe Crestodian command as JSON;
+ * parsing stays deliberately narrow so free-form model text does not execute.
+ */
+/** Timeout for one assistant planner call. */
 export const CRESTODIAN_ASSISTANT_TIMEOUT_MS = 10_000;
+/** Maximum assistant planner response budget. */
 export const CRESTODIAN_ASSISTANT_MAX_TOKENS = 512;
 
+/** System prompt that limits the assistant to Crestodian's command vocabulary. */
 export const CRESTODIAN_ASSISTANT_SYSTEM_PROMPT = [
   "You are Crestodian, OpenClaw's ring-zero setup helper.",
   "Turn the user's request into exactly one safe OpenClaw Crestodian command.",
@@ -23,6 +33,10 @@ export const CRESTODIAN_ASSISTANT_SYSTEM_PROMPT = [
   "- stop gateway",
   "- agents",
   "- models",
+  "- plugins list",
+  "- plugins search <query>",
+  "- plugin install <npm-or-clawhub-spec>",
+  "- plugin uninstall <id>",
   "- audit",
   "- validate config",
   "- set default model <provider/model>",
@@ -34,12 +48,14 @@ export const CRESTODIAN_ASSISTANT_SYSTEM_PROMPT = [
   "If unsure, choose overview.",
 ].join("\n");
 
+/** Parsed assistant plan before it is re-validated as a Crestodian operation. */
 export type CrestodianAssistantPlan = {
   command: string;
   reply?: string;
   modelLabel?: string;
 };
 
+/** Build the overview-grounded user prompt supplied to assistant planners. */
 export function buildCrestodianAssistantUserPrompt(params: {
   input: string;
   overview: CrestodianOverview;
@@ -63,7 +79,7 @@ export function buildCrestodianAssistantUserPrompt(params: {
     `Default model: ${params.overview.defaultModel ?? "not configured"}`,
     `Config valid: ${params.overview.config.valid}`,
     `Gateway reachable: ${params.overview.gateway.reachable}`,
-    `Codex CLI: ${params.overview.tools.codex.found ? "found" : "not found"}`,
+    `Codex binary: ${params.overview.tools.codex.found ? "found" : "not found"}`,
     `Claude Code CLI: ${params.overview.tools.claude.found ? "found" : "not found"}`,
     `OpenAI API key: ${params.overview.tools.apiKeys.openai ? "found" : "not found"}`,
     `Anthropic API key: ${params.overview.tools.apiKeys.anthropic ? "found" : "not found"}`,
@@ -80,6 +96,7 @@ export function buildCrestodianAssistantUserPrompt(params: {
   ].join("\n");
 }
 
+/** Parse compact assistant JSON while ignoring surrounding explanatory text. */
 export function parseCrestodianAssistantPlanText(
   rawText: string | undefined,
 ): CrestodianAssistantPlan | null {
@@ -87,6 +104,7 @@ export function parseCrestodianAssistantPlanText(
   if (!text) {
     return null;
   }
+  // Model output may wrap JSON in prose; extraction stays narrow and validation happens after.
   const jsonText = extractFirstJsonObject(text);
   if (!jsonText) {
     return null;
@@ -113,6 +131,7 @@ export function parseCrestodianAssistantPlanText(
 }
 
 function extractFirstJsonObject(text: string): string | null {
+  // Planner output must be JSON, but this tolerates model wrappers before re-validating fields.
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end <= start) {

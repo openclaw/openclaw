@@ -1,3 +1,4 @@
+// Irc helper module supports config schema behavior.
 import {
   DmPolicySchema,
   GroupPolicySchema,
@@ -7,7 +8,7 @@ import {
   buildChannelConfigSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 import { ircChannelConfigUiHints } from "./config-ui-hints.js";
 
 const IrcGroupSchema = z
@@ -42,7 +43,7 @@ const IrcNickServSchema = z
     }
   });
 
-export const IrcAccountSchemaBase = z
+const IrcAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
@@ -68,7 +69,7 @@ export const IrcAccountSchemaBase = z
   })
   .strict();
 
-export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
+const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,

@@ -1,8 +1,9 @@
+// Music Generation Providers.Live.Test.Ts tests cover music generation providers plugin behavior.
 import {
   resolveApiKeyForProvider,
-  resolveOpenClawAgentDir,
+  resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -14,8 +15,14 @@ import {
   encodePngRgba,
   fillPixel,
   getShellEnvAppliedKeys,
+  isAuthErrorMessage,
+  isBillingErrorMessage,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
+  isModelNotFoundErrorMessage,
+  isOverloadedErrorMessage,
+  isServerErrorMessage,
+  isTimeoutErrorMessage,
   isTruthyEnvValue,
   parseCsvFilter,
   parseProviderModelMap,
@@ -24,8 +31,10 @@ import {
   resolveLiveMusicAuthStore,
 } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
+import openrouterPlugin from "./openrouter/index.js";
 import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generation-live-test-helpers.js";
 
 const LIVE = isLiveTestEnabled();
@@ -44,6 +53,12 @@ type LiveProviderCase = {
 
 const CASES: LiveProviderCase[] = [
   {
+    plugin: falPlugin,
+    pluginId: "fal",
+    pluginName: "fal Provider",
+    providerId: "fal",
+  },
+  {
     plugin: googlePlugin,
     pluginId: "google",
     pluginName: "Google Provider",
@@ -54,6 +69,12 @@ const CASES: LiveProviderCase[] = [
     pluginId: "minimax",
     pluginName: "MiniMax Provider",
     providerId: "minimax",
+  },
+  {
+    plugin: openrouterPlugin,
+    pluginId: "openrouter",
+    pluginName: "OpenRouter Provider",
+    providerId: "openrouter",
   },
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))
@@ -107,6 +128,29 @@ function maybeLoadShellEnvForMusicProviders(providerIds: string[]): void {
   maybeLoadShellEnvForGenerationProviders(providerIds);
 }
 
+function formatProviderFilter(filter: Set<string> | null): string {
+  return filter ? [...filter].toSorted((a, b) => a.localeCompare(b)).join(", ") : "";
+}
+
+function expectMusicLiveSweepPassed(params: {
+  attempted: string[];
+  failures: string[];
+  providerFilter: Set<string> | null;
+  skipped: string[];
+}): void {
+  if (params.attempted.length === 0) {
+    expect(params.failures).toStrictEqual([]);
+    if (params.providerFilter && params.providerFilter.size > 0) {
+      throw new Error(
+        `[live:music-generation] requested provider filter produced no live attempts: ${formatProviderFilter(params.providerFilter)}; skipped=${params.skipped.join(", ") || "none"}`,
+      );
+    }
+    console.warn("[live:music-generation] no provider had usable auth; skipping assertions");
+    return;
+  }
+  expect(params.failures).toStrictEqual([]);
+}
+
 function resolveLiveLyrics(providerId: string): string | undefined {
   if (providerId !== "minimax") {
     return undefined;
@@ -121,12 +165,30 @@ function resolveLiveLyrics(providerId: string): string | undefined {
   ].join("\n");
 }
 
-function isSkippableLiveMusicProviderError(providerId: string, error: unknown): boolean {
+function resolveLiveMusicSkipReason(providerId: string, error: unknown): string | null {
   const message = error instanceof Error ? error.message : String(error);
-  return (
-    providerId === "google" &&
+  if (
+    (providerId === "google" || providerId === "openrouter") &&
     message.toLowerCase().includes("music generation response missing audio data")
-  );
+  ) {
+    return "transient no-audio response";
+  }
+  if (isAuthErrorMessage(message)) {
+    return "auth drift";
+  }
+  if (isModelNotFoundErrorMessage(message)) {
+    return "model drift";
+  }
+  if (isBillingErrorMessage(message)) {
+    return "billing drift";
+  }
+  if (isTimeoutErrorMessage(message) || /operation was aborted/i.test(message)) {
+    return "provider timeout";
+  }
+  if (isOverloadedErrorMessage(message) || isServerErrorMessage(message)) {
+    return "provider outage";
+  }
+  return null;
 }
 
 describeLive("music generation provider live", () => {
@@ -135,7 +197,7 @@ describeLive("music generation provider live", () => {
     async () => {
       const cfg = withPluginsEnabled(getRuntimeConfig());
       const configuredModels = resolveConfiguredLiveMusicModels(cfg);
-      const agentDir = resolveOpenClawAgentDir();
+      const agentDir = resolveDefaultAgentDir(cfg as never);
       const attempted: string[] = [];
       const skipped: string[] = [];
       const failures: string[] = [];
@@ -157,7 +219,7 @@ describeLive("music generation provider live", () => {
           requireProfileKeys: REQUIRE_PROFILE_KEYS,
           hasLiveKeys,
         });
-        let authLabel = "unresolved";
+        let authLabel;
         try {
           const auth = await resolveApiKeyForProvider({
             provider: testCase.providerId,
@@ -193,10 +255,12 @@ describeLive("music generation provider live", () => {
             cfg,
             agentDir,
             authStore,
-            ...(generateCaps?.supportsDuration ? { durationSeconds: 12 } : {}),
-            ...(generateCaps?.supportsFormat ? { format: "mp3" as const } : {}),
-            ...(liveLyrics ? { lyrics: liveLyrics } : {}),
-            ...(generateCaps?.supportsInstrumental && !liveLyrics ? { instrumental: true } : {}),
+            ...(generateCaps?.supportsDuration ? { durationSeconds: 12 } : undefined),
+            ...(generateCaps?.supportsFormat ? { format: "mp3" as const } : undefined),
+            ...(liveLyrics ? { lyrics: liveLyrics } : undefined),
+            ...(generateCaps?.supportsInstrumental && !liveLyrics
+              ? { instrumental: true }
+              : undefined),
           });
 
           expect(result.tracks.length).toBeGreaterThan(0);
@@ -204,8 +268,9 @@ describeLive("music generation provider live", () => {
           expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(1024);
           attempted.push(`${testCase.providerId}:generate:${providerModel} (${authLabel})`);
         } catch (error) {
-          if (isSkippableLiveMusicProviderError(testCase.providerId, error)) {
-            skipped.push(`${testCase.providerId}:generate transient no-audio response`);
+          const skipReason = resolveLiveMusicSkipReason(testCase.providerId, error);
+          if (skipReason) {
+            skipped.push(`${testCase.providerId}:generate ${skipReason}`);
             continue;
           }
           failures.push(
@@ -242,8 +307,9 @@ describeLive("music generation provider live", () => {
           expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(1024);
           attempted.push(`${testCase.providerId}:edit:${providerModel} (${authLabel})`);
         } catch (error) {
-          if (isSkippableLiveMusicProviderError(testCase.providerId, error)) {
-            skipped.push(`${testCase.providerId}:edit transient no-audio response`);
+          const skipReason = resolveLiveMusicSkipReason(testCase.providerId, error);
+          if (skipReason) {
+            skipped.push(`${testCase.providerId}:edit ${skipReason}`);
             continue;
           }
           failures.push(
@@ -258,13 +324,21 @@ describeLive("music generation provider live", () => {
         `[live:music-generation] attempted=${attempted.join(", ") || "none"} skipped=${skipped.join(", ") || "none"} failures=${failures.join(" | ") || "none"} shellEnv=${getShellEnvAppliedKeys().join(", ") || "none"}`,
       );
 
-      if (attempted.length === 0) {
-        expect(failures).toEqual([]);
-        console.warn("[live:music-generation] no provider had usable auth; skipping assertions");
-        return;
-      }
-      expect(failures).toEqual([]);
+      expectMusicLiveSweepPassed({ attempted, failures, providerFilter, skipped });
     },
     10 * 60_000,
   );
+});
+
+describe("music generation live provider filter coverage", () => {
+  it("fails filtered sweeps when no requested provider is attempted", () => {
+    expect(() =>
+      expectMusicLiveSweepPassed({
+        attempted: [],
+        failures: [],
+        providerFilter: new Set(["minimax"]),
+        skipped: ["minimax: no usable auth"],
+      }),
+    ).toThrow(/requested provider filter produced no live attempts: minimax/u);
+  });
 });

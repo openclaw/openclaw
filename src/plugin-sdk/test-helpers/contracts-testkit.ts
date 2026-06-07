@@ -1,3 +1,7 @@
+/**
+ * Core plugin SDK contract-test fixture builders and registration helpers.
+ */
+import type { PluginRegistryParams } from "../../plugins/registry-types.js";
 import type { OpenClawPluginApi } from "../plugin-entry.js";
 import {
   createPluginRecord,
@@ -8,54 +12,16 @@ import {
   type PluginRecord,
   type PluginRuntime,
 } from "../testing.js";
+export { assertNoImportTimeSideEffects } from "./import-side-effects.js";
+import { uniqueSortedStrings } from "./string-utils.js";
 
-export { registerProviders, requireProvider };
+export { registerProviders, requireProvider, uniqueSortedStrings };
 
-export function uniqueSortedStrings(values: readonly string[]) {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
-}
-
-function formatImportSideEffectCall(args: readonly unknown[]): string {
-  if (args.length === 0) {
-    return "(no args)";
-  }
-  return args
-    .map((arg) => {
-      try {
-        return JSON.stringify(arg);
-      } catch {
-        return String(arg);
-      }
-    })
-    .join(", ");
-}
-
-export function assertNoImportTimeSideEffects(params: {
-  moduleId: string;
-  forbiddenSeam: string;
-  calls: readonly (readonly unknown[])[];
-  why: string;
-  fixHint: string;
-}) {
-  if (params.calls.length === 0) {
-    return;
-  }
-  const observedCalls = params.calls
-    .slice(0, 3)
-    .map((call, index) => `  ${index + 1}. ${formatImportSideEffectCall(call)}`)
-    .join("\n");
-  throw new Error(
-    [
-      `[runtime contract] ${params.moduleId} touched ${params.forbiddenSeam} during module import.`,
-      `why this is banned: ${params.why}`,
-      `expected fix: ${params.fixHint}`,
-      `observed calls (${params.calls.length}):`,
-      observedCalls,
-    ].join("\n"),
-  );
-}
-
-export function createPluginRegistryFixture(config = {} as OpenClawConfig) {
+/** Creates a minimal plugin registry fixture with quiet logger defaults. */
+export function createPluginRegistryFixture(
+  config = {} as OpenClawConfig,
+  params: { hostServices?: PluginRegistryParams["hostServices"] } = {},
+) {
   return {
     config,
     registry: createPluginRegistry({
@@ -66,10 +32,12 @@ export function createPluginRegistryFixture(config = {} as OpenClawConfig) {
         debug() {},
       },
       runtime: {} as PluginRuntime,
+      ...(params.hostServices ? { hostServices: params.hostServices } : {}),
     }),
   };
 }
 
+/** Registers one plugin record against a registry fixture and invokes its register hook. */
 export function registerTestPlugin(params: {
   registry: ReturnType<typeof createPluginRegistry>;
   config: OpenClawConfig;
@@ -84,6 +52,7 @@ export function registerTestPlugin(params: {
   );
 }
 
+/** Registers a virtual plugin record for tests that do not need a real package path. */
 export function registerVirtualTestPlugin(params: {
   registry: ReturnType<typeof createPluginRegistry>;
   config: OpenClawConfig;

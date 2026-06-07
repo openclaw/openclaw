@@ -1,8 +1,9 @@
+// Slack plugin module implements account reply mode behavior.
 import type { SlackAccountConfig } from "./runtime-api.js";
 
-export type SlackReplyToMode = "off" | "first" | "all" | "batched";
+type SlackReplyToMode = "off" | "first" | "all" | "batched";
 
-export type SlackReplyToModeAccount = {
+type SlackReplyToModeAccount = {
   replyToMode?: SlackReplyToMode;
   replyToModeByChatType?: SlackAccountConfig["replyToModeByChatType"];
   dm?: { replyToMode?: SlackReplyToMode };

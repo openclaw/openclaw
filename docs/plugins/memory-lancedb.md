@@ -1,20 +1,32 @@
 ---
-summary: "Configure the bundled LanceDB memory plugin, including local Ollama-compatible embeddings"
+summary: "Configure the official external LanceDB memory plugin, including local Ollama-compatible embeddings"
 read_when:
-  - You are configuring the bundled memory-lancedb plugin
+  - You are configuring the memory-lancedb plugin
   - You want LanceDB-backed long-term memory with auto-recall or auto-capture
   - You are using local OpenAI-compatible embeddings such as Ollama
 title: "Memory LanceDB"
 sidebarTitle: "Memory LanceDB"
 ---
 
-`memory-lancedb` is a bundled memory plugin that stores long-term memory in
+`memory-lancedb` is an official external memory plugin that stores long-term memory in
 LanceDB and uses embeddings for recall. It can automatically recall relevant
 memories before a model turn and capture important facts after a response.
 
 Use it when you want a local vector database for memory, need an
 OpenAI-compatible embedding endpoint, or want to keep a memory database outside
 the default built-in memory store.
+
+## Installation
+
+Install `memory-lancedb` before setting `plugins.slots.memory = "memory-lancedb"`:
+
+```bash
+openclaw plugins install @openclaw/memory-lancedb
+```
+
+The plugin is published to npm and is not bundled into the OpenClaw runtime image.
+The installer writes the plugin entry and switches the memory slot when no other
+plugin owns it.
 
 <Note>
 `memory-lancedb` is an active memory plugin. Enable it by selecting the memory
@@ -113,8 +125,8 @@ embeddings:
 }
 ```
 
-OpenAI Codex / ChatGPT OAuth (`openai-codex`) is not an OpenAI Platform
-embeddings credential. For OpenAI embeddings, use an OpenAI API key auth profile,
+OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
+For OpenAI embeddings, use an OpenAI API key auth profile,
 `OPENAI_API_KEY`, or `models.providers.openai.apiKey`. OAuth-only users can use
 another embedding-capable provider such as GitHub Copilot or Ollama.
 
@@ -196,10 +208,11 @@ in. For example, ZhiPu `embedding-3` uses `2048` dimensions:
 
 `memory-lancedb` has two separate text limits:
 
-| Setting           | Default | Range     | Applies to                                    |
-| ----------------- | ------- | --------- | --------------------------------------------- |
-| `recallMaxChars`  | `1000`  | 100-10000 | text sent to the embedding API for recall     |
-| `captureMaxChars` | `500`   | 100-10000 | assistant message length eligible for capture |
+| Setting           | Default | Range     | Applies to                                                |
+| ----------------- | ------- | --------- | --------------------------------------------------------- |
+| `recallMaxChars`  | `1000`  | 100-10000 | text sent to the embedding API for recall                 |
+| `captureMaxChars` | `500`   | 100-10000 | message length eligible for auto-capture                  |
+| `customTriggers`  | `[]`    | 0-50      | literal phrases that make auto-capture consider a message |
 
 `recallMaxChars` controls auto-recall, the `memory_recall` tool, the
 `memory_forget` query path, and `openclaw ltm search`. Auto-recall prefers the
@@ -209,6 +222,10 @@ out of the embedding request.
 
 `captureMaxChars` controls whether a response is short enough to be considered
 for automatic capture. It does not cap recall query embeddings.
+
+`customTriggers` lets you add literal auto-capture phrases without writing
+regular expressions. The built-in triggers include common English, Czech,
+Chinese, Japanese, and Korean memory phrases.
 
 ## Commands
 
@@ -220,6 +237,19 @@ openclaw ltm list
 openclaw ltm search "project preferences"
 openclaw ltm stats
 ```
+
+The `query` subcommand runs a non-vector query against the LanceDB table
+directly:
+
+```bash
+openclaw ltm query --cols id,text,createdAt --limit 20
+openclaw ltm query --filter "category = 'preference'" --order-by createdAt:desc
+```
+
+- `--cols <columns>`: comma-separated column allowlist (defaults to `id`, `text`, `importance`, `category`, `createdAt`).
+- `--filter <condition>`: SQL-style WHERE clause; capped at 200 characters and restricted to alphanumerics, comparison operators, quotes, parentheses, and a small set of safe punctuation.
+- `--limit <n>`: positive integer; default `10`.
+- `--order-by <column>:<asc|desc>`: in-memory sort applied after the filter; the sort column is auto-included in the projection.
 
 Agents also get LanceDB memory tools from the active memory plugin:
 
@@ -281,9 +311,9 @@ supports `${ENV_VAR}` expansion:
 ## Runtime dependencies
 
 `memory-lancedb` depends on the native `@lancedb/lancedb` package. Packaged
-OpenClaw installs first try the bundled runtime dependency and can repair the
-plugin runtime dependency under OpenClaw state when the bundled import is not
-available.
+OpenClaw treats that package as part of the plugin package. Gateway startup
+does not repair plugin dependencies; if the dependency is missing, reinstall or
+update the plugin package and restart the Gateway.
 
 If an older install logs a missing `dist/package.json` or missing
 `@lancedb/lancedb` error during plugin load, upgrade OpenClaw and restart the

@@ -1,3 +1,4 @@
+// Verifies plugin auto-enable prefer-over precedence rules.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,6 +40,20 @@ function writeBundledChannelPackage(rootDir: string, channelId: string): void {
         },
       },
     }),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: channelId,
+      configSchema: { type: "object" },
+      channels: [channelId],
+    }),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "index.js"),
+    "export default { register() {} };\n",
     "utf-8",
   );
 }

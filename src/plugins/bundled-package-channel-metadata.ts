@@ -1,44 +1,13 @@
-import fs from "node:fs";
-import path from "node:path";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import {
-  getPackageManifestMetadata,
-  type PackageManifest,
-  type PluginPackageChannel,
-} from "./manifest.js";
+// Collects bundled package channel metadata from plugin catalogs.
+import { listChannelCatalogEntries } from "./channel-catalog-registry.js";
+import type { PluginPackageChannel } from "./manifest.js";
 
-let bundledPackageChannelMetadataCache: readonly PluginPackageChannel[] | undefined;
-
-function readPackageManifest(pluginDir: string): PackageManifest | undefined {
-  const packagePath = path.join(pluginDir, "package.json");
-  if (!fs.existsSync(packagePath)) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(fs.readFileSync(packagePath, "utf-8")) as PackageManifest;
-  } catch {
-    return undefined;
-  }
-}
-
+/** Lists channel metadata contributed by bundled package manifests. */
 export function listBundledPackageChannelMetadata(): readonly PluginPackageChannel[] {
-  if (bundledPackageChannelMetadataCache) {
-    return bundledPackageChannelMetadataCache;
-  }
-  const scanDir = resolveBundledPluginsDir();
-  if (!scanDir || !fs.existsSync(scanDir)) {
-    bundledPackageChannelMetadataCache = [];
-    return bundledPackageChannelMetadataCache;
-  }
-  bundledPackageChannelMetadataCache = fs
-    .readdirSync(scanDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => readPackageManifest(path.join(scanDir, entry.name)))
-    .map((manifest) => getPackageManifestMetadata(manifest)?.channel)
-    .filter((channel): channel is PluginPackageChannel => Boolean(channel?.id));
-  return bundledPackageChannelMetadataCache;
+  return listChannelCatalogEntries({ origin: "bundled" }).map((entry) => entry.channel);
 }
 
+/** Finds bundled package channel metadata by id or alias. */
 export function findBundledPackageChannelMetadata(
   channelId: string,
 ): PluginPackageChannel | undefined {

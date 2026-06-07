@@ -1,15 +1,19 @@
+// Verifies installed packages can bootstrap the default OpenClaw workspace files.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
+/**
+ * Template pack files that must be present in installed packages.
+ */
 export const WORKSPACE_TEMPLATE_PACK_PATHS = [
   "docs/reference/templates/AGENTS.md",
   "docs/reference/templates/SOUL.md",
   "docs/reference/templates/TOOLS.md",
   "docs/reference/templates/IDENTITY.md",
   "docs/reference/templates/USER.md",
-  "docs/reference/templates/HEARTBEAT.md",
+  "src/agents/templates/HEARTBEAT.md",
   "docs/reference/templates/BOOTSTRAP.md",
 ];
 
@@ -22,6 +26,51 @@ const REQUIRED_BOOTSTRAP_WORKSPACE_FILES = [
   "HEARTBEAT.md",
   "BOOTSTRAP.md",
 ];
+
+const WORKSPACE_BOOTSTRAP_SMOKE_TIMEOUT_MS = 15_000;
+const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
+
+/**
+ * Creates a minimal isolated environment for workspace bootstrap smoke runs.
+ */
+export function createWorkspaceBootstrapSmokeEnv(env, homeDir, overrides = {}) {
+  const allowlistedEnvEntries = [
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "SystemRoot",
+    "ComSpec",
+    "PATHEXT",
+    "WINDIR",
+  ];
+  const windowsRoot = env.SystemRoot ?? env.WINDIR ?? "C:\\Windows";
+  const nodeBinDir = dirname(process.execPath);
+  const safePath =
+    process.platform === "win32"
+      ? `${nodeBinDir};${windowsRoot}\\System32;${windowsRoot}`
+      : `${nodeBinDir}:${SAFE_UNIX_SMOKE_PATH}`;
+
+  return {
+    ...Object.fromEntries(
+      allowlistedEnvEntries.flatMap((key) => {
+        const value = env[key];
+        return typeof value === "string" && value.length > 0 ? [[key, value]] : [];
+      }),
+    ),
+    PATH: safePath,
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+    OPENCLAW_HOME: homeDir,
+    OPENCLAW_NO_ONBOARD: "1",
+    OPENCLAW_SUPPRESS_NOTES: "1",
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+    AWS_EC2_METADATA_DISABLED: "true",
+    AWS_SHARED_CREDENTIALS_FILE: join(homeDir, ".aws", "credentials"),
+    AWS_CONFIG_FILE: join(homeDir, ".aws", "config"),
+    ...overrides,
+  };
+}
 
 function collectMissingBootstrapWorkspaceFiles(workspaceDir) {
   return REQUIRED_BOOTSTRAP_WORKSPACE_FILES.filter(
@@ -48,6 +97,9 @@ function describeExecFailure(error) {
   return [error.message, stdout, stderr].filter(Boolean).join(" | ");
 }
 
+/**
+ * Runs the installed CLI workspace bootstrap smoke and validates created files.
+ */
 export function runInstalledWorkspaceBootstrapSmoke(params) {
   const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-workspace-bootstrap-smoke-"));
   const homeDir = join(tempRoot, "home");
@@ -77,12 +129,8 @@ export function runInstalledWorkspaceBootstrapSmoke(params) {
           encoding: "utf8",
           maxBuffer: 1024 * 1024 * 16,
           stdio: ["ignore", "pipe", "pipe"],
-          env: {
-            ...process.env,
-            HOME: homeDir,
-            OPENCLAW_HOME: homeDir,
-            OPENCLAW_SUPPRESS_NOTES: "1",
-          },
+          timeout: WORKSPACE_BOOTSTRAP_SMOKE_TIMEOUT_MS,
+          env: createWorkspaceBootstrapSmokeEnv(process.env, homeDir),
         },
       );
     } catch (error) {
@@ -98,8 +146,9 @@ export function runInstalledWorkspaceBootstrapSmoke(params) {
     const workspaceDir = join(homeDir, ".openclaw", "workspace");
     const missingFiles = collectMissingBootstrapWorkspaceFiles(workspaceDir);
     if (missingFiles.length > 0) {
+      const outputDetails = combinedOutput.length > 0 ? `\nCommand output:\n${combinedOutput}` : "";
       throw new Error(
-        `installed workspace bootstrap did not create required files in ${workspaceDir}: ${missingFiles.join(", ")}`,
+        `installed workspace bootstrap did not create required files in ${workspaceDir}: ${missingFiles.join(", ")}${outputDetails}`,
       );
     }
   } finally {

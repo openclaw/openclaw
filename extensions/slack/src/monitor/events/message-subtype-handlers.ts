@@ -1,9 +1,10 @@
+// Slack plugin module implements message subtype handlers behavior.
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMessageChangedEvent, SlackMessageDeletedEvent } from "../types.js";
 
 type SupportedSubtype = "message_changed" | "message_deleted";
 
-export type SlackMessageSubtypeHandler = {
+type SlackMessageSubtypeHandler = {
   subtype: SupportedSubtype;
   eventKind: SupportedSubtype;
   describe: (channelLabel: string) => string;

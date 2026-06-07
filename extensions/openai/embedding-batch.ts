@@ -1,3 +1,4 @@
+// Openai plugin module implements embedding batch behavior.
 import {
   applyEmbeddingBatchOutputLine,
   buildBatchHeaders,
@@ -17,6 +18,7 @@ import {
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenAiEmbeddingClient } from "./embedding-provider.js";
 
 type EmbeddingBatchExecutionParams = {
@@ -27,7 +29,7 @@ type EmbeddingBatchExecutionParams = {
   debug?: (message: string, data?: Record<string, unknown>) => void;
 };
 
-export type OpenAiBatchRequest = {
+type OpenAiBatchRequest = {
   custom_id: string;
   method: "POST";
   url: "/v1/embeddings";
@@ -37,8 +39,8 @@ export type OpenAiBatchRequest = {
   };
 };
 
-export type OpenAiBatchStatus = EmbeddingBatchStatus;
-export type OpenAiBatchOutputLine = ProviderBatchOutputLine;
+type OpenAiBatchStatus = EmbeddingBatchStatus;
+type OpenAiBatchOutputLine = ProviderBatchOutputLine;
 
 export const OPENAI_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const OPENAI_BATCH_COMPLETION_WINDOW = "24h";
@@ -122,15 +124,17 @@ async function fetchOpenAiBatchResource<T>(params: {
   });
 }
 
-function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
+export function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
   if (!text.trim()) {
     return [];
   }
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as OpenAiBatchOutputLine);
+  return normalizeStringEntries(text.split("\n")).map((line) => {
+    try {
+      return JSON.parse(line) as OpenAiBatchOutputLine;
+    } catch {
+      throw new Error("OpenAI embedding batch output contained malformed JSONL");
+    }
+  });
 }
 
 async function readOpenAiBatchError(params: {
@@ -191,7 +195,9 @@ async function waitForOpenAiBatch(params: {
       throw new Error(`openai batch ${params.batchId} timed out after ${params.timeoutMs}ms`);
     }
     params.debug?.(`openai batch ${params.batchId} ${state}; waiting ${params.pollIntervalMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, params.pollIntervalMs);
+    });
     current = undefined;
   }
 }
@@ -208,7 +214,7 @@ export async function runOpenAiEmbeddingBatches(
       maxRequests: OPENAI_BATCH_MAX_REQUESTS,
       debugLabel: "memory embeddings: openai batch submit",
     }),
-    runGroup: async ({ group, groupIndex, groups, byCustomId }) => {
+    runGroup: async ({ group, groupIndex, groups, byCustomId, pollIntervalMs, timeoutMs }) => {
       const batchInfo = await submitOpenAiBatch({
         openAi: params.openAi,
         requests: group,
@@ -236,8 +242,8 @@ export async function runOpenAiEmbeddingBatches(
             openAi: params.openAi,
             batchId,
             wait: params.wait,
-            pollIntervalMs: params.pollIntervalMs,
-            timeoutMs: params.timeoutMs,
+            pollIntervalMs,
+            timeoutMs,
             debug: params.debug,
             initial: batchInfo,
           }),

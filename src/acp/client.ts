@@ -1,3 +1,4 @@
+/** Interactive stdio ACP client used to connect a terminal session to an OpenClaw ACP server. */
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,8 +12,8 @@ import {
   type RequestPermissionRequest,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   buildAcpClientStripKeys,
   resolveAcpClientSpawnEnv,
@@ -21,15 +22,7 @@ import {
   shouldStripProviderAuthEnvVarsForAcpServer,
 } from "./client-helpers.js";
 
-export {
-  buildAcpClientStripKeys,
-  resolveAcpClientSpawnEnv,
-  resolveAcpClientSpawnInvocation,
-  resolvePermissionRequest,
-  shouldStripProviderAuthEnvVarsForAcpServer,
-} from "./client-helpers.js";
-
-export type AcpClientOptions = {
+type AcpClientOptions = {
   cwd?: string;
   serverCommand?: string;
   serverArgs?: string[];
@@ -37,7 +30,7 @@ export type AcpClientOptions = {
   verbose?: boolean;
 };
 
-export type AcpClientHandle = {
+type AcpClientHandle = {
   client: ClientSideConnection;
   agent: ChildProcess;
   sessionId: string;
@@ -105,14 +98,12 @@ function printSessionUpdate(notification: SessionNotification): void {
       if (names) {
         console.log(`\n[commands] ${names}`);
       }
-      return;
     }
     default:
-      return;
   }
 }
 
-export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
+async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
   const cwd = opts.cwd ?? process.cwd();
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
@@ -125,7 +116,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const defaultServerArgs = entryPath ? [entryPath, ...serverArgs] : serverArgs;
   const serverCommand = opts.serverCommand ?? defaultServerCommand;
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : defaultServerArgs;
-  const { getActiveSkillEnvKeys } = await import("../agents/skills/env-overrides.runtime.js");
+  const { getActiveSkillEnvKeys } = await import("../skills/runtime/env-overrides.runtime.js");
   const stripProviderAuthEnvVars = shouldStripProviderAuthEnvVarsForAcpServer({
     serverCommand,
     serverArgs: effectiveArgs,
@@ -199,6 +190,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   };
 }
 
+/** Starts the terminal prompt loop for a local ACP client session. */
 export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Promise<void> {
   const { client, agent, sessionId } = await createAcpClient(opts);
 
@@ -212,29 +204,31 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
   console.log('Type a prompt, or "exit" to quit.\n');
 
   const prompt = () => {
-    rl.question("> ", async (input) => {
-      const text = input.trim();
-      if (!text) {
+    rl.question("> ", (input) => {
+      void (async () => {
+        const text = input.trim();
+        if (!text) {
+          prompt();
+          return;
+        }
+        if (text === "exit" || text === "quit") {
+          agent.kill();
+          rl.close();
+          process.exit(0);
+        }
+
+        try {
+          const response = await client.prompt({
+            sessionId,
+            prompt: [{ type: "text", text }],
+          });
+          console.log(`\n[${response.stopReason}]\n`);
+        } catch (err) {
+          console.error(`\n[error] ${String(err)}\n`);
+        }
+
         prompt();
-        return;
-      }
-      if (text === "exit" || text === "quit") {
-        agent.kill();
-        rl.close();
-        process.exit(0);
-      }
-
-      try {
-        const response = await client.prompt({
-          sessionId,
-          prompt: [{ type: "text", text }],
-        });
-        console.log(`\n[${response.stopReason}]\n`);
-      } catch (err) {
-        console.error(`\n[error] ${String(err)}\n`);
-      }
-
-      prompt();
+      })();
     });
   };
 

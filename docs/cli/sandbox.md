@@ -164,6 +164,15 @@ Use `openclaw sandbox recreate` to force removal of old runtimes. They are recre
 Prefer `openclaw sandbox recreate` over manual backend-specific cleanup. It uses the Gateway's runtime registry and avoids mismatches when scope or session keys change.
 </Tip>
 
+## Registry migration
+
+OpenClaw stores sandbox runtime metadata in the shared SQLite state database. Older installs may still have legacy sandbox registry files:
+
+- `~/.openclaw/sandbox/containers.json`
+- `~/.openclaw/sandbox/browsers.json`
+
+Some upgrades may also have one JSON shard per container/browser under `~/.openclaw/sandbox/containers/` or `~/.openclaw/sandbox/browsers/`. Regular sandbox runtime reads do not rewrite those legacy sources. Run `openclaw doctor --fix` to migrate valid legacy entries into SQLite. Invalid legacy files are quarantined so one bad old registry cannot hide current runtime entries.
+
 ## Configuration
 
 Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):

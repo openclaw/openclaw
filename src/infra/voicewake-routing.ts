@@ -1,18 +1,23 @@
+// Persists and resolves voice wake routing rules.
 import path from "node:path";
+import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import {
   classifySessionKeyShape,
   isValidAgentId,
   normalizeAgentId,
 } from "../routing/session-key.js";
-import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
-export type VoiceWakeRouteTarget =
+// Voice wake routing maps normalized wake phrases to an agent, session key, or
+// current session target and persists the mapping under state settings.
+type VoiceWakeRouteTarget =
   | { mode: "current"; agentId?: undefined; sessionKey?: undefined }
   | { agentId: string; sessionKey?: undefined; mode?: undefined }
   | { sessionKey: string; agentId?: undefined; mode?: undefined };
 
-export type VoiceWakeRouteRule = {
+type VoiceWakeRouteRule = {
   trigger: string;
   target: VoiceWakeRouteTarget;
 };
@@ -39,6 +44,7 @@ function resolvePath(baseDir?: string) {
   return path.join(root, "settings", "voicewake-routing.json");
 }
 
+/** Normalize a voice wake trigger phrase for matching and duplicate checks. */
 export function normalizeVoiceWakeTriggerWord(value: string): string {
   return value
     .toLowerCase()
@@ -46,14 +52,6 @@ export function normalizeVoiceWakeTriggerWord(value: string): string {
     .map((token) => token.replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, ""))
     .filter(Boolean)
     .join(" ");
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function normalizeRouteTarget(value: unknown): VoiceWakeRouteTarget | null {
@@ -102,10 +100,6 @@ function isCanonicalAgentSessionKey(value: string): boolean {
     return false;
   }
   return !trimmed.split(":").some((part) => part.length === 0);
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function validateRouteTargetInput(
@@ -164,6 +158,7 @@ function validateRouteTargetInput(
   };
 }
 
+/** Validate user-provided voice wake routing config before persistence. */
 export function validateVoiceWakeRoutingConfigInput(
   input: unknown,
 ): { ok: true } | { ok: false; message: string } {
@@ -231,6 +226,8 @@ export function validateVoiceWakeRoutingConfigInput(
   }
   return { ok: true };
 }
+
+/** Normalize persisted or user-provided voice wake routing config. */
 export function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutingConfig {
   if (!input || typeof input !== "object") {
     return { ...DEFAULT_ROUTING };
@@ -261,17 +258,19 @@ export function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutin
 
 const withLock = createAsyncLock();
 
+/** Load persisted voice wake routing config from state. */
 export async function loadVoiceWakeRoutingConfig(
   baseDir?: string,
 ): Promise<VoiceWakeRoutingConfig> {
   const filePath = resolvePath(baseDir);
-  const existing = await readJsonFile<unknown>(filePath);
+  const existing = await tryReadJson<unknown>(filePath);
   if (!existing) {
     return { ...DEFAULT_ROUTING };
   }
   return normalizeVoiceWakeRoutingConfig(existing);
 }
 
+/** Persist normalized voice wake routing config. */
 export async function setVoiceWakeRoutingConfig(
   config: unknown,
   baseDir?: string,
@@ -283,17 +282,14 @@ export async function setVoiceWakeRoutingConfig(
       ...normalized,
       updatedAtMs: Date.now(),
     };
-    await writeJsonAtomic(filePath, next);
+    await writeJson(filePath, next);
     return next;
   });
 }
 
-export type VoiceWakeResolvedRoute =
-  | { mode: "current" }
-  | { agentId: string }
-  | { sessionKey: string };
+type VoiceWakeResolvedRoute = { mode: "current" } | { agentId: string } | { sessionKey: string };
 
-export function resolveVoiceWakeRouteTarget(
+function resolveVoiceWakeRouteTarget(
   routeTarget: VoiceWakeRouteTarget | undefined,
 ): VoiceWakeResolvedRoute {
   if (!routeTarget || ("mode" in routeTarget && routeTarget.mode === "current")) {
@@ -308,6 +304,7 @@ export function resolveVoiceWakeRouteTarget(
   return { mode: "current" };
 }
 
+/** Resolve the route target for a normalized wake trigger. */
 export function resolveVoiceWakeRouteByTrigger(params: {
   trigger: string | undefined;
   config: VoiceWakeRoutingConfig;

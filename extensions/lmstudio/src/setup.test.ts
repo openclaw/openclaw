@@ -1,3 +1,4 @@
+// Lmstudio tests cover setup plugin behavior.
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -8,9 +9,11 @@ import {
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-setup";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
+  LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
+  LMSTUDIO_DOCKER_HOST_INFERENCE_BASE_URL,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
 } from "./defaults.js";
 import {
@@ -46,6 +49,13 @@ vi.mock("openclaw/plugin-sdk/provider-setup", async (importOriginal) => {
     configureOpenAICompatibleSelfHostedProviderNonInteractive: (...args: unknown[]) =>
       configureSelfHostedNonInteractiveMock(...args),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./models.fetch.js");
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth");
+  vi.doUnmock("openclaw/plugin-sdk/provider-setup");
+  vi.resetModules();
 });
 
 function createModel(id: string, name = id): ModelDefinitionConfig {
@@ -172,6 +182,126 @@ function createQueuedWizardPrompterHarness(textValues: string[]): {
   return { prompter, note, text };
 }
 
+function createMethodBoundWizardPrompterHarness(textValues: string[]): {
+  prompter: WizardPrompter;
+  note: ReturnType<typeof vi.fn>;
+  text: ReturnType<typeof vi.fn>;
+} {
+  const queue = [...textValues];
+  const note = vi.fn(async (_message: string, _title?: string) => {});
+  const text = vi.fn(async () => queue.shift() ?? "");
+
+  class MethodBoundWizardPrompter implements WizardPrompter {
+    async intro() {}
+    async outro() {}
+    async note(message: string, title?: string) {
+      await this.recordNote(message, title);
+    }
+    async select<T>(params: { options: Array<{ value: T }> }) {
+      const firstOption = params.options[0];
+      if (!firstOption) {
+        throw new Error("select called without options");
+      }
+      return firstOption.value;
+    }
+    async multiselect() {
+      return [];
+    }
+    async text() {
+      return await this.readText();
+    }
+    async confirm() {
+      return false;
+    }
+    progress() {
+      return {
+        update: () => {},
+        stop: () => {},
+      };
+    }
+    private async readText() {
+      return await text();
+    }
+    private async recordNote(message: string, title?: string) {
+      await note(message, title);
+    }
+  }
+
+  return { prompter: new MethodBoundWizardPrompter(), note, text };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an array`);
+  }
+  return value;
+}
+
+function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key]).toEqual(expectedValue);
+  }
+}
+
+function firstMockArg(mock: { mock: { calls: Array<readonly unknown[]> } }, label: string) {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
+function requirePathRecord(value: unknown, label: string, path: string[]): Record<string, unknown> {
+  let current = value;
+  for (const key of path) {
+    current = requireRecord(current, label)[key];
+  }
+  return requireRecord(current, label);
+}
+
+function requireNonInteractiveLmstudioProvider(result: unknown): Record<string, unknown> {
+  return requirePathRecord(result, "LM Studio provider config", [
+    "models",
+    "providers",
+    "lmstudio",
+  ]);
+}
+
+function requireConfigPatchLmstudioProvider(result: unknown): Record<string, unknown> {
+  return requirePathRecord(result, "LM Studio config patch provider", [
+    "configPatch",
+    "models",
+    "providers",
+    "lmstudio",
+  ]);
+}
+
+function requireProviderModels(provider: unknown): unknown[] {
+  return requireArray(requireRecord(provider, "LM Studio provider").models, "LM Studio models");
+}
+
+function expectModelFields(model: unknown, expected: Record<string, unknown>) {
+  expectRecordFields(model, "LM Studio model", expected);
+}
+
+function expectProfileFields(profile: unknown, expectedCredential: Record<string, unknown>) {
+  const profileRecord = requireRecord(profile, "LM Studio profile");
+  expect(profileRecord.profileId).toBe("lmstudio:default");
+  expect(profileRecord.credential).toEqual(expectedCredential);
+}
+
 describe("lmstudio setup", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -246,18 +376,19 @@ describe("lmstudio setup", () => {
       apiKey: "lmstudio-test-key",
       timeoutMs: 5000,
     });
-    expect(result?.models?.providers?.lmstudio).toMatchObject({
+    const provider = requireNonInteractiveLmstudioProvider(result);
+    expectRecordFields(provider, "LM Studio provider config", {
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
       auth: "api-key",
       apiKey: "LM_API_TOKEN",
-      models: [
-        {
-          id: "qwen3-8b-instruct",
-          contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-          contextTokens: 64000,
-        },
-      ],
+    });
+    const models = requireProviderModels(provider);
+    expect(models).toHaveLength(1);
+    expectModelFields(models[0], {
+      id: "qwen3-8b-instruct",
+      contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+      contextTokens: 64000,
     });
     expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
       "lmstudio/qwen3-8b-instruct",
@@ -288,7 +419,7 @@ describe("lmstudio setup", () => {
 
     const result = await configureLmstudioNonInteractive(ctx);
 
-    expect(result?.models?.providers?.lmstudio).toMatchObject({
+    expectRecordFields(requireNonInteractiveLmstudioProvider(result), "LM Studio provider config", {
       auth: "api-key",
       apiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
       headers: {
@@ -321,25 +452,24 @@ describe("lmstudio setup", () => {
 
     const result = await configureLmstudioNonInteractive(ctx);
 
-    expect(configureSelfHostedNonInteractiveMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          opts: expect.objectContaining({
-            customModelId: "phi-4",
-          }),
-        }),
-      }),
+    const setupCall = requireRecord(
+      firstMockArg(configureSelfHostedNonInteractiveMock, "self-hosted setup"),
+      "self-hosted setup call",
     );
+    const setupCtx = requireRecord(setupCall.ctx, "self-hosted setup context");
+    expectRecordFields(setupCtx.opts, "self-hosted setup opts", {
+      customModelId: "phi-4",
+    });
     expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe("lmstudio/phi-4");
-    expect(result?.models?.providers?.lmstudio?.models).toEqual([
-      expect.objectContaining({
-        id: "phi-4",
-        contextWindow: 65536,
-      }),
-      expect.objectContaining({
-        id: "qwen3-8b-instruct",
-      }),
-    ]);
+    const models = requireProviderModels(requireNonInteractiveLmstudioProvider(result));
+    expect(models).toHaveLength(2);
+    expectModelFields(models[0], {
+      id: "phi-4",
+      contextWindow: 65536,
+    });
+    expectModelFields(models[1], {
+      id: "qwen3-8b-instruct",
+    });
   });
 
   it("non-interactive setup synthesizes lmstudio-local when API key is missing", async () => {
@@ -356,15 +486,16 @@ describe("lmstudio setup", () => {
       apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
       timeoutMs: 5000,
     });
-    expect(result?.models?.providers?.lmstudio).toMatchObject({
+    const provider = requireNonInteractiveLmstudioProvider(result);
+    expectRecordFields(provider, "LM Studio provider config", {
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
       apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-      models: [
-        {
-          id: "qwen3-8b-instruct",
-        },
-      ],
+    });
+    const models = requireProviderModels(provider);
+    expect(models).toHaveLength(1);
+    expectModelFields(models[0], {
+      id: "qwen3-8b-instruct",
     });
   });
 
@@ -421,20 +552,21 @@ describe("lmstudio setup", () => {
     expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
       "lmstudio/qwen3-8b-instruct",
     );
-    expect(result?.models?.providers?.lmstudio).toMatchObject({
+    const provider = requireNonInteractiveLmstudioProvider(result);
+    expectRecordFields(provider, "LM Studio provider config", {
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
       headers: {
         Authorization: "Bearer proxy-token",
       },
-      models: [
-        {
-          id: "qwen3-8b-instruct",
-        },
-      ],
     });
-    expect(result?.models?.providers?.lmstudio).not.toHaveProperty("apiKey");
-    expect(result?.models?.providers?.lmstudio).not.toHaveProperty("auth");
+    const models = requireProviderModels(provider);
+    expect(models).toHaveLength(1);
+    expectModelFields(models[0], {
+      id: "qwen3-8b-instruct",
+    });
+    expect(provider).not.toHaveProperty("apiKey");
+    expect(provider).not.toHaveProperty("auth");
     expect(result?.auth).toBeUndefined();
   });
 
@@ -492,20 +624,21 @@ describe("lmstudio setup", () => {
     expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
       "lmstudio/qwen3-8b-instruct",
     );
-    expect(result?.models?.providers?.lmstudio).toMatchObject({
+    const provider = requireNonInteractiveLmstudioProvider(result);
+    expectRecordFields(provider, "LM Studio provider config", {
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
       headers: {
         Authorization: "Bearer proxy-token",
       },
-      models: [
-        {
-          id: "qwen3-8b-instruct",
-        },
-      ],
     });
-    expect(result?.models?.providers?.lmstudio).not.toHaveProperty("apiKey");
-    expect(result?.models?.providers?.lmstudio).not.toHaveProperty("auth");
+    const models = requireProviderModels(provider);
+    expect(models).toHaveLength(1);
+    expectModelFields(models[0], {
+      id: "qwen3-8b-instruct",
+    });
+    expect(provider).not.toHaveProperty("apiKey");
+    expect(provider).not.toHaveProperty("auth");
     expect(result?.auth).toBeUndefined();
   });
 
@@ -551,20 +684,21 @@ describe("lmstudio setup", () => {
     expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
       "lmstudio/qwen3-8b-instruct",
     );
-    expect(result?.models?.providers?.lmstudio).toMatchObject({
+    const provider = requireNonInteractiveLmstudioProvider(result);
+    expectRecordFields(provider, "LM Studio provider config", {
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
       headers: {
         Authorization: "Bearer proxy-token",
       },
-      models: [
-        {
-          id: "qwen3-8b-instruct",
-        },
-      ],
     });
-    expect(result?.models?.providers?.lmstudio).not.toHaveProperty("apiKey");
-    expect(result?.models?.providers?.lmstudio).not.toHaveProperty("auth");
+    const models = requireProviderModels(provider);
+    expect(models).toHaveLength(1);
+    expectModelFields(models[0], {
+      id: "qwen3-8b-instruct",
+    });
+    expect(provider).not.toHaveProperty("apiKey");
+    expect(provider).not.toHaveProperty("auth");
     expect(result?.auth).toBeUndefined();
   });
 
@@ -578,12 +712,10 @@ describe("lmstudio setup", () => {
 
     await configureLmstudioNonInteractive(ctx);
 
-    expect(ctx.resolveApiKey).toHaveBeenCalledWith(
-      expect.objectContaining({
-        flagValue: "new-lmstudio-key",
-        flagName: "--lmstudio-api-key",
-      }),
-    );
+    expectRecordFields(firstMockArg(ctx.resolveApiKey, "resolveApiKey"), "resolveApiKey options", {
+      flagValue: "new-lmstudio-key",
+      flagName: "--lmstudio-api-key",
+    });
   });
 
   it("non-interactive setup overwrites existing config apiKey during re-auth", async () => {
@@ -609,22 +741,29 @@ describe("lmstudio setup", () => {
 
     const result = await configureLmstudioNonInteractive(ctx);
 
-    expect(result?.models?.providers?.lmstudio).toMatchObject({
+    const provider = requireNonInteractiveLmstudioProvider(result);
+    expectRecordFields(provider, "LM Studio provider config", {
       auth: "api-key",
       apiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
     });
-    expect(result?.models?.providers?.lmstudio?.apiKey).not.toBe("stale-config-key");
+    expect(provider.apiKey).not.toBe("stale-config-key");
   });
 
   it("non-interactive setup fails when requested model is missing", async () => {
     const ctx = buildNonInteractiveContext({
       customModelId: "missing-model",
     });
+    const dockerSetup = ["1", "true", "yes", "on"].includes(
+      process.env.OPENCLAW_DOCKER_SETUP?.trim().toLowerCase() ?? "",
+    );
+    const expectedBaseUrl = dockerSetup
+      ? LMSTUDIO_DOCKER_HOST_INFERENCE_BASE_URL
+      : LMSTUDIO_DEFAULT_INFERENCE_BASE_URL;
 
     await expect(configureLmstudioNonInteractive(ctx)).resolves.toBeNull();
 
     expect(ctx.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("LM Studio model missing-model was not found"),
+      `LM Studio model missing-model was not found at ${expectedBaseUrl}.\nAvailable models: qwen3-8b-instruct`,
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
     expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();
@@ -642,20 +781,21 @@ describe("lmstudio setup", () => {
     });
 
     expect(result.configPatch?.models?.mode).toBe("merge");
-    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
-      baseUrl: "http://localhost:1234/v1",
-      api: "openai-completions",
-      auth: "api-key",
-      apiKey: "LM_API_TOKEN",
-    });
-    expect(result.defaultModel).toBe("lmstudio/qwen3-8b-instruct");
-    expect(result.profiles[0]).toMatchObject({
-      profileId: "lmstudio:default",
-      credential: {
-        type: "api_key",
-        provider: "lmstudio",
-        key: "lmstudio-test-key",
+    expectRecordFields(
+      requireConfigPatchLmstudioProvider(result),
+      "LM Studio config patch provider",
+      {
+        baseUrl: "http://localhost:1234/v1",
+        api: "openai-completions",
+        auth: "api-key",
+        apiKey: "LM_API_TOKEN",
       },
+    );
+    expect(result.defaultModel).toBe("lmstudio/qwen3-8b-instruct");
+    expectProfileFields(result.profiles[0], {
+      type: "api_key",
+      provider: "lmstudio",
+      key: "lmstudio-test-key",
     });
   });
 
@@ -690,20 +830,57 @@ describe("lmstudio setup", () => {
     });
 
     expect(text).toHaveBeenCalledTimes(3);
-    expect(result.configPatch?.models?.providers?.lmstudio?.models).toEqual([
-      expect.objectContaining({
-        id: "phi-4",
-        contextWindow: 65536,
-        contextTokens: 4096,
-        maxTokens: 4096,
-      }),
-      expect.objectContaining({
-        id: "qwen3-8b-instruct",
-        contextWindow: 32768,
-        contextTokens: 4096,
-        maxTokens: 4096,
-      }),
+    const models = requireProviderModels(requireConfigPatchLmstudioProvider(result));
+    expect(models).toHaveLength(2);
+    expectModelFields(models[0], {
+      id: "phi-4",
+      contextWindow: 65536,
+      contextTokens: 4096,
+      maxTokens: 4096,
+    });
+    expectModelFields(models[1], {
+      id: "qwen3-8b-instruct",
+      contextWindow: 32768,
+      contextTokens: 4096,
+      maxTokens: 4096,
+    });
+  });
+
+  it("interactive setup preserves gateway wizard prompter method binding", async () => {
+    const { prompter, text } = createMethodBoundWizardPrompterHarness([
+      "http://localhost:1234/api/v1/",
+      "lmstudio-test-key",
+      "4096",
     ]);
+
+    const result = await promptAndConfigureLmstudioInteractive({
+      config: buildConfig(),
+      prompter,
+    });
+
+    expect(text).toHaveBeenCalledTimes(3);
+    expect(result.defaultModel).toBe("lmstudio/qwen3-8b-instruct");
+  });
+
+  it("interactive setup preserves gateway wizard note binding on discovery failure", async () => {
+    fetchLmstudioModelsMock.mockResolvedValueOnce({ reachable: false, models: [] });
+    const { prompter, note, text } = createMethodBoundWizardPrompterHarness([
+      "http://localhost:1234/api/v1/",
+      "lmstudio-test-key",
+    ]);
+
+    await expect(
+      promptAndConfigureLmstudioInteractive({
+        config: buildConfig(),
+        prompter,
+      }),
+    ).rejects.toThrow("LM Studio not reachable");
+
+    expect(text).toHaveBeenCalledTimes(2);
+    expect(note).toHaveBeenCalledWith(
+      "LM Studio could not be reached at http://localhost:1234/v1.\nStart LM Studio (or run lms server start) and re-run setup.",
+      "LM Studio",
+    );
   });
 
   it("interactive setup accepts a blank API key for unauthenticated local LM Studio", async () => {
@@ -728,18 +905,19 @@ describe("lmstudio setup", () => {
       provider: "lmstudio",
       agentDir: undefined,
     });
-    expect(result.profiles).toEqual([]);
-    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
+    expect(result.profiles).toStrictEqual([]);
+    const provider = requireConfigPatchLmstudioProvider(result);
+    expectRecordFields(provider, "LM Studio config patch provider", {
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
       apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-      models: [
-        {
-          id: "qwen3-8b-instruct",
-        },
-      ],
     });
-    expect(result.configPatch?.models?.providers?.lmstudio).not.toHaveProperty("auth");
+    const models = requireProviderModels(provider);
+    expect(models).toHaveLength(1);
+    expectModelFields(models[0], {
+      id: "qwen3-8b-instruct",
+    });
+    expect(provider).not.toHaveProperty("auth");
   });
 
   it("interactive Docker setup defaults to the host LM Studio endpoint", async () => {
@@ -755,21 +933,26 @@ describe("lmstudio setup", () => {
       prompter,
     });
 
-    expect(text).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        initialValue: "http://host.docker.internal:1234",
-        placeholder: "http://host.docker.internal:1234",
-      }),
+    const firstTextCall = requireRecord(
+      firstMockArg(text, "first text prompt"),
+      "first text prompt",
     );
+    expectRecordFields(firstTextCall, "first text prompt", {
+      initialValue: "http://host.docker.internal:1234",
+      placeholder: "http://host.docker.internal:1234",
+    });
     expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
       baseUrl: "http://host.docker.internal:1234/v1",
       apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
       timeoutMs: 5000,
     });
-    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
-      baseUrl: "http://host.docker.internal:1234/v1",
-    });
+    expectRecordFields(
+      requireConfigPatchLmstudioProvider(result),
+      "LM Studio config patch provider",
+      {
+        baseUrl: "http://host.docker.internal:1234/v1",
+      },
+    );
   });
 
   it("interactive setup uses existing Authorization headers when the API key is blank", async () => {
@@ -812,21 +995,22 @@ describe("lmstudio setup", () => {
       provider: "lmstudio",
       agentDir: undefined,
     });
-    expect(result.profiles).toEqual([]);
-    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
+    expect(result.profiles).toStrictEqual([]);
+    const provider = requireConfigPatchLmstudioProvider(result);
+    expectRecordFields(provider, "LM Studio config patch provider", {
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
       headers: {
         Authorization: "Bearer proxy-token",
       },
-      models: [
-        {
-          id: "qwen3-8b-instruct",
-        },
-      ],
     });
-    expect(result.configPatch?.models?.providers?.lmstudio).not.toHaveProperty("apiKey");
-    expect(result.configPatch?.models?.providers?.lmstudio).not.toHaveProperty("auth");
+    const models = requireProviderModels(provider);
+    expect(models).toHaveLength(1);
+    expectModelFields(models[0], {
+      id: "qwen3-8b-instruct",
+    });
+    expect(provider).not.toHaveProperty("apiKey");
+    expect(provider).not.toHaveProperty("auth");
   });
 
   it("interactive setup without a wizard accepts a blank API key for local LM Studio", async () => {
@@ -849,11 +1033,12 @@ describe("lmstudio setup", () => {
       provider: "lmstudio",
       agentDir: undefined,
     });
-    expect(result.profiles).toEqual([]);
-    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
+    expect(result.profiles).toStrictEqual([]);
+    const provider = requireConfigPatchLmstudioProvider(result);
+    expectRecordFields(provider, "LM Studio config patch provider", {
       apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
     });
-    expect(result.configPatch?.models?.providers?.lmstudio).not.toHaveProperty("auth");
+    expect(provider).not.toHaveProperty("auth");
   });
 
   it("interactive setup overwrites existing config apiKey during re-auth", async () => {
@@ -879,18 +1064,16 @@ describe("lmstudio setup", () => {
       config,
       promptText,
     });
-    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
+    const provider = requireConfigPatchLmstudioProvider(result);
+    expectRecordFields(provider, "LM Studio config patch provider", {
       auth: "api-key",
       apiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
     });
-    expect(result.configPatch?.models?.providers?.lmstudio?.apiKey).not.toBe("stale-config-key");
-    expect(result.profiles[0]).toMatchObject({
-      profileId: "lmstudio:default",
-      credential: {
-        type: "api_key",
-        provider: "lmstudio",
-        key: "fresh-prompt-key",
-      },
+    expect(provider.apiKey).not.toBe("stale-config-key");
+    expectProfileFields(result.profiles[0], {
+      type: "api_key",
+      provider: "lmstudio",
+      key: "fresh-prompt-key",
     });
   });
 
@@ -920,14 +1103,18 @@ describe("lmstudio setup", () => {
       config,
       promptText,
     });
-    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
-      auth: "api-key",
-      apiKey: "LM_API_TOKEN",
-      headers: {
-        Authorization: "Bearer stale-token",
-        "X-Proxy-Auth": "proxy-token",
+    expectRecordFields(
+      requireConfigPatchLmstudioProvider(result),
+      "LM Studio config patch provider",
+      {
+        auth: "api-key",
+        apiKey: "LM_API_TOKEN",
+        headers: {
+          Authorization: "Bearer stale-token",
+          "X-Proxy-Auth": "proxy-token",
+        },
       },
-    });
+    );
   });
 
   it("interactive setup preserves existing agent model allowlist entries", async () => {
@@ -1030,6 +1217,20 @@ describe("lmstudio setup", () => {
       name: "does not inject api-key marker when Authorization header is configured",
       providerPatch: {
         apiKey: "stale-legacy-key",
+        headers: {
+          Authorization: "Bearer custom-token",
+        },
+      },
+      expectedProviderPatch: {
+        headers: {
+          Authorization: "Bearer custom-token",
+        },
+      },
+    },
+    {
+      name: "ignores unresolved apiKey template when Authorization header is configured",
+      providerPatch: {
+        apiKey: "${LMSTUDIO_API_KEY}",
         headers: {
           Authorization: "Bearer custom-token",
         },
@@ -1251,6 +1452,38 @@ describe("lmstudio setup", () => {
     });
   });
 
+  it("discoverLmstudioProvider ignores an unresolved apiKey template when discoveryApiKey is resolved", async () => {
+    discoverLmstudioModelsMock.mockResolvedValueOnce([
+      createModel("qwen3-8b-instruct", "Qwen3 8B"),
+    ]);
+
+    await discoverLmstudioProvider(
+      buildDiscoveryContext({
+        discoveryApiKey: "resolved-discovery-key",
+        config: {
+          models: {
+            providers: {
+              lmstudio: {
+                baseUrl: "http://localhost:1234/v1",
+                api: "openai-completions",
+                apiKey: "${LMSTUDIO_API_KEY}",
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+      }),
+    );
+
+    expect(discoverLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "resolved-discovery-key",
+      headers: undefined,
+      quiet: false,
+    });
+  });
+
   it("discoverLmstudioProvider suppresses stale discovery apiKey when Authorization header auth is configured", async () => {
     discoverLmstudioModelsMock.mockResolvedValueOnce([
       createModel("qwen3-8b-instruct", "Qwen3 8B"),
@@ -1304,10 +1537,15 @@ describe("lmstudio setup", () => {
       }),
     );
 
-    expect(result?.provider).toMatchObject({
+    const provider = requireRecord(result?.provider, "discovered LM Studio provider");
+    expectRecordFields(provider, "discovered LM Studio provider", {
       auth: "api-key",
       apiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
-      models: [expect.objectContaining({ id: "qwen3-8b-instruct" })],
+    });
+    const models = requireProviderModels(provider);
+    expect(models).toHaveLength(1);
+    expectModelFields(models[0], {
+      id: "qwen3-8b-instruct",
     });
   });
 
@@ -1332,16 +1570,21 @@ describe("lmstudio setup", () => {
       }),
     );
 
-    expect(result?.provider).toMatchObject({
+    const provider = requireRecord(result?.provider, "discovered LM Studio provider");
+    expectRecordFields(provider, "discovered LM Studio provider", {
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
       headers: {
         Authorization: "Bearer custom-token",
       },
-      models: [expect.objectContaining({ id: "qwen3-8b-instruct" })],
     });
-    expect(result?.provider.apiKey).toBeUndefined();
-    expect(result?.provider.auth).toBeUndefined();
+    const models = requireProviderModels(provider);
+    expect(models).toHaveLength(1);
+    expectModelFields(models[0], {
+      id: "qwen3-8b-instruct",
+    });
+    expect(provider.apiKey).toBeUndefined();
+    expect(provider.auth).toBeUndefined();
   });
 
   it("discoverLmstudioProvider uses quiet mode and returns null when unconfigured", async () => {
@@ -1378,7 +1621,7 @@ describe("lmstudio setup", () => {
 
     const result = await configureLmstudioNonInteractive(ctx);
 
-    expect(result?.models?.providers?.lmstudio).toMatchObject({
+    expectRecordFields(requireNonInteractiveLmstudioProvider(result), "LM Studio provider config", {
       auth: "api-key",
       apiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
     });

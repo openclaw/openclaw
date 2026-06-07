@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite runtime transport plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
@@ -224,6 +225,7 @@ describe("qa suite transport helpers", () => {
       senderName: "OpenClaw QA",
     });
 
-    await expect(pending).resolves.toMatchObject({ text: "done" });
+    const message = await pending;
+    expect(message.text).toBe("done");
   });
 });

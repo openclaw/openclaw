@@ -1,17 +1,39 @@
+// Cron Mcp Cleanup Docker Client script supports OpenClaw repository automation.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { assert, connectGateway, type GatewayRpcClient, waitFor } from "./mcp-channels-harness.ts";
+import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import type { GatewayRpcClient } from "./mcp-channels-harness.ts";
 
 const execFileAsync = promisify(execFile);
+const PROBE_PID_WAIT_MS = readCronMcpCleanupProbePidWaitMs();
+type McpChannelsHarness = typeof import("./mcp-channels-harness.ts");
+let mcpChannelsHarness: McpChannelsHarness | undefined;
 
 type CronJob = { id?: string };
 type CronRunResult = { ok?: boolean; enqueued?: boolean; runId?: string };
 type AgentRunResult = { runId?: string; status?: string };
+type CronFinishedPayload = { status?: unknown };
+
+async function loadMcpChannelsHarness(): Promise<McpChannelsHarness> {
+  mcpChannelsHarness ??= await import("./mcp-channels-harness.ts");
+  return mcpChannelsHarness;
+}
+
+export function readCronMcpCleanupProbePidWaitMs(env: NodeJS.ProcessEnv = process.env): number {
+  return readPositiveIntEnv("OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS", 120_000, env);
+}
+
+export function assertCronFinishedOk(finished: CronFinishedPayload | undefined): void {
+  if (finished?.status !== "ok") {
+    throw new Error(`cron cleanup run did not finish ok: ${JSON.stringify(finished)}`);
+  }
+}
 
 async function readProbePid(pidPath: string): Promise<number | undefined> {
   try {
@@ -52,14 +74,19 @@ async function describeProbePid(pid: number): Promise<string | undefined> {
   }
 }
 
-async function waitForProbePid(pidPath: string): Promise<number | undefined> {
+export async function waitForProbePid(
+  pidPath: string,
+  options: { pollMs?: number; timeoutMs?: number } = {},
+): Promise<number | undefined> {
+  const timeoutMs = options.timeoutMs ?? PROBE_PID_WAIT_MS;
+  const pollMs = options.pollMs ?? 100;
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 600_000) {
+  while (Date.now() - startedAt < timeoutMs) {
     const pid = await readProbePid(pidPath);
     if (pid) {
       return pid;
     }
-    await delay(100);
+    await delay(pollMs);
   }
   return undefined;
 }
@@ -82,19 +109,26 @@ async function waitForProbeExit(params: {
   throw new Error(`${label} MCP probe process still alive after run: pid=${pid} args=${args}`);
 }
 
-async function waitForAnyProbeExit(params: {
+async function waitForAllProbeExits(params: {
   pidsPath: string;
   label: string;
   timeoutMs: number;
-}): Promise<number> {
+}): Promise<number[]> {
   const startedAt = Date.now();
   let observed: number[] = [];
   while (Date.now() - startedAt < params.timeoutMs) {
     observed = await readProbePids(params.pidsPath);
-    for (const pid of observed) {
-      const args = await describeProbePid(pid);
-      if (!args || !args.includes("openclaw-cron-mcp-cleanup-probe")) {
-        return pid;
+    if (observed.length > 0) {
+      let allExited = true;
+      for (const pid of observed) {
+        const args = await describeProbePid(pid);
+        if (args?.includes("openclaw-cron-mcp-cleanup-probe")) {
+          allExited = false;
+          break;
+        }
+      }
+      if (allExited) {
+        return observed;
       }
     }
     await delay(100);
@@ -121,6 +155,7 @@ async function runCronCleanupScenario(params: {
   gateway: GatewayRpcClient;
   pidPath: string;
 }): Promise<{ jobId: string; runId?: string; pid: number; status?: unknown }> {
+  const { assert, waitFor } = await loadMcpChannelsHarness();
   const { gateway, pidPath } = params;
   const job = await gateway.request<CronJob>("cron.add", {
     name: "cron mcp cleanup docker e2e",
@@ -133,7 +168,7 @@ async function runCronCleanupScenario(params: {
       message: "Use available context and then stop.",
       timeoutSeconds: 90,
       lightContext: true,
-      toolsAllow: ["bundle-mcp"],
+      toolsAllow: ["bundle-mcp", "cronCleanupProbe__cleanup_probe"],
     },
     delivery: { mode: "none" },
   });
@@ -164,7 +199,7 @@ async function runCronCleanupScenario(params: {
   const pid = await waitForProbePid(pidPath);
   assert(
     pid,
-    `cron MCP probe did not start; missing pid file at ${pidPath}; events=${JSON.stringify(
+    `cron MCP probe did not start within ${PROBE_PID_WAIT_MS}ms; missing pid file at ${pidPath}; events=${JSON.stringify(
       gateway.events.slice(-10),
     )}`,
   );
@@ -186,6 +221,7 @@ async function runCronCleanupScenario(params: {
     240_000,
   );
   assert(finished, "missing cron finished event");
+  assertCronFinishedOk(finished);
 
   await waitForProbeExit({ pid, label: "cron" });
   return {
@@ -201,39 +237,58 @@ async function runSubagentCleanupScenario(params: {
   pidPath: string;
   pidsPath: string;
   exitPath: string;
-}): Promise<{ runId: string; exitedPid: number; pids: number[] }> {
+}): Promise<{ runId: string; exitedPids: number[]; pids: number[] }> {
+  const { assert } = await loadMcpChannelsHarness();
   const { gateway, pidPath, pidsPath, exitPath } = params;
   await resetProbeFiles({ pidPath, pidsPath, exitPath });
 
-  const run = await gateway.request<AgentRunResult>("agent", {
-    message: "Use available context and then stop.",
-    sessionKey: `agent:main:subagent:docker-${randomUUID()}`,
-    agentId: "main",
-    lane: "subagent",
-    cleanupBundleMcpOnRunEnd: true,
-    idempotencyKey: randomUUID(),
-    deliver: false,
-    timeout: 90,
-    bestEffortDeliver: true,
-  });
+  const run = await gateway.request<AgentRunResult>(
+    "agent",
+    {
+      message: "Use available context and then stop.",
+      sessionKey: `agent:main:subagent:docker-${randomUUID()}`,
+      agentId: "main",
+      lane: "subagent",
+      cleanupBundleMcpOnRunEnd: true,
+      idempotencyKey: randomUUID(),
+      deliver: false,
+      timeout: 90,
+      bestEffortDeliver: true,
+    },
+    { timeoutMs: 240_000 },
+  );
   assert(
     run.status === "accepted" && run.runId,
     `agent did not accept subagent cleanup run: ${JSON.stringify(run)}`,
   );
 
-  const exitedPid = await waitForAnyProbeExit({
+  const finished = await gateway.request<{ status?: string }>(
+    "agent.wait",
+    {
+      runId: run.runId,
+      timeoutMs: 240_000,
+    },
+    { timeoutMs: 250_000 },
+  );
+  assert(
+    finished.status === "ok",
+    `subagent cleanup run did not finish ok: ${JSON.stringify(finished)}`,
+  );
+
+  const exitedPids = await waitForAllProbeExits({
     pidsPath,
     label: "subagent",
     timeoutMs: 240_000,
   });
   return {
     runId: run.runId,
-    exitedPid,
+    exitedPids,
     pids: await readProbePids(pidsPath),
   };
 }
 
 async function main() {
+  const { assert, connectGateway } = await loadMcpChannelsHarness();
   const gatewayUrl = process.env.GW_URL?.trim();
   const gatewayToken = process.env.GW_TOKEN?.trim();
   const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
@@ -259,4 +314,6 @@ async function main() {
   }
 }
 
-await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

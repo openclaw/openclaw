@@ -1,20 +1,31 @@
+// Doctor scanner and repair for plugin/channel config that references missing plugins.
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
+import { shouldSuppressMissingCodexPluginDiagnostics } from "../../../config/codex-plugin-diagnostics.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
+import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
 import { asObjectRecord } from "./object.js";
 
 const CHANNEL_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
 
-type StalePluginSurface = "allow" | "entries" | "channel" | "heartbeat" | "modelByChannel";
+type StalePluginSurface =
+  | "allow"
+  | "deny"
+  | "entries"
+  | "slot"
+  | "channel"
+  | "heartbeat"
+  | "modelByChannel";
 
 type StalePluginConfigHit = {
   pluginId: string;
   pathLabel: string;
   surface: StalePluginSurface;
+  slotKey?: PluginSlotKey;
 };
 
 type StalePluginRegistryState = {
@@ -29,12 +40,11 @@ function collectPluginRegistryState(
   env?: NodeJS.ProcessEnv,
 ): StalePluginRegistryState {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const registry = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir: workspaceDir ?? undefined,
-    env,
-    includeDisabled: true,
-  });
+    env: env ?? process.env,
+  }).manifestRegistry;
   const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
   const installedIds = new Set<string>();
   for (const pluginId of Object.keys(cfg.plugins?.installs ?? {})) {
@@ -70,6 +80,7 @@ function collectPluginRegistryState(
   };
 }
 
+/** Return true when plugin discovery errors should pause stale-plugin auto-removal. */
 export function isStalePluginAutoRepairBlocked(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -80,6 +91,7 @@ export function isStalePluginAutoRepairBlocked(
   return collectPluginRegistryState(cfg, env).hasDiscoveryErrors;
 }
 
+/** Scan plugin/channel config surfaces for ids no longer present in manifests or installs. */
 export function scanStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -105,7 +117,7 @@ function scanStalePluginConfigWithState(
       continue;
     }
     const pluginId = normalizePluginId(rawPluginId);
-    if (!pluginId || knownIds.has(pluginId)) {
+    if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
       continue;
     }
     hits.push({
@@ -116,11 +128,31 @@ function scanStalePluginConfigWithState(
     staleEvidenceIds.add(pluginId);
   }
 
+  const deny = Array.isArray(plugins?.deny) ? plugins.deny : [];
+  for (const rawPluginId of deny) {
+    if (typeof rawPluginId !== "string") {
+      continue;
+    }
+    const pluginId = normalizePluginId(rawPluginId);
+    if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
+      continue;
+    }
+    hits.push({
+      pluginId: rawPluginId,
+      pathLabel: "plugins.deny",
+      surface: "deny",
+    });
+    staleEvidenceIds.add(pluginId);
+  }
+
   const entries = asObjectRecord(plugins?.entries);
   if (entries) {
     for (const rawPluginId of Object.keys(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
-      if (!pluginId || knownIds.has(pluginId)) {
+      if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
+        continue;
+      }
+      if (pluginId === "codex" && shouldSuppressMissingCodexPluginDiagnostics(cfg)) {
         continue;
       }
       hits.push({
@@ -129,6 +161,32 @@ function scanStalePluginConfigWithState(
         surface: "entries",
       });
       staleEvidenceIds.add(pluginId);
+    }
+  }
+
+  const slots = asObjectRecord(plugins?.slots);
+  if (slots) {
+    for (const slotKey of ["memory", "contextEngine"] as const satisfies readonly PluginSlotKey[]) {
+      const rawPluginId = slots[slotKey];
+      if (typeof rawPluginId !== "string") {
+        continue;
+      }
+      const pluginId = normalizePluginId(rawPluginId);
+      const defaultSlotId = defaultSlotIdForKey(slotKey);
+      if (
+        !pluginId ||
+        rawPluginId.trim().toLowerCase() === "none" ||
+        pluginId === normalizePluginId(defaultSlotId) ||
+        knownIds.has(pluginId)
+      ) {
+        continue;
+      }
+      hits.push({
+        pluginId: rawPluginId,
+        pathLabel: `plugins.slots.${slotKey}`,
+        surface: "slot",
+        slotKey,
+      });
     }
   }
 
@@ -198,7 +256,8 @@ function collectDependentChannelConfigHits(
       surface: "heartbeat",
     });
   }
-  for (const [index, agent] of (cfg.agents?.list ?? []).entries()) {
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const [index, agent] of agents.entries()) {
     const target = agent?.heartbeat?.target;
     if (typeof target !== "string" || !staleChannelIds.has(normalizePluginId(target))) {
       continue;
@@ -234,8 +293,11 @@ function collectDependentChannelConfigHits(
 }
 
 function formatStalePluginHitWarning(hit: StalePluginConfigHit): string {
-  if (hit.surface === "allow" || hit.surface === "entries") {
+  if (hit.surface === "allow" || hit.surface === "deny" || hit.surface === "entries") {
     return `- ${hit.pathLabel}: stale plugin reference "${hit.pluginId}" was found.`;
+  }
+  if (hit.surface === "slot") {
+    return `- ${hit.pathLabel}: slot references missing plugin "${hit.pluginId}".`;
   }
   if (hit.surface === "channel") {
     return `- ${hit.pathLabel}: dangling channel config for missing plugin "${hit.pluginId}" was found.`;
@@ -246,6 +308,7 @@ function formatStalePluginHitWarning(hit: StalePluginConfigHit): string {
   return `- ${hit.pathLabel}: model override references missing channel plugin "${hit.pluginId}".`;
 }
 
+/** Format warnings for stale plugin config hits. */
 export function collectStalePluginConfigWarnings(params: {
   hits: StalePluginConfigHit[];
   doctorFixCommand: string;
@@ -267,9 +330,11 @@ export function collectStalePluginConfigWarnings(params: {
   return lines.map((line) => sanitizeForLog(line));
 }
 
+/** Remove stale plugin ids and dangling channel references when discovery is healthy. */
 export function maybeRepairStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
+  params?: { preservePluginIds?: Iterable<string> },
 ): {
   config: OpenClawConfig;
   changes: string[];
@@ -282,7 +347,14 @@ export function maybeRepairStalePluginConfig(
     return { config: cfg, changes: [] };
   }
 
-  const hits = scanStalePluginConfigWithState(cfg, registryState);
+  const preservePluginIds = new Set(
+    [...(params?.preservePluginIds ?? [])]
+      .map((pluginId) => normalizePluginId(pluginId))
+      .filter((pluginId): pluginId is string => Boolean(pluginId)),
+  );
+  const hits = scanStalePluginConfigWithState(cfg, registryState).filter(
+    (hit) => !preservePluginIds.has(normalizePluginId(hit.pluginId)),
+  );
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
   }
@@ -295,6 +367,14 @@ export function maybeRepairStalePluginConfig(
     const staleAllowIds = new Set(allowIds.map((pluginId) => normalizePluginId(pluginId)));
     nextPlugins.allow = nextPlugins.allow.filter(
       (pluginId) => typeof pluginId !== "string" || !staleAllowIds.has(normalizePluginId(pluginId)),
+    );
+  }
+
+  const denyIds = hits.filter((hit) => hit.surface === "deny").map((hit) => hit.pluginId);
+  if (denyIds.length > 0 && Array.isArray(nextPlugins?.deny)) {
+    const staleDenyIds = new Set(denyIds.map((pluginId) => normalizePluginId(pluginId)));
+    nextPlugins.deny = nextPlugins.deny.filter(
+      (pluginId) => typeof pluginId !== "string" || !staleDenyIds.has(normalizePluginId(pluginId)),
     );
   }
 
@@ -311,6 +391,19 @@ export function maybeRepairStalePluginConfig(
     }
   }
 
+  const slotHits = hits.filter(
+    (hit): hit is StalePluginConfigHit & { slotKey: PluginSlotKey } =>
+      hit.surface === "slot" && hit.slotKey !== undefined,
+  );
+  if (slotHits.length > 0) {
+    const slots = asObjectRecord(nextPlugins?.slots);
+    if (slots) {
+      for (const hit of slotHits) {
+        slots[hit.slotKey] = defaultSlotIdForKey(hit.slotKey);
+      }
+    }
+  }
+
   const channelIds = hits.filter((hit) => hit.surface === "channel").map((hit) => hit.pluginId);
   if (channelIds.length > 0) {
     removeDanglingChannelReferences(next, channelIds);
@@ -322,9 +415,19 @@ export function maybeRepairStalePluginConfig(
       `- plugins.allow: removed ${allowIds.length} stale plugin id${allowIds.length === 1 ? "" : "s"} (${allowIds.join(", ")})`,
     );
   }
+  if (denyIds.length > 0) {
+    changes.push(
+      `- plugins.deny: removed ${denyIds.length} stale plugin id${denyIds.length === 1 ? "" : "s"} (${denyIds.join(", ")})`,
+    );
+  }
   if (entryIds.length > 0) {
     changes.push(
       `- plugins.entries: removed ${entryIds.length} stale plugin entr${entryIds.length === 1 ? "y" : "ies"} (${entryIds.join(", ")})`,
+    );
+  }
+  if (slotHits.length > 0) {
+    changes.push(
+      `- plugins.slots: reset ${slotHits.length} stale plugin slot${slotHits.length === 1 ? "" : "s"} (${slotHits.map((hit) => `${hit.slotKey}: ${hit.pluginId} -> ${defaultSlotIdForKey(hit.slotKey)}`).join(", ")})`,
     );
   }
   if (channelIds.length > 0) {
@@ -391,7 +494,8 @@ function removeDanglingChannelReferences(config: OpenClawConfig, channelIds: rea
   ) {
     delete defaultsHeartbeat.target;
   }
-  for (const agent of config.agents?.list ?? []) {
+  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
+  for (const agent of agents) {
     const heartbeat = agent.heartbeat;
     if (
       heartbeat &&

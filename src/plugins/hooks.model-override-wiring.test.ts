@@ -85,12 +85,12 @@ describe("model override pipeline wiring", () => {
 
   async function expectBeforeModelResolve(params: {
     event: PluginHookBeforeModelResolveEvent;
-    expected: Partial<PluginHookBeforeModelResolveResult>;
+    expected: PluginHookBeforeModelResolveResult;
     withBrokenHook?: boolean;
     catchErrors?: boolean;
   }) {
     const handlerSpy = vi.fn(
-      (_event: PluginHookBeforeModelResolveEvent) =>
+      (_eventValue: PluginHookBeforeModelResolveEvent) =>
         ({
           modelOverride: "demo-local-model",
           providerOverride: "demo-local-provider",
@@ -116,7 +116,7 @@ describe("model override pipeline wiring", () => {
 
     expect(handlerSpy).toHaveBeenCalledTimes(1);
     expect(handlerSpy).toHaveBeenCalledWith(params.event, stubCtx);
-    expect(result).toEqual(expect.objectContaining(params.expected));
+    expect(result).toEqual(params.expected);
     return result;
   }
 
@@ -235,7 +235,7 @@ describe("model override pipeline wiring", () => {
         addBeforePromptBuildHook(
           registry,
           "slow-plugin",
-          () => new Promise<PluginHookBeforePromptBuildResult>(() => undefined),
+          () => new Promise<PluginHookBeforePromptBuildResult>(() => {}),
           10,
         );
         addBeforePromptBuildHook(registry, "fast-plugin", () => ({ prependContext: "fast" }), 1);
@@ -258,9 +258,7 @@ describe("model override pipeline wiring", () => {
 
         await expect(resultPromise).resolves.toEqual({ prependContext: "fast" });
         expect(logger.error).toHaveBeenCalledWith(
-          expect.stringContaining(
-            "[hooks] before_prompt_build handler from slow-plugin failed: timed out after 5ms",
-          ),
+          "[hooks] before_prompt_build handler from slow-plugin failed: timed out after 5ms",
         );
       } finally {
         vi.useRealTimers();
@@ -274,7 +272,9 @@ describe("model override pipeline wiring", () => {
           registry,
           "active-memory",
           async () => {
-            await new Promise((resolve) => setTimeout(resolve, 20));
+            await new Promise((resolve) => {
+              setTimeout(resolve, 20);
+            });
             return { prependContext: "memory context" };
           },
           10,

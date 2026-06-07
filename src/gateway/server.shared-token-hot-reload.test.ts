@@ -1,3 +1,6 @@
+/**
+ * Shared gateway-token hot-reload tests.
+ */
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { openAuthenticatedGatewayWs, waitForGatewayWsClose } from "./shared-auth.test-helpers.js";
@@ -69,7 +72,7 @@ describe("gateway shared token hot reload rotation", () => {
         (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
       );
 
-      await expect(closed).resolves.toMatchObject({
+      await expect(closed).resolves.toEqual({
         code: 4001,
         reason: "gateway auth changed",
       });

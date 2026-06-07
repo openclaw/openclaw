@@ -1,61 +1,81 @@
+// Capability CLI commands for local/gateway model, media, memory, search, and generation calls.
+import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { detectMime, extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   listProfilesForProvider,
   loadAuthProfileStoreForRuntime,
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { buildExplicitSessionIdSessionKey } from "../agents/command/session.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../auto-reply/thinking.js";
+import {
+  getRuntimeConfig,
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
 import type {
   ImageGenerationBackground,
   ImageGenerationOutputFormat,
 } from "../image-generation/types.js";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "../infra/parse-finite-number.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
+import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
   describeImageFile,
   describeImageFileWithModel,
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
-import { getImageMetadata } from "../media/image-ops.js";
-import { detectMime, extensionForMime, normalizeMimeType } from "../media/mime.js";
+import { convertHeicToJpeg, getImageMetadata } from "../media/media-services.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
   createEmbeddingProvider,
   registerBuiltInMemoryEmbeddingProviders,
 } from "../plugin-sdk/memory-core-bundled-runtime.js";
+import { listEmbeddingProviders } from "../plugins/embedding-provider-runtime.js";
 import {
   listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
 import {
   getTtsProvider,
@@ -83,12 +103,23 @@ import {
   runWebSearch,
 } from "../web-search/runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
+import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
+import {
+  getCapabilityWebFetchCommandSecretTargets,
+  getCapabilityWebSearchCommandSecretTargets,
+  getMemoryEmbeddingCommandSecretTargetIds,
+  getModelsCommandSecretTargetIds,
+  getTtsCommandSecretTargetIds,
+} from "./command-secret-targets.js";
+import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
 type CapabilityTransport = "local" | "gateway";
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
+const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
 
 type CapabilityMetadata = {
   id: string;
@@ -556,6 +587,20 @@ function resolveModelRefOverride(raw: string | undefined): { provider?: string; 
   };
 }
 
+async function canonicalizeModelRunRef(params: {
+  raw: string | undefined;
+  cfg: OpenClawConfig;
+  preserveAuthProfile: boolean;
+}): Promise<string | undefined> {
+  return await canonicalizeCaseOnlyCatalogModelRef({
+    cfg: params.cfg,
+    raw: params.raw,
+    defaultProvider: DEFAULT_PROVIDER,
+    loadCatalog: () => loadModelCatalog({ config: params.cfg, readOnly: true }),
+    preserveAuthProfile: params.preserveAuthProfile,
+  });
+}
+
 function requireProviderModelOverride(
   raw: string | undefined,
 ): { provider: string; model: string } | undefined {
@@ -612,6 +657,15 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
           `Unsupported --file for model run: ${resolvedPath}. Only image files are supported; use infer audio transcribe for audio files.`,
         );
       }
+      if (HEIC_MODEL_RUN_MIMES.has(mimeType)) {
+        const converted = await convertHeicToJpeg(buffer);
+        return {
+          path: resolvedPath,
+          fileName: path.basename(resolvedPath),
+          mimeType: "image/jpeg",
+          data: converted.toString("base64"),
+        };
+      }
       return {
         path: resolvedPath,
         fileName: path.basename(resolvedPath),
@@ -622,14 +676,46 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
   );
 }
 
+function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error("--thinking must be a string.");
+  }
+  const normalized = normalizeThinkLevel(value);
+  if (!normalized) {
+    throw new Error(
+      "Invalid thinking level. Use one of: off, minimal, low, medium, high, adaptive, xhigh, max.",
+    );
+  }
+  return normalized;
+}
+
 async function runModelRun(params: {
   prompt: string;
   files?: string[];
   model?: string;
+  thinking?: ThinkLevel;
   transport: CapabilityTransport;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg =
+    params.transport === "local"
+      ? await resolveLocalCapabilityRuntimeConfig({
+          commandName: "infer model run",
+          targetIds: getModelsCommandSecretTargetIds(),
+        })
+      : getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
+  const modelRef = await canonicalizeModelRunRef({
+    raw: params.model,
+    cfg,
+    preserveAuthProfile: params.transport === "local",
+  });
+  const explicitModelOverride = resolveModelRefOverride(params.model);
+  const hasExplicitProviderModelOverride = Boolean(
+    params.model?.trim() && explicitModelOverride.provider && explicitModelOverride.model,
+  );
   const imageFiles = await readModelRunImageFiles(params.files);
   const messageContent =
     imageFiles.length > 0
@@ -646,17 +732,27 @@ async function runModelRun(params: {
     const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId,
-      modelRef: params.model,
+      modelRef,
       allowMissingApiKeyModes: ["aws-sdk"],
-      skipPiDiscovery: true,
+      ...(hasExplicitProviderModelOverride ? { allowBundledStaticCatalogFallback: true } : {}),
+      skipAgentDiscovery: true,
     });
     if ("error" in prepared) {
       throw new Error(prepared.error);
     }
+    if (prepared.selection.provider === "codex") {
+      throw new Error(
+        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with provider/model agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
+      );
+    }
+    const localModelRunSystemPrompt =
+      prepared.model.api === "openai-chatgpt-responses" ? LOCAL_MODEL_RUN_SYSTEM_PROMPT : undefined;
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,
+      cfg,
       context: {
+        ...(localModelRunSystemPrompt ? { systemPrompt: localModelRunSystemPrompt } : {}),
         messages: [
           {
             role: "user",
@@ -670,12 +766,18 @@ async function runModelRun(params: {
           typeof prepared.model.maxTokens === "number" && Number.isFinite(prepared.model.maxTokens)
             ? prepared.model.maxTokens
             : undefined,
+        ...(params.thinking ? { reasoning: params.thinking } : {}),
       },
     });
     const text = collectModelRunText(result.content);
     if (!text) {
+      const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
+      const detail =
+        typeof providerErrorMessage === "string" && providerErrorMessage.trim()
+          ? `: ${providerErrorMessage.trim()}`
+          : "";
       throw new Error(
-        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}".`,
+        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
       );
     }
     return {
@@ -702,19 +804,29 @@ async function runModelRun(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const { provider, model } = resolveModelRefOverride(params.model);
+  const { provider, model } = resolveModelRefOverride(modelRef);
   // Provider/model overrides require trusted-operator scope. Use the backend
   // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
   const hasModelOverride = Boolean(provider || model);
+  const sessionId = `model-run-${randomUUID()}`;
+  const sessionKey = buildExplicitSessionIdSessionKey({ agentId, sessionId });
   const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
-      meta?: { agentMeta?: { provider?: string; model?: string } };
+      meta?: {
+        agentMeta?: {
+          provider?: string;
+          model?: string;
+          fallbackAttempts?: Array<Record<string, unknown>>;
+        };
+      };
     };
   } = await callGateway({
     method: "agent",
     params: {
       agentId,
+      sessionId,
+      sessionKey,
       message: params.prompt,
       attachments:
         imageFiles.length > 0
@@ -727,6 +839,7 @@ async function runModelRun(params: {
           : undefined,
       provider,
       model,
+      ...(params.thinking ? { thinking: params.thinking } : {}),
       modelRun: true,
       promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
@@ -744,7 +857,7 @@ async function runModelRun(params: {
     transport: "gateway" as const,
     provider: response?.result?.meta?.agentMeta?.provider,
     model: response?.result?.meta?.agentMeta?.model,
-    attempts: [],
+    attempts: response?.result?.meta?.agentMeta?.fallbackAttempts ?? [],
     outputs: (response?.result?.payloads ?? []).map((payload) => ({
       text: payload.text,
       mediaUrl: payload.mediaUrl,
@@ -815,9 +928,10 @@ async function runModelAuthStatus() {
   return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
 }
 
-async function runModelAuthLogout(provider: string) {
+async function runModelAuthLogout(provider: string, agent?: string) {
   const cfg = getRuntimeConfig();
-  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
+  const agentId = agent?.trim() || resolveDefaultAgentId(cfg);
+  const agentDir = resolveAgentDir(cfg, agentId);
   const store = loadAuthProfileStoreForRuntime(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
   const updated = await updateAuthProfileStoreWithLock({
@@ -869,7 +983,10 @@ async function runImageGenerate(params: {
   output?: string;
   timeoutMs?: number;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: `infer ${params.capability}`,
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const inputImages =
     params.file && params.file.length > 0
@@ -938,16 +1055,21 @@ async function runImageDescribe(params: {
   prompt?: string;
   timeoutMs?: number;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: `infer ${params.capability}`,
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const activeModel = requireProviderModelOverride(params.model);
   const prompt = normalizeOptionalString(params.prompt);
   const outputs = await Promise.all(
     params.files.map(async (filePath) => {
-      const resolvedPath = path.resolve(filePath);
+      const resolvedPath = resolveImageDescribeInput(filePath);
+      const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
       const result = activeModel
         ? await describeImageFileWithModel({
             filePath: resolvedPath,
+            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             agentDir,
             provider: activeModel.provider,
@@ -957,12 +1079,18 @@ async function runImageDescribe(params: {
           })
         : await describeImageFile({
             filePath: resolvedPath,
+            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             agentDir,
             prompt,
             timeoutMs: params.timeoutMs,
           });
       if (!result.text) {
+        if (isMissingMediaUnderstandingProvider(result)) {
+          throw new Error(
+            "No image understanding provider is configured or ready. Configure tools.media.image.models or agents.defaults.imageModel.primary, or pass --model <provider/model> after configuring that provider's auth/API key.",
+          );
+        }
         throw new Error(`No description returned for image: ${resolvedPath}`);
       }
       return {
@@ -985,13 +1113,25 @@ async function runImageDescribe(params: {
   } satisfies CapabilityEnvelope;
 }
 
+function isMissingMediaUnderstandingProvider(result: RunMediaUnderstandingFileResult): boolean {
+  const decision = result.decision;
+  return (
+    decision?.outcome === "skipped" &&
+    decision.attachments.length > 0 &&
+    decision.attachments.every((attachment) => attachment.attempts.length === 0)
+  );
+}
+
 async function runAudioTranscribe(params: {
   file: string;
   language?: string;
   model?: string;
   prompt?: string;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer audio transcribe",
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const activeModel = requireProviderModelOverride(params.model);
   const result = await transcribeAudioFile({
     filePath: path.resolve(params.file),
@@ -1001,6 +1141,11 @@ async function runAudioTranscribe(params: {
     prompt: params.prompt,
   });
   if (!result.text) {
+    if (isMissingMediaUnderstandingProvider(result)) {
+      throw new Error(
+        "No audio transcription provider is configured or ready. Configure tools.media.audio.models, or pass --model <provider/model> after configuring that provider's auth/API key.",
+      );
+    }
     throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);
   }
   return {
@@ -1019,11 +1164,29 @@ function parseOptionalFiniteNumber(
   if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
     return undefined;
   }
-  const value = Number(raw);
-  if (!Number.isFinite(value)) {
+  const value = parseStrictFiniteNumber(raw);
+  if (value === undefined) {
     throw new Error(`${label} must be a finite number`);
   }
   return value;
+}
+
+function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+    return undefined;
+  }
+  const value = parseStrictPositiveInteger(raw);
+  if (value === undefined) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
+  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+    return undefined;
+  }
+  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error" });
 }
 
 function normalizeImageOutputFormat(
@@ -1059,14 +1222,16 @@ function normalizeVideoResolution(raw: string | undefined): VideoGenerationResol
     return undefined;
   }
   if (
+    normalized === "360P" ||
     normalized === "480P" ||
+    normalized === "540P" ||
     normalized === "720P" ||
     normalized === "768P" ||
     normalized === "1080P"
   ) {
     return normalized;
   }
-  throw new Error("video resolution must be one of 480P, 720P, 768P, or 1080P");
+  throw new Error("video resolution must be one of 360P, 480P, 540P, 720P, 768P, or 1080P");
 }
 
 async function runVideoGenerate(params: {
@@ -1081,7 +1246,10 @@ async function runVideoGenerate(params: {
   watermark?: boolean;
   timeoutMs?: number;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer video.generate",
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const result = await generateVideo({
     cfg,
@@ -1156,7 +1324,10 @@ async function runVideoGenerate(params: {
 }
 
 async function runVideoDescribe(params: { file: string; model?: string }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer video.describe",
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const activeModel = requireProviderModelOverride(params.model);
   const result = await describeVideoFile({
     filePath: path.resolve(params.file),
@@ -1235,12 +1406,30 @@ async function runTtsConvert(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const cfg = getRuntimeConfig();
-  const overrides = resolveExplicitTtsOverrides({
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer tts convert",
+    targetIds: getTtsCommandSecretTargetIds(),
+  });
+  const ttsProvider = resolveTtsProviderForAuthHydration({
     cfg,
     provider: params.provider,
     modelId: params.modelId,
+    channelId: params.channel,
+  });
+  const effectiveCfg = await injectTtsAuthProfileApiKey({
+    cfg,
+    provider: ttsProvider,
+    channelId: params.channel,
+  });
+  if (effectiveCfg !== cfg) {
+    pinRuntimeConfigSnapshot(effectiveCfg);
+  }
+  const overrides = resolveExplicitTtsOverrides({
+    cfg: effectiveCfg,
+    provider: params.provider,
+    modelId: params.modelId,
     voiceId: params.voiceId,
+    channelId: params.channel,
   });
   const hasExplicitSelection = Boolean(
     overrides.provider ||
@@ -1249,7 +1438,7 @@ async function runTtsConvert(params: {
   );
   const result = await textToSpeech({
     text: params.text,
-    cfg,
+    cfg: effectiveCfg,
     channel: params.channel,
     overrides,
     disableFallback: hasExplicitSelection,
@@ -1278,6 +1467,264 @@ async function runTtsConvert(params: {
       },
     ],
   } satisfies CapabilityEnvelope;
+}
+
+function resolveTtsProviderForAuthHydration(params: {
+  cfg: OpenClawConfig;
+  provider?: string;
+  modelId?: string;
+  channelId?: string;
+}): string | undefined {
+  const explicitProvider =
+    params.provider ?? resolveSelectedProviderFromModelRef(normalizeOptionalString(params.modelId));
+  if (explicitProvider) {
+    return explicitProvider;
+  }
+  const ttsConfig = resolveTtsConfig(params.cfg, { channelId: params.channelId });
+  return getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig));
+}
+
+async function injectTtsAuthProfileApiKey(params: {
+  cfg: OpenClawConfig;
+  provider?: string;
+  channelId?: string;
+}): Promise<OpenClawConfig> {
+  if (!params.provider) {
+    return params.cfg;
+  }
+  const providerId =
+    canonicalizeSpeechProviderId(params.provider, params.cfg) ??
+    normalizeLowercaseStringOrEmpty(params.provider);
+  if (!providerId) {
+    return params.cfg;
+  }
+  const effectiveTtsConfig = resolveTtsConfig(params.cfg, { channelId: params.channelId });
+  if (resolvedTtsConfigHasProviderApiKey(effectiveTtsConfig, providerId)) {
+    return params.cfg;
+  }
+  const existingProviderConfig = resolveExistingTtsProviderConfig({
+    cfg: params.cfg,
+    providerId,
+    channelId: params.channelId,
+  });
+  if (ttsProviderConfigHasApiKey(existingProviderConfig?.value)) {
+    return params.cfg;
+  }
+  const auth = await resolveApiKeyForProvider({
+    provider: providerId,
+    cfg: params.cfg,
+    credentialPrecedence: "profile-first",
+  }).catch(() => undefined);
+  if (!auth?.apiKey || auth.mode !== "api-key") {
+    return params.cfg;
+  }
+  if (existingProviderConfig?.scope === "channel") {
+    const channels = { ...params.cfg.channels };
+    const channel = channels[existingProviderConfig.channelKey];
+    if (!isObjectRecord(channel)) {
+      return params.cfg;
+    }
+    const nextChannel = {
+      ...channel,
+      tts: buildTtsConfigWithHydratedProvider({
+        tts: channel.tts,
+        existingProviderConfig,
+        providerId,
+        apiKey: auth.apiKey,
+      }),
+    };
+    return {
+      ...params.cfg,
+      channels: {
+        ...channels,
+        [existingProviderConfig.channelKey]: nextChannel,
+      },
+    };
+  }
+  const messages = { ...params.cfg.messages };
+  const nextTts = buildTtsConfigWithHydratedProvider({
+    tts: messages.tts,
+    existingProviderConfig,
+    providerId,
+    apiKey: auth.apiKey,
+  });
+  return {
+    ...params.cfg,
+    messages: {
+      ...messages,
+      tts: nextTts,
+    },
+  };
+}
+
+type TtsProviderConfigLocation = {
+  container: "providers" | "direct";
+  key: string;
+  value: unknown;
+};
+
+type ExistingTtsProviderConfig =
+  | (TtsProviderConfigLocation & {
+      scope: "root";
+      channelKey?: never;
+    })
+  | (TtsProviderConfigLocation & {
+      scope: "channel";
+      channelKey: string;
+    });
+
+function resolveExistingTtsProviderConfig(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+  channelId?: string;
+}): ExistingTtsProviderConfig | undefined {
+  const channelTts = resolveChannelTtsConfigForAuthHydration(params);
+  if (channelTts) {
+    const channelProviderConfig = resolveExistingTtsProviderConfigInTts({
+      cfg: params.cfg,
+      tts: channelTts.tts,
+      providerId: params.providerId,
+    });
+    if (channelProviderConfig) {
+      return {
+        ...channelProviderConfig,
+        scope: "channel",
+        channelKey: channelTts.channelKey,
+      };
+    }
+  }
+  const rootProviderConfig = resolveExistingTtsProviderConfigInTts({
+    cfg: params.cfg,
+    tts: params.cfg.messages?.tts,
+    providerId: params.providerId,
+  });
+  return rootProviderConfig ? { ...rootProviderConfig, scope: "root" } : undefined;
+}
+
+function resolveExistingTtsProviderConfigInTts(params: {
+  cfg: OpenClawConfig;
+  tts: unknown;
+  providerId: string;
+}): TtsProviderConfigLocation | undefined {
+  if (!isObjectRecord(params.tts)) {
+    return undefined;
+  }
+  const providers = isObjectRecord(params.tts.providers) ? params.tts.providers : undefined;
+  if (!providers) {
+    return resolveDirectTtsProviderConfig(params);
+  }
+  const exact = providers[params.providerId];
+  if (exact !== undefined) {
+    return { container: "providers", key: params.providerId, value: exact };
+  }
+  for (const [key, value] of Object.entries(providers)) {
+    const normalizedKey = normalizeLowercaseStringOrEmpty(
+      canonicalizeSpeechProviderId(key, params.cfg) ?? key,
+    );
+    if (normalizedKey === params.providerId) {
+      return { container: "providers", key, value };
+    }
+  }
+  return resolveDirectTtsProviderConfig(params);
+}
+
+const TTS_CONFIG_RESERVED_KEYS = new Set([
+  "auto",
+  "enabled",
+  "maxTextLength",
+  "mode",
+  "modelOverrides",
+  "persona",
+  "personas",
+  "prefsPath",
+  "provider",
+  "providers",
+  "summaryModel",
+  "timeoutMs",
+]);
+
+function resolveDirectTtsProviderConfig(params: {
+  cfg: OpenClawConfig;
+  tts: unknown;
+  providerId: string;
+}): TtsProviderConfigLocation | undefined {
+  if (!isObjectRecord(params.tts)) {
+    return undefined;
+  }
+  for (const [key, value] of Object.entries(params.tts)) {
+    if (TTS_CONFIG_RESERVED_KEYS.has(key)) {
+      continue;
+    }
+    const normalizedKey = normalizeLowercaseStringOrEmpty(
+      canonicalizeSpeechProviderId(key, params.cfg) ?? key,
+    );
+    if (normalizedKey === params.providerId) {
+      return { container: "direct", key, value };
+    }
+  }
+  return undefined;
+}
+
+function resolveChannelTtsConfigForAuthHydration(params: {
+  cfg: OpenClawConfig;
+  channelId?: string;
+}): { channelKey: string; tts: unknown } | undefined {
+  const channels = params.cfg.channels;
+  const normalizedChannelId = normalizeOptionalString(params.channelId);
+  if (!isObjectRecord(channels) || !normalizedChannelId) {
+    return undefined;
+  }
+  const channelKey = Object.hasOwn(channels, normalizedChannelId)
+    ? normalizedChannelId
+    : Object.keys(channels).find(
+        (candidate) =>
+          normalizeLowercaseStringOrEmpty(candidate) ===
+          normalizeLowercaseStringOrEmpty(normalizedChannelId),
+      );
+  const channel = channelKey ? channels[channelKey] : undefined;
+  if (!channelKey || !isObjectRecord(channel)) {
+    return undefined;
+  }
+  return { channelKey, tts: channel.tts };
+}
+
+function buildTtsConfigWithHydratedProvider(params: {
+  tts: unknown;
+  existingProviderConfig?: ExistingTtsProviderConfig;
+  providerId: string;
+  apiKey: string;
+}): Record<string, unknown> {
+  const tts = isObjectRecord(params.tts) ? { ...params.tts } : {};
+  const providers = isObjectRecord(tts.providers) ? { ...tts.providers } : {};
+  const providerConfigKey = params.existingProviderConfig?.key ?? params.providerId;
+  const nextProviderConfig = {
+    ...(isObjectRecord(params.existingProviderConfig?.value)
+      ? params.existingProviderConfig.value
+      : {}),
+    apiKey: params.apiKey,
+  };
+  if (params.existingProviderConfig?.container === "direct") {
+    tts[providerConfigKey] = nextProviderConfig;
+  } else {
+    providers[providerConfigKey] = nextProviderConfig;
+    tts.providers = providers;
+  }
+  return tts;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function ttsProviderConfigHasApiKey(value: unknown): boolean {
+  return isObjectRecord(value) && "apiKey" in value;
+}
+
+function resolvedTtsConfigHasProviderApiKey(config: unknown, providerId: string): boolean {
+  if (!isObjectRecord(config) || !isObjectRecord(config.providerConfigs)) {
+    return false;
+  }
+  return ttsProviderConfigHasApiKey(config.providerConfigs[providerId]);
 }
 
 async function runTtsProviders(transport: CapabilityTransport) {
@@ -1326,6 +1773,11 @@ async function runTtsProviders(transport: CapabilityTransport) {
   };
 }
 
+function resolveImageDescribeInput(filePath: string): string {
+  const trimmed = filePath.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
+}
+
 async function runTtsPersonas(transport: CapabilityTransport) {
   if (transport === "gateway") {
     return await callGateway({
@@ -1351,7 +1803,10 @@ async function runTtsPersonas(transport: CapabilityTransport) {
 }
 
 async function runTtsVoices(providerRaw?: string) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer tts voices",
+    targetIds: getTtsCommandSecretTargetIds(),
+  });
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const provider = normalizeOptionalString(providerRaw) || getTtsProvider(config, prefsPath);
@@ -1426,8 +1881,55 @@ async function runTtsStateMutation(params: {
   return { provider };
 }
 
+async function resolveLocalCapabilityRuntimeConfig(params: {
+  commandName: string;
+  targetIds: Set<string>;
+  allowedPaths?: Set<string>;
+  forcedActivePaths?: Set<string>;
+  optionalActivePaths?: Set<string>;
+  config?: OpenClawConfig;
+}): Promise<OpenClawConfig> {
+  const cfg = params.config ?? getRuntimeConfig();
+  const { effectiveConfig } = await resolveCommandConfigWithSecrets({
+    config: cfg,
+    commandName: params.commandName,
+    targetIds: params.targetIds,
+    ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
+    ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),
+    ...(params.optionalActivePaths ? { optionalActivePaths: params.optionalActivePaths } : {}),
+    runtime: defaultRuntime,
+    autoEnable: true,
+  });
+  pinRuntimeConfigSnapshot(effectiveConfig);
+  return effectiveConfig;
+}
+
+function pinRuntimeConfigSnapshot(config: OpenClawConfig): void {
+  const sourceConfig = getRuntimeConfigSourceSnapshot();
+  if (sourceConfig) {
+    setRuntimeConfigSnapshot(config, sourceConfig);
+  } else {
+    setRuntimeConfigSnapshot(config);
+  }
+}
+
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
-  const cfg = getRuntimeConfig();
+  const rawConfig = getRuntimeConfig();
+  const scopedTargets = getCapabilityWebSearchCommandSecretTargets(rawConfig, {
+    providerId: params.provider,
+  });
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer web search",
+    targetIds: scopedTargets.targetIds,
+    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+    ...(scopedTargets.forcedActivePaths
+      ? { forcedActivePaths: scopedTargets.forcedActivePaths }
+      : {}),
+    ...(scopedTargets.optionalActivePaths
+      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
+      : {}),
+    config: rawConfig,
+  });
   const result = await runWebSearch({
     config: cfg,
     providerId: params.provider,
@@ -1448,7 +1950,22 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
 }
 
 async function runWebFetchCommand(params: { url: string; provider?: string; format?: string }) {
-  const cfg = getRuntimeConfig();
+  const rawConfig = getRuntimeConfig();
+  const scopedTargets = getCapabilityWebFetchCommandSecretTargets(rawConfig, {
+    providerId: params.provider,
+  });
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer web fetch",
+    targetIds: scopedTargets.targetIds,
+    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+    ...(scopedTargets.forcedActivePaths
+      ? { forcedActivePaths: scopedTargets.forcedActivePaths }
+      : {}),
+    ...(scopedTargets.optionalActivePaths
+      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
+      : {}),
+    config: rawConfig,
+  });
   const resolved = resolveWebFetchDefinition({
     config: cfg,
     providerId: params.provider,
@@ -1476,7 +1993,10 @@ async function runMemoryEmbeddingCreate(params: {
   model?: string;
 }) {
   ensureMemoryEmbeddingProvidersRegistered();
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer embedding create",
+    targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
+  });
   const modelRef = resolveModelRefOverride(params.model);
   const requestedProvider = normalizeOptionalString(params.provider) || modelRef.provider || "auto";
   const result = await createEmbeddingProvider({
@@ -1576,12 +2096,14 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
+    .option("--thinking <level>", "Thinking level override")
     .option("--local", "Force local execution", false)
     .option("--gateway", "Force gateway execution", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const prompt = requireModelRunPrompt(opts.prompt);
+        const thinking = normalizeModelRunThinking(opts.thinking);
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
@@ -1592,6 +2114,7 @@ export function registerCapabilityCli(program: Command) {
           prompt,
           files: opts.file as string[] | undefined,
           model: opts.model as string | undefined,
+          thinking,
           transport,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1647,10 +2170,17 @@ export function registerCapabilityCli(program: Command) {
     .command("login")
     .description("Run provider auth login")
     .requiredOption("--provider <id>", "Provider id")
+    .option("--method <id>", "Provider auth method id")
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
-        await modelsAuthLoginCommand({ provider: String(opts.provider) }, defaultRuntime);
+        await modelsAuthLoginCommand(
+          {
+            provider: String(opts.provider),
+            method: opts.method ? String(opts.method) : undefined,
+          },
+          defaultRuntime,
+        );
       });
     });
 
@@ -1658,10 +2188,14 @@ export function registerCapabilityCli(program: Command) {
     .command("logout")
     .description("Remove saved auth profiles for one provider")
     .requiredOption("--provider <id>", "Provider id")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runModelAuthLogout(String(opts.provider));
+        const result = await runModelAuthLogout(
+          String(opts.provider),
+          typeof opts.agent === "string" ? opts.agent : undefined,
+        );
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
           JSON.stringify(value, null, 2),
         );
@@ -1704,7 +2238,7 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.generate",
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
-          count: opts.count ? Number.parseInt(String(opts.count), 10) : undefined,
+          count: parseOptionalPositiveInteger(opts.count, "--count"),
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
@@ -1714,7 +2248,7 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1753,7 +2287,7 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1775,7 +2309,7 @@ export function registerCapabilityCli(program: Command) {
           files: [String(opts.file)],
           model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -1796,7 +2330,7 @@ export function registerCapabilityCli(program: Command) {
           files: opts.file as string[],
           model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -2086,7 +2620,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--model <provider/model>", "Model override")
     .option("--size <size>", "Size hint like 1280x720")
     .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
-    .option("--resolution <value>", "Resolution hint: 480P, 720P, 768P, or 1080P")
+    .option("--resolution <value>", "Resolution hint: 360P, 480P, 540P, 720P, 768P, or 1080P")
     .option("--duration <seconds>", "Target duration in seconds")
     .option("--audio", "Enable generated audio when supported")
     .option("--watermark", "Request provider watermark when supported")
@@ -2105,7 +2639,7 @@ export function registerCapabilityCli(program: Command) {
           durationSeconds: parseOptionalFiniteNumber(opts.duration, "--duration"),
           audio: opts.audio === true ? true : undefined,
           watermark: opts.watermark === true ? true : undefined,
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -2181,7 +2715,7 @@ export function registerCapabilityCli(program: Command) {
         const result = await runWebSearchCommand({
           query: String(opts.query),
           provider: opts.provider as string | undefined,
-          limit: opts.limit ? Number.parseInt(String(opts.limit), 10) : undefined,
+          limit: parseOptionalPositiveInteger(opts.limit, "--limit"),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -2272,35 +2806,48 @@ export function registerCapabilityCli(program: Command) {
         const cfg = getRuntimeConfig();
         const agentId = resolveDefaultAgentId(cfg);
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
-        const selectedProvider =
-          resolvedMemory?.provider && resolvedMemory.provider !== "auto"
-            ? resolvedMemory.provider
-            : undefined;
-        const autoSelectedProvider =
-          resolvedMemory?.provider === "auto"
-            ? (
-                await createEmbeddingProvider({
-                  config: cfg,
-                  agentDir: resolveAgentDir(cfg, agentId),
-                  provider: "auto",
-                  fallback: "none",
-                  model: resolvedMemory.model,
-                  local: resolvedMemory.local,
-                  remote: resolvedMemory.remote,
-                  outputDimensionality: resolvedMemory.outputDimensionality,
-                }).catch(() => ({ provider: null }))
-              )?.provider?.id
-            : undefined;
-        const result = listMemoryEmbeddingProviders().map((provider) => ({
+        const selectedProvider = resolvedMemory?.provider;
+        const providers = new Map(
+          listMemoryEmbeddingProviders().map((provider) => [
+            provider.id,
+            {
+              id: provider.id,
+              defaultModel: provider.defaultModel,
+              transport: provider.transport,
+              autoSelectPriority: provider.autoSelectPriority,
+            },
+          ]),
+        );
+        for (const provider of listEmbeddingProviders(cfg)) {
+          if (providers.has(provider.id)) {
+            continue;
+          }
+          providers.set(provider.id, {
+            id: provider.id,
+            defaultModel: provider.defaultModel,
+            transport: provider.transport,
+            autoSelectPriority: undefined,
+          });
+        }
+        if (selectedProvider && !providers.has(selectedProvider)) {
+          providers.set(selectedProvider, {
+            id: selectedProvider,
+            defaultModel: resolvedMemory?.model || undefined,
+            transport: providerHasGenericConfig({ cfg, providerId: selectedProvider })
+              ? "remote"
+              : undefined,
+            autoSelectPriority: undefined,
+          });
+        }
+        const result = Array.from(providers.values()).map((provider) => ({
           available: true,
           configured:
             provider.id === selectedProvider ||
-            provider.id === autoSelectedProvider ||
             providerHasGenericConfig({
               cfg,
               providerId: provider.id,
             }),
-          selected: provider.id === selectedProvider || provider.id === autoSelectedProvider,
+          selected: provider.id === selectedProvider,
           id: provider.id,
           defaultModel: provider.defaultModel,
           transport: provider.transport,

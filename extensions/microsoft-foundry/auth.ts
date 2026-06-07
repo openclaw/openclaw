@@ -1,3 +1,4 @@
+// Microsoft Foundry plugin module implements auth behavior.
 import type {
   ProviderAuthContext,
   ProviderAuthMethod,
@@ -52,7 +53,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       );
     }
 
-    let account = getLoggedInAccount();
+    const account = getLoggedInAccount();
     let tenantId = account?.tenantId;
     if (account) {
       const useExisting = await ctx.prompter.confirm({
@@ -61,7 +62,6 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       });
       if (!useExisting) {
         const loginResult = await loginWithTenantFallback(ctx);
-        account = loginResult.account;
         tenantId = loginResult.tenantId ?? loginResult.account?.tenantId;
       }
     } else {
@@ -70,7 +70,6 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
         "Azure Login",
       );
       const loginResult = await loginWithTenantFallback(ctx);
-      account = loginResult.account;
       tenantId = loginResult.tenantId ?? loginResult.account?.tenantId;
     }
 
@@ -98,7 +97,11 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
           label: `${sub.name} (${sub.id})`,
         })),
       });
-      selectedSub = subs.find((sub) => sub.id === selectedId)!;
+      const match = subs.find((sub) => sub.id === selectedId);
+      if (!match) {
+        throw new Error(`Selected subscription not found: ${selectedId}`);
+      }
+      selectedSub = match;
       tenantId ??= selectedSub.tenantId;
     }
 

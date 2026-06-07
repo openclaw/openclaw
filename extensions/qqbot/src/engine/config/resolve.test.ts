@@ -1,3 +1,4 @@
+// Qqbot tests cover resolve plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -8,7 +9,7 @@ import {
 
 describe("engine/config/resolve", () => {
   it("returns empty list when no accounts configured", () => {
-    expect(listAccountIds({})).toEqual([]);
+    expect(listAccountIds({})).toStrictEqual([]);
   });
 
   it("returns default when top-level appId is set", () => {

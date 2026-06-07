@@ -29,7 +29,12 @@ Auth profiles are **per-agent**. Each agent reads from its own:
 </Note>
 
 <Warning>
-Main agent credentials are **not** shared automatically. Never reuse `agentDir` across agents (it causes auth/session collisions). If you want to share creds, copy `auth-profiles.json` into the other agent's `agentDir`.
+Never reuse `agentDir` across agents (it causes auth/session collisions). Agents
+can read through to the default/main agent's auth profiles when they do not have
+a local profile, but OpenClaw does not clone OAuth refresh tokens into the
+secondary agent store. If you want an independent OAuth account, sign in from
+that agent; if you copy credentials manually, copy only portable static
+`api_key` or `token` profiles.
 </Warning>
 
 Skills are loaded from each agent workspace plus shared roots such as `~/.openclaw/skills`, then filtered by the effective agent skill allowlist when configured. Use `agents.defaults.skills` for a shared baseline and `agents.list[].skills` for per-agent replacement. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) and [Skills: agent skill allowlists](/tools/skills#agent-skill-allowlists).
@@ -240,8 +245,9 @@ Bindings are **deterministic** and **most-specific wins**:
 
   </Accordion>
   <Accordion title="Account-scope detail">
-    - A binding that omits `accountId` matches the default account only.
+    - A binding that omits `accountId` matches the default account only. It does not match all accounts.
     - Use `accountId: "*"` for a channel-wide fallback across all accounts.
+    - Use `accountId: "<name>"` to match one account.
     - If you later add the same binding for the same agent with an explicit account id, OpenClaw upgrades the existing channel-only binding to account-scoped instead of duplicating it.
 
   </Accordion>
@@ -257,7 +263,7 @@ Common channels supporting this pattern include:
 
 - `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`
 - `irc`, `line`, `googlechat`, `mattermost`, `matrix`, `nextcloud-talk`
-- `bluebubbles`, `zalo`, `zalouser`, `nostr`, `feishu`
+- `zalo`, `zalouser`, `nostr`, `feishu`
 
 ## Concepts
 
@@ -351,6 +357,11 @@ Common channels supporting this pattern include:
 
     - Create one bot per agent with BotFather and copy each token.
     - Tokens live in `channels.telegram.accounts.<id>.botToken` (default account can use `TELEGRAM_BOT_TOKEN`).
+    - For multiple bots in the same Telegram group, invite each bot and mention the bot that should answer.
+    - Disable BotFather Privacy Mode for each group bot, then re-add the bot so Telegram applies the setting.
+    - Allow groups with `channels.telegram.groups`, or use `groupPolicy: "open"` only for trusted group deployments.
+    - Put sender user IDs in `groupAllowFrom`. Group and supergroup IDs belong in `channels.telegram.groups`, not `groupAllowFrom`.
+    - Bind by `accountId` so each bot routes to its own agent.
 
   </Accordion>
   <Accordion title="WhatsApp numbers per agent">
@@ -452,15 +463,15 @@ Common channels supporting this pattern include:
         ],
       },
       bindings: [
-        { agentId: "chat", match: { channel: "whatsapp" } },
-        { agentId: "opus", match: { channel: "telegram" } },
+        { agentId: "chat", match: { channel: "whatsapp", accountId: "*" } },
+        { agentId: "opus", match: { channel: "telegram", accountId: "*" } },
       ],
     }
     ```
 
     Notes:
 
-    - If you have multiple accounts for a channel, add `accountId` to the binding (for example `{ channel: "whatsapp", accountId: "personal" }`).
+    - These examples use `accountId: "*"` so the bindings keep working if you add accounts later.
     - To route a single DM/group to Opus while keeping the rest on chat, add a `match.peer` binding for that peer; peer matches always win over channel-wide rules.
 
   </Tab>
@@ -488,9 +499,9 @@ Common channels supporting this pattern include:
       bindings: [
         {
           agentId: "opus",
-          match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551234567" } },
+          match: { channel: "whatsapp", accountId: "*", peer: { kind: "direct", id: "+15551234567" } },
         },
-        { agentId: "chat", match: { channel: "whatsapp" } },
+        { agentId: "chat", match: { channel: "whatsapp", accountId: "*" } },
       ],
     }
     ```

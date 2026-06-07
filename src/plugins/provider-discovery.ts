@@ -1,22 +1,23 @@
+/** Control-plane provider discovery helpers that keep runtime imports lazy until catalog hooks run. */
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import {
-  listPluginContributionIds,
-  loadPluginRegistrySnapshot,
-  type LoadPluginRegistryParams,
-  type PluginRegistrySnapshot,
-} from "./plugin-registry.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { listManifestProviderContributionIds } from "./manifest-contribution-ids.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import type { LoadPluginRegistryParams, PluginRegistrySnapshot } from "./plugin-registry.js";
+import { copyProviderCatalogResultProjection } from "./provider-catalog-result.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
 const DANGEROUS_PROVIDER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-let providerRuntimePromise: Promise<typeof import("./provider-discovery.runtime.js")> | undefined;
+const providerRuntimeLoader = createLazyImportLoader(
+  () => import("./provider-discovery.runtime.js"),
+);
 
 function loadProviderRuntime() {
-  providerRuntimePromise ??= import("./provider-discovery.runtime.js");
-  return providerRuntimePromise;
+  return providerRuntimeLoader.load();
 }
 
 function resolveProviderCatalogHook(provider: ProviderPlugin) {
@@ -35,15 +36,17 @@ function isSafeProviderConfigKey(value: string): boolean {
   return value !== "" && !DANGEROUS_PROVIDER_KEYS.has(value);
 }
 
+/** Options for resolving plugin providers that can contribute model catalog entries. */
 export type ResolveRuntimePluginDiscoveryProvidersParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
 
 export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegistryParams & {
@@ -51,10 +54,7 @@ export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegi
   includeDisabled?: boolean;
 };
 
-function sortedValues(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
-}
-
+/** Lists provider ids advertised by installed manifests, including disabled entries when requested. */
 export function resolveInstalledPluginProviderContributionIds(
   params: ResolveInstalledPluginProviderContributionIdsParams = {},
 ): string[] {
@@ -62,17 +62,16 @@ export function resolveInstalledPluginProviderContributionIds(
     params.candidates && params.preferPersisted === undefined
       ? { ...params, preferPersisted: false }
       : params;
-  const index = params.index ?? loadPluginRegistrySnapshot(registryParams);
-  return sortedValues(
-    listPluginContributionIds({
-      index,
-      contribution: "providers",
+  return sortUniqueStrings(
+    listManifestProviderContributionIds({
+      ...registryParams,
+      index: params.index,
       includeDisabled: params.includeDisabled,
-      config: params.config,
     }),
   );
 }
 
+/** Loads provider runtime discovery and filters to providers that can produce catalog order entries. */
 export async function resolveRuntimePluginDiscoveryProviders(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
 ): Promise<ProviderPlugin[]> {
@@ -81,6 +80,7 @@ export async function resolveRuntimePluginDiscoveryProviders(
     .filter((provider) => resolveProviderCatalogOrderHook(provider));
 }
 
+/** Groups plugin providers into stable discovery phases for catalog probing. */
 export function groupPluginDiscoveryProvidersByOrder(
   providers: ProviderPlugin[],
 ): Record<ProviderDiscoveryOrder, ProviderPlugin[]> {
@@ -103,6 +103,7 @@ export function groupPluginDiscoveryProvidersByOrder(
   return grouped;
 }
 
+/** Normalizes a plugin discovery response into safe provider-config keys. */
 export function normalizePluginDiscoveryResult(params: {
   provider: ProviderPlugin;
   result:
@@ -116,7 +117,8 @@ export function normalizePluginDiscoveryResult(params: {
     return {};
   }
 
-  if ("provider" in result) {
+  const projection = copyProviderCatalogResultProjection(result);
+  if (projection.kind === "provider") {
     const normalized = createProviderConfigRecord();
     for (const providerId of [
       params.provider.id,
@@ -127,13 +129,16 @@ export function normalizePluginDiscoveryResult(params: {
       if (!isSafeProviderConfigKey(normalizedKey)) {
         continue;
       }
-      normalized[normalizedKey] = result.provider;
+      normalized[normalizedKey] = projection.provider;
     }
     return normalized;
   }
 
   const normalized = createProviderConfigRecord();
-  for (const [key, value] of Object.entries(result.providers)) {
+  if (projection.kind !== "providers") {
+    return normalized;
+  }
+  for (const [key, value] of projection.providers) {
     const normalizedKey = normalizeProviderId(key);
     if (!isSafeProviderConfigKey(normalizedKey) || !value) {
       continue;
@@ -159,7 +164,7 @@ export function runProviderCatalog(params: {
   ) => {
     apiKey: string | undefined;
     discoveryApiKey?: string;
-    mode: "api_key" | "oauth" | "token" | "none";
+    mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
     source: "env" | "profile" | "none";
     profileId?: string;
   };

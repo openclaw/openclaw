@@ -1,3 +1,4 @@
+// Verifies MCP transport config normalization and startup-safety filtering.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logWarn } from "../logger.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
@@ -16,16 +17,40 @@ describe("resolveMcpTransportConfig", () => {
       connectionTimeoutMs: 12_345,
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       kind: "stdio",
       transportType: "stdio",
       command: "node",
       args: ["./server.mjs"],
+      env: undefined,
+      cwd: undefined,
+      description: "node ./server.mjs",
       connectionTimeoutMs: 12_345,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
   });
 
+  it("resolves operator timeout aliases and parallel capability", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      command: "node",
+      timeout: 7,
+      connectTimeout: 2,
+      supportsParallelToolCalls: true,
+    });
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        connectionTimeoutMs: 2_000,
+        requestTimeoutMs: 7_000,
+        supportsParallelToolCalls: true,
+      }),
+    );
+  });
+
   it("drops dangerous env overrides from stdio config", () => {
+    // Stdio env is executable process input. Block loader/shell hook variables
+    // while preserving ordinary provider tokens and scalar env values.
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
       env: {
@@ -55,6 +80,8 @@ describe("resolveMcpTransportConfig", () => {
       cwd: undefined,
       description: "node",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
     expect(logWarn).toHaveBeenCalledWith(
       'bundle-mcp: server "probe": env "NODE_OPTIONS" is blocked for stdio startup safety and was ignored.',
@@ -76,10 +103,17 @@ describe("resolveMcpTransportConfig", () => {
       },
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       kind: "stdio",
+      transportType: "stdio",
       command: "node",
+      args: undefined,
       env: {},
+      cwd: undefined,
+      description: "node",
+      connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
   });
 
@@ -115,10 +149,14 @@ describe("resolveMcpTransportConfig", () => {
       },
       description: "https://mcp.example.com/sse",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
   });
 
   it("keeps HTTP header parsing unchanged for env-like names", () => {
+    // Header names are not process environment keys, so env safety filtering
+    // must not rewrite or drop them.
     const resolved = resolveMcpTransportConfig("probe", {
       url: "https://mcp.example.com/sse",
       headers: {
@@ -135,6 +173,8 @@ describe("resolveMcpTransportConfig", () => {
       },
       description: "https://mcp.example.com/sse",
       connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
   });
 
@@ -144,10 +184,15 @@ describe("resolveMcpTransportConfig", () => {
       transport: "streamable-http",
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       kind: "http",
       transportType: "streamable-http",
       url: "https://mcp.example.com/http",
+      headers: undefined,
+      description: "https://mcp.example.com/http",
+      connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
   });
 
@@ -157,10 +202,15 @@ describe("resolveMcpTransportConfig", () => {
       type: "http",
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       kind: "http",
       transportType: "streamable-http",
       url: "https://mcp.example.com/http",
+      headers: undefined,
+      description: "https://mcp.example.com/http",
+      connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
     });
   });
 });

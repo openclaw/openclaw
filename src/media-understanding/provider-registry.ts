@@ -1,3 +1,5 @@
+// Media-understanding provider registry combines plugin capability providers,
+// config-derived image providers, and test/runtime overrides.
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
@@ -20,13 +22,33 @@ function mergeProviderIntoRegistry(
         defaultModels: provider.defaultModels ?? existing.defaultModels,
         autoPriority: provider.autoPriority ?? existing.autoPriority,
         nativeDocumentInputs: provider.nativeDocumentInputs ?? existing.nativeDocumentInputs,
+        documentModels: provider.documentModels ?? existing.documentModels,
       }
     : provider;
-  registry.set(normalizedKey, merged);
+  registry.set(normalizedKey, hydrateModelBackedMediaProvider(merged));
 }
 
-export { normalizeMediaProviderId } from "./provider-id.js";
+function hydrateModelBackedMediaProvider(
+  provider: MediaUnderstandingProvider,
+): MediaUnderstandingProvider {
+  // Manifest-only image providers can still route through the generic model
+  // runtime when they declare image capability but no plugin hook.
+  if (!provider.capabilities?.includes("image")) {
+    return provider;
+  }
+  if (provider.describeImage && provider.describeImages) {
+    return provider;
+  }
+  return {
+    ...provider,
+    describeImage: provider.describeImage ?? describeImageWithModel,
+    describeImages: provider.describeImages ?? describeImagesWithModel,
+  };
+}
 
+export { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
+
+/** Builds the media-understanding provider registry from plugin capabilities and config providers. */
 export function buildMediaUnderstandingRegistry(
   overrides?: Record<string, MediaUnderstandingProvider>,
   cfg?: OpenClawConfig,
@@ -57,6 +79,7 @@ export function buildMediaUnderstandingRegistry(
   return registry;
 }
 
+/** Looks up a media-understanding provider using the same id normalization as registry builds. */
 export function getMediaUnderstandingProvider(
   id: string,
   registry: Map<string, MediaUnderstandingProvider>,

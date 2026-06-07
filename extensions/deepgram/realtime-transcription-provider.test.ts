@@ -1,7 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Deepgram tests cover realtime transcription provider plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   buildDeepgramRealtimeTranscriptionProvider,
 } from "./realtime-transcription-provider.js";
 
@@ -29,19 +30,20 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
       },
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       apiKey: "dg-key",
+      baseUrl: undefined,
       model: "nova-3",
-      encoding: "mulaw",
+      language: "en-US",
       sampleRate: 8000,
+      encoding: "mulaw",
       interimResults: true,
       endpointingMs: 500,
-      language: "en-US",
     });
   });
 
   it("builds a Deepgram listen websocket URL", () => {
-    const url = __testing.toDeepgramRealtimeWsUrl({
+    const url = testing.toDeepgramRealtimeWsUrl({
       apiKey: "dg-key",
       baseUrl: "https://api.deepgram.com/v1",
       model: "nova-3",

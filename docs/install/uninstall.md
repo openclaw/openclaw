@@ -19,7 +19,15 @@ Recommended: use the built-in uninstaller:
 openclaw uninstall
 ```
 
-Non-interactive (automation / npx):
+When using the CLI, state removal preserves configured workspace directories unless you also select `--workspace`.
+
+Preview what will be removed (safe):
+
+```bash
+openclaw uninstall --dry-run --all
+```
+
+Non-interactive (automation / npx). Use with caution and only after confirming scopes:
 
 ```bash
 openclaw uninstall --all --yes --non-interactive
@@ -47,6 +55,7 @@ rm -rf "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 ```
 
 If you set `OPENCLAW_CONFIG_PATH` to a custom location outside the state dir, delete that file too.
+If you want to keep a workspace inside the state dir, such as `~/.openclaw/workspace`, move it aside before running `rm -rf` or delete state contents selectively.
 
 4. Delete your workspace (optional, removes agent files):
 

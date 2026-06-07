@@ -1,8 +1,10 @@
-import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
+// Implements dock commands that bind sessions to local workspaces.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import { resolveTextCommand } from "../commands-registry.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { persistSessionEntry } from "./commands-session-store.js";
@@ -36,6 +38,10 @@ function resolveTargetChannelAccountId(
     (entry) => normalizeLowercaseStringOrEmpty(entry.plugin.id) === targetChannel,
   )?.plugin;
   return normalizeOptionalString(plugin?.config.defaultAccountId?.(params.cfg)) || "default";
+}
+
+function isDirectDockSource(params: HandleCommandsParams): boolean {
+  return normalizeLowercaseStringOrEmpty(params.ctx.ChatType) === "direct";
 }
 
 function collectSourcePeerCandidates(params: HandleCommandsParams): string[] {
@@ -87,7 +93,7 @@ function resolveLinkedDockTarget(params: {
     if (!Array.isArray(ids)) {
       continue;
     }
-    const normalizedIds = ids.map((id) => normalizeLowercaseStringOrEmpty(id)).filter(Boolean);
+    const normalizedIds = normalizeTrimmedStringList(ids).map((id) => id.toLowerCase());
     if (!normalizedIds.some((id) => params.sourceCandidates.has(id))) {
       continue;
     }
@@ -124,6 +130,14 @@ export const handleDockCommand: CommandHandler = async (params, allowTextCommand
     return {
       shouldContinue: false,
       reply: { text: `Already docked to ${targetChannel}.` },
+    };
+  }
+  if (!isDirectDockSource(params)) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `Cannot dock to ${targetChannel}: docking is only available from direct chats.`,
+      },
     };
   }
 

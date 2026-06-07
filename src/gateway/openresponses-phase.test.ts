@@ -1,3 +1,6 @@
+/**
+ * Tests OpenAI Responses phase tracking for gateway request processing.
+ */
 import { describe, expect, it } from "vitest";
 import { CreateResponseBodySchema, OutputItemSchema } from "./open-responses.schema.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
@@ -58,10 +61,11 @@ describe("openresponses phase support", () => {
         phase: "commentary",
         status: "completed",
       }),
-    ).toMatchObject({
+    ).toEqual({
       type: "message",
       id: "msg_commentary",
       role: "assistant",
+      content: [{ type: "output_text", text: "Checking logs." }],
       phase: "commentary",
       status: "completed",
     });
@@ -73,10 +77,11 @@ describe("openresponses phase support", () => {
         phase: "final_answer",
         status: "completed",
       }),
-    ).toMatchObject({
+    ).toEqual({
       type: "message",
       id: "msg_final",
       role: "assistant",
+      content: [{ type: "output_text", text: "Root cause found." }],
       phase: "final_answer",
       status: "completed",
     });

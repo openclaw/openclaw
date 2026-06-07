@@ -1,6 +1,7 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+// OpenClaw-owned tool runtime contract helpers mock agent tool runtimes in SDK tests.
 import { vi } from "vitest";
-import { __testing as beforeToolCallTesting } from "../../../agents/pi-tools.before-tool-call.js";
+import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/agent-tools.before-tool-call.state.js";
+import type { AgentToolResult } from "../../../agents/runtime/index.js";
 import type {
   CodexAppServerExtensionFactory,
   CodexAppServerToolResultEvent,
@@ -90,5 +91,5 @@ export function installCodexToolResultMiddleware(
 export function resetOpenClawOwnedToolHooks(): void {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
-  beforeToolCallTesting.adjustedParamsByToolCallId.clear();
+  resetAdjustedParamsByToolCallIdForTests();
 }

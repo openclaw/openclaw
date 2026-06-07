@@ -1,6 +1,7 @@
+// Whatsapp plugin module implements connection controller registry behavior.
 import type { ActiveWebListener } from "./inbound/types.js";
 
-export type WhatsAppConnectionControllerHandle = {
+type WhatsAppConnectionControllerHandle = {
   getActiveListener(): ActiveWebListener | null;
 };
 

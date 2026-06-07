@@ -1,3 +1,4 @@
+/** Normalizes durable plugin install records into installed-index metadata and back. */
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type {
   InstalledPluginIndex,
@@ -15,6 +16,16 @@ function setInstallStringField<Key extends keyof Omit<InstalledPluginInstallReco
   const normalized = value.trim();
   if (normalized) {
     target[key] = normalized as InstalledPluginInstallRecordInfo[Key];
+  }
+}
+
+function setInstallNumberField<Key extends keyof Omit<InstalledPluginInstallRecordInfo, "source">>(
+  target: InstalledPluginInstallRecordInfo,
+  key: Key,
+  value: PluginInstallRecord[Key],
+): void {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    target[key] = value as InstalledPluginInstallRecordInfo[Key];
   }
 }
 
@@ -42,6 +53,18 @@ function normalizeInstallRecord(
   setInstallStringField(normalized, "clawhubPackage", record.clawhubPackage);
   setInstallStringField(normalized, "clawhubFamily", record.clawhubFamily);
   setInstallStringField(normalized, "clawhubChannel", record.clawhubChannel);
+  setInstallStringField(normalized, "artifactKind", record.artifactKind);
+  setInstallStringField(normalized, "artifactFormat", record.artifactFormat);
+  setInstallStringField(normalized, "npmIntegrity", record.npmIntegrity);
+  setInstallStringField(normalized, "npmShasum", record.npmShasum);
+  setInstallStringField(normalized, "npmTarballName", record.npmTarballName);
+  setInstallStringField(normalized, "clawpackSha256", record.clawpackSha256);
+  setInstallNumberField(normalized, "clawpackSpecVersion", record.clawpackSpecVersion);
+  setInstallStringField(normalized, "clawpackManifestSha256", record.clawpackManifestSha256);
+  setInstallNumberField(normalized, "clawpackSize", record.clawpackSize);
+  setInstallStringField(normalized, "gitUrl", record.gitUrl);
+  setInstallStringField(normalized, "gitRef", record.gitRef);
+  setInstallStringField(normalized, "gitCommit", record.gitCommit);
   setInstallStringField(normalized, "marketplaceName", record.marketplaceName);
   setInstallStringField(normalized, "marketplaceSource", record.marketplaceSource);
   setInstallStringField(normalized, "marketplacePlugin", record.marketplacePlugin);
@@ -57,6 +80,7 @@ function restoreInstallRecord(
   return structuredClone(record) as PluginInstallRecord;
 }
 
+/** Normalizes raw plugin install records into index-safe install record metadata. */
 export function normalizeInstallRecordMap(
   records: Record<string, PluginInstallRecord> | undefined,
 ): Record<string, InstalledPluginInstallRecordInfo> {
@@ -87,10 +111,11 @@ function restoreInstallRecordMap(
   return restored;
 }
 
+/** Extracts raw plugin install records from either current or legacy installed-index shapes. */
 export function extractPluginInstallRecordsFromInstalledPluginIndex(
   index: InstalledPluginIndex | null | undefined,
 ): Record<string, PluginInstallRecord> {
-  if (index && Object.prototype.hasOwnProperty.call(index, "installRecords")) {
+  if (index && Object.hasOwn(index, "installRecords")) {
     return restoreInstallRecordMap(index.installRecords);
   }
   const records: Record<string, PluginInstallRecord> = {};

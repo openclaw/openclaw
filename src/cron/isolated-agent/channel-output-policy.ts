@@ -1,14 +1,18 @@
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+/** Reads channel plugin output/threading policy for isolated cron delivery. */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 type ChannelPluginRuntime = typeof import("../../channels/plugins/index.js");
 
-let channelPluginRuntimePromise: Promise<ChannelPluginRuntime> | undefined;
+const channelPluginRuntimeLoader = createLazyImportLoader<ChannelPluginRuntime>(
+  () => import("../../channels/plugins/index.js"),
+);
 
 async function loadChannelPluginRuntime() {
-  channelPluginRuntimePromise ??= import("../../channels/plugins/index.js");
-  return await channelPluginRuntimePromise;
+  return await channelPluginRuntimeLoader.load();
 }
 
+/** Resolves channel-specific cron output preferences from loaded channel plugins. */
 export async function resolveCronChannelOutputPolicy(channel: string | undefined): Promise<{
   preferFinalAssistantVisibleText: boolean;
 }> {
@@ -23,6 +27,7 @@ export async function resolveCronChannelOutputPolicy(channel: string | undefined
   };
 }
 
+/** Resolves the provider-specific current-thread target for a delivery address. */
 export async function resolveCurrentChannelTarget(params: {
   channel?: string;
   to?: string;

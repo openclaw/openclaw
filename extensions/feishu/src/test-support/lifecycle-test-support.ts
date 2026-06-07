@@ -1,8 +1,8 @@
+// Feishu plugin module implements lifecycle test support behavior.
 import { randomUUID } from "node:crypto";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { expect, vi, type Mock } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
-import { createFeishuMessageReceiveHandler } from "../monitor.message-handler.js";
 import { setFeishuRuntime } from "../runtime.js";
 import type { ResolvedFeishuAccount } from "../types.js";
 
@@ -38,10 +38,12 @@ type FeishuLifecycleReplyDispatcher = {
     sendFinalReply: AsyncUnknownMock;
     waitForIdle: AsyncUnknownMock;
     getQueuedCounts: UnknownMock;
+    getFailedCounts: UnknownMock;
     markComplete: UnknownMock;
   };
   replyOptions: Record<string, never>;
   markDispatchIdle: UnknownMock;
+  ensureNoVisibleReplyFallback: AsyncUnknownMock;
 };
 
 export function setFeishuLifecycleStateDir(prefix: string) {
@@ -56,7 +58,7 @@ export function restoreFeishuLifecycleStateDir(originalStateDir: string | undefi
   process.env.OPENCLAW_STATE_DIR = originalStateDir;
 }
 
-export const FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE = {
+const FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE = {
   kind: "prefetched",
   botOpenId: "ou_bot_1",
   botName: "Bot",
@@ -70,14 +72,16 @@ export function createFeishuLifecycleReplyDispatcher(): FeishuLifecycleReplyDisp
       sendFinalReply: vi.fn(async () => true),
       waitForIdle: vi.fn(async () => {}),
       getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+      getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
       markComplete: vi.fn(),
     },
     replyOptions: {},
     markDispatchIdle: vi.fn(),
+    ensureNoVisibleReplyFallback: vi.fn(async () => false),
   };
 }
 
-export function createImmediateInboundDebounce() {
+function createImmediateInboundDebounce() {
   return {
     resolveInboundDebounceMs: vi.fn(() => 0),
     createInboundDebouncer: <T>(params: InboundDebouncerParams<T>) => ({
@@ -89,11 +93,12 @@ export function createImmediateInboundDebounce() {
         }
       },
       flushKey: async () => {},
+      cancelKey: () => false,
     }),
   };
 }
 
-export function installFeishuLifecycleRuntime(params: {
+function installFeishuLifecycleRuntime(params: {
   resolveAgentRoute: PluginRuntime["channel"]["routing"]["resolveAgentRoute"];
   finalizeInboundContext: PluginRuntime["channel"]["reply"]["finalizeInboundContext"];
   dispatchReplyFromConfig: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
@@ -309,7 +314,7 @@ async function expectFeishuLifecycleEventually(
   }
 }
 
-export async function replayFeishuLifecycleEvent(params: {
+async function replayFeishuLifecycleEvent(params: {
   handler: (data: unknown) => Promise<void>;
   event: unknown;
   waitForFirst: () => void | Promise<void>;
@@ -411,31 +416,6 @@ async function loadMonitorSingleAccount() {
   return module.monitorSingleAccount;
 }
 
-export async function setupFeishuMessageReceiveLifecycleHandler(params: {
-  runtime: RuntimeEnv;
-  core: PluginRuntime;
-  cfg: ClawdbotConfig;
-  accountId: string;
-  fireAndForget?: boolean;
-  handleMessage: Parameters<typeof createFeishuMessageReceiveHandler>[0]["handleMessage"];
-  resolveDebounceText: Parameters<
-    typeof createFeishuMessageReceiveHandler
-  >[0]["resolveDebounceText"];
-}): Promise<(data: unknown) => Promise<void>> {
-  return createFeishuMessageReceiveHandler({
-    cfg: params.cfg,
-    core: params.core,
-    accountId: params.accountId,
-    runtime: params.runtime,
-    chatHistories: new Map(),
-    fireAndForget: params.fireAndForget,
-    handleMessage: params.handleMessage,
-    resolveDebounceText: params.resolveDebounceText,
-    hasProcessedMessage: vi.fn(async () => false),
-    recordProcessedMessage: vi.fn(async () => true),
-  });
-}
-
 export async function setupFeishuLifecycleHandler(params: {
   createEventDispatcherMock: {
     mockReturnValue: (value: unknown) => unknown;
@@ -468,7 +448,7 @@ export async function setupFeishuLifecycleHandler(params: {
   });
 
   const handlers: Record<string, (data: unknown) => Promise<void>> = {};
-  for (const [key, value] of Object.entries(register.mock.calls[0]?.[0] ?? {})) {
+  for (const [key, value] of Object.entries(register.mock.calls.at(0)?.[0] ?? {})) {
     handlers[key] = value as (data: unknown) => Promise<void>;
   }
   const handler = handlers[params.handlerKey];

@@ -1,3 +1,4 @@
+// Proxy capture SQLite store tests cover persisted capture reads and writes.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -54,7 +55,7 @@ describe("DebugProxyCaptureStore", () => {
     const store = makeStore();
 
     store.close();
-    expect(() => store.close()).not.toThrow();
+    store.close();
     expect(store.isClosed).toBe(true);
   });
 
@@ -103,14 +104,12 @@ describe("DebugProxyCaptureStore", () => {
     });
 
     expect(store.listSessions(10)).toHaveLength(1);
-    expect(store.queryPreset("double-sends", "session-1")).toEqual([
-      expect.objectContaining({
-        host: "api.example.com",
-        path: "/v1/send",
-        method: "POST",
-        duplicateCount: 2,
-      }),
-    ]);
+    const duplicateRows = store.queryPreset("double-sends", "session-1");
+    expect(duplicateRows).toHaveLength(1);
+    expect(duplicateRows[0]?.host).toBe("api.example.com");
+    expect(duplicateRows[0]?.path).toBe("/v1/send");
+    expect(duplicateRows[0]?.method).toBe("POST");
+    expect(duplicateRows[0]?.duplicateCount).toBe(2);
     expect(store.readBlob(firstPayload.dataBlobId ?? "")).toContain('"ok":true');
   });
 

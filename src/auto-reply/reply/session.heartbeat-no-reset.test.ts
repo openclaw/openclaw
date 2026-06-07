@@ -1,3 +1,4 @@
+// Tests heartbeat messages do not reset active session routing.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -80,6 +81,14 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
         ...overrides,
       },
     });
+  };
+
+  const expectPersistedSession = (sessionStore: Record<string, SessionEntry>): SessionEntry => {
+    const entry = sessionStore["main:user123"];
+    if (!entry) {
+      throw new Error("Expected persisted session for main:user123");
+    }
+    return entry;
   };
 
   it("should NOT reset session when Provider is 'heartbeat'", async () => {
@@ -191,7 +200,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     expect(heartbeatResult.sessionEntry.lastInteractionAt).toBe(staleTime);
 
     const persistedAfterHeartbeat = loadSessionStore(storePath);
-    expect(persistedAfterHeartbeat["main:user123"]?.lastInteractionAt).toBe(staleTime);
+    expect(expectPersistedSession(persistedAfterHeartbeat).lastInteractionAt).toBe(staleTime);
 
     const userResult = await initSessionState({
       ctx: createBaseCtx({
@@ -278,7 +287,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     expect(heartbeatResult.sessionId).toBe("legacy-idle-session");
 
     const persistedAfterHeartbeat = loadSessionStore(storePath);
-    expect(persistedAfterHeartbeat["main:user123"]?.lastInteractionAt).toBeUndefined();
+    expect(expectPersistedSession(persistedAfterHeartbeat).lastInteractionAt).toBeUndefined();
 
     const userResult = await initSessionState({
       ctx: createBaseCtx({

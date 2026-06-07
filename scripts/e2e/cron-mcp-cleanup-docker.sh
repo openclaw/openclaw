@@ -12,19 +12,18 @@ CONTAINER_NAME="openclaw-cron-mcp-e2e-$$"
 CLIENT_LOG="$(mktemp -t openclaw-cron-mcp-client-log.XXXXXX)"
 
 cleanup() {
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   rm -f "$CLIENT_LOG"
 }
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" cron-mcp-cleanup
-docker_e2e_harness_mount_args
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 cron-mcp-cleanup empty)"
 
 echo "Running in-container cron/subagent MCP cleanup smoke..."
 # Harness files are mounted read-only; the app under test comes from /app/dist.
 set +e
-docker run --rm \
+docker_e2e_run_with_harness \
   --name "$CONTAINER_NAME" \
   -e "OPENCLAW_TEST_FAST=1" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
@@ -37,7 +36,6 @@ docker run --rm \
   -e "GW_URL=ws://127.0.0.1:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   -e "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
     source scripts/lib/openclaw-e2e-instance.sh
@@ -70,7 +68,7 @@ docker run --rm \
     openclaw_e2e_wait_mock_openai \"\$MOCK_PORT\"
     tsx scripts/e2e/cron-mcp-cleanup-seed.ts >/tmp/cron-mcp-cleanup-seed.log
     gateway_pid=\"\$(openclaw_e2e_start_gateway \"\$entry\" $PORT /tmp/cron-mcp-cleanup-gateway.log)\"
-    openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/cron-mcp-cleanup-gateway.log 300
+    openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/cron-mcp-cleanup-gateway.log 300 $PORT
     tsx scripts/e2e/cron-mcp-cleanup-docker-client.ts
   " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}
@@ -78,8 +76,9 @@ set -e
 
 if [ "$status" -ne 0 ]; then
   echo "Docker cron/subagent MCP cleanup smoke failed"
-  cat "$CLIENT_LOG"
+  docker_e2e_print_log "$CLIENT_LOG"
   exit "$status"
 fi
 
+docker_e2e_print_log "$CLIENT_LOG"
 echo "OK"

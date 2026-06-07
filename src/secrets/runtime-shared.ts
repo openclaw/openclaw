@@ -1,5 +1,7 @@
+/** Shared secrets runtime resolver context, assignments, and warning helpers. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
@@ -34,6 +36,7 @@ export type ResolverContext = {
   sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   cache: SecretRefResolveCache;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   warnings: SecretResolverWarning[];
   warningKeys: Set<string>;
   assignments: SecretAssignment[];
@@ -42,24 +45,35 @@ export type ResolverContext = {
 export type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 export type { SecretRefResolveCache } from "./resolve-types.js";
 
+/**
+ * Creates the mutable collection context used while preparing a secrets runtime snapshot.
+ */
 export function createResolverContext(params: {
   sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): ResolverContext {
   return {
     sourceConfig: params.sourceConfig,
     env: params.env,
     cache: {},
+    ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
     warnings: [],
     warningKeys: new Set(),
     assignments: [],
   };
 }
 
+/**
+ * Records a SecretRef assignment that should be resolved and applied later.
+ */
 export function pushAssignment(context: ResolverContext, assignment: SecretAssignment): void {
   context.assignments.push(assignment);
 }
 
+/**
+ * Records a resolver warning once per code/path/message tuple.
+ */
 export function pushWarning(context: ResolverContext, warning: SecretResolverWarning): void {
   const warningKey = `${warning.code}:${warning.path}:${warning.message}`;
   if (context.warningKeys.has(warningKey)) {
@@ -69,6 +83,9 @@ export function pushWarning(context: ResolverContext, warning: SecretResolverWar
   context.warnings.push(warning);
 }
 
+/**
+ * Emits the standard warning for refs configured on currently inactive surfaces.
+ */
 export function pushInactiveSurfaceWarning(params: {
   context: ResolverContext;
   path: string;
@@ -84,6 +101,9 @@ export function pushInactiveSurfaceWarning(params: {
   });
 }
 
+/**
+ * Converts an inline SecretInput value into a deferred assignment when its surface is active.
+ */
 export function collectSecretInputAssignment(params: {
   value: unknown;
   path: string;
@@ -114,6 +134,9 @@ export function collectSecretInputAssignment(params: {
   });
 }
 
+/**
+ * Applies resolved SecretRef values to their collected config targets with shape validation.
+ */
 export function applyResolvedAssignments(params: {
   assignments: SecretAssignment[];
   resolved: Map<string, unknown>;
@@ -136,10 +159,16 @@ export function applyResolvedAssignments(params: {
   }
 }
 
+/**
+ * Own-property helper used by config collectors that receive unknown object shapes.
+ */
 export function hasOwnProperty(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
+/**
+ * Treats missing or non-object enabled state as enabled by default.
+ */
 export function isEnabledFlag(value: unknown): boolean {
   if (!isRecord(value)) {
     return true;
@@ -147,6 +176,9 @@ export function isEnabledFlag(value: unknown): boolean {
   return value.enabled !== false;
 }
 
+/**
+ * Returns whether both a channel and one account are enabled for secret resolution.
+ */
 export function isChannelAccountEffectivelyEnabled(
   channel: Record<string, unknown>,
   account: Record<string, unknown>,

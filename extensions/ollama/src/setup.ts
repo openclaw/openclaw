@@ -1,3 +1,4 @@
+// Ollama setup module handles plugin onboarding behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawConfig,
@@ -19,9 +20,10 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OLLAMA_CLOUD_BASE_URL,
+  OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DOCKER_HOST_BASE_URL,
   OLLAMA_DEFAULT_MODEL,
@@ -40,7 +42,7 @@ import {
 export { buildOllamaProvider };
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
-const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.7:cloud", "glm-5.1:cloud"];
+const OLLAMA_SUGGESTED_MODELS_CLOUD = [...OLLAMA_CLOUD_DEFAULT_MODELS];
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const OLLAMA_CLOUD_MAX_DISCOVERED_MODELS = 500;
 const OLLAMA_PULL_RESPONSE_TIMEOUT_MS = 30_000;
@@ -202,10 +204,10 @@ async function readOllamaPullChunkWithIdleTimeout(
           resolve(result);
         }
       },
-      (err) => {
+      (err: unknown) => {
         clear();
         if (!timedOut) {
-          reject(err);
+          reject(toLintErrorObject(err, "Non-Error rejection"));
         }
       },
     );
@@ -598,17 +600,8 @@ export async function promptAndConfigureOllama(params: {
       secretInputMode: params.secretInputMode,
       allowSecretRefPrompt: params.allowSecretRefPrompt,
     });
-    const { reachable, models: rawDiscoveredModels } =
-      await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL);
+    const { models: rawDiscoveredModels } = await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL);
     const discoveredModels = rawDiscoveredModels.slice(0, OLLAMA_CLOUD_MAX_DISCOVERED_MODELS);
-    const enrichedModels =
-      reachable && discoveredModels.length > 0
-        ? await enrichOllamaModelsWithContext(
-            OLLAMA_CLOUD_BASE_URL,
-            discoveredModels.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
-          )
-        : [];
-    const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
     const discoveredModelNames = discoveredModels.map((model) => model.name);
     const modelNames =
       discoveredModelNames.length > 0
@@ -621,7 +614,7 @@ export async function promptAndConfigureOllama(params: {
         params.cfg,
         OLLAMA_CLOUD_BASE_URL,
         modelNames,
-        discoveredModelsByName,
+        undefined,
         credential,
       ),
     };
@@ -749,4 +742,18 @@ export async function ensureOllamaModelPulled(params: {
   if (!(await pullOllamaModel(baseUrl, modelName, params.prompter))) {
     throw new WizardCancelledError("Failed to download selected Ollama model");
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

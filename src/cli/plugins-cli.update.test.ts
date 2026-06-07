@@ -1,5 +1,6 @@
+// Plugins CLI update tests cover plugin update command behavior and output.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadConfig,
@@ -15,6 +16,8 @@ import {
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
+
+const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 
 function createTrackedPluginConfig(params: {
   pluginId: string;
@@ -35,12 +38,37 @@ function createTrackedPluginConfig(params: {
   } as OpenClawConfig;
 }
 
+function expectRestartNoticeLogged() {
+  expect(
+    runtimeLogs.some((message) =>
+      message.includes("Restart the gateway to load plugins and hooks."),
+    ),
+  ).toBe(true);
+}
+
+function expectSingleCallParams(mockFn: ReturnType<typeof vi.fn>) {
+  expect(mockFn).toHaveBeenCalledTimes(1);
+  const params = mockFn.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+  if (params === undefined) {
+    throw new Error("expected call params");
+  }
+  return params;
+}
+
 describe("plugins cli update", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
   });
 
-  it("shows the dangerous unsafe install override in update help", () => {
+  afterEach(() => {
+    if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
+      delete process.env.OPENCLAW_NIX_MODE;
+    } else {
+      process.env.OPENCLAW_NIX_MODE = ORIGINAL_OPENCLAW_NIX_MODE;
+    }
+  });
+
+  it("shows the deprecated unsafe install flag in update help", () => {
     const program = new Command();
     registerPluginsCli(program);
 
@@ -49,8 +77,29 @@ describe("plugins cli update", () => {
     const helpText = updateCommand?.helpInformation() ?? "";
 
     expect(helpText).toContain("--dangerously-force-unsafe-install");
-    expect(helpText).toContain("Bypass built-in dangerous-code update");
-    expect(helpText).toContain("blocking for plugins");
+    expect(helpText).toContain("Deprecated no-op");
+    expect(helpText).toContain("install policy and");
+    expect(helpText).toContain("plugin hooks may still block");
+  });
+
+  it("refuses plugin updates in Nix mode before package-manager work", async () => {
+    const previous = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      await expect(runPluginsCommand(["plugins", "update", "--all"])).rejects.toThrow(
+        "OPENCLAW_NIX_MODE=1",
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previous;
+      }
+    }
+
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("updates tracked hook packs through plugins update", async () => {
@@ -102,17 +151,12 @@ describe("plugins cli update", () => {
 
     await runPluginsCommand(["plugins", "update", "demo-hooks"]);
 
-    expect(updateNpmInstalledHookPacks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: cfg,
-        hookIds: ["demo-hooks"],
-      }),
-    );
+    const hookUpdateParams = expectSingleCallParams(updateNpmInstalledHookPacks);
+    expect(hookUpdateParams.config).toBe(cfg);
+    expect(hookUpdateParams.hookIds).toEqual(["demo-hooks"]);
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
-    expect(
-      runtimeLogs.some((line) => line.includes("Restart the gateway to load plugins and hooks.")),
-    ).toBe(true);
+    expectRestartNoticeLogged();
   });
 
   it("exits when update is called without id and without --all", async () => {
@@ -162,13 +206,38 @@ describe("plugins cli update", () => {
       "--dangerously-force-unsafe-install",
     ]);
 
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        pluginIds: ["openclaw-codex-app-server"],
-        dangerouslyForceUnsafeInstall: true,
-      }),
-    );
+    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(updateParams.config).toEqual(config);
+    expect(updateParams.pluginIds).toEqual(["openclaw-codex-app-server"]);
+    expect(updateParams.dangerouslyForceUnsafeInstall).toBe(true);
+    expect(
+      runtimeLogs.some((message) =>
+        message.includes(
+          "--dangerously-force-unsafe-install is deprecated and no longer affects plugin updates",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not sync official catalog specs for manual plugin updates", async () => {
+    const config = createTrackedPluginConfig({
+      pluginId: "codex",
+      spec: "@openclaw/codex@2026.5.28",
+      resolvedName: "@openclaw/codex",
+    });
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [],
+    });
+
+    await runPluginsCommand(["plugins", "update", "codex"]);
+
+    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(updateParams.pluginIds).toEqual(["codex"]);
+    expect(updateParams.syncOfficialPluginInstalls).toBeUndefined();
   });
 
   it("writes updated config when updater reports changes", async () => {
@@ -207,13 +276,10 @@ describe("plugins cli update", () => {
 
     await runPluginsCommand(["plugins", "update", "alpha"]);
 
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: cfg,
-        pluginIds: ["alpha"],
-        dryRun: false,
-      }),
-    );
+    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(updateParams.config).toEqual(cfg);
+    expect(updateParams.pluginIds).toEqual(["alpha"]);
+    expect(updateParams.dryRun).toBe(false);
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
       nextConfig.plugins?.installs,
     );
@@ -223,9 +289,7 @@ describe("plugins cli update", () => {
       installRecords: nextConfig.plugins?.installs,
       reason: "source-changed",
     });
-    expect(
-      runtimeLogs.some((line) => line.includes("Restart the gateway to load plugins and hooks.")),
-    ).toBe(true);
+    expectRestartNoticeLogged();
   });
 
   it("exits non-zero when a plugin update reports an error after persisting successes", async () => {

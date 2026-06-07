@@ -1,12 +1,14 @@
-import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+// Exercises core model selection, aliases, thinking defaults, and visibility policy.
+import { afterEach, describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
-import { __testing as setupRegistryRuntimeTesting } from "../plugins/setup-registry.runtime.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import { isModelKeyAllowedBySet, providerWildcardModelKey } from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredModelCatalog,
   inferUniqueProviderFromConfiguredModels,
-  isCliProvider,
   parseModelRef,
   buildModelAliasIndex,
   normalizeModelSelection,
@@ -18,11 +20,104 @@ import {
   resolvePersistedSelectedModelRef,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
   resolveSubagentSpawnModelSelection,
   resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
+
+const manifestNormalizationSnapshot = vi.hoisted(() => ({
+  configFingerprint: "model-selection-test-normalizers",
+  plugins: [
+    {
+      id: "model-selection-test-normalizers",
+      modelIdNormalization: {
+        providers: {
+          anthropic: {
+            aliases: {
+              "opus-4.6": "claude-opus-4-6",
+              "opus-4.5": "claude-opus-4-5",
+              "sonnet-4.6": "claude-sonnet-4-6",
+              "sonnet-4.5": "claude-sonnet-4-5",
+            },
+          },
+          google: {
+            aliases: {
+              "gemini-3-pro": "gemini-3.1-pro-preview",
+              "gemini-3-flash": "gemini-3-flash-preview",
+              "gemini-3.1-pro": "gemini-3.1-pro-preview",
+              "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
+              "gemini-3.1-flash": "gemini-3-flash-preview",
+              "gemini-3.1-flash-preview": "gemini-3-flash-preview",
+            },
+          },
+          "google-vertex": {
+            aliases: {
+              "gemini-3-pro": "gemini-3.1-pro-preview",
+              "gemini-3-flash": "gemini-3-flash-preview",
+              "gemini-3.1-pro": "gemini-3.1-pro-preview",
+              "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
+              "gemini-3.1-flash": "gemini-3-flash-preview",
+              "gemini-3.1-flash-preview": "gemini-3-flash-preview",
+            },
+          },
+          xai: {
+            aliases: {
+              "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
+            },
+          },
+          openrouter: {
+            prefixWhenBare: "openrouter",
+          },
+          huggingface: {
+            stripPrefixes: ["huggingface/"],
+          },
+          "vercel-ai-gateway": {
+            aliases: {
+              "opus-4.6": "claude-opus-4-6",
+              "opus-4.5": "claude-opus-4-5",
+              "sonnet-4.6": "claude-sonnet-4-6",
+              "sonnet-4.5": "claude-sonnet-4-5",
+            },
+            prefixWhenBareAfterAliasStartsWith: [
+              {
+                modelPrefix: "claude-",
+                prefix: "anthropic",
+              },
+            ],
+          },
+          nvidia: {
+            prefixWhenBare: "nvidia",
+          },
+        },
+      },
+    },
+  ],
+}));
+
+const providerModelNormalizationMock = vi.hoisted(() => ({
+  normalizeProviderModelIdWithRuntime: vi.fn(() => undefined),
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => manifestNormalizationSnapshot,
+}));
+
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime:
+    providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
+}));
+
+vi.mock("./model-selection-cli.js", () => ({
+  isCliProvider: () => false,
+}));
+
+afterEach(() => {
+  setLoggerOverride(null);
+  resetLogger();
+});
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
   agents: {
@@ -58,7 +153,36 @@ const ANTHROPIC_OPUS_47_CATALOG = [
   },
 ];
 
+const ANTHROPIC_OPUS_48_CATALOG = [
+  {
+    provider: "anthropic",
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    reasoning: true,
+  },
+];
+
+const ANTHROPIC_VERTEX_OPUS_48_CATALOG = [
+  {
+    provider: "anthropic-vertex",
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    reasoning: true,
+  },
+];
+
+const CLAUDE_CLI_OPUS_48_CATALOG = [
+  {
+    provider: "claude-cli",
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    reasoning: true,
+  },
+];
+
 function resolveAnthropicOpusThinking(cfg: OpenClawConfig) {
+  // Helper keeps thinking-default assertions focused on config differences
+  // while using the same catalog metadata shape as production selection.
   return resolveThinkingDefault({
     cfg,
     provider: "anthropic",
@@ -76,11 +200,39 @@ function resolveAnthropicOpus47Thinking(cfg: OpenClawConfig) {
   });
 }
 
+function resolveAnthropicOpus48Thinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "anthropic",
+    model: "claude-opus-4-8",
+    catalog: ANTHROPIC_OPUS_48_CATALOG,
+  });
+}
+
+function resolveAnthropicVertexOpus48Thinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "anthropic-vertex",
+    model: "claude-opus-4-8",
+    catalog: ANTHROPIC_VERTEX_OPUS_48_CATALOG,
+  });
+}
+
+function resolveClaudeCliOpus48Thinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "claude-cli",
+    model: "claude-opus-4-8",
+    catalog: CLAUDE_CLI_OPUS_48_CATALOG,
+  });
+}
+
 function createAgentFallbackConfig(params: {
   primary?: string;
   fallbacks?: string[];
   agentFallbacks?: string[];
 }) {
+  // Compact fixture for primary/fallback allowlist tests.
   return {
     agents: {
       defaults: {
@@ -134,50 +286,25 @@ describe("model-selection", () => {
   describe("normalizeProviderId", () => {
     it("should normalize provider names", () => {
       expect(normalizeProviderId("Anthropic")).toBe("anthropic");
-      expect(normalizeProviderId("Z.ai")).toBe("zai");
-      expect(normalizeProviderId("z-ai")).toBe("zai");
-      expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
+      expect(normalizeProviderId("Z.ai")).toBe("z.ai");
+      expect(normalizeProviderId("z-ai")).toBe("z-ai");
+      expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode-zen");
       expect(normalizeProviderId("qwen")).toBe("qwen");
-      expect(normalizeProviderId("kimi-code")).toBe("kimi");
-      expect(normalizeProviderId("kimi-coding")).toBe("kimi");
-      expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
-      expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
+      expect(normalizeProviderId("kimi-code")).toBe("kimi-code");
+      expect(normalizeProviderId("kimi-coding")).toBe("kimi-coding");
+      expect(normalizeProviderId("MoonshotAI")).toBe("moonshotai");
+      expect(normalizeProviderId("moonshot-ai")).toBe("moonshot-ai");
+      expect(normalizeProviderId("bedrock")).toBe("bedrock");
+      expect(normalizeProviderId("aws-bedrock")).toBe("aws-bedrock");
       expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
     });
   });
 
   describe("normalizeProviderIdForAuth", () => {
-    it("only applies generic provider-id normalization before auth alias lookup", () => {
-      expect(normalizeProviderIdForAuth("qwencloud")).toBe("qwen");
-      expect(normalizeProviderIdForAuth("openai-codex")).toBe("openai-codex");
+    it("only applies lowercase provider-id normalization before auth alias lookup", () => {
+      expect(normalizeProviderIdForAuth("qwencloud")).toBe("qwencloud");
       expect(normalizeProviderIdForAuth("openai")).toBe("openai");
-    });
-  });
-
-  describe("isCliProvider", () => {
-    beforeEach(() => {
-      setupRegistryRuntimeTesting.resetRuntimeState();
-      setupRegistryRuntimeTesting.setRuntimeModuleForTest({
-        resolvePluginSetupCliBackend: ({ backend }) =>
-          backend === "claude-cli"
-            ? {
-                pluginId: "anthropic",
-                backend: { id: "claude-cli", config: { command: "claude" } },
-              }
-            : undefined,
-      });
-    });
-
-    afterEach(() => {
-      setupRegistryRuntimeTesting.resetRuntimeState();
-    });
-
-    it("returns true for setup-registered cli backends", () => {
-      expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
-    });
-
-    it("returns false for provider ids", () => {
-      expect(isCliProvider("example-cli", {} as OpenClawConfig)).toBe(false);
+      expect(normalizeProviderIdForAuth("openai")).toBe("openai");
     });
   });
 
@@ -194,11 +321,14 @@ describe("model-selection", () => {
       expected: { provider: string; model: string },
     ) => {
       for (const raw of variants) {
-        expect(parseModelRef(raw, defaultProvider), raw).toEqual(expected);
+        expect(
+          parseModelRef(raw, defaultProvider, { allowPluginNormalization: false }),
+          raw,
+        ).toEqual(expected);
       }
     };
 
-    it.each([
+    const parseModelRefCases = [
       {
         name: "parses explicit provider/model refs",
         variants: ["anthropic/claude-3-5-sonnet"],
@@ -222,6 +352,12 @@ describe("model-selection", () => {
         variants: ["mlx/mlx-community/Qwen3-30B-A3B-6bit"],
         defaultProvider: "anthropic",
         expected: { provider: "mlx", model: "mlx-community/Qwen3-30B-A3B-6bit" },
+      },
+      {
+        name: "preserves three-segment refs where the maker equals the provider",
+        variants: ["nvidia/nvidia/nemotron-3-super-120b-a12b"],
+        defaultProvider: "anthropic",
+        expected: { provider: "nvidia", model: "nvidia/nemotron-3-super-120b-a12b" },
       },
       {
         name: "normalizes anthropic shorthand aliases",
@@ -248,10 +384,22 @@ describe("model-selection", () => {
         expected: { provider: "google", model: "gemini-3-flash-preview" },
       },
       {
-        name: "normalizes gemini 3.1 flash-lite ids",
+        name: "normalizes retired google gemini 3 pro preview ids",
+        variants: ["google/gemini-3-pro-preview", "gemini-3-pro-preview"],
+        defaultProvider: "google",
+        expected: { provider: "google", model: "gemini-3.1-pro-preview" },
+      },
+      {
+        name: "normalizes retired gemini cli 3 pro preview ids",
+        variants: ["google-gemini-cli/gemini-3-pro-preview"],
+        defaultProvider: "google",
+        expected: { provider: "google-gemini-cli", model: "gemini-3.1-pro-preview" },
+      },
+      {
+        name: "keeps stable GA gemini 3.1 flash-lite ids",
         variants: ["google/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
         defaultProvider: "google",
-        expected: { provider: "google", model: "gemini-3.1-flash-lite-preview" },
+        expected: { provider: "google", model: "gemini-3.1-flash-lite" },
       },
       {
         name: "normalizes deprecated xai grok 4.20 beta ids",
@@ -323,24 +471,35 @@ describe("model-selection", () => {
         expected: { provider: "openai", model: "gpt-5.4-codex-codex" },
       },
       {
-        name: "normalizes gemini 3.1 flash-lite ids for google-vertex",
+        name: "keeps stable GA gemini 3.1 flash-lite ids for google-vertex",
         variants: ["google-vertex/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
         defaultProvider: "google-vertex",
-        expected: { provider: "google-vertex", model: "gemini-3.1-flash-lite-preview" },
+        expected: { provider: "google-vertex", model: "gemini-3.1-flash-lite" },
       },
-    ])("$name", ({ variants, defaultProvider, expected }) => {
-      expectParsedModelVariants(variants, defaultProvider, expected);
+    ];
+
+    it("parses and normalizes provider/model refs", () => {
+      for (const { variants, defaultProvider, expected } of parseModelRefCases) {
+        expectParsedModelVariants(variants, defaultProvider, expected);
+      }
     });
 
     it("round-trips normalized refs through modelKey", () => {
-      const parsed = parseModelRef(" opus-4.6 ", "anthropic");
+      const parsed = parseModelRef(" opus-4.6 ", "anthropic", {
+        allowPluginNormalization: false,
+      });
       expect(parsed).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
       expect(modelKey(parsed?.provider ?? "", parsed?.model ?? "")).toBe(
         "anthropic/claude-opus-4-6",
       );
     });
-    it.each(["", "  ", "/", "anthropic/", "/model"])("returns null for invalid ref %j", (raw) => {
-      expect(parseModelRef(raw, "anthropic")).toBeNull();
+    it("returns null for invalid refs", () => {
+      for (const raw of ["", "  ", "/", "anthropic/", "/model"]) {
+        expect(
+          parseModelRef(raw, "anthropic", { allowPluginNormalization: false }),
+          raw,
+        ).toBeNull();
+      }
     });
   });
 
@@ -370,7 +529,7 @@ describe("model-selection", () => {
       });
     });
 
-    it("normalizes explicit override providers without reparsing runtime semantics", () => {
+    it("preserves explicit override provider ids without reparsing runtime semantics", () => {
       expect(
         resolvePersistedModelRef({
           defaultProvider: "anthropic",
@@ -378,9 +537,21 @@ describe("model-selection", () => {
           overrideModel: "kimi-code",
         }),
       ).toEqual({
-        provider: "kimi",
+        provider: "kimi-coding",
         model: "kimi-code",
       });
+    });
+
+    it("ignores malformed persisted model fields and tolerates a missing default provider", () => {
+      expect(
+        resolvePersistedModelRef({
+          defaultProvider: undefined,
+          runtimeProvider: { provider: "openai" },
+          runtimeModel: false,
+          overrideProvider: ["anthropic"],
+          overrideModel: 123,
+        }),
+      ).toBeNull();
     });
   });
 
@@ -397,7 +568,7 @@ describe("model-selection", () => {
       });
     });
 
-    it("normalizes explicit override providers without reparsing away wrapper semantics", () => {
+    it("preserves explicit override provider ids without reparsing away wrapper semantics", () => {
       expect(
         resolvePersistedOverrideModelRef({
           defaultProvider: "anthropic",
@@ -405,9 +576,19 @@ describe("model-selection", () => {
           overrideModel: "kimi-code",
         }),
       ).toEqual({
-        provider: "kimi",
+        provider: "kimi-coding",
         model: "kimi-code",
       });
+    });
+
+    it("ignores malformed persisted override fields", () => {
+      expect(
+        resolvePersistedOverrideModelRef({
+          defaultProvider: undefined,
+          overrideProvider: ["anthropic"],
+          overrideModel: 123,
+        }),
+      ).toBeNull();
     });
   });
 
@@ -416,7 +597,7 @@ describe("model-selection", () => {
       expect(
         resolvePersistedSelectedModelRef({
           defaultProvider: "anthropic",
-          runtimeProvider: "openai-codex",
+          runtimeProvider: "openai",
           runtimeModel: "gpt-5.4",
           overrideProvider: "anthropic",
           overrideModel: "claude-opus-4-6",
@@ -440,6 +621,18 @@ describe("model-selection", () => {
         provider: "openrouter",
         model: "anthropic/claude-haiku-4.5",
       });
+    });
+
+    it("ignores malformed persisted model metadata instead of throwing", () => {
+      expect(
+        resolvePersistedSelectedModelRef({
+          defaultProvider: "anthropic",
+          runtimeProvider: { provider: "openai" },
+          runtimeModel: false,
+          overrideProvider: ["openrouter"],
+          overrideModel: 123,
+        }),
+      ).toBeNull();
     });
   });
 
@@ -540,6 +733,63 @@ describe("model-selection", () => {
       ).toBe("qwen-dashscope");
     });
 
+    it("infers provider from raw configured ids when manifest policies add prefixes", () => {
+      const cfg = {
+        models: {
+          providers: {
+            nvidia: {
+              models: [{ id: "llama-fast" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "llama-fast",
+        }),
+      ).toBe("nvidia");
+    });
+
+    it("infers Google provider from canonicalized configured provider catalogs", () => {
+      const cfg = {
+        models: {
+          providers: {
+            google: {
+              models: [{ id: "gemini-3-pro-preview" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "gemini-3.1-pro-preview",
+        }),
+      ).toBe("google");
+    });
+
+    it("infers proxy providers from canonicalized nested Google catalog ids", () => {
+      const cfg = {
+        models: {
+          providers: {
+            kilocode: {
+              models: [{ id: "google/gemini-3-pro-preview" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "google/gemini-3.1-pro-preview",
+        }),
+      ).toBe("kilocode");
+    });
+
     it("returns undefined when provider catalog matches are ambiguous", () => {
       const cfg = {
         models: {
@@ -560,6 +810,109 @@ describe("model-selection", () => {
           model: "qwen-max",
         }),
       ).toBeUndefined();
+    });
+  });
+
+  describe("buildConfiguredModelCatalog", () => {
+    it("emits canonical Google Gemini 3.1 provider model ids", () => {
+      const cfg = {
+        models: {
+          providers: {
+            google: {
+              models: [
+                {
+                  id: "gemini-3-pro-preview",
+                  name: "Gemini 3 Pro",
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "google" && entry.id === "gemini-3.1-pro-preview",
+      );
+      expect(model?.provider).toBe("google");
+      expect(model?.id).toBe("gemini-3.1-pro-preview");
+      expect(model?.name).toBe("Gemini 3 Pro");
+    });
+
+    it("emits canonical nested Google Gemini 3.1 ids from proxy provider catalog rows", () => {
+      const cfg = {
+        models: {
+          providers: {
+            kilocode: {
+              models: [
+                {
+                  id: "google/gemini-3-pro-preview",
+                  name: "Gemini 3 Pro",
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "kilocode" && entry.id === "google/gemini-3.1-pro-preview",
+      );
+      expect(model?.provider).toBe("kilocode");
+      expect(model?.id).toBe("google/gemini-3.1-pro-preview");
+      expect(model?.name).toBe("Gemini 3 Pro");
+    });
+
+    it("carries configured model compat into catalog entries for provider policy", () => {
+      const cfg = {
+        models: {
+          providers: {
+            vllm: {
+              models: [
+                {
+                  id: "Qwen/Qwen3-8B",
+                  name: "Qwen 3 8B",
+                  reasoning: true,
+                  compat: {
+                    thinkingFormat: "qwen-chat-template",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "vllm" && entry.id === "Qwen/Qwen3-8B",
+      );
+      expect(model?.compat).toEqual({ thinkingFormat: "qwen-chat-template" });
+      expect(model?.reasoning).toBe(true);
+    });
+
+    it("does not infer reasoning from non-vLLM thinking compat", () => {
+      const cfg = {
+        models: {
+          providers: {
+            custom: {
+              models: [
+                {
+                  id: "custom-reasoning",
+                  name: "Custom Reasoning",
+                  compat: {
+                    thinkingFormat: "together",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "custom" && entry.id === "custom-reasoning",
+      );
+      expect(model?.compat).toEqual({ thinkingFormat: "together" });
+      expect(model?.reasoning).toBeUndefined();
     });
   });
 
@@ -587,6 +940,36 @@ describe("model-selection", () => {
       });
       expect(index.byAlias.get("smart")?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
       expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
+    });
+
+    it("does not normalize configured model keys that have no alias", () => {
+      providerModelNormalizationMock.normalizeProviderModelIdWithRuntime.mockClear();
+      const models = Object.fromEntries(
+        Array.from({ length: 25 }, (_, index) => [`openai/gpt-5.5-aliasless-${index}`, {}]),
+      );
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            models: {
+              ...models,
+              "openai/gpt-5.5-mini": { alias: "mini" },
+            },
+          },
+        },
+      };
+
+      const index = buildModelAliasIndex({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "openai",
+      });
+
+      expect(index.byAlias.get("mini")?.ref).toEqual({
+        provider: "openai",
+        model: "gpt-5.5-mini",
+      });
+      expect(
+        providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
+      ).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -629,6 +1012,7 @@ describe("model-selection", () => {
                   id: "gpt-test-z",
                   name: "Configured GPT Test Z",
                   contextWindow: 64_000,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
                 },
               ],
             },
@@ -650,8 +1034,293 @@ describe("model-selection", () => {
           name: "Configured GPT Test Z",
           alias: "GPT Test Z Alias",
           contextWindow: 64_000,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
       ]);
+    });
+
+    it("overlays configured provider metadata after manifest model normalization", () => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            nvidia: {
+              models: [
+                {
+                  id: "llama-fast",
+                  name: "Configured Llama Fast",
+                  contextWindow: 128_000,
+                  reasoning: true,
+                  compat: { thinkingFormat: "qwen" },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [{ provider: "nvidia", id: "nvidia/llama-fast", name: "Runtime Llama Fast" }],
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowedCatalog).toEqual([
+        {
+          provider: "nvidia",
+          id: "nvidia/llama-fast",
+          name: "Configured Llama Fast",
+          contextWindow: 128_000,
+          reasoning: true,
+          compat: { thinkingFormat: "qwen" },
+        },
+      ]);
+    });
+
+    it("keeps configured provider models visible when the catalog is otherwise allow-any", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "ollama/existing" },
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              apiKey: "ollama-local",
+              models: [
+                {
+                  id: "glm-5.1:cloud",
+                  name: "GLM 5.1 Cloud",
+                  contextWindow: 131_072,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [{ provider: "ollama", id: "existing", name: "Existing" }],
+        defaultProvider: "ollama",
+        defaultModel: "existing",
+      });
+
+      expect(result.allowAny).toBe(true);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "ollama", id: "existing", name: "Existing" },
+        {
+          api: "ollama",
+          compat: undefined,
+          contextTokens: undefined,
+          provider: "ollama",
+          id: "glm-5.1:cloud",
+          name: "GLM 5.1 Cloud",
+          contextWindow: 131_072,
+          input: undefined,
+          reasoning: undefined,
+        },
+      ]);
+      expect(result.allowedKeys.has("ollama/glm-5.1:cloud")).toBe(true);
+    });
+
+    it("allows every discovered catalog model for provider wildcard entries", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/*": {},
+              "vllm/*": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+          { provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+          { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+          { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+          { provider: "vllm", id: "local-added-after-startup", name: "Local Added After Startup" },
+        ],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+        { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+        { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+        { provider: "vllm", id: "local-added-after-startup", name: "Local Added After Startup" },
+      ]);
+      expect(result.allowedKeys.has("openai/gpt-5.4-codex")).toBe(true);
+      expect(result.allowedKeys.has("openai/gpt-5.5-codex")).toBe(true);
+      expect(result.allowedKeys.has("vllm/local-added-after-startup")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
+    });
+
+    it("preserves provider wildcard intent when catalog rows are unavailable", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/*": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual([]);
+      expect(result.allowedKeys.has(providerWildcardModelKey("openai"))).toBe(true);
+      expect(isModelKeyAllowedBySet(result.allowedKeys, "openai/gpt-added-later")).toBe(true);
+      expect(isModelKeyAllowedBySet(result.allowedKeys, "anthropic/claude-sonnet-4-6")).toBe(false);
+    });
+
+    it("exposes wildcard allow and visible catalog behavior through one policy", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/*": {},
+              "anthropic/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const policy = createModelVisibilityPolicy({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+          { provider: "openai", id: "gpt-added-later", name: "GPT Added Later" },
+          { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+        ],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(policy.hasProviderWildcards).toBe(true);
+      expect(policy.allows({ provider: "openai", model: "future-model" })).toBe(true);
+      expect(policy.allows({ provider: "vllm", model: "qwen-local" })).toBe(false);
+      expect(
+        policy.visibleCatalog({
+          catalog: [],
+          defaultVisibleCatalog: [
+            { provider: "openai", id: "gpt-added-later", name: "GPT Added Later" },
+            { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+          ],
+        }),
+      ).toEqual([
+        { provider: "openai", id: "gpt-added-later", name: "GPT Added Later" },
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      ]);
+    });
+
+    it("keeps exact same-provider entries visible beside wildcard catalog rows", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/*": {},
+              "vllm/manual": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const policy = createModelVisibilityPolicy({
+        cfg,
+        catalog: [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(
+        policy.visibleCatalog({
+          catalog: [],
+          defaultVisibleCatalog: [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }],
+        }),
+      ).toEqual([
+        { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+        { provider: "vllm", id: "manual", name: "manual" },
+      ]);
+    });
+
+    it("does not re-add a default outside mixed wildcard and exact filters", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/*": {},
+              "google/gemini-test": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+          { provider: "openai", id: "gpt-codex", name: "GPT Codex" },
+          { provider: "google", id: "gemini-test", name: "Gemini Test" },
+        ],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result.allowedCatalog).toEqual([
+        { provider: "openai", id: "gpt-codex", name: "GPT Codex" },
+        { provider: "google", id: "gemini-test", name: "Gemini Test" },
+      ]);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
+      expect(result.allowedKeys.has(providerWildcardModelKey("openai"))).toBe(true);
+    });
+
+    it("unions exact model entries with provider wildcard entries", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "openai/*": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+          { provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+          { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+          { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+        ],
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+        { provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+        { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+      ]);
+      expect(result.allowedKeys.has("openai/gpt-5.5-codex")).toBe(true);
+      expect(result.allowedKeys.has("vllm/qwen-local")).toBe(false);
     });
 
     it("matches allowlisted catalog entries with normalized provider and model ids", () => {
@@ -678,13 +1347,11 @@ describe("model-selection", () => {
         defaultProvider: "anthropic",
       });
 
-      expect(result.allowedCatalog).toEqual([
-        expect.objectContaining({
-          provider: "modelscope",
-          id: "qwen/qwen3.5-35b-a3b",
-          input: ["text", "image"],
-        }),
-      ]);
+      expect(result.allowedCatalog).toHaveLength(1);
+      const allowed = result.allowedCatalog[0];
+      expect(allowed?.provider).toBe("modelscope");
+      expect(allowed?.id).toBe("qwen/qwen3.5-35b-a3b");
+      expect(allowed?.input).toEqual(["text", "image"]);
     });
 
     it("applies configured provider metadata and alias to synthetic allowlist entries", () => {
@@ -707,6 +1374,7 @@ describe("model-selection", () => {
                   name: "Kimi K2.5 (Configured)",
                   contextWindow: 32_000,
                   reasoning: true,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
                 },
               ],
             },
@@ -729,6 +1397,7 @@ describe("model-selection", () => {
           alias: "Kimi K2.5 (NVIDIA)",
           contextWindow: 32_000,
           reasoning: true,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
       ]);
     });
@@ -747,7 +1416,7 @@ describe("model-selection", () => {
 
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
-      expect(result.allowedKeys.has("google/gemini-3-pro-preview")).toBe(true);
+      expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(true);
       expect(result.allowAny).toBe(false);
     });
 
@@ -781,7 +1450,7 @@ describe("model-selection", () => {
 
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
-      expect(result.allowedKeys.has("google/gemini-3-pro-preview")).toBe(false);
+      expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
       expect(result.allowAny).toBe(false);
     });
   });
@@ -799,6 +1468,34 @@ describe("model-selection", () => {
       expect(result).toEqual({
         key: "anthropic/claude-sonnet-4-6",
         ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      });
+    });
+
+    it("keeps legacy CLI runtime refs accepted when canonical runtime refs are also configured", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "claude-cli" },
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "claude-cli/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: BUNDLED_ALLOWLIST_CATALOG,
+        raw: "claude-cli/claude-sonnet-4-6",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({
+        key: "claude-cli/claude-sonnet-4-6",
+        ref: { provider: "claude-cli", model: "claude-sonnet-4-6" },
       });
     });
 
@@ -831,7 +1528,7 @@ describe("model-selection", () => {
         agents: {
           defaults: {
             models: {
-              "openai-codex/gpt-5.4": {},
+              "openai/gpt-5.4": {},
               "opencode-go/kimi-k2.6": {},
               "opencode-go/glm-5": {},
             },
@@ -839,13 +1536,13 @@ describe("model-selection", () => {
         },
       } as OpenClawConfig;
 
-      // When session default is openai-codex, switching to a bare "kimi-k2.6"
-      // should resolve to opencode-go/kimi-k2.6, not openai-codex/kimi-k2.6
+      // When session default is openai, switching to a bare "kimi-k2.6"
+      // should resolve to opencode-go/kimi-k2.6, not openai/kimi-k2.6
       const result = resolveAllowedModelRef({
         cfg,
         catalog: [],
         raw: "kimi-k2.6",
-        defaultProvider: "openai-codex", // session's current provider
+        defaultProvider: "openai", // session's current provider
       });
 
       expect(result).toEqual({
@@ -1051,9 +1748,8 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
     });
 
-    it("should fall back to the configured default provider and warn if provider is missing for non-alias", () => {
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    it("should fall back to the configured default provider and warn if provider is missing for non-alias", async () => {
+      const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
       try {
         const cfg: Partial<OpenClawConfig> = {
           agents: {
@@ -1070,13 +1766,13 @@ describe("model-selection", () => {
         });
 
         expect(result).toEqual({ provider: "google", model: "claude-3-5-sonnet" });
-        expect(warnSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Falling back to "google/claude-3-5-sonnet"'),
-        );
+        expect(
+          await warnLogs.findText(
+            'Model "claude-3-5-sonnet" specified without provider. Falling back to "google/claude-3-5-sonnet". Please use "google/claude-3-5-sonnet" in your config.',
+          ),
+        ).toBeDefined();
       } finally {
-        warnSpy.mockRestore();
-        setLoggerOverride(null);
-        resetLogger();
+        warnLogs.cleanup();
       }
     });
 
@@ -1140,6 +1836,126 @@ describe("model-selection", () => {
       }
     });
 
+    it("normalizes bare configured default model strings with manifest policies", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "llama-fast" },
+          },
+        },
+        models: {
+          providers: {
+            nvidia: {
+              models: [{ id: "llama-fast" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "nvidia",
+        model: "nvidia/llama-fast",
+      });
+    });
+
+    it("keeps exact configured provider refs before alias values that point to them", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "nemotron-bolt/nemotron-3-super-120b" },
+            models: {
+              nemotron: { alias: "nemotron-bolt/nemotron-3-super-120b" },
+            },
+          },
+        },
+        models: {
+          providers: {
+            "nemotron-bolt": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [{ id: "nemotron-3-super-120b", name: "Nemotron" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "nemotron-bolt",
+        model: "nemotron-3-super-120b",
+      });
+    });
+
+    it("keeps exact configured provider refs before slash-form alias values that point to them", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "nemotron-bolt/nemotron-3-super-120b" },
+            models: {
+              "openai/nemotron-bolt/nemotron-3-super-120b": {
+                alias: "nemotron-bolt/nemotron-3-super-120b",
+              },
+            },
+          },
+        },
+        models: {
+          providers: {
+            "nemotron-bolt": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [{ id: "nemotron-3-super-120b", name: "Nemotron" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "nemotron-bolt",
+        model: "nemotron-3-super-120b",
+      });
+    });
+
+    it("keeps built-in provider refs before bare alias values that point to them", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+            models: {
+              opus: { alias: "anthropic/claude-opus-4-6" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+    });
+
     it("prefers slash-form aliases for configured default models", () => {
       const cfg = {
         agents: {
@@ -1161,6 +1977,168 @@ describe("model-selection", () => {
       });
 
       expect(result).toEqual({ provider: "openai", model: "xiaomi/mimo-v2-pro-mit" });
+    });
+
+    it("prefers slash-form aliases before applying auth profile suffixes", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "xiaomi/mimo-v2-pro-mit@work" },
+            models: {
+              "openai/xiaomi/mimo-v2-pro-mit": {
+                alias: "xiaomi/mimo-v2-pro-mit",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "xiaomi/mimo-v2-pro-mit" });
+    });
+
+    it("prefers exact aliases that contain auth-profile-like suffixes", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "gpt@prod" },
+            models: {
+              "openai/gpt-5.5": {
+                alias: "gpt@prod",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "gpt-5.5" });
+    });
+
+    it("prefers exact slash-form aliases before stripping auth-profile suffixes", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6@prod" },
+            models: {
+              "openai/gpt-5.5": {
+                alias: "anthropic/claude-opus-4-6@prod",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "gpt-5.5" });
+    });
+
+    it("prefers exact auth-profile aliases before configured-provider stripping", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "nemotron-bolt/nemotron-3-super-120b@prod" },
+            models: {
+              "openai/gpt-5.5": {
+                alias: "nemotron-bolt/nemotron-3-super-120b@prod",
+              },
+            },
+          },
+        },
+        models: {
+          providers: {
+            "nemotron-bolt": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [{ id: "nemotron-3-super-120b", name: "Nemotron" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "gpt-5.5" });
+    });
+
+    it("prefers stripped auth-profile aliases before configured-provider stripping", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "nemotron-bolt/nemotron-3-super-120b@prod" },
+            models: {
+              "openai/nemotron-bolt/nemotron-3-super-120b": {
+                alias: "nemotron-bolt/nemotron-3-super-120b",
+              },
+            },
+          },
+        },
+        models: {
+          providers: {
+            "nemotron-bolt": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [{ id: "nemotron-3-super-120b", name: "Nemotron" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({
+        provider: "openai",
+        model: "nemotron-bolt/nemotron-3-super-120b",
+      });
+    });
+
+    it("resolves provider-qualified defaults without normalizing every aliasless configured model", () => {
+      providerModelNormalizationMock.normalizeProviderModelIdWithRuntime.mockClear();
+      const models = Object.fromEntries(
+        Array.from({ length: 25 }, (_, index) => [`anthropic/claude-extra-${index}`, {}]),
+      );
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models,
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "gpt-5.5" });
+      expect(
+        providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
+      ).toHaveBeenCalledTimes(1);
     });
 
     it("should use default provider/model if config is empty", () => {
@@ -1223,7 +2201,7 @@ describe("model-selection", () => {
 
       expect(result).toEqual({
         provider: "google-vertex",
-        model: "gemini-3.1-flash-lite-preview",
+        model: "gemini-3.1-flash-lite",
       });
     });
 
@@ -1254,7 +2232,35 @@ describe("model-selection", () => {
       ).toEqual({ provider: "modelstudio", model: "qwen3.6-plus" });
     });
 
-    it("keeps legacy modelstudio aliases when no exact foreign api owner is configured", () => {
+    it("normalizes retired nested Gemini ids in exact configured provider refs", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "kilocode/google/gemini-3-pro-preview" },
+          },
+        },
+        models: {
+          providers: {
+            kilocode: {
+              api: "openai-completions",
+              baseUrl: "https://kilocode.test/v1",
+              models: [{ id: "google/gemini-3-pro-preview", name: "Gemini 3 Pro" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-opus-4-6",
+          allowPluginNormalization: false,
+        }),
+      ).toEqual({ provider: "kilocode", model: "google/gemini-3.1-pro-preview" });
+    });
+
+    it("preserves explicit provider ids when no exact foreign api owner is configured", () => {
       const cfg = {
         agents: {
           defaults: {
@@ -1269,7 +2275,7 @@ describe("model-selection", () => {
           defaultProvider: "anthropic",
           defaultModel: "claude-opus-4-6",
         }),
-      ).toEqual({ provider: "qwen", model: "qwen3.5-plus" });
+      ).toEqual({ provider: "modelstudio", model: "qwen3.5-plus" });
     });
 
     it("should fall back to hardcoded default when no custom providers have models", () => {
@@ -1278,9 +2284,8 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "openai", model: "gpt-5.4" });
     });
 
-    it("should warn when specified model cannot be resolved and falls back to default", () => {
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    it("should warn when specified model cannot be resolved and falls back to default", async () => {
+      const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
       try {
         const cfg: Partial<OpenClawConfig> = {
           agents: {
@@ -1297,13 +2302,13 @@ describe("model-selection", () => {
         });
 
         expect(result).toEqual({ provider: "openai", model: "gpt-5.4" });
-        expect(warnSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Falling back to default "openai/gpt-5.4"'),
-        );
+        expect(
+          await warnLogs.findText(
+            'Model "openai/" could not be resolved. Falling back to default "openai/gpt-5.4".',
+          ),
+        ).toBeDefined();
       } finally {
-        warnSpy.mockRestore();
-        setLoggerOverride(null);
-        resetLogger();
+        warnLogs.cleanup();
       }
     });
 
@@ -1533,6 +2538,72 @@ describe("model-selection", () => {
       expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
     });
 
+    it("treats params.thinking=false as off (#74374)", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "deepseek/deepseek-v4-pro": {
+                params: { thinking: false },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "deepseek",
+          model: "deepseek-v4-pro",
+        }),
+      ).toBe("off");
+    });
+
+    it('treats params.thinking="disabled" as off (#74374)', () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "deepseek/deepseek-v4-pro": {
+                params: { thinking: "disabled" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "deepseek",
+          model: "deepseek-v4-pro",
+        }),
+      ).toBe("off");
+    });
+
+    it('treats params.thinking="none" as off', () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "deepseek/deepseek-v4-pro": {
+                params: { thinking: "none" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "deepseek",
+          model: "deepseek-v4-pro",
+        }),
+      ).toBe("off");
+    });
+
     it("keeps thinking off by default for explicitly configured Anthropic Opus 4.7", () => {
       const cfg = {
         agents: {
@@ -1545,11 +2616,46 @@ describe("model-selection", () => {
       expect(resolveAnthropicOpus47Thinking(cfg)).toBe("off");
     });
 
-    it("falls back to medium when no provider thinking hook is active", () => {
+    it("leaves explicitly configured Anthropic Opus 4.8 thinking off by default", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-8" },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveAnthropicOpus48Thinking(cfg)).toBe("off");
+    });
+
+    it("leaves explicitly configured Anthropic Vertex Opus 4.8 thinking off by default", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic-vertex/claude-opus-4-8" },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveAnthropicVertexOpus48Thinking(cfg)).toBe("off");
+    });
+
+    it("leaves explicitly configured Claude CLI Opus 4.8 thinking off by default", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "claude-cli/claude-opus-4-8" },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveClaudeCliOpus48Thinking(cfg)).toBe("off");
+    });
+
+    it("uses bundled provider thinking defaults when no explicit config overrides them", () => {
       const cfg = {} as OpenClawConfig;
 
-      expect(resolveAnthropicOpusThinking(cfg)).toBe("medium");
-
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
       expect(
         resolveThinkingDefault({
           cfg,
@@ -1564,7 +2670,86 @@ describe("model-selection", () => {
             },
           ],
         }),
+      ).toBe("adaptive");
+    });
+
+    it("falls back to medium when no provider thinking policy is active", () => {
+      const cfg = {} as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "custom-provider",
+          model: "custom-reasoning-model",
+          catalog: [
+            {
+              provider: "custom-provider",
+              id: "custom-reasoning-model",
+              name: "Custom Reasoning Model",
+              reasoning: true,
+            },
+          ],
+        }),
       ).toBe("medium");
+    });
+
+    it("honors configured provider models that disable reasoning", () => {
+      const cfg = {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [
+                {
+                  id: "gemma-4-26b-a4b-it",
+                  name: "Gemma 4 26B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "google",
+          model: "gemma-4-26b-a4b-it",
+        }),
+      ).toBe("off");
+    });
+  });
+});
+
+describe("resolveDefaultModelForAgent", () => {
+  it("uses an agent primary model override before the global default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            model: {
+              primary: "openai/gpt-5.5",
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveDefaultModelForAgent({ cfg, agentId: "main" })).toEqual({
+      provider: "openai",
+      model: "gpt-5.5",
     });
   });
 });
@@ -1598,7 +2783,7 @@ describe("normalizeModelSelection", () => {
 });
 
 describe("resolveSubagentConfiguredModelSelection", () => {
-  it("prefers the agent primary model over agents.defaults.subagents.model", () => {
+  it("prefers agents.defaults.subagents.model over the agent primary model", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -1615,7 +2800,7 @@ describe("resolveSubagentConfiguredModelSelection", () => {
     } as OpenClawConfig;
 
     expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
-      "anthropic/claude-opus-4-6",
+      "openai/gpt-5.4",
     );
   });
 
@@ -1639,6 +2824,34 @@ describe("resolveSubagentConfiguredModelSelection", () => {
     expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
       "google/gemini-2.5-pro",
     );
+  });
+
+  it("keeps runtime policy attached to the configured default subagent model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          subagents: { model: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+        list: [{ id: "research", model: "anthropic/claude-opus-4-7" }],
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" });
+
+    expect(resolved).toBe("anthropic/claude-sonnet-4-6");
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        config: cfg,
+      }),
+    ).toEqual({
+      runtime: "claude-cli",
+      runtimeSource: "model",
+    });
   });
 });
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Formats docs Markdown/MDX and repairs Mintlify accordion indentation.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -16,7 +17,10 @@ function docsFiles() {
     cwd: ROOT,
     encoding: "utf8",
   });
-  return output.split("\n").filter(Boolean);
+  return output
+    .split("\n")
+    .filter(Boolean)
+    .filter((relativePath) => fs.existsSync(path.join(ROOT, relativePath)));
 }
 
 function runOxfmt(files) {

@@ -49,6 +49,9 @@ import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+/**
+ * Watches local DNS-SD and optional wide-area DNS-SD for reachable OpenClaw gateways.
+ */
 class GatewayDiscovery(
   context: Context,
   private val scope: CoroutineScope,
@@ -63,9 +66,13 @@ class GatewayDiscovery(
   private val localById = ConcurrentHashMap<String, GatewayEndpoint>()
   private val unicastById = ConcurrentHashMap<String, GatewayEndpoint>()
   private val _gateways = MutableStateFlow<List<GatewayEndpoint>>(emptyList())
+
+  /** Current discovered gateway list, merged from local DNS-SD and optional wide-area DNS-SD. */
   val gateways: StateFlow<List<GatewayEndpoint>> = _gateways.asStateFlow()
 
   private val _statusText = MutableStateFlow("Searching…")
+
+  /** Short diagnostic text shown by connect UI while discovery is running. */
   val statusText: StateFlow<String> = _statusText.asStateFlow()
 
   private var unicastJob: Job? = null
@@ -130,6 +137,8 @@ class GatewayDiscovery(
     val cm = connectivity ?: return
     cm.activeNetwork?.let(availableNetworks::add)
     try {
+      // Track all networks so wide-area DNS can prefer VPN/split-DNS answers
+      // even when Android's active network is not the VPN.
       cm.registerNetworkCallback(NetworkRequest.Builder().build(), networkCallback)
     } catch (_: Throwable) {
       // ignore (best-effort)
@@ -168,6 +177,7 @@ class GatewayDiscovery(
 
   private fun resolve(serviceInfo: NsdServiceInfo) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      // Android 14+ streams service updates; older releases require one-shot resolve calls.
       resolveWithServiceInfoCallback(serviceInfo)
     } else {
       resolveLegacy(serviceInfo)
@@ -255,6 +265,7 @@ class GatewayDiscovery(
     val tlsEnabled = txtBool(resolved, "gatewayTls")
     val tlsFingerprint = txt(resolved, "gatewayTlsSha256")
     val id = stableId(serviceName, "local.")
+    // Local NSD gives the socket host/port; TXT ports are retained as gateway metadata only.
     localById[id] =
       GatewayEndpoint(
         stableId = id,
@@ -278,17 +289,17 @@ class GatewayDiscovery(
     return legacyHostAddress(resolved)
   }
 
-  private fun legacyHostAddress(resolved: NsdServiceInfo): String? {
-    return try {
+  private fun legacyHostAddress(resolved: NsdServiceInfo): String? =
+    try {
       val host = NsdServiceInfo::class.java.getMethod("getHost").invoke(resolved) as? InetAddress
       host?.hostAddress
     } catch (_: Throwable) {
       null
     }
-  }
 
   private fun publish() {
     _gateways.value =
+      // Merge local and wide-area results deterministically for stable UI selection.
       (localById.values + unicastById.values).sortedBy { it.name.lowercase() }
     _statusText.value = buildStatusText()
   }
@@ -370,6 +381,7 @@ class GatewayDiscovery(
           ?: resolveHostUnicast(targetFqdn)
           ?: continue
 
+      // Wide-area DNS-SD may put TXT in additional records; fall back to a direct TXT query.
       val txtFromPtr =
         recordsByName(ptrMsg, Section.ADDITIONAL)[keyName(instanceFqdn)]
           .orEmpty()
@@ -455,6 +467,7 @@ class GatewayDiscovery(
     val system = queryViaSystemDns(query)
     if (records(system, Section.ANSWER).any { it.type == type }) return system
 
+    // Android's DnsResolver can miss split-DNS answers; retry with dnsjava against network DNS servers.
     val direct = createDirectResolver() ?: return system
     return try {
       val msg = direct.send(query)
@@ -529,26 +542,27 @@ class GatewayDiscovery(
     val cm = connectivity ?: return null
 
     // Prefer VPN (Tailscale) when present; otherwise use the active network.
-    trackedNetworks(cm).firstOrNull { n ->
-      val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
-      caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-    }?.let { return it }
+    trackedNetworks(cm)
+      .firstOrNull { n ->
+        val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+      }?.let { return it }
 
     return cm.activeNetwork
   }
 
-  private fun trackedNetworks(cm: ConnectivityManager): List<Network> {
-    return buildList {
+  private fun trackedNetworks(cm: ConnectivityManager): List<Network> =
+    buildList {
       cm.activeNetwork?.let(::add)
       addAll(availableNetworks)
     }.distinct()
-  }
 
   private fun createDirectResolver(): Resolver? {
     val cm = connectivity ?: return null
 
     val candidateNetworks =
       buildList {
+        // Put VPN DNS first so Tailscale split-horizon names win over public DNS.
         trackedNetworks(cm)
           .firstOrNull { n ->
             val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false

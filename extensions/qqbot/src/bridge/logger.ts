@@ -5,24 +5,24 @@
  * engine's `debugLog` so that all logs flow through the OpenClaw log system.
  */
 
-export interface BridgeLogger {
+interface BridgeLogger {
   info: (msg: string) => void;
   error: (msg: string) => void;
   warn?: (msg: string) => void;
   debug?: (msg: string) => void;
 }
 
-let _logger: BridgeLogger | null = null;
+let loggerInstance: BridgeLogger | null = null;
 
 /** Register the framework logger. Called once in startGateway(). */
 export function setBridgeLogger(logger: BridgeLogger): void {
-  _logger = logger;
+  loggerInstance = logger;
 }
 
 /** Get the bridge logger. Falls back to console if not yet registered. */
 export function getBridgeLogger(): BridgeLogger {
   return (
-    _logger ?? {
+    loggerInstance ?? {
       info: (msg) => console.log(msg),
       error: (msg) => console.error(msg),
       debug: (msg) => console.log(msg),

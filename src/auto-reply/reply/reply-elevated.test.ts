@@ -1,3 +1,4 @@
+// Tests elevated permission resolution from allowlists and message context.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
@@ -46,10 +47,12 @@ function expectAllowFromDecision(params: {
     return;
   }
 
-  expect(result.failures).toContainEqual({
-    gate: "allowFrom",
-    key: "tools.elevated.allowFrom.whatsapp",
-  });
+  expect(result.failures).toEqual([
+    {
+      gate: "allowFrom",
+      key: "tools.elevated.allowFrom.whatsapp",
+    },
+  ]);
 }
 
 describe("resolveElevatedPermissions", () => {

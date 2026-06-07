@@ -1,3 +1,4 @@
+// Imessage API module exposes the plugin public contract.
 export {
   DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
   resolveIMessageAttachmentRoots as resolveInboundAttachmentRoots,
@@ -6,6 +7,6 @@ export {
   resolveIMessageRemoteAttachmentRoots,
 } from "./media-contract-api.js";
 export {
-  __testing as imessageConversationBindingTesting,
+  testing as imessageConversationBindingTesting,
   createIMessageConversationBindingManager,
 } from "./src/conversation-bindings.js";

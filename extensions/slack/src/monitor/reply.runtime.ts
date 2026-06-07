@@ -1,11 +1,7 @@
+// Slack plugin module implements reply behavior.
 export {
-  chunkMarkdownTextWithMode,
   createReplyDispatcherWithTyping,
-  createReplyReferencePlanner,
+  dispatchReplyWithBufferedBlockDispatcher,
   dispatchInboundMessage,
-  finalizeInboundContext,
-  getReplyFromConfig,
-  isSilentReplyText,
-  resolveTextChunkLimit,
-  SILENT_REPLY_TOKEN,
+  settleReplyDispatcher,
 } from "openclaw/plugin-sdk/reply-runtime";

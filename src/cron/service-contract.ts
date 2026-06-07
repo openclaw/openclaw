@@ -1,3 +1,4 @@
+/** Public cron service interface shared by callers and implementations. */
 import type { CronListPageOptions, CronListPageResult } from "./service/list-page-types.js";
 import type {
   CronAddInput,
@@ -13,12 +14,12 @@ import type {
 } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
-export type { CronListPageOptions, CronListPageResult } from "./service/list-page-types.js";
+type CronWakeResult = { ok: true } | { ok: false; reason?: "unwakeable-session-key" };
 
-export type CronWakeResult = { ok: true } | { ok: false };
-
+/** Result shape for direct/queued cron runs, including invalid persisted specs. */
 export type CronServiceRunResult = CronRunResult | { ok: true; ran: false; reason: "invalid-spec" };
 
+/** Public cron service facade used by gateway, plugin SDK, and tests. */
 export interface CronServiceContract {
   start(): Promise<void>;
   stop(): void;
@@ -31,6 +32,7 @@ export interface CronServiceContract {
   run(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
   enqueueRun(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
   getJob(id: string): CronJob | undefined;
+  readJob(id: string): Promise<CronJob | undefined>;
   getDefaultAgentId(): string | undefined;
-  wake(opts: { mode: CronWakeMode; text: string }): CronWakeResult;
+  wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string }): CronWakeResult;
 }

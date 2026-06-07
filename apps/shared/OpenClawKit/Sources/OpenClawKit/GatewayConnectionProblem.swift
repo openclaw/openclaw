@@ -10,6 +10,7 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         case gatewayAuthPasswordNotConfigured
         case bootstrapTokenInvalid
         case deviceTokenMismatch
+        case deviceTokenScopeMismatch
         case pairingRequired
         case pairingRoleUpgradeRequired
         case pairingScopeUpgradeRequired
@@ -30,6 +31,9 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         case connectionRefused
         case reachabilityFailed
         case websocketCancelled
+        case tlsPinMismatch
+        case tlsCertificateUntrusted
+        case tlsCertificateUnavailable
         case unknown
     }
 
@@ -52,6 +56,10 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
     public let retryable: Bool
     public let pauseReconnect: Bool
     public let technicalDetails: String?
+    public let tlsStoreKey: String?
+    public let tlsExpectedFingerprint: String?
+    public let tlsObservedFingerprint: String?
+    public let tlsSystemTrustOk: Bool
 
     public init(
         kind: Kind,
@@ -64,7 +72,11 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         requestId: String? = nil,
         retryable: Bool,
         pauseReconnect: Bool,
-        technicalDetails: String? = nil)
+        technicalDetails: String? = nil,
+        tlsStoreKey: String? = nil,
+        tlsExpectedFingerprint: String? = nil,
+        tlsObservedFingerprint: String? = nil,
+        tlsSystemTrustOk: Bool = false)
     {
         self.kind = kind
         self.owner = owner
@@ -77,12 +89,16 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         self.retryable = retryable
         self.pauseReconnect = pauseReconnect
         self.technicalDetails = Self.trimmedOrNil(technicalDetails)
+        self.tlsStoreKey = Self.trimmedOrNil(tlsStoreKey)
+        self.tlsExpectedFingerprint = Self.trimmedOrNil(tlsExpectedFingerprint)
+        self.tlsObservedFingerprint = Self.trimmedOrNil(tlsObservedFingerprint)
+        self.tlsSystemTrustOk = tlsSystemTrustOk
     }
 
     public var needsPairingApproval: Bool {
         switch self.kind {
         case .pairingRequired, .pairingRoleUpgradeRequired, .pairingScopeUpgradeRequired,
-             .pairingMetadataUpgradeRequired:
+             .pairingMetadataUpgradeRequired, .deviceTokenScopeMismatch:
             true
         default:
             false
@@ -105,6 +121,10 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         }
     }
 
+    public var suggestsOnboardingReset: Bool {
+        self.kind == .gatewayAuthTokenMismatch
+    }
+
     public var statusText: String {
         switch self.kind {
         case .pairingRequired, .pairingRoleUpgradeRequired, .pairingScopeUpgradeRequired,
@@ -116,6 +136,13 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         default:
             return self.title
         }
+    }
+
+    public var canTrustRotatedCertificate: Bool {
+        self.kind == .tlsPinMismatch
+            && self.tlsSystemTrustOk
+            && self.tlsStoreKey != nil
+            && self.tlsObservedFingerprint != nil
     }
 
     private static func trimmedOrNil(_ value: String?) -> String? {
@@ -170,6 +197,9 @@ public enum GatewayConnectionProblemMapper {
         if let responseError = error as? GatewayResponseError {
             return self.map(responseError)
         }
+        if let tlsError = error as? GatewayTLSValidationError {
+            return self.map(tlsError)
+        }
         return self.mapTransportError(error)
     }
 
@@ -183,7 +213,7 @@ public enum GatewayConnectionProblemMapper {
                 owner: .both,
                 title: authError.titleOverride ?? "Gateway token required",
                 message: authError.userMessageOverride
-                    ?? "This gateway requires an auth token, but this iPhone did not send one.",
+                    ?? "This gateway requires an auth token, but this device did not send one.",
                 actionLabel: authError.actionLabel ?? "Open Settings",
                 actionCommand: authError.actionCommand,
                 docsURL: self.docsURL(
@@ -199,7 +229,7 @@ public enum GatewayConnectionProblemMapper {
                 owner: .both,
                 title: authError.titleOverride ?? "Gateway token is out of date",
                 message: authError.userMessageOverride
-                    ?? "The token on this iPhone does not match the gateway token.",
+                    ?? "The token on this device does not match the gateway token.",
                 actionLabel: authError
                     .actionLabel ?? (authError.canRetryWithDeviceToken ? "Retry once" : "Update gateway token"),
                 actionCommand: authError.actionCommand,
@@ -232,7 +262,7 @@ public enum GatewayConnectionProblemMapper {
                 owner: .both,
                 title: authError.titleOverride ?? "Gateway password required",
                 message: authError.userMessageOverride
-                    ?? "This gateway requires a password, but this iPhone did not send one.",
+                    ?? "This gateway requires a password, but this device did not send one.",
                 actionLabel: authError.actionLabel ?? "Open Settings",
                 actionCommand: authError.actionCommand,
                 docsURL: self.docsURL(
@@ -248,7 +278,7 @@ public enum GatewayConnectionProblemMapper {
                 owner: .both,
                 title: authError.titleOverride ?? "Gateway password is out of date",
                 message: authError.userMessageOverride
-                    ?? "The saved password on this iPhone does not match the gateway password.",
+                    ?? "The saved password on this device does not match the gateway password.",
                 actionLabel: authError.actionLabel ?? "Update password",
                 actionCommand: authError.actionCommand,
                 docsURL: self.docsURL(
@@ -292,10 +322,24 @@ public enum GatewayConnectionProblemMapper {
             return self.problem(
                 kind: .deviceTokenMismatch,
                 owner: .both,
-                title: authError.titleOverride ?? "This iPhone's saved device token is no longer valid",
+                title: authError.titleOverride ?? "This device's saved device token is no longer valid",
                 message: authError.userMessageOverride
                     ?? "The gateway rejected the stored device token for this role.",
                 actionLabel: authError.actionLabel ?? "Repair pairing",
+                actionCommand: authError.actionCommand ?? pairingCommand,
+                docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
+                requestId: authError.requestId,
+                retryable: false,
+                pauseReconnect: true,
+                authError: authError)
+        case .authScopeMismatch:
+            return self.problem(
+                kind: .deviceTokenScopeMismatch,
+                owner: .both,
+                title: authError.titleOverride ?? "Device permissions need approval",
+                message: authError.userMessageOverride
+                    ?? "The gateway accepted this device token but rejected the requested operator scopes.",
+                actionLabel: authError.actionLabel ?? "Review pairing",
                 actionCommand: authError.actionCommand ?? pairingCommand,
                 docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
                 requestId: authError.requestId,
@@ -311,7 +355,7 @@ public enum GatewayConnectionProblemMapper {
                 title: authError.titleOverride ?? "Secure device identity is required",
                 message: authError.userMessageOverride
                     ??
-                    "This connection must include a signed device identity before the gateway can bind permissions to this iPhone.",
+                    "This connection must include a signed device identity before the gateway can bind permissions to this device.",
                 actionLabel: authError.actionLabel ?? "Retry from the app",
                 actionCommand: authError.actionCommand,
                 docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/platforms/ios"),
@@ -325,7 +369,7 @@ public enum GatewayConnectionProblemMapper {
                 owner: .iphone,
                 title: authError.titleOverride ?? "Secure handshake expired",
                 message: authError.userMessageOverride ?? "The device signature is too old to use.",
-                actionLabel: authError.actionLabel ?? "Check iPhone time",
+                actionLabel: authError.actionLabel ?? "Check device time",
                 actionCommand: authError.actionCommand,
                 docsURL: self.docsURL(
                     authError.docsURLString,
@@ -371,8 +415,8 @@ public enum GatewayConnectionProblemMapper {
                 owner: .iphone,
                 title: authError.titleOverride ?? "This device identity could not be verified",
                 message: authError.userMessageOverride
-                    ?? "The gateway could not verify the identity this iPhone presented.",
-                actionLabel: authError.actionLabel ?? "Re-pair this iPhone",
+                    ?? "The gateway could not verify the identity this device presented.",
+                actionLabel: authError.actionLabel ?? "Re-pair this device",
                 actionCommand: authError.actionCommand,
                 docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
                 requestId: authError.requestId,
@@ -385,8 +429,8 @@ public enum GatewayConnectionProblemMapper {
                 owner: .iphone,
                 title: authError.titleOverride ?? "This device identity could not be verified",
                 message: authError.userMessageOverride
-                    ?? "The gateway could not verify the public key this iPhone presented.",
-                actionLabel: authError.actionLabel ?? "Re-pair this iPhone",
+                    ?? "The gateway could not verify the public key this device presented.",
+                actionLabel: authError.actionLabel ?? "Re-pair this device",
                 actionCommand: authError.actionCommand,
                 docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
                 requestId: authError.requestId,
@@ -400,7 +444,7 @@ public enum GatewayConnectionProblemMapper {
                 title: authError.titleOverride ?? "This device identity could not be verified",
                 message: authError.userMessageOverride
                     ?? "The gateway rejected the device identity because the device ID did not match.",
-                actionLabel: authError.actionLabel ?? "Re-pair this iPhone",
+                actionLabel: authError.actionLabel ?? "Re-pair this device",
                 actionCommand: authError.actionCommand,
                 docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
                 requestId: authError.requestId,
@@ -516,6 +560,55 @@ public enum GatewayConnectionProblemMapper {
             return self.map(authError)
         }
         return nil
+    }
+
+    private static func map(_ tlsError: GatewayTLSValidationError) -> GatewayConnectionProblem {
+        let failure = tlsError.failure
+        switch failure.kind {
+        case .pinMismatch:
+            let trustedSuffix = failure.systemTrustOk
+                ? " The new certificate is trusted by this device; this is commonly caused by certificate rotation."
+                : " This device could not verify the new certificate."
+            return GatewayConnectionProblem(
+                kind: .tlsPinMismatch,
+                owner: failure.systemTrustOk ? .network : .unknown,
+                title: "Gateway certificate changed",
+                message: "The saved TLS certificate pin for \(failure.host) no longer matches the gateway certificate.\(trustedSuffix)",
+                actionLabel: "Review certificate",
+                actionCommand: nil,
+                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+                retryable: false,
+                pauseReconnect: true,
+                technicalDetails: tlsError.localizedDescription,
+                tlsStoreKey: failure.storeKey,
+                tlsExpectedFingerprint: failure.expectedFingerprint,
+                tlsObservedFingerprint: failure.observedFingerprint,
+                tlsSystemTrustOk: failure.systemTrustOk)
+        case .certificateUnavailable:
+            return GatewayConnectionProblem(
+                kind: .tlsCertificateUnavailable,
+                owner: .network,
+                title: "Gateway certificate unavailable",
+                message: "OpenClaw could not read the gateway certificate for \(failure.host).",
+                actionLabel: "Retry",
+                actionCommand: nil,
+                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+                retryable: true,
+                pauseReconnect: false,
+                technicalDetails: tlsError.localizedDescription)
+        case .untrustedCertificate:
+            return GatewayConnectionProblem(
+                kind: .tlsCertificateUntrusted,
+                owner: .network,
+                title: "Gateway certificate is not trusted",
+                message: "This device does not trust the TLS certificate presented by \(failure.host).",
+                actionLabel: "Check certificate",
+                actionCommand: nil,
+                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+                retryable: false,
+                pauseReconnect: true,
+                technicalDetails: tlsError.localizedDescription)
+        }
     }
 
     private static func mapTransportError(_ error: Error) -> GatewayConnectionProblem? {
@@ -652,7 +745,7 @@ public enum GatewayConnectionProblemMapper {
                 title: authError.titleOverride ?? "Additional approval required",
                 message: authError.userMessageOverride
                     ??
-                    "This iPhone is already paired, but it is requesting a new role that was not previously approved.",
+                    "This device is already paired, but it is requesting a new role that was not previously approved.",
                 actionLabel: authError.actionLabel ?? "Approve on gateway",
                 actionCommand: authError.actionCommand ?? pairingCommand,
                 docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
@@ -666,7 +759,7 @@ public enum GatewayConnectionProblemMapper {
                 owner: .gateway,
                 title: authError.titleOverride ?? "Additional permissions required",
                 message: authError.userMessageOverride
-                    ?? "This iPhone is already paired, but it is requesting new permissions that require approval.",
+                    ?? "This device is already paired, but it is requesting new permissions that require approval.",
                 actionLabel: authError.actionLabel ?? "Approve on gateway",
                 actionCommand: authError.actionCommand ?? pairingCommand,
                 docsURL: self.docsURL(authError.docsURLString, fallback: "https://docs.openclaw.ai/gateway/pairing"),
@@ -693,7 +786,7 @@ public enum GatewayConnectionProblemMapper {
             return self.problem(
                 kind: .pairingRequired,
                 owner: .gateway,
-                title: authError.titleOverride ?? "This iPhone is not approved yet",
+                title: authError.titleOverride ?? "This device is not approved yet",
                 message: authError.userMessageOverride
                     ?? "The gateway received the connection request, but this device must be approved first.",
                 actionLabel: authError.actionLabel ?? "Approve on gateway",

@@ -1,12 +1,14 @@
+// Tracks inbound message ids to avoid duplicate reply runs.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext } from "../templating.js";
 
 const DEFAULT_INBOUND_DEDUPE_TTL_MS = 20 * 60_000;
@@ -39,11 +41,7 @@ const resolveInboundPeerId = (ctx: MsgContext) =>
 
 function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   const sessionKey =
-    (ctx.CommandSource === "native"
-      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
-      : undefined) ||
-    normalizeOptionalString(ctx.SessionKey) ||
-    "";
+    resolveCommandTurnTargetSessionKey(ctx) || normalizeOptionalString(ctx.SessionKey) || "";
   if (!sessionKey) {
     return "";
   }

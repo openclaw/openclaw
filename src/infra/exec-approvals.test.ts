@@ -1,3 +1,4 @@
+// Covers exec approval allowlist evaluation.
 import { describe, expect, it } from "vitest";
 import { normalizeSafeBins } from "./exec-approvals-allowlist.js";
 import {
@@ -90,7 +91,7 @@ describe("exec approvals allowlist evaluation", () => {
       return;
     }
     expect(result.allowlistSatisfied).toBe(true);
-    expect(result.allowlistMatches).toEqual([]);
+    expect(result.allowlistMatches).toStrictEqual([]);
   });
 
   it("satisfies allowlist via auto-allow skills", () => {
@@ -115,6 +116,38 @@ describe("exec approvals allowlist evaluation", () => {
       resolvedPath: "/opt/skills/skill-bin",
     });
     expect(result.allowlistSatisfied).toBe(true);
+  });
+
+  it("matches auto-allow skill bins against the executable trust realpath", () => {
+    const analysis = {
+      ok: true,
+      segments: [
+        {
+          raw: "skill-bin",
+          argv: ["skill-bin", "--help"],
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "skill-bin",
+              resolvedPath: "/tmp/symlink-bin/skill-bin",
+              resolvedRealPath: "/opt/skills/skill-bin",
+              executableName: "skill-bin",
+            }),
+          }),
+        },
+      ],
+    };
+
+    const trustedRealPath = evaluateAutoAllowSkills({
+      analysis,
+      resolvedPath: "/opt/skills/skill-bin",
+    });
+    expect(trustedRealPath.allowlistSatisfied).toBe(true);
+
+    const trustedSymlinkPath = evaluateAutoAllowSkills({
+      analysis,
+      resolvedPath: "/tmp/symlink-bin/skill-bin",
+    });
+    expectAutoAllowSkillsMiss(trustedSymlinkPath);
   });
 
   it("does not satisfy auto-allow skills for explicit relative paths", () => {
@@ -188,8 +221,8 @@ describe("exec approvals allowlist evaluation", () => {
       cwd: "/tmp",
     });
     expect(result.allowlistSatisfied).toBe(false);
-    expect(result.allowlistMatches).toEqual([]);
-    expect(result.segmentSatisfiedBy).toEqual([]);
+    expect(result.allowlistMatches).toStrictEqual([]);
+    expect(result.segmentSatisfiedBy).toStrictEqual([]);
   });
 
   it("aggregates segment satisfaction across chains", () => {

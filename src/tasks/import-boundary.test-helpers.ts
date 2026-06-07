@@ -1,10 +1,12 @@
+// Provides import-boundary assertions shared by task architecture tests.
 import fs from "node:fs/promises";
 import path from "node:path";
 
 const TASK_ROOT = path.resolve(import.meta.dirname);
 
-export const TASK_BOUNDARY_SRC_ROOT = path.resolve(TASK_ROOT, "..");
+const TASK_BOUNDARY_SRC_ROOT = path.resolve(TASK_ROOT, "..");
 
+/** Converts source paths to stable task-boundary test paths. */
 export function toTaskBoundaryRelativePath(file: string, root = TASK_BOUNDARY_SRC_ROOT): string {
   return path.relative(root, file).replaceAll(path.sep, "/");
 }

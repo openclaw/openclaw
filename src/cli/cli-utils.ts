@@ -1,9 +1,10 @@
+// Shared CLI execution wrappers and inherited Commander option lookup.
 import type { Command } from "commander";
 import { formatErrorMessage } from "../infra/errors.js";
 
 export { formatErrorMessage };
 
-export type ManagerLookupResult<T> = {
+type ManagerLookupResult<T> = {
   manager: T | null;
   error?: string;
 };

@@ -1,8 +1,10 @@
+// TTS config tests cover text-to-speech config loading and overrides.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   resolveConfiguredTtsMode,
   resolveEffectiveTtsConfig,
@@ -10,7 +12,7 @@ import {
 } from "./tts-config.js";
 
 describe("shouldAttemptTtsPayload", () => {
-  let originalPrefsPath: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let root = "";
   let dir: string;
   let prefsPath: string;
@@ -27,7 +29,7 @@ describe("shouldAttemptTtsPayload", () => {
   });
 
   beforeEach(() => {
-    originalPrefsPath = process.env.OPENCLAW_TTS_PREFS;
+    envSnapshot = captureEnv(["OPENCLAW_TTS_PREFS"]);
     dir = path.join(root, `case-${caseId++}`);
     mkdirSync(dir, { recursive: true });
     prefsPath = path.join(dir, "tts.json");
@@ -35,15 +37,23 @@ describe("shouldAttemptTtsPayload", () => {
   });
 
   afterEach(() => {
-    if (originalPrefsPath === undefined) {
-      delete process.env.OPENCLAW_TTS_PREFS;
-    } else {
-      process.env.OPENCLAW_TTS_PREFS = originalPrefsPath;
-    }
+    envSnapshot?.restore();
+    envSnapshot = undefined;
   });
 
   it("skips TTS when config, prefs, and session state leave auto mode off", () => {
     expect(shouldAttemptTtsPayload({ cfg: {} as OpenClawConfig })).toBe(false);
+  });
+
+  it("does not infer automatic TTS from a dashboard text turn without opt-in state", () => {
+    expect(
+      shouldAttemptTtsPayload({
+        cfg: {} as OpenClawConfig,
+        agentId: "main",
+        channelId: "webchat",
+        accountId: "dashboard",
+      }),
+    ).toBe(false);
   });
 
   it("honors session auto state before prefs and config", () => {
@@ -149,16 +159,10 @@ describe("shouldAttemptTtsPayload", () => {
       accountId: "englishbot",
     });
 
-    expect(resolved).toMatchObject({
-      auto: "always",
-      mode: "all",
-      provider: "openai",
-      providers: {
-        openai: {
-          model: "gpt-4o-mini-tts",
-          voice: "shimmer",
-        },
-      },
-    });
+    expect(resolved.auto).toBe("always");
+    expect(resolved.mode).toBe("all");
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.providers?.openai?.model).toBe("gpt-4o-mini-tts");
+    expect(resolved.providers?.openai?.voice).toBe("shimmer");
   });
 });

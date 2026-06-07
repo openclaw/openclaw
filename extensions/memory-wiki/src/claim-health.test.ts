@@ -1,3 +1,4 @@
+// Memory Wiki tests cover claim health plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildPageContradictionClusters } from "./claim-health.js";
 import type { WikiPageSummary } from "./markdown.js";
@@ -12,8 +13,12 @@ function createPage(params: {
     relativePath: params.relativePath,
     kind: "entity",
     title: params.title,
+    aliases: [],
     sourceIds: [],
     linkTargets: [],
+    relationships: [],
+    bestUsedFor: [],
+    notEnoughFor: [],
     claims: [],
     contradictions: params.contradictions,
     questions: [],

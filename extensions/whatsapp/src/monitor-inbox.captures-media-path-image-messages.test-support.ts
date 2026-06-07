@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox.captures media path image messages support behavior.
 import "./monitor-inbox.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,13 +8,15 @@ import {
   getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
+  settleInboundWork,
+  waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
 const inboundLoggerInfoMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
-    "openclaw/plugin-sdk/text-runtime",
+vi.mock("openclaw/plugin-sdk/logging-core", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/logging-core")>(
+    "openclaw/plugin-sdk/logging-core",
   );
   return {
     ...actual,
@@ -49,7 +52,8 @@ describe("web monitor inbox", () => {
     const listener = await openMonitor(onMessage);
     const sock = getSock();
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForMessageCalls(onMessage, 1);
+    await settleInboundWork();
     return { onMessage, listener, sock };
   }
 
@@ -58,7 +62,13 @@ describe("web monitor inbox", () => {
     expected: Record<string, unknown>,
   ) {
     expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining(expected));
+    const message = onMessage.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    if (!message) {
+      throw new Error("expected inbound group message");
+    }
+    for (const [key, value] of Object.entries(expected)) {
+      expect(message[key]).toEqual(value);
+    }
   }
 
   it("captures media path for image messages", async () => {
@@ -73,11 +83,8 @@ describe("web monitor inbox", () => {
       ],
     });
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "<media:image>",
-      }),
-    );
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage.mock.calls[0]?.[0]?.body).toBe("<media:image>");
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
         remoteJid: "888@s.whatsapp.net",
@@ -118,13 +125,15 @@ describe("web monitor inbox", () => {
       connection: "close",
       lastDisconnect: { error: { output: { statusCode: 500 } } },
     });
-    await expect(reasonPromise).resolves.toEqual(
-      expect.objectContaining({ status: 500, isLoggedOut: false }),
-    );
+    await expect(reasonPromise).resolves.toEqual({
+      status: 500,
+      isLoggedOut: false,
+      error: { output: { statusCode: 500 } },
+    });
     await listener.close();
   });
 
-  it("detaches inbound listeners and closes the socket on close()", async () => {
+  it("detaches inbound listeners and ends the socket on close()", async () => {
     const listener = await openMonitor(vi.fn());
     const sock = getSock();
 
@@ -135,7 +144,11 @@ describe("web monitor inbox", () => {
 
     expect(sock.ev.listenerCount("messages.upsert")).toBe(0);
     expect(sock.ev.listenerCount("connection.update")).toBe(0);
-    expect(sock.ws.close).toHaveBeenCalledTimes(1);
+    expect(sock.end).toHaveBeenCalledTimes(1);
+    const closeError = sock.end.mock.calls[0]?.[0];
+    expect(closeError).toBeInstanceOf(Error);
+    expect(closeError?.message).toBe("OpenClaw WhatsApp listener close");
+    expect(sock.ws.close).not.toHaveBeenCalled();
   });
 
   it("logs inbound bodies through the inbound child logger", async () => {
@@ -151,13 +164,10 @@ describe("web monitor inbox", () => {
       ],
     });
 
-    expect(inboundLoggerInfoMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "ping",
-        from: "+999",
-      }),
-      "inbound message",
-    );
+    expect(inboundLoggerInfoMock).toHaveBeenCalledTimes(1);
+    expect(inboundLoggerInfoMock.mock.calls[0]?.[0]?.body).toBe("ping");
+    expect(inboundLoggerInfoMock.mock.calls[0]?.[0]?.from).toBe("+999");
+    expect(inboundLoggerInfoMock.mock.calls[0]?.[1]).toBe("inbound message");
     await listener.close();
   });
 
@@ -211,14 +221,12 @@ describe("web monitor inbox", () => {
       ],
     });
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatType: "group",
-        conversationId: "99999@g.us",
-        senderE164: "+777",
-        mentionedJids: ["123@s.whatsapp.net"],
-      }),
-    );
+    expectSingleGroupMessage(onMessage, {
+      chatType: "group",
+      conversationId: "99999@g.us",
+      senderE164: "+777",
+      mentionedJids: ["123@s.whatsapp.net"],
+    });
     await listener.close();
   });
 

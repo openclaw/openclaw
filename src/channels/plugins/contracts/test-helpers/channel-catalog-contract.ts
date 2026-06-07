@@ -1,3 +1,8 @@
+/**
+ * Channel catalog contract suites.
+ *
+ * Exercises manifest/catalog loading paths used by setup and install-on-demand surfaces.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -17,8 +22,6 @@ type CatalogEntryMeta = {
 function createCatalogFixtureEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     ...overrides,
   };
 }
@@ -51,6 +54,7 @@ export function describeChannelCatalogEntryContract(params: {
   });
 }
 
+/** Verifies catalog entries that come only from bundled manifest metadata. */
 export function describeBundledMetadataOnlyChannelCatalogContract(params: {
   pluginId: string;
   packageName: string;
@@ -103,6 +107,7 @@ export function describeBundledMetadataOnlyChannelCatalogContract(params: {
   });
 }
 
+/** Verifies fallback ordering between bundled, official, and external catalogs. */
 export function describeOfficialFallbackChannelCatalogContract(params: {
   channelId: string;
   npmSpec: string;
@@ -143,6 +148,7 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
 
       expect(entry?.install.npmSpec).toBe(params.npmSpec);
       expect(entry?.pluginId).toBeUndefined();
+      expect(entry?.trustedSourceLinkedOfficialInstall).toBe(true);
     });
 
     it("lets external catalogs override shipped fallback channel metadata", () => {
@@ -219,6 +225,7 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
       expect(entry?.install.npmSpec).toBe(params.externalNpmSpec);
       expect(entry?.meta.label).toBe(params.externalLabel);
       expect(entry?.pluginId).toBeUndefined();
+      expect(entry?.trustedSourceLinkedOfficialInstall).toBeUndefined();
     });
 
     it("surfaces package-name drift in external channel catalog install metadata", () => {

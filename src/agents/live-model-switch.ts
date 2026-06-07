@@ -1,21 +1,28 @@
+/**
+ * Resolves and persists live-session model switch requests.
+ */
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
+import {
+  abortEmbeddedAgentRun,
+  consumeEmbeddedRunModelSwitch,
+  requestEmbeddedRunModelSwitch,
+  type EmbeddedRunModelSwitchRequest,
+} from "./embedded-agent-runner/runs.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
-import {
-  abortEmbeddedPiRun,
-  consumeEmbeddedRunModelSwitch,
-  requestEmbeddedRunModelSwitch,
-  type EmbeddedRunModelSwitchRequest,
-} from "./pi-embedded-runner/runs.js";
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CODEX_PROVIDER_ID = "openai";
+
 export function resolveLiveSessionModelSelection(params: {
   cfg?: { session?: { store?: string } } | undefined;
   sessionKey?: string;
@@ -38,7 +45,10 @@ export function resolveLiveSessionModelSelection(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId,
   });
-  const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+  const entry = loadSessionStore(storePath, {
+    hydrateSkillPromptRefs: false,
+    skipCache: true,
+  })[sessionKey];
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -73,7 +83,7 @@ export function requestLiveSessionModelSwitch(params: {
   if (!sessionId) {
     return false;
   }
-  const aborted = abortEmbeddedPiRun(sessionId);
+  const aborted = abortEmbeddedAgentRun(sessionId);
   if (!aborted) {
     return false;
   }
@@ -85,6 +95,19 @@ export function consumeLiveSessionModelSwitch(
   sessionId: string,
 ): LiveSessionModelSelection | undefined {
   return consumeEmbeddedRunModelSwitch(sessionId);
+}
+
+function isAlreadyAppliedOpenAICodexRuntimePromotion(
+  current: { provider: string; model: string },
+  next: LiveSessionModelSelection,
+): boolean {
+  // The embedded Codex runtime reports openai after applying a canonical
+  // openai selection. Other runtime aliases remain real live-switch targets.
+  return (
+    normalizeProviderId(current.provider) === OPENAI_CODEX_PROVIDER_ID &&
+    normalizeProviderId(next.provider) === OPENAI_PROVIDER_ID &&
+    current.model === next.model
+  );
 }
 
 export function hasDifferentLiveSessionModelSelection(
@@ -99,9 +122,11 @@ export function hasDifferentLiveSessionModelSelection(
   if (!next) {
     return false;
   }
+  const modelSelectionDiffers =
+    (current.provider !== next.provider || current.model !== next.model) &&
+    !isAlreadyAppliedOpenAICodexRuntimePromotion(current, next);
   return (
-    current.provider !== next.provider ||
-    current.model !== next.model ||
+    modelSelectionDiffers ||
     normalizeOptionalString(current.authProfileId) !== next.authProfileId ||
     (normalizeOptionalString(current.authProfileId) ? current.authProfileIdSource : undefined) !==
       next.authProfileIdSource
@@ -160,7 +185,11 @@ export function shouldSwitchToLiveModel(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
-  const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+  const entry = loadSessionStore(storePath, {
+    hydrateSkillPromptRefs: false,
+    skipCache: true,
+    clone: false,
+  })[sessionKey];
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }

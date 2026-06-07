@@ -1,15 +1,17 @@
+// Gateway HTTP test harness.
+// Builds fake requests/responses and dispatches them through Gateway HTTP servers.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { expect, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
-import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
+import { canonicalizePathVariant } from "./security-path.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { createHooksRequestHandler } from "./server/hooks-request-handler.js";
 import { withTempConfig } from "./test-temp-config.js";
 
-export type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;
-export type GatewayServerOptions = Partial<Parameters<typeof createGatewayHttpServer>[0]>;
+type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;
+type GatewayServerOptions = Partial<Parameters<typeof createGatewayHttpServer>[0]>;
 type HooksHandlerDeps = Parameters<typeof createHooksRequestHandler>[0];
 
 const responseEndPromises = new WeakMap<ServerResponse, Promise<void>>();
@@ -27,6 +29,7 @@ export const AUTH_TOKEN: ResolvedGatewayAuth = {
   allowTailscale: false,
 };
 
+/** Build an IncomingMessage-like request for gateway HTTP handler tests. */
 export function createRequest(params: {
   path: string;
   authorization?: string;
@@ -45,6 +48,7 @@ export function createRequest(params: {
   });
 }
 
+/** Build a pre-authenticated hook POST request for hook HTTP tests. */
 export function createHookRequest(params?: {
   authorization?: string;
   remoteAddress?: string;
@@ -61,6 +65,7 @@ export function createHookRequest(params?: {
   });
 }
 
+/** Build a ServerResponse-like mock and body reader for handler tests. */
 export function createResponse(): {
   res: ServerResponse;
   setHeader: ReturnType<typeof vi.fn>;
@@ -102,16 +107,31 @@ export function createResponse(): {
   };
 }
 
+/** Emit one request through a gateway HTTP server and wait for response completion. */
 export async function dispatchRequest(
   server: GatewayHttpServer,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
+  let timeout: NodeJS.Timeout | undefined;
   server.emit("request", req, res);
-  await Promise.race([
-    responseEndPromises.get(res) ?? new Promise((resolve) => setImmediate(resolve)),
-    new Promise((resolve) => setTimeout(resolve, 2_000)),
-  ]);
+  try {
+    await Promise.race([
+      responseEndPromises.get(res) ??
+        new Promise((resolve) => {
+          setImmediate(resolve);
+        }),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`gateway test request timed out: ${req.method ?? "GET"} ${req.url}`));
+        }, 15_000);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export async function withGatewayTempConfig(
@@ -130,7 +150,6 @@ export function createTestGatewayServer(options: {
   overrides?: GatewayServerOptions;
 }): GatewayHttpServer {
   return createGatewayHttpServer({
-    canvasHost: null,
     clients: new Set(),
     controlUiEnabled: false,
     controlUiBasePath: "/__control__",
@@ -221,7 +240,7 @@ export function createHooksHandler(
   });
 }
 
-export type RouteVariant = {
+type RouteVariant = {
   label: string;
   path: string;
 };
@@ -310,8 +329,4 @@ export async function expectAuthorizedVariants(params: {
     expect(response.res.statusCode, variant.label).toBe(200);
     expect(response.getBody(), variant.label).toContain('"route":"channel-canonicalized"');
   }
-}
-
-export function defaultProtectedPluginRoutePath(pathname: string): boolean {
-  return isProtectedPluginRoutePath(pathname);
 }

@@ -1,3 +1,4 @@
+// Covers document extractor public artifacts from plugin metadata.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { publicArtifactModule } = vi.hoisted(() => ({
@@ -21,6 +22,7 @@ describe("loadBundledDocumentExtractorEntriesFromDir", () => {
   });
 
   it("isolates a throwing factory when another extractor factory succeeds", () => {
+    const extract = vi.fn();
     publicArtifactModule.createBrokenDocumentExtractor = () => {
       throw new Error("native probe failed");
     };
@@ -28,7 +30,7 @@ describe("loadBundledDocumentExtractorEntriesFromDir", () => {
       id: "pdf",
       label: "PDF",
       mimeTypes: ["application/pdf"],
-      extract: vi.fn(),
+      extract,
     });
 
     expect(
@@ -36,7 +38,15 @@ describe("loadBundledDocumentExtractorEntriesFromDir", () => {
         dirName: "demo",
         pluginId: "demo",
       }),
-    ).toMatchObject([{ id: "pdf", pluginId: "demo" }]);
+    ).toStrictEqual([
+      {
+        id: "pdf",
+        label: "PDF",
+        mimeTypes: ["application/pdf"],
+        extract,
+        pluginId: "demo",
+      },
+    ]);
   });
 
   it("surfaces initialization failure when every matching factory throws", () => {

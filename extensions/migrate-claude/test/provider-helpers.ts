@@ -1,3 +1,4 @@
+// Migrate Claude provider module implements model/runtime integration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -6,7 +7,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const tempRoots = new Set<string>();
 
-export const logger = {
+const logger = {
   info() {},
   warn() {},
   error() {},

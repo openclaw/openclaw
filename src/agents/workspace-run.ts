@@ -1,3 +1,8 @@
+/**
+ * Agent run workspace resolver.
+ *
+ * Selects per-run workspace directories and redacts run identifiers for logs/prompts.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
@@ -11,10 +16,10 @@ import { resolveUserPath } from "../utils.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
-export type WorkspaceFallbackReason = "missing" | "blank" | "invalid_type";
+type WorkspaceFallbackReason = "missing" | "blank" | "invalid_type";
 type AgentIdSource = "explicit" | "session_key" | "default";
 
-export type ResolveRunWorkspaceResult = {
+type ResolveRunWorkspaceResult = {
   workspaceDir: string;
   usedFallback: boolean;
   fallbackReason?: WorkspaceFallbackReason;
@@ -67,10 +72,12 @@ function resolveRunAgentId(params: {
   };
 }
 
+/** Redacts a run/session identifier for logs and prompts. */
 export function redactRunIdentifier(value: string | undefined): string {
   return redactIdentifier(value, { len: 12 });
 }
 
+/** Resolves the workspace directory used for an agent run. */
 export function resolveRunWorkspaceDir(params: {
   workspaceDir: unknown;
   sessionKey?: string;

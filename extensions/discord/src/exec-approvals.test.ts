@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Discord tests cover exec approvals plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   getDiscordExecApprovalApprovers,
@@ -72,7 +73,7 @@ describe("discord exec approvals", () => {
       },
     );
 
-    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(getDiscordExecApprovalApprovers({ cfg })).toStrictEqual([]);
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);
   });
 

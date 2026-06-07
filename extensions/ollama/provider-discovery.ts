@@ -1,3 +1,4 @@
+// Ollama provider module implements model/runtime integration.
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -22,7 +23,7 @@ type OllamaProviderPlugin = {
         mode: "api-key";
       }
     | undefined;
-  discovery: {
+  catalog: {
     order: "late";
     run: (ctx: ProviderCatalogContext) => ReturnType<typeof runOllamaDiscovery>;
   };
@@ -60,7 +61,7 @@ export const ollamaProviderDiscovery: OllamaProviderPlugin = {
       mode: "api-key",
     };
   },
-  discovery: {
+  catalog: {
     order: "late",
     run: runOllamaDiscovery,
   },

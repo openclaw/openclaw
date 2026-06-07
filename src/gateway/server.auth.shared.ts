@@ -1,11 +1,16 @@
+// Shared auth suite helpers provide WebSocket clients, signed device payloads,
+// pairing utilities, and gateway harness setup for auth-mode tests.
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
 import { WebSocket } from "ws";
+import {
+  MIN_PROBE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/index.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
 import {
   createGatewaySuiteHarness,
   connectReq,
@@ -55,7 +60,9 @@ async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean
 const openWs = async (port: number, headers?: Record<string, string>) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, headers ? { headers } : undefined);
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve) => {
+    ws.once("open", resolve);
+  });
   return ws;
 };
 
@@ -86,7 +93,9 @@ const openTailscaleWs = async (port: number, headers?: Record<string, string>) =
     },
   });
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve) => {
+    ws.once("open", resolve);
+  });
   return ws;
 };
 
@@ -204,20 +213,22 @@ function resolveGatewayTokenOrEnv(): string {
     typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
       ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
       : process.env.OPENCLAW_GATEWAY_TOKEN;
-  expect(typeof token).toBe("string");
-  return token ?? "";
+  if (typeof token !== "string") {
+    throw new Error("expected gateway token in test state or OPENCLAW_GATEWAY_TOKEN");
+  }
+  return token;
 }
 
 async function approvePendingPairingIfNeeded() {
   const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
   const list = await listDevicePairing();
   const pending = list.pending.at(0);
-  expect(pending?.requestId).toBeDefined();
-  if (pending?.requestId) {
-    await approveDevicePairing(pending.requestId, {
-      callerScopes: pending.scopes ?? ["operator.admin"],
-    });
+  if (!pending?.requestId) {
+    throw new Error("expected pending pairing request");
   }
+  await approveDevicePairing(pending.requestId, {
+    callerScopes: pending.scopes ?? ["operator.admin"],
+  });
 }
 
 async function configureTrustedProxyControlUiAuth() {
@@ -325,8 +336,10 @@ async function resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath: strin
   const paired = await getPairedDevice(identity.deviceId);
   const deviceToken = paired?.tokens?.operator?.token;
   expect(paired?.deviceId).toBe(identity.deviceId);
-  expect(deviceToken).toBeDefined();
-  return { identity: { deviceId: identity.deviceId }, deviceToken: deviceToken ?? "" };
+  if (!deviceToken) {
+    throw new Error(`expected operator token for paired device ${identity.deviceId}`);
+  }
+  return { identity: { deviceId: identity.deviceId }, deviceToken };
 }
 
 async function startRateLimitedTokenServerWithPairedDeviceToken() {
@@ -391,6 +404,7 @@ export {
   getFreePort,
   getTrackedConnectChallengeNonce,
   installGatewayTestHooks,
+  MIN_PROBE_PROTOCOL_VERSION,
   NODE_CLIENT,
   onceMessage,
   openTailscaleWs,
@@ -415,7 +429,7 @@ export {
   withRuntimeVersionEnv,
   writeTrustedProxyControlUiConfig,
 };
-export { ConnectErrorDetailCodes } from "./protocol/connect-error-details.js";
+export { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 export { getPreauthHandshakeTimeoutMsFromEnv } from "./handshake-timeouts.js";
-export { PROTOCOL_VERSION } from "./protocol/index.js";
+export { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 export { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";

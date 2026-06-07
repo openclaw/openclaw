@@ -1,11 +1,14 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+// Resolves bundled plugin source metadata from package manifests.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifest } from "./manifest.js";
 
 export type BundledPluginSource = {
   pluginId: string;
   localPath: string;
   npmSpec?: string;
+  version?: string;
   configSchema?: Record<string, unknown>;
   requiresConfig?: boolean;
 };
@@ -37,11 +40,11 @@ export function resolveBundledPluginSources(params: {
   workspaceDir?: string;
   /** Use an explicit env when bundled roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
+  discovery?: PluginDiscoveryResult;
 }): Map<string, BundledPluginSource> {
-  const discovery = discoverOpenClawPlugins({
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const discovery =
+    params.discovery ??
+    discoverOpenClawPlugins({ workspaceDir: params.workspaceDir, env: params.env });
   const bundled = new Map<string, BundledPluginSource>();
 
   for (const candidate of discovery.candidates) {
@@ -62,10 +65,16 @@ export function resolveBundledPluginSources(params: {
       normalizeOptionalString(candidate.packageName) ||
       undefined;
 
+    const version =
+      normalizeOptionalString(candidate.packageVersion) ||
+      normalizeOptionalString(manifest.manifest.version) ||
+      undefined;
+
     bundled.set(pluginId, {
       pluginId,
       localPath: candidate.rootDir,
       npmSpec,
+      version,
       ...(isRecord(manifest.manifest.configSchema)
         ? { configSchema: manifest.manifest.configSchema }
         : {}),
@@ -74,10 +83,6 @@ export function resolveBundledPluginSources(params: {
   }
 
   return bundled;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function pluginConfigSchemaHasRequiredFields(schema: unknown): boolean {

@@ -1,46 +1,24 @@
+// Facade loader helpers resolve plugin public API modules from source, dist, or installed roots.
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import { prepareBuiltBundledPluginPublicSurfaceLocation } from "../plugins/bundled-public-surface-runtime-root.js";
 import {
-  getCachedPluginJitiLoader,
-  type PluginJitiLoaderCache,
-  type PluginJitiLoaderFactory,
-} from "../plugins/jiti-loader-cache.js";
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+  type PluginModuleLoaderFactory,
+} from "../plugins/plugin-module-loader-cache.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
-import {
-  createFacadeResolutionKey as createFacadeResolutionKeyShared,
-  resolveBundledFacadeModuleLocation,
-  resolveCachedFacadeModuleLocation,
-} from "./facade-resolution-shared.js";
+import { resolveBundledFacadeModuleLocation } from "./facade-resolution-shared.js";
 
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 
-const nodeRequire = createRequire(import.meta.url);
-const jitiLoaders: PluginJitiLoaderCache = new Map();
+const moduleLoaders: PluginModuleLoaderCache = new Map();
 const loadedFacadeModules = new Map<string, unknown>();
 const loadedFacadePluginIds = new Set<string>();
-const cachedFacadeModuleLocationsByKey = new Map<
-  string,
-  {
-    modulePath: string;
-    boundaryRoot: string;
-  } | null
->();
-let facadeLoaderJitiFactory: PluginJitiLoaderFactory | undefined;
+let facadeLoaderSourceTransformFactory: PluginModuleLoaderFactory | undefined;
 let cachedOpenClawPackageRoot: string | undefined;
-
-function getJitiFactory() {
-  if (facadeLoaderJitiFactory) {
-    return facadeLoaderJitiFactory;
-  }
-  const { createJiti } = nodeRequire("jiti") as typeof import("jiti");
-  facadeLoaderJitiFactory = createJiti;
-  return facadeLoaderJitiFactory;
-}
 
 function getOpenClawPackageRoot() {
   if (cachedOpenClawPackageRoot) {
@@ -54,20 +32,7 @@ function getOpenClawPackageRoot() {
   return cachedOpenClawPackageRoot;
 }
 
-function createFacadeResolutionKey(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
-  return createFacadeResolutionKeyShared({
-    ...params,
-    bundledPluginsDir,
-    ...(params.env ? { env: params.env } : {}),
-  });
-}
-
-function resolveFacadeModuleLocationUncached(params: {
+function resolveFacadeModuleLocation(params: {
   dirName: string;
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
@@ -81,26 +46,16 @@ function resolveFacadeModuleLocationUncached(params: {
   });
 }
 
-function resolveFacadeModuleLocation(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): { modulePath: string; boundaryRoot: string } | null {
-  return resolveCachedFacadeModuleLocation({
-    cache: cachedFacadeModuleLocationsByKey,
-    key: createFacadeResolutionKey(params),
-    resolve: () => resolveFacadeModuleLocationUncached(params),
-  });
-}
-
-function getJiti(modulePath: string) {
-  return getCachedPluginJitiLoader({
-    cache: jitiLoaders,
+function getModuleLoader(modulePath: string) {
+  return getCachedPluginModuleLoader({
+    cache: moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
-    jitiFilename: import.meta.url,
-    createLoader: getJitiFactory(),
+    loaderFilename: import.meta.url,
+    ...(facadeLoaderSourceTransformFactory
+      ? { createLoader: facadeLoaderSourceTransformFactory }
+      : {}),
   });
 }
 
@@ -158,55 +113,35 @@ function createLazyFacadeProxyValue<T extends object>(params: {
   }) as T;
 }
 
+/** Create an object proxy that loads the underlying facade only on first property access. */
 export function createLazyFacadeObjectValue<T extends object>(load: () => T): T {
   return createLazyFacadeProxyValue({ load, target: {} });
 }
 
+/** Create an array proxy that loads the underlying facade only on first array access. */
 export function createLazyFacadeArrayValue<T extends readonly unknown[]>(load: () => T): T {
   return createLazyFacadeProxyValue({ load, target: [] });
 }
 
+/** Resolved public-surface module path plus the filesystem root it must stay within. */
 export type FacadeModuleLocation = {
   modulePath: string;
   boundaryRoot: string;
 };
 
-function prepareFacadeLocationForBundledRuntimeDeps(params: {
-  location: FacadeModuleLocation;
-  runtimeDeps?: {
-    pluginId: string;
-    env?: NodeJS.ProcessEnv;
-  };
-}): FacadeModuleLocation {
-  if (!params.runtimeDeps) {
-    return params.location;
-  }
-  return prepareBuiltBundledPluginPublicSurfaceLocation({
-    location: params.location,
-    pluginId: params.runtimeDeps.pluginId,
-    ...(params.runtimeDeps.env ? { env: params.runtimeDeps.env } : {}),
-  });
-}
-
+/** Load and cache a facade module after verifying it is inside its declared boundary root. */
 export function loadFacadeModuleAtLocationSync<T extends object>(params: {
   location: FacadeModuleLocation;
   trackedPluginId: string | (() => string);
-  runtimeDeps?: {
-    pluginId: string;
-    env?: NodeJS.ProcessEnv;
-  };
   loadModule?: (modulePath: string) => T;
 }): T {
-  const location = prepareFacadeLocationForBundledRuntimeDeps({
-    location: params.location,
-    ...(params.runtimeDeps ? { runtimeDeps: params.runtimeDeps } : {}),
-  });
+  const location = params.location;
   const cached = loadedFacadeModules.get(location.modulePath);
   if (cached) {
     return cached as T;
   }
 
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: location.modulePath,
     rootPath: location.boundaryRoot,
     boundaryLabel:
@@ -234,7 +169,7 @@ export function loadFacadeModuleAtLocationSync<T extends object>(params: {
   try {
     loaded =
       params.loadModule?.(location.modulePath) ??
-      (getJiti(location.modulePath)(location.modulePath) as T);
+      (getModuleLoader(location.modulePath)(location.modulePath) as T);
     Object.assign(sentinel, loaded);
     loadedFacadePluginIds.add(
       typeof params.trackedPluginId === "function"
@@ -249,6 +184,7 @@ export function loadFacadeModuleAtLocationSync<T extends object>(params: {
   return sentinel;
 }
 
+/** Resolve and synchronously load a bundled plugin public surface by plugin dir and artifact name. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
@@ -265,18 +201,14 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
   return loadFacadeModuleAtLocationSync({
     location,
     trackedPluginId: params.trackedPluginId ?? params.dirName,
-    runtimeDeps: {
-      pluginId: params.dirName,
-      ...(params.env ? { env: params.env } : {}),
-    },
   });
 }
 
+/** Resolve and asynchronously import a bundled plugin public surface with sync-loader fallback. */
 export async function loadBundledPluginPublicSurfaceModule<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
   trackedPluginId?: string | (() => string);
-  env?: NodeJS.ProcessEnv;
 }): Promise<T> {
   const location = resolveFacadeModuleLocation(params);
   if (!location) {
@@ -284,19 +216,13 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  const preparedLocation = prepareFacadeLocationForBundledRuntimeDeps({
-    location,
-    runtimeDeps: {
-      pluginId: params.dirName,
-      ...(params.env ? { env: params.env } : {}),
-    },
-  });
+  const preparedLocation = location;
   const cached = loadedFacadeModules.get(preparedLocation.modulePath);
   if (cached) {
     return cached as T;
   }
 
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: preparedLocation.modulePath,
     rootPath: preparedLocation.boundaryRoot,
     boundaryLabel:
@@ -329,21 +255,23 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
   }
 }
 
+/** List plugin ids whose public facades have been loaded in this process. */
 export function listImportedBundledPluginFacadeIds(): string[] {
   return [...loadedFacadePluginIds].toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Reset facade module caches and test loader overrides. */
 export function resetFacadeLoaderStateForTest(): void {
   loadedFacadeModules.clear();
   loadedFacadePluginIds.clear();
-  jitiLoaders.clear();
-  cachedFacadeModuleLocationsByKey.clear();
-  facadeLoaderJitiFactory = undefined;
+  moduleLoaders.clear();
+  facadeLoaderSourceTransformFactory = undefined;
   cachedOpenClawPackageRoot = undefined;
 }
 
-export function setFacadeLoaderJitiFactoryForTest(
-  factory: PluginJitiLoaderFactory | undefined,
+/** Override source transform loader creation for facade-loader tests. */
+export function setFacadeLoaderSourceTransformFactoryForTest(
+  factory: PluginModuleLoaderFactory | undefined,
 ): void {
-  facadeLoaderJitiFactory = factory;
+  facadeLoaderSourceTransformFactory = factory;
 }

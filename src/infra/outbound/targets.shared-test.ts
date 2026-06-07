@@ -1,3 +1,5 @@
+// Shared target-resolution fixtures cover plugin defaults, allowlists, prefix
+// errors, WebChat rejection, and missing-target hints.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { resolveOutboundTarget } from "./targets.js";
@@ -8,6 +10,7 @@ import {
   createTestChannelPlugin,
 } from "./targets.test-helpers.js";
 
+/** Installs target-resolution plugin registry fixtures around shared tests. */
 export function installResolveOutboundTargetPluginRegistryHooks(): void {
   beforeEach(() => {
     setActivePluginRegistry(
@@ -82,6 +85,18 @@ export function runResolveOutboundTargetCoreTests(): void {
       expect(res.ok).toBe(false);
       if (!res.ok) {
         expect(res.error.message).toContain(expectedErrorIncludes);
+      }
+    });
+
+    it("rejects a target prefixed for a different channel before plugin normalization", () => {
+      const res = resolveOutboundTarget({
+        channel: "alpha",
+        to: "beta:room-one",
+        mode: "explicit",
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error.message).toContain("belongs to beta, not alpha");
       }
     });
 

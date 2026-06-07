@@ -1,3 +1,4 @@
+// Verifies shell selection, PATH lookup, and platform-specific shell helpers.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,9 +6,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
   detectRuntimeShell,
+  getShellEnv,
   getShellConfig,
   resolvePowerShellPath,
   resolveShellFromPath,
+  resolveShellFromWhich,
+  resolveWindowsBashPath,
 } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
@@ -16,6 +20,7 @@ function createTempCommandDir(
   tempDirs: string[],
   files: Array<{ name: string; executable?: boolean }>,
 ): string {
+  // Temporary PATH entries model available shell binaries and permissions.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-"));
   tempDirs.push(dir);
   for (const file of files) {
@@ -46,9 +51,14 @@ describe("getShellConfig", () => {
 
   if (isWin) {
     it("uses PowerShell on Windows", () => {
-      const { shell } = getShellConfig();
+      const { shell, args } = getShellConfig();
       const normalized = shell.toLowerCase();
-      expect(normalized.includes("powershell") || normalized.includes("pwsh")).toBe(true);
+      if (normalized.includes("powershell")) {
+        expect(normalized).toContain("powershell");
+      } else {
+        expect(normalized).toContain("pwsh");
+      }
+      expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
     });
     return;
   }
@@ -56,28 +66,61 @@ describe("getShellConfig", () => {
   it("prefers bash when fish is default and bash is on PATH", () => {
     const binDir = createTempCommandDir(tempDirs, [{ name: "bash" }]);
     process.env.PATH = binDir;
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe(path.join(binDir, "bash"));
+    expect(args).toEqual(["--noprofile", "--norc", "-c"]);
   });
 
   it("falls back to sh when fish is default and bash is missing", () => {
     const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
     process.env.PATH = binDir;
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe(path.join(binDir, "sh"));
+    expect(args).toEqual(["-c"]);
   });
 
   it("falls back to env shell when fish is default and no sh is available", () => {
     process.env.PATH = "";
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe("/usr/bin/fish");
+    expect(args).toEqual(["--no-config", "-c"]);
+  });
+
+  it("uses startup-suppressed args for zsh env shells", () => {
+    process.env.SHELL = "/bin/zsh";
+    process.env.PATH = "";
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe("/bin/zsh");
+    expect(args).toEqual(["-f", "-c"]);
+  });
+
+  it("uses startup-suppressed args for bash env shells", () => {
+    process.env.SHELL = "/bin/bash";
+    process.env.PATH = "";
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe("/bin/bash");
+    expect(args).toEqual(["--noprofile", "--norc", "-c"]);
   });
 
   it("uses sh when SHELL is unset", () => {
     delete process.env.SHELL;
     process.env.PATH = "";
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe("sh");
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("uses an explicit custom shell path through the same resolver", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "zsh" }]);
+    const shellPath = path.join(binDir, "zsh");
+
+    expect(getShellConfig(shellPath)).toEqual({ shell: shellPath, args: ["-f", "-c"] });
+  });
+
+  it("rejects a missing explicit custom shell path", () => {
+    expect(() => getShellConfig(path.join(os.tmpdir(), "missing-openclaw-shell"))).toThrow(
+      "Custom shell path not found",
+    );
   });
 
   it("falls back to sh on PATH when SHELL is /usr/bin/false", () => {
@@ -93,15 +136,67 @@ describe("getShellConfig", () => {
     const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
     process.env.SHELL = "/sbin/nologin";
     process.env.PATH = binDir;
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe(path.join(binDir, "sh"));
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("falls back to startup-suppressed bash on PATH when SHELL is a placeholder", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "bash" }]);
+    process.env.SHELL = "/usr/bin/false";
+    process.env.PATH = binDir;
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "bash"));
+    expect(args).toEqual(["--noprofile", "--norc", "-c"]);
   });
 
   it("falls back to bare sh when SHELL is a placeholder and no sh is on PATH", () => {
     process.env.SHELL = "/usr/bin/false";
     process.env.PATH = "";
-    const { shell } = getShellConfig();
+    const { shell, args } = getShellConfig();
     expect(shell).toBe("sh");
+    expect(args).toEqual(["-c"]);
+  });
+});
+
+describe("resolveWindowsBashPath", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("finds Git Bash under ProgramFiles", () => {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-git-bash-"));
+    tempDirs.push(programFiles);
+    const bashDir = path.join(programFiles, "Git", "bin");
+    fs.mkdirSync(bashDir, { recursive: true });
+    const bashPath = path.join(bashDir, "bash.exe");
+    fs.writeFileSync(bashPath, "");
+
+    expect(resolveWindowsBashPath({ ProgramFiles: programFiles, PATH: "" })).toBe(bashPath);
+  });
+});
+
+describe("getShellEnv", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["PATH"]);
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+  });
+
+  it("returns an env object with the OpenClaw bin dir on PATH", () => {
+    process.env.PATH = "/usr/bin";
+    const env = getShellEnv();
+
+    expect(env.PATH).toContain("/usr/bin");
+    expect(env.PATH).toContain(".openclaw");
   });
 });
 
@@ -142,6 +237,32 @@ describe("resolveShellFromPath", () => {
     process.env.PATH = dir;
     expect(resolveShellFromPath("bash")).toBeUndefined();
   });
+});
+
+describe("resolveShellFromWhich", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+  const tempDirs: string[] = [];
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["PATH"]);
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  if (!isWin) {
+    it("uses command discovery as a fallback for bash-like shells", () => {
+      const originalPath = process.env.PATH ?? "";
+      const binDir = createTempCommandDir(tempDirs, [{ name: "bash" }]);
+      process.env.PATH = [binDir, originalPath].filter(Boolean).join(path.delimiter);
+
+      expect(resolveShellFromWhich("bash")).toBe(path.join(binDir, "bash"));
+    });
+  }
 });
 
 describe("detectRuntimeShell", () => {

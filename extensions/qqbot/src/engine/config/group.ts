@@ -1,74 +1,28 @@
-/**
- * QQBot group configuration resolution (pure logic).
- * QQBot 群配置解析（纯逻辑层）。
- *
- * Resolves per-group settings that the inbound pipeline needs to decide how
- * to gate and contextualize group messages. Reads from a raw config object
- * produced by the framework's config loader, with a `specific > wildcard
- * ("*") > default` precedence chain.
- *
- * All functions are **pure** (no I/O, no external state) — making them
- * portable to the standalone plugin build and trivially unit-testable.
- */
-
+// Qqbot plugin module implements group behavior.
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asOptionalObjectRecord as asRecord } from "../utils/string-normalize.js";
 import { resolveAccountBase } from "./resolve.js";
 
-// ============ Types ============
-
-/**
- * Tool policy — which tool palette an agent should use in a given group.
- *
- * - `full`:       default allow everything (no engine-side restriction).
- * - `restricted`: engine returns an empty allowlist so the framework falls
- *                 back to its built-in restricted palette.
- * - `none`:       deny all tools.
- */
-export type GroupToolPolicy = "full" | "restricted" | "none";
-
-/** Per-group configuration — everything that may be overridden per group. */
-export interface GroupConfig {
-  /** Whether the bot requires @mention to respond. Defaults to true. */
+interface GroupConfig {
   requireMention: boolean;
-  /**
-   * When true, group messages that @other users (but not the bot) are
-   * dropped silently without reaching the AI pipeline.
-   */
   ignoreOtherMentions: boolean;
-  /** Tool palette policy. Defaults to "restricted". */
-  toolPolicy: GroupToolPolicy;
-  /** Human-readable group name. Empty string if not configured. */
   name: string;
-  /** Per-group behaviour prompt appended to the system prompt. */
   prompt?: string;
-  /**
-   * Number of non-@ history messages buffered per group. Clamped to 0 when
-   * disabled. The default matches the standalone build's `50`.
-   */
   historyLimit: number;
 }
 
-// ============ Defaults ============
-
-/** Default history limit — matches the standalone build. */
 export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 
-/** Default group behaviour prompt. Exported so the gating stage can use
- *  the same fallback when no per-group `prompt` is configured. */
 export const DEFAULT_GROUP_PROMPT =
   "If the sender is a bot, respond only when they explicitly @mention you to ask a question or request assistance with a specific task; keep your replies concise and clear, avoiding the urge to race other bots to answer or engage in lengthy, unproductive exchanges. In group chats, prioritize responding to messages from human users; bots should maintain a collaborative rather than competitive dynamic to ensure the conversation remains orderly and does not result in message flooding.";
 
 const DEFAULT_GROUP_CONFIG: Readonly<Omit<GroupConfig, "prompt">> = {
   requireMention: true,
   ignoreOtherMentions: false,
-  toolPolicy: "restricted",
   name: "",
   historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
 };
 
-// ============ Helpers ============
-
-/** Read a named account's raw `groups` map from an OpenClawConfig. */
 function readGroupsMap(
   cfg: Record<string, unknown>,
   accountId?: string | null,
@@ -78,7 +32,6 @@ function readGroupsMap(
   if (!groups) {
     return {};
   }
-  // Only keep sub-objects; skip scalars produced by user mistakes.
   const normalized: Record<string, Record<string, unknown>> = {};
   for (const [key, value] of Object.entries(groups)) {
     const sub = asRecord(value);
@@ -90,18 +43,12 @@ function readGroupsMap(
 }
 
 function readBoolean(obj: Record<string, unknown>, key: string): boolean | undefined {
-  const v = obj[key];
-  return typeof v === "boolean" ? v : undefined;
+  return asBoolean(obj[key]);
 }
 
 function readString(obj: Record<string, unknown>, key: string): string | undefined {
   const v = obj[key];
   return typeof v === "string" && v.length > 0 ? v : undefined;
-}
-
-function readToolPolicy(obj: Record<string, unknown>, key: string): GroupToolPolicy | undefined {
-  const v = obj[key];
-  return v === "full" || v === "restricted" || v === "none" ? v : undefined;
 }
 
 function readHistoryLimit(obj: Record<string, unknown>, key: string): number | undefined {
@@ -112,14 +59,6 @@ function readHistoryLimit(obj: Record<string, unknown>, key: string): number | u
   return Math.max(0, Math.floor(v));
 }
 
-// ============ Public API ============
-
-/**
- * Resolve per-group configuration with `specific > "*" > default` precedence.
- *
- * When `groupOpenid` is not provided, only the wildcard/default values are
- * returned. This lets callers query the "default" behaviour for new groups.
- */
 export function resolveGroupConfig(
   cfg: Record<string, unknown>,
   groupOpenid?: string | null,
@@ -138,10 +77,6 @@ export function resolveGroupConfig(
       readBoolean(specific, "ignoreOtherMentions") ??
       readBoolean(wildcard, "ignoreOtherMentions") ??
       DEFAULT_GROUP_CONFIG.ignoreOtherMentions,
-    toolPolicy:
-      readToolPolicy(specific, "toolPolicy") ??
-      readToolPolicy(wildcard, "toolPolicy") ??
-      DEFAULT_GROUP_CONFIG.toolPolicy,
     name: readString(specific, "name") ?? readString(wildcard, "name") ?? DEFAULT_GROUP_CONFIG.name,
     prompt: readString(specific, "prompt") ?? readString(wildcard, "prompt"),
     historyLimit:
@@ -151,7 +86,6 @@ export function resolveGroupConfig(
   };
 }
 
-/** Resolve the effective `historyLimit` (>= 0) for a given group. */
 export function resolveHistoryLimit(
   cfg: Record<string, unknown>,
   groupOpenid?: string | null,
@@ -160,7 +94,6 @@ export function resolveHistoryLimit(
   return resolveGroupConfig(cfg, groupOpenid, accountId).historyLimit;
 }
 
-/** Resolve `requireMention` for a given group. */
 export function resolveRequireMention(
   cfg: Record<string, unknown>,
   groupOpenid?: string | null,
@@ -169,22 +102,12 @@ export function resolveRequireMention(
   return resolveGroupConfig(cfg, groupOpenid, accountId).requireMention;
 }
 
-/** Resolve `ignoreOtherMentions` for a given group. */
 export function resolveIgnoreOtherMentions(
   cfg: Record<string, unknown>,
   groupOpenid?: string | null,
   accountId?: string | null,
 ): boolean {
   return resolveGroupConfig(cfg, groupOpenid, accountId).ignoreOtherMentions;
-}
-
-/** Resolve tool policy for a given group. */
-export function resolveGroupToolPolicy(
-  cfg: Record<string, unknown>,
-  groupOpenid?: string | null,
-  accountId?: string | null,
-): GroupToolPolicy {
-  return resolveGroupConfig(cfg, groupOpenid, accountId).toolPolicy;
 }
 
 /**
@@ -225,7 +148,7 @@ export function resolveGroupName(
  * (which depend on `agentId`, not on the group itself) and a
  * pre-computed display name for logging.
  */
-export interface GroupSettings {
+interface GroupSettings {
   /** Merged group config (specific > wildcard > defaults). */
   config: GroupConfig;
   /** Display name — `config.name` or the first 8 chars of the openid. */
@@ -234,13 +157,6 @@ export interface GroupSettings {
   mentionPatterns: string[];
 }
 
-/**
- * Resolve all per-inbound group-related settings in one pass.
- *
- * Prefer this over calling `resolveHistoryLimit` / `resolveRequireMention`
- * / etc. individually in hot paths — each of those currently re-walks
- * the config tree on its own.
- */
 export function resolveGroupSettings(params: {
   cfg: Record<string, unknown>;
   groupOpenid: string;
@@ -258,17 +174,10 @@ interface AgentEntry {
   groupChat?: { mentionPatterns?: unknown };
 }
 
-/**
- * Resolve mentionPatterns with `agent > global > []` precedence.
- *
- * Mirrors the framework's `messages.groupChat.mentionPatterns` / per-agent
- * `agents.list[].groupChat.mentionPatterns` chain.
- */
 export function resolveMentionPatterns(
   cfg: Record<string, unknown>,
   agentId?: string | null,
 ): string[] {
-  // ---- 1. Agent-level ----
   if (agentId) {
     const agents = asRecord(cfg.agents);
     const list = Array.isArray(agents?.list) ? (agents?.list as AgentEntry[]) : [];
@@ -284,7 +193,6 @@ export function resolveMentionPatterns(
     }
   }
 
-  // ---- 2. Global level ----
   const messages = asRecord(cfg.messages);
   const globalGroupChat = asRecord(messages?.groupChat);
   if (globalGroupChat && Object.hasOwn(globalGroupChat, "mentionPatterns")) {
@@ -294,6 +202,5 @@ export function resolveMentionPatterns(
       : [];
   }
 
-  // ---- 3. Default ----
   return [];
 }

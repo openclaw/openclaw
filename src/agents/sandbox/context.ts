@@ -1,3 +1,8 @@
+/**
+ * Sandbox context resolver.
+ *
+ * Prepares workspace layout, backend handle, filesystem bridge, browser bridge, and registry state for one run.
+ */
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -49,14 +54,15 @@ async function ensureSandboxWorkspaceLayout(params: {
       sandboxWorkspaceDir,
       agentWorkspaceDir,
       params.config?.agents?.defaults?.skipBootstrap,
+      params.config?.agents?.defaults?.skipOptionalBootstrapFiles,
     );
     if (cfg.workspaceAccess !== "rw") {
       try {
-        const [{ getRemoteSkillEligibility }, { canExecRequestNode }, { syncSkillsToWorkspace }] =
+        const [{ syncSkillsToWorkspace }, { getRemoteSkillEligibility }, { canExecRequestNode }] =
           await Promise.all([
-            import("../../infra/skills-remote.js"),
+            import("../../skills/loading/workspace.js"),
+            import("../../skills/runtime/remote.js"),
             import("../exec-defaults.js"),
-            import("../skills.js"),
           ]);
         await syncSkillsToWorkspace({
           sourceWorkspaceDir: agentWorkspaceDir,

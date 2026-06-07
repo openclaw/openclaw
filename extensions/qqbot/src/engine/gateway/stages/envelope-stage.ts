@@ -7,13 +7,14 @@
  * dispatcher needs. No decisions / gating.
  */
 
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ProcessedAttachments } from "../inbound-attachments.js";
 import type { InboundGroupInfo, InboundPipelineDeps, ReplyToInfo } from "../inbound-context.js";
 import type { QueuedMessage } from "../message-queue.js";
 
 // ─────────────────────────── Envelope body ───────────────────────────
 
-export interface BuildBodyInput {
+interface BuildBodyInput {
   event: QueuedMessage;
   deps: InboundPipelineDeps;
   userContent: string;
@@ -49,7 +50,7 @@ export function buildQuotePart(replyTo?: ReplyToInfo): string {
     : `[Quoted message begins]\nOriginal content unavailable\n[Quoted message ends]\n`;
 }
 
-export interface BuildDynamicCtxInput {
+interface BuildDynamicCtxInput {
   imageUrls: string[];
   uniqueVoicePaths: string[];
   uniqueVoiceUrls: string[];
@@ -94,7 +95,7 @@ export function buildGroupSystemPrompt(
 
 // ─────────────────────────── Media classification ───────────────────────────
 
-export interface MediaClassification {
+interface MediaClassification {
   localMediaPaths: string[];
   localMediaTypes: string[];
   remoteMediaUrls: string[];
@@ -125,8 +126,8 @@ export function classifyMedia(processed: ProcessedAttachments): MediaClassificat
     }
   }
 
-  const uniqueVoicePaths = [...new Set(processed.voiceAttachmentPaths)];
-  const uniqueVoiceUrls = [...new Set(processed.voiceAttachmentUrls)];
+  const uniqueVoicePaths = uniqueStrings(processed.voiceAttachmentPaths);
+  const uniqueVoiceUrls = uniqueStrings(processed.voiceAttachmentUrls);
   const voiceMediaTypes = [...uniqueVoicePaths, ...uniqueVoiceUrls].map(() => "audio/wav");
 
   return {
@@ -136,7 +137,7 @@ export function classifyMedia(processed: ProcessedAttachments): MediaClassificat
     remoteMediaTypes,
     uniqueVoicePaths,
     uniqueVoiceUrls,
-    uniqueVoiceAsrReferTexts: [...new Set(processed.voiceAsrReferTexts)].filter(Boolean),
+    uniqueVoiceAsrReferTexts: uniqueStrings(processed.voiceAsrReferTexts).filter(Boolean),
     voiceMediaTypes,
     hasAsrReferFallback: processed.voiceTranscriptSources.includes("asr"),
     voiceTranscriptSources: processed.voiceTranscriptSources,

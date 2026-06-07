@@ -1,7 +1,10 @@
+// Cron tool tests cover schedule guidance, scoped job operations, delivery
+// context inheritance, session routing, and agent id ownership.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { callGatewayMock } = vi.hoisted(() => ({
+const { callGatewayMock, extractDeliveryInfoMock } = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
+  extractDeliveryInfoMock: vi.fn(),
 }));
 
 vi.mock("../agent-scope.js", async () => {
@@ -12,6 +15,11 @@ vi.mock("../agent-scope.js", async () => {
   };
 });
 
+vi.mock("../../config/sessions/delivery-info.js", () => ({
+  extractDeliveryInfo: extractDeliveryInfoMock,
+}));
+
+import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
@@ -19,6 +27,7 @@ describe("cron tool", () => {
     anyOf?: Array<{ type?: string }>;
     description?: string;
     properties?: Record<string, SchemaLike>;
+    type?: string;
   };
 
   type TestDelivery = {
@@ -33,8 +42,8 @@ describe("cron tool", () => {
     opts?: Parameters<typeof createCronTool>[0],
   ): ReturnType<typeof createCronTool> {
     return createCronTool(opts, {
-      callGatewayTool: async (method, _gatewayOpts, params) =>
-        await callGatewayMock({ method, params }),
+      callGatewayTool: async (method, gatewayOpts, params) =>
+        await callGatewayMock({ method, params }, gatewayOpts),
     });
   }
 
@@ -44,6 +53,10 @@ describe("cron tool", () => {
         | { method?: string; params?: Record<string, unknown> }
         | undefined) ?? { method: undefined, params: undefined }
     );
+  }
+
+  function readGatewayOpts(index = 0): Record<string, unknown> | undefined {
+    return callGatewayMock.mock.calls[index]?.[1] as Record<string, unknown> | undefined;
   }
 
   function readCronPayloadText(index = 0): string {
@@ -64,9 +77,7 @@ describe("cron tool", () => {
     expect(tool.description).toContain("local wall-clock time");
     expect(tool.description).toContain("do not convert the requested local time to UTC first");
     expect(tool.description).toContain("Gateway host local timezone");
-    expect(tool.description).toContain(
-      'For schedule.kind="at", ISO timestamps without an explicit timezone are treated as UTC.',
-    );
+    expect(tool.description).toContain('For "at", ISO timestamps without timezone are UTC.');
     expect(tool.description).toContain('"expr": "0 18 * * *"');
     expect(tool.description).toContain('"tz": "Asia/Shanghai"');
   });
@@ -105,10 +116,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { delivery?: TestDelivery };
-    };
-    return call?.params?.delivery;
+    return (readGatewayCall().params as { delivery?: TestDelivery } | undefined)?.delivery;
   }
 
   async function executeAddAndReadSessionKey(params: {
@@ -166,14 +174,13 @@ describe("cron tool", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
     callGatewayMock.mockResolvedValue({ ok: true });
-  });
-
-  it("marks cron as owner-only", async () => {
-    const tool = createTestCronTool();
-    expect(tool.ownerOnly).toBe(true);
+    extractDeliveryInfoMock.mockReset();
+    extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
   });
 
   it("allows scoped isolated cron runs to remove the current job", async () => {
+    // Self-removal scope lets a cron-triggered run clean up its own schedule
+    // without granting broad cron mutation access.
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
 
     await tool.execute("call-self-remove", {
@@ -193,30 +200,260 @@ describe("cron tool", () => {
         action: "remove",
         jobId: "job-other",
       }),
-    ).rejects.toThrow("Cron tool is restricted to removing the current cron job.");
+    ).rejects.toThrow("Cron tool is restricted to the current cron job.");
 
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("denies scoped isolated cron runs from using non-remove cron actions", async () => {
+  it("allows scoped isolated cron runs to read the current job run history", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      entries: [{ jobId: "job-current", status: "ok" }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    });
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
 
-    await expect(
-      tool.execute("call-list", {
-        action: "list",
-      }),
-    ).rejects.toThrow("Cron tool is restricted to removing the current cron job.");
+    const result = await tool.execute("call-self-runs", {
+      action: "runs",
+      jobId: "job-current",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.runs");
+    expect(params).toEqual({ id: "job-current" });
+    expect(result.details).toEqual({
+      entries: [{ jobId: "job-current", status: "ok" }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    });
+  });
+
+  it.each([
+    ["another job", { action: "runs", jobId: "job-other" }],
+    ["missing job id", { action: "runs" }],
+  ])("denies scoped isolated cron runs from reading %s run history", async (_label, args) => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(tool.execute("call-runs-denied", args)).rejects.toThrow(
+      "Cron tool is restricted to the current cron job.",
+    );
 
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("allows scoped isolated cron runs to read cron scheduler status", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      enabled: true,
+      storePath: "/home/user/.openclaw/cron/jobs.json",
+      jobs: 37,
+      nextWakeAtMs: 1_234,
+    });
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    const result = await tool.execute("call-status", {
+      action: "status",
+      timeoutMs: 10_000,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.status");
+    expect(params).toStrictEqual({});
+    expect(result.details).toEqual({ enabled: true });
+  });
+
+  it("passes parsed string timeoutMs values through to gateway calls", async () => {
+    callGatewayMock.mockResolvedValueOnce({ enabled: true });
+    const tool = createTestCronTool();
+
+    await tool.execute("call-status-timeout", {
+      action: "status",
+      timeoutMs: "5000",
+    });
+
+    expectSingleGatewayCallMethod("cron.status");
+    expect(readGatewayOpts(0)?.timeoutMs).toBe(5000);
+  });
+
+  it("allows scoped isolated cron runs to get the current job", async () => {
+    callGatewayMock.mockResolvedValueOnce({ id: "job-current", name: "current" });
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    const result = await tool.execute("call-get", {
+      action: "get",
+      jobId: "job-current",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.get");
+    expect(params).toStrictEqual({ id: "job-current" });
+    expect(result.details).toEqual({ id: "job-current", name: "current" });
+  });
+
+  it.each([
+    ["another job", { action: "get", jobId: "job-other" }],
+    ["missing job id", { action: "get" }],
+  ])("denies scoped isolated cron runs from getting %s", async (_label, args) => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(tool.execute("call-get-denied", args)).rejects.toThrow(
+      "Cron tool is restricted to the current cron job.",
+    );
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("allows scoped isolated cron runs to list only the current job", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      jobs: [
+        { id: "job-current", name: "current" },
+        { id: "job-other", name: "other" },
+      ],
+      total: 2,
+      offset: 0,
+      limit: 2,
+      hasMore: false,
+      nextOffset: null,
+      deliveryPreviews: {
+        "job-current": { label: "current", detail: "self" },
+        "job-other": { label: "other", detail: "hidden" },
+      },
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:cron:job-current:run:abc",
+      selfRemoveOnlyJobId: "job-current",
+    });
+
+    const result = await tool.execute("call-list", {
+      action: "list",
+      agentId: "other-agent",
+      includeDisabled: true,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.list");
+    expect(params).toEqual({ includeDisabled: true, agentId: "agent-123", limit: 200, offset: 0 });
+    expect(result.details).toEqual({
+      jobs: [{ id: "job-current", name: "current" }],
+      total: 1,
+      offset: 0,
+      limit: 1,
+      hasMore: false,
+      nextOffset: null,
+      deliveryPreviews: {
+        "job-current": { label: "current", detail: "self" },
+      },
+    });
+  });
+
+  it("pages scoped isolated cron list until it finds the current job", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        jobs: Array.from({ length: 200 }, (_, index) => ({
+          id: `job-old-${index}`,
+          name: `old ${index}`,
+        })),
+        total: 201,
+        offset: 0,
+        limit: 200,
+        hasMore: true,
+        nextOffset: 200,
+        deliveryPreviews: {},
+      })
+      .mockResolvedValueOnce({
+        jobs: [{ id: "job-current", name: "current" }],
+        total: 201,
+        offset: 200,
+        limit: 200,
+        hasMore: false,
+        nextOffset: null,
+        deliveryPreviews: {
+          "job-current": { label: "current", detail: "self" },
+        },
+      });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:cron:job-current:run:abc",
+      selfRemoveOnlyJobId: "job-current",
+    });
+
+    const result = await tool.execute("call-list-paged", {
+      action: "list",
+      includeDisabled: true,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(readGatewayCall(0)).toEqual({
+      method: "cron.list",
+      params: { includeDisabled: true, agentId: "agent-123", limit: 200, offset: 0 },
+    });
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.list",
+      params: { includeDisabled: true, agentId: "agent-123", limit: 200, offset: 200 },
+    });
+    expect(result.details).toEqual({
+      jobs: [{ id: "job-current", name: "current" }],
+      total: 1,
+      offset: 0,
+      limit: 1,
+      hasMore: false,
+      nextOffset: null,
+      deliveryPreviews: {
+        "job-current": { label: "current", detail: "self" },
+      },
+    });
+  });
+
+  it.each([
+    ["add", { action: "add", job: buildReminderAgentTurnJob() }],
+    ["update", { action: "update", jobId: "job-current", patch: { enabled: false } }],
+    ["run", { action: "run", jobId: "job-current" }],
+    ["wake", { action: "wake", text: "wake up" }],
+  ])("denies scoped isolated cron runs from using %s", async (_action, args) => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(tool.execute("call-denied", args)).rejects.toThrow(
+      "Cron tool is restricted to the current cron job.",
+    );
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("filters cron list by the requester agent session", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+
+    await tool.execute("call-list", {
+      action: "list",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.list");
+    expect(params).toEqual({ includeDisabled: false, agentId: "agent-123" });
+  });
+
+  it("prefers explicit cron list agent id over the requester session", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+
+    await tool.execute("call-list-explicit", {
+      action: "list",
+      agentId: "ops",
+      includeDisabled: true,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.list");
+    expect(params).toEqual({ includeDisabled: true, agentId: "ops" });
   });
 
   it("documents deferred follow-up guidance in the tool description", () => {
     const tool = createTestCronTool();
     expect(tool.description).toContain(
-      'Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks.',
+      "reminders, check-back-later, delayed follow-ups, recurring work",
     );
     expect(tool.description).toContain(
-      "Do not emulate scheduling with exec sleep or process polling.",
+      "Do not emulate scheduling with exec sleep/process polling.",
     );
   });
 
@@ -226,10 +463,52 @@ describe("cron tool", () => {
     const jobThreadId = parameters.properties?.job?.properties?.delivery?.properties?.threadId;
     const patchThreadId = parameters.properties?.patch?.properties?.delivery?.properties?.threadId;
 
-    for (const threadId of [jobThreadId, patchThreadId]) {
-      expect(threadId?.description).toContain("Thread/topic id");
-      expect(threadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number"]);
-    }
+    expect(jobThreadId?.description).toContain("Thread/topic id");
+    expect(jobThreadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number"]);
+    expect(patchThreadId?.description).toContain("Thread/topic id");
+    expect(patchThreadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number", "null"]);
+  });
+
+  it("advertises nullable cron update clears in the tool schema", () => {
+    const tool = createTestCronTool();
+    const parameters = tool.parameters as SchemaLike;
+    const jobDelivery = parameters.properties?.job?.properties?.delivery;
+    const patch = parameters.properties?.patch;
+    const payload = patch?.properties?.payload;
+    const delivery = patch?.properties?.delivery;
+
+    expect(jobDelivery?.properties?.channel?.anyOf).toBeUndefined();
+    expect(jobDelivery?.properties?.channel?.type).toBe("string");
+    expect(jobDelivery?.properties?.failureDestination?.anyOf).toBeUndefined();
+    expect(jobDelivery?.properties?.failureDestination?.type).toBe("object");
+    expect(patch?.properties?.agentId?.anyOf?.map((entry) => entry.type)).toEqual([
+      "string",
+      "null",
+    ]);
+    expect(patch?.properties?.agentId?.type).toBeUndefined();
+    expect(patch?.properties?.agentId?.description).toContain("null to clear");
+    expect(patch?.properties?.sessionKey?.anyOf?.map((entry) => entry.type)).toEqual([
+      "string",
+      "null",
+    ]);
+    expect(patch?.properties?.sessionKey?.type).toBeUndefined();
+    expect(patch?.properties?.sessionKey?.description).toContain("null to clear");
+    expect(payload?.properties?.toolsAllow?.anyOf?.map((entry) => entry.type)).toEqual([
+      "array",
+      "null",
+    ]);
+    expect(payload?.properties?.toolsAllow?.type).toBeUndefined();
+    expect(payload?.properties?.toolsAllow?.description).toContain("null to clear");
+    expect(delivery?.properties?.channel?.anyOf?.map((entry) => entry.type)).toEqual([
+      "string",
+      "null",
+    ]);
+    expect(delivery?.properties?.channel?.type).toBeUndefined();
+    expect(delivery?.properties?.channel?.description).toContain("null to clear");
+    expect(delivery?.properties?.failureDestination?.anyOf?.map((entry) => entry.type)).toEqual([
+      "object",
+      "null",
+    ]);
   });
 
   it.each([
@@ -247,6 +526,8 @@ describe("cron tool", () => {
     ["remove", { action: "remove", id: "job-2" }, { id: "job-2" }],
     ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "force" }],
     ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "force" }],
+    ["get", { action: "get", jobId: "job-1" }, { id: "job-1" }],
+    ["get", { action: "get", id: "job-2" }, { id: "job-2" }],
     ["runs", { action: "runs", jobId: "job-1" }, { id: "job-1" }],
     ["runs", { action: "runs", id: "job-2" }, { id: "job-2" }],
   ])("%s sends id to gateway", async (action, args, expectedParams) => {
@@ -315,10 +596,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { agentId?: unknown };
-    };
-    expect(call?.params?.agentId).toBeNull();
+    expect(readGatewayCall().params?.agentId).toBeNull();
   });
 
   it("infers session agentId when job.agentId is omitted", async () => {
@@ -359,6 +637,34 @@ describe("cron tool", () => {
     expect(params?.failureAlert).toBe(false);
   });
 
+  it.each([
+    ["delivery.channel", { channel: " ", to: "chat-1" }],
+    ["delivery.to", { mode: "announce", channel: "telegram", to: " \t" }],
+    [
+      "delivery.failureDestination.to",
+      { mode: "announce", failureDestination: { mode: "announce", to: " " } },
+    ],
+    [
+      "delivery.completionDestination.to",
+      { mode: "announce", completionDestination: { mode: "webhook", to: "\n" } },
+    ],
+  ])("rejects blank cron.add %s before gateway normalization", async (field, delivery) => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-blank-delivery-add", {
+        action: "add",
+        job: {
+          name: "reminder",
+          schedule: { at: new Date(123).toISOString() },
+          payload: { kind: "agentTurn", message: "hello" },
+          delivery,
+        },
+      }),
+    ).rejects.toThrow(`${field} must be a non-empty string`);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("recovers flattened add params for failureAlert and payload extras", async () => {
     const tool = createTestCronTool();
     await tool.execute("call-flat-add-extras", {
@@ -394,6 +700,54 @@ describe("cron tool", () => {
     expect(params?.failureAlert).toEqual({ after: 3, cooldownMs: 60_000 });
   });
 
+  it("recovers concatenated cron add keys from local tool-call parsers", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-concatenated-add", {
+      action: "add",
+      job: {
+        delivery: { mode: "none" },
+        enabled: true,
+        namePayload: { kind: "agentTurn", message: "Evidence test.", timeoutSeconds: 10 },
+        scheduleKind: { everyMs: 999_999, kind: "every" },
+        sessionTargetName: "evidence-test",
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add");
+    expect(params).toEqual({
+      delivery: { mode: "none" },
+      enabled: true,
+      name: "evidence-test",
+      payload: { kind: "agentTurn", message: "Evidence test.", timeoutSeconds: 10 },
+      schedule: { everyMs: 999_999, kind: "every" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+    });
+  });
+
+  it("recovers flat concatenated cron add keys from local tool-call parsers", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-flat-concatenated-add", {
+      action: "add",
+      delivery: { mode: "none" },
+      enabled: true,
+      namePayload: { kind: "agentTurn", message: "Evidence test.", timeoutSeconds: 10 },
+      scheduleKind: { everyMs: 999_999, kind: "every" },
+      sessionTargetName: "evidence-test",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add");
+    expect(params).toEqual({
+      delivery: { mode: "none" },
+      enabled: true,
+      name: "evidence-test",
+      payload: { kind: "agentTurn", message: "Evidence test.", timeoutSeconds: 10 },
+      schedule: { everyMs: 999_999, kind: "every" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+    });
+  });
+
   it("stamps cron.add with caller sessionKey when missing", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
@@ -414,6 +768,25 @@ describe("cron tool", () => {
       jobSessionKey: "agent:main:telegram:group:-100123:topic:99",
     });
     expect(sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
+  });
+
+  it("does not stamp caller sessionKey when add targets isolated session", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool({ agentSessionKey: "agent:main:webchat:dm:dashboard" });
+    await tool.execute("call-isolated-no-stamp", {
+      action: "add",
+      job: {
+        name: "isolated run",
+        schedule: { at: new Date(123).toISOString() },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "hello" },
+      },
+    });
+    const call = readGatewayCall();
+    const payload = call.params as { sessionKey?: string; sessionTarget?: string } | undefined;
+    expect(payload?.sessionTarget).toBe("isolated");
+    expect(payload).not.toHaveProperty("sessionKey");
   });
 
   it("adds recent context for systemEvent reminders when contextMessages > 0", async () => {
@@ -467,6 +840,26 @@ describe("cron tool", () => {
     expect(text).toContain("Message 12");
   });
 
+  it.each([1.5, -1, "2messages"])(
+    "rejects invalid contextMessages value %s",
+    async (contextMessages) => {
+      const tool = createTestCronTool({ agentSessionKey: "main" });
+
+      await expect(
+        tool.execute("call-invalid-context", {
+          action: "add",
+          contextMessages,
+          job: {
+            name: "reminder",
+            schedule: { at: new Date(123).toISOString() },
+            payload: { kind: "systemEvent", text: "Reminder: the thing." },
+          },
+        }),
+      ).rejects.toThrow("contextMessages must be a non-negative integer");
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not add context when contextMessages is 0 (default)", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
@@ -502,97 +895,61 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      method?: string;
-      params?: { agentId?: string | null };
-    };
+    const call = readGatewayCall();
     expect(call.method).toBe("cron.add");
     expect(call.params?.agentId).toBeNull();
   });
 
-  it("infers delivery from threaded session keys", async () => {
-    expect(
-      await executeAddAndReadDelivery({
-        callId: "call-thread",
-        agentSessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "slack",
-      to: "general",
+  it("does not infer delivery from raw session-key fragments without delivery context", async () => {
+    const slackDelivery = await executeAddAndReadDelivery({
+      callId: "call-thread",
+      agentSessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
     });
+    const telegramDelivery = await executeAddAndReadDelivery({
+      callId: "call-telegram-topic",
+      agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+    });
+
+    expect(slackDelivery?.channel).toBeUndefined();
+    expect(slackDelivery?.to).toBeUndefined();
+    expect(telegramDelivery?.channel).toBeUndefined();
+    expect(telegramDelivery?.to).toBeUndefined();
   });
 
-  it("preserves telegram forum topics when inferring delivery", async () => {
-    expect(
-      await executeAddAndReadDelivery({
-        callId: "call-telegram-topic",
-        agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "-1001234567890:topic:99",
+  it("uses stored delivery context when current context is unavailable", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!AbCdEf1234567890:example.org",
+        accountId: "bot-a",
+        threadId: "$RootEvent:Example.Org",
+      },
+      threadId: undefined,
     });
-  });
 
-  it("preserves telegram direct-chat thread ids when inferring delivery", async () => {
     expect(
       await executeAddAndReadDelivery({
-        callId: "call-telegram-direct-thread",
-        agentSessionKey: "agent:main:telegram:direct:123456789:thread:123456789:99",
+        callId: "call-stored-context",
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
       }),
     ).toEqual({
       mode: "announce",
-      channel: "telegram",
-      to: "123456789",
-      threadId: "99",
-    });
-  });
-
-  it("preserves telegram account ids with direct-chat thread inference", async () => {
-    expect(
-      await executeAddAndReadDelivery({
-        callId: "call-telegram-account-direct-thread",
-        agentSessionKey: "agent:main:telegram:bot-a:direct:123456789:thread:123456789:99",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "123456789",
+      channel: "matrix",
+      to: "room:!AbCdEf1234567890:example.org",
       accountId: "bot-a",
-      threadId: "99",
+      threadId: "$RootEvent:Example.Org",
     });
   });
 
-  it("preserves legacy telegram dm thread ids when inferring delivery", async () => {
-    expect(
-      await executeAddAndReadDelivery({
-        callId: "call-telegram-dm-thread",
-        agentSessionKey: "agent:main:telegram:dm:123456789:thread:123456789:99",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "123456789",
-      threadId: "99",
+  it("prefers current delivery context over stored session context", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        channel: "matrix",
+        to: "!stored:example.org",
+      },
+      threadId: undefined,
     });
-  });
 
-  it("drops mismatched telegram direct-chat thread ids when inferring delivery", async () => {
-    expect(
-      await executeAddAndReadDelivery({
-        callId: "call-telegram-mismatched-direct-thread",
-        agentSessionKey: "agent:main:telegram:direct:123456789:thread:987654321:99",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "123456789",
-    });
-  });
-
-  it("prefers current delivery context over lowercased session-key targets", async () => {
     expect(
       await executeAddAndReadDelivery({
         callId: "call-current-context",
@@ -611,6 +968,63 @@ describe("cron tool", () => {
       accountId: "bot-a",
       threadId: "$RootEvent:Example.Org",
     });
+  });
+
+  it("does not surface lowercased LINE recipients when current delivery context is unavailable (#81628)", async () => {
+    // LINE chat IDs are case-sensitive; without current/persisted deliveryContext,
+    // cron must not rebuild delivery.to from the lowercased session-key fragment.
+    const sessionKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "line",
+      peerKind: "group",
+      peerId: "Cabcdef0123456789abcdef0123456789",
+    });
+    expect(sessionKey).toBe("agent:main:line:group:cabcdef0123456789abcdef0123456789");
+
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-line-group-no-context-81628",
+      agentSessionKey: sessionKey,
+      // Intentionally no currentDeliveryContext.
+    });
+
+    expect(delivery?.to).toBeUndefined();
+  });
+
+  it("does not surface lowercased LINE DM recipients with per-account-channel-peer scope (#81628)", async () => {
+    const sessionKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "line",
+      peerKind: "direct",
+      accountId: "primary",
+      dmScope: "per-account-channel-peer",
+      peerId: "Uabcdef0123456789abcdef0123456789",
+    });
+    expect(sessionKey).toBe("agent:main:line:primary:direct:uabcdef0123456789abcdef0123456789");
+
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-line-direct-no-context-81628",
+      agentSessionKey: sessionKey,
+    });
+
+    expect(delivery?.to).toBeUndefined();
+  });
+
+  it("does not surface lowercased LINE DM recipients with per-peer scope (#81628)", async () => {
+    const sessionKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "line",
+      peerKind: "direct",
+      dmScope: "per-peer",
+      peerId: "Uabcdef0123456789abcdef0123456789",
+    });
+    expect(sessionKey).toBe("agent:main:direct:uabcdef0123456789abcdef0123456789");
+
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-line-per-peer-no-context-81628",
+      agentSessionKey: sessionKey,
+    });
+
+    expect(delivery?.to).toBeUndefined();
   });
 
   it("does not let current delivery context override explicit delivery targets", async () => {
@@ -716,7 +1130,15 @@ describe("cron tool", () => {
     });
   });
 
-  it("falls back to session-key inference when current context has no target", async () => {
+  it("falls back to stored delivery context when current context has no target", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        channel: "telegram",
+        to: "-1001234567890",
+      },
+      threadId: "99",
+    });
+
     expect(
       await executeAddAndReadDelivery({
         callId: "call-empty-current-context",
@@ -729,7 +1151,8 @@ describe("cron tool", () => {
     ).toEqual({
       mode: "announce",
       channel: "telegram",
-      to: "-1001234567890:topic:99",
+      to: "-1001234567890",
+      threadId: "99",
     });
   });
 
@@ -748,6 +1171,13 @@ describe("cron tool", () => {
   });
 
   it("infers delivery when delivery is null", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        to: "alice",
+      },
+      threadId: undefined,
+    });
+
     expect(
       await executeAddAndReadDelivery({
         callId: "call-null-delivery",
@@ -847,11 +1277,9 @@ describe("cron tool", () => {
       name: "flat-name-should-be-ignored",
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { name?: string; payload?: { text?: string } };
-    };
+    const call = readGatewayCall();
     expect(call?.params?.name).toBe("nested-job");
-    expect(call?.params?.payload?.text).toBe("from nested");
+    expect((call?.params?.payload as { text?: string } | undefined)?.text).toBe("from nested");
   });
 
   it("does not infer delivery when mode is none", async () => {
@@ -938,6 +1366,55 @@ describe("cron tool", () => {
     expect(params?.id).toBe("job-1");
     expect(params?.patch?.name).toBe("new-name");
     expect(params?.patch?.enabled).toBe(false);
+  });
+
+  it.each([
+    ["delivery.channel", { channel: " " }],
+    ["delivery.to", { to: " " }],
+    ["delivery.failureDestination.to", { failureDestination: { to: " " } }],
+    ["delivery.completionDestination.to", { completionDestination: { mode: "webhook", to: " " } }],
+  ])("rejects blank cron.update %s before gateway normalization", async (field, delivery) => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-blank-delivery-update", {
+        action: "update",
+        id: "job-blank-delivery",
+        patch: { delivery },
+      }),
+    ).rejects.toThrow(`${field} must be a non-empty string`);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("passes nullable cron.update delivery clears through to the gateway", async () => {
+    const tool = createTestCronTool();
+    await tool.execute("call-null-delivery-update", {
+      action: "update",
+      id: "job-clear-delivery",
+      patch: {
+        delivery: {
+          channel: null,
+          to: null,
+          failureDestination: null,
+          completionDestination: null,
+        },
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | { id?: string; patch?: { delivery?: unknown } }
+      | undefined;
+    expect(params).toEqual({
+      id: "job-clear-delivery",
+      patch: {
+        delivery: {
+          channel: null,
+          to: null,
+          failureDestination: null,
+          completionDestination: null,
+        },
+      },
+    });
   });
 
   it("recovers additional flat patch params for update action", async () => {
@@ -1053,6 +1530,90 @@ describe("cron tool", () => {
       fallbacks: ["openrouter/gpt-4.1-mini", "anthropic/claude-haiku-3-5"],
       toolsAllow: ["exec", "read"],
     });
+  });
+
+  it("recovers concatenated cron update keys from local tool-call parsers", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-concatenated", {
+      action: "update",
+      id: "job-concat",
+      patch: {
+        namePayload: { kind: "agentTurn", message: "Updated prompt.", timeoutSeconds: 20 },
+        scheduleKind: { everyMs: 60_000, kind: "every" },
+        sessionTargetName: "updated-name",
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: {
+            name?: string;
+            payload?: { kind?: string; message?: string; timeoutSeconds?: number };
+            schedule?: { kind?: string; everyMs?: number };
+          };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-concat");
+    expect(params?.patch).toEqual({
+      name: "updated-name",
+      payload: { kind: "agentTurn", message: "Updated prompt.", timeoutSeconds: 20 },
+      schedule: { everyMs: 60_000, kind: "every" },
+    });
+  });
+
+  it("recovers flat concatenated cron update keys from local tool-call parsers", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-flat-concatenated", {
+      action: "update",
+      id: "job-concat",
+      namePayload: { kind: "agentTurn", message: "Updated prompt.", timeoutSeconds: 20 },
+      scheduleKind: { everyMs: 60_000, kind: "every" },
+      sessionTargetName: "updated-name",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: {
+            name?: string;
+            payload?: { kind?: string; message?: string; timeoutSeconds?: number };
+            schedule?: { kind?: string; everyMs?: number };
+          };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-concat");
+    expect(params?.patch).toEqual({
+      name: "updated-name",
+      payload: { kind: "agentTurn", message: "Updated prompt.", timeoutSeconds: 20 },
+      schedule: { everyMs: 60_000, kind: "every" },
+    });
+  });
+
+  it("uses flat string scheduleKind without leaking it to cron update", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-string-schedule-kind", {
+      action: "update",
+      id: "job-kind",
+      expr: "0 8 * * *",
+      scheduleKind: "cron",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: { schedule?: { kind?: string; expr?: string }; scheduleKind?: unknown };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-kind");
+    expect(params?.patch).toEqual({ schedule: { expr: "0 8 * * *", kind: "cron" } });
+    expect(params?.patch?.scheduleKind).toBeUndefined();
   });
 
   it("rejects malformed flattened fallback-only payload patch params for update action", async () => {

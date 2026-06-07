@@ -1,6 +1,7 @@
+/** Text and JSON rendering for the gateway status command. */
+import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { writeRuntimeJson } from "../../runtime.js";
-import { colorize, theme } from "../../terminal/theme.js";
 import { serializeGatewayDiscoveryBeacon } from "./discovery.js";
 import {
   isProbeReachable,
@@ -12,12 +13,63 @@ import {
 } from "./helpers.js";
 import type { GatewayStatusProbedTarget } from "./probe-run.js";
 
+/** Warning emitted when gateway status finds degraded or surprising probe state. */
 export type GatewayStatusWarning = {
   code: string;
   message: string;
   targetIds?: string[];
 };
 
+const noReachableGatewayDiagnostic =
+  "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
+
+function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null {
+  if (!entry.self) {
+    return null;
+  }
+  const host = typeof entry.self.host === "string" ? entry.self.host.trim().toLowerCase() : "";
+  const ip = typeof entry.self.ip === "string" ? entry.self.ip.trim().toLowerCase() : "";
+  const discriminator =
+    typeof entry.self.instanceId === "string" && entry.self.instanceId.trim()
+      ? `instance:${entry.self.instanceId.trim().toLowerCase()}`
+      : typeof entry.self.deviceId === "string" && entry.self.deviceId.trim()
+        ? `device:${entry.self.deviceId.trim().toLowerCase()}`
+        : "";
+  if ((!host && !ip) || !discriminator) {
+    return null;
+  }
+  return `${host}\0${ip}\0${discriminator}`;
+}
+
+function hasMultipleReachableGatewayIdentities(reachable: GatewayStatusProbedTarget[]): boolean {
+  if (reachable.length <= 1) {
+    return false;
+  }
+  const identityKeys = reachable.map((entry) => gatewaySelfIdentityKey(entry));
+  if (identityKeys.some((key) => key === null)) {
+    return true;
+  }
+  return new Set(identityKeys).size > 1;
+}
+
+function readModelPricingDegradedDetail(health: unknown): string | null {
+  if (!health || typeof health !== "object") {
+    return null;
+  }
+  const modelPricing = (health as { modelPricing?: unknown }).modelPricing;
+  if (!modelPricing || typeof modelPricing !== "object") {
+    return null;
+  }
+  const record = modelPricing as { state?: unknown; detail?: unknown };
+  if (record.state !== "degraded") {
+    return null;
+  }
+  return typeof record.detail === "string" && record.detail.trim()
+    ? record.detail.trim()
+    : "pricing bootstrap or refresh failed";
+}
+
+/** Chooses the reachable target that best represents the user's requested gateway. */
 export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   const reachable = probed.filter((entry) => isProbeReachable(entry.probe));
   return (
@@ -29,12 +81,14 @@ export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   );
 }
 
+/** Builds operator-facing warnings from probe, discovery, and SSH tunnel results. */
 export function buildGatewayStatusWarnings(params: {
   probed: GatewayStatusProbedTarget[];
   sshTarget: string | null;
   sshTunnelStarted: boolean;
   sshTunnelError: string | null;
   localTlsLoadError?: string | null;
+  discoveryCount?: number;
 }): GatewayStatusWarning[] {
   const reachable = params.probed.filter((entry) => isProbeReachable(entry.probe));
   const degradedScopeLimited = params.probed.filter((entry) =>
@@ -59,11 +113,20 @@ export function buildGatewayStatusWarnings(params: {
       targetIds: ["localLoopback"],
     });
   }
-  if (reachable.length > 1) {
+  if (reachable.length === 0 && params.discoveryCount === 0) {
+    warnings.push({
+      code: "no_gateway_reachable",
+      message: noReachableGatewayDiagnostic,
+      targetIds: params.probed.map((entry) => entry.target.id),
+    });
+  }
+  if (hasMultipleReachableGatewayIdentities(reachable)) {
+    // Multiple reachable gateways are valid for isolated profiles but surprising
+    // enough to call out before users debug against the wrong process.
     warnings.push({
       code: "multiple_gateways",
       message:
-        "Unconventional setup: multiple reachable gateways detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
+        "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
       targetIds: reachable.map((entry) => entry.target.id),
     });
   }
@@ -95,9 +158,21 @@ export function buildGatewayStatusWarnings(params: {
       targetIds: [result.target.id],
     });
   }
+  for (const result of reachable) {
+    const detail = readModelPricingDegradedDetail(result.probe.health);
+    if (!detail) {
+      continue;
+    }
+    warnings.push({
+      code: "model_pricing_degraded",
+      message: `Model pricing warning: optional pricing refresh degraded: ${detail}`,
+      targetIds: [result.target.id],
+    });
+  }
   return warnings;
 }
 
+/** Writes the machine-readable gateway status payload and exits nonzero when unreachable. */
 export function writeGatewayStatusJson(params: {
   runtime: RuntimeEnv;
   startedAt: number;
@@ -154,6 +229,7 @@ export function writeGatewayStatusJson(params: {
   }
 }
 
+/** Writes the human-readable gateway status report and exits nonzero when unreachable. */
 export function writeGatewayStatusText(params: {
   runtime: RuntimeEnv;
   rich: boolean;

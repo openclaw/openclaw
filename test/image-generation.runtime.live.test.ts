@@ -1,9 +1,11 @@
+// Live image generation runtime tests cover image provider runtime behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../src/agents/agent-scope.js";
+import { isBillingErrorMessage } from "../src/agents/embedded-agent-helpers/failover-matches.js";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
@@ -30,6 +32,11 @@ const describeLive = LIVE ? describe : describe.skip;
 const providerFilter = parseCsvFilter(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS);
 const caseFilter = parseCaseFilter(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_CASES);
 const envModelMap = parseProviderModelMap(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_MODELS);
+const DEFAULT_LIVE_IMAGE_GENERATION_TIMEOUT_MS = 120_000;
+const LIVE_IMAGE_GENERATION_TIMEOUT_MS = resolvePositiveIntegerEnv(
+  process.env.OPENCLAW_LIVE_IMAGE_GENERATION_TIMEOUT_MS,
+  DEFAULT_LIVE_IMAGE_GENERATION_TIMEOUT_MS,
+);
 
 type LiveProviderCase = {
   pluginId: string;
@@ -46,6 +53,14 @@ type LiveImageCase = {
   resolution?: "1K" | "2K" | "4K";
   inputImages?: Array<{ buffer: Buffer; mimeType: string; fileName?: string }>;
 };
+
+function resolvePositiveIntegerEnv(raw: string | undefined, fallback: number): number {
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
 
 function loadBundledProviderPlugin(
   pluginId: string,
@@ -142,6 +157,29 @@ function resolveProviderModelForLiveTest(providerId: string, modelRef: string): 
   return modelRef.slice(0, slash) === providerId ? modelRef.slice(slash + 1) : modelRef;
 }
 
+function formatProviderFilter(filter: Set<string> | null): string {
+  return filter ? [...filter].toSorted((a, b) => a.localeCompare(b)).join(", ") : "";
+}
+
+function expectImageLiveSweepPassed(params: {
+  attempted: string[];
+  failures: string[];
+  providerFilter: Set<string> | null;
+  skipped: string[];
+}): void {
+  if (params.attempted.length === 0) {
+    expect(params.failures).toStrictEqual([]);
+    if (params.providerFilter && params.providerFilter.size > 0) {
+      throw new Error(
+        `[live:image-generation] requested provider filter produced no live attempts: ${formatProviderFilter(params.providerFilter)}; skipped=${params.skipped.join(", ") || "none"}`,
+      );
+    }
+    console.warn("[live:image-generation] no provider had usable auth; skipping assertions");
+    return;
+  }
+  expect(params.failures).toStrictEqual([]);
+}
+
 function buildLiveCases(params: {
   providerId: string;
   modelRef: string;
@@ -161,12 +199,16 @@ function buildLiveCases(params: {
     },
   ];
   if (params.editEnabled) {
+    const providerModel = resolveProviderModelForLiveTest(params.providerId, params.modelRef);
+    const useReferenceResolution = !(
+      params.providerId === "fal" && providerModel.startsWith("krea/v2/")
+    );
     cases.push({
       id: `${params.providerId}:edit`,
       providerId: params.providerId,
       modelRef: params.modelRef,
       prompt: editPrompt,
-      resolution: "2K",
+      ...(useReferenceResolution ? { resolution: "1K" as const } : {}),
       inputImages: [
         {
           buffer: createEditReferencePng(),
@@ -185,7 +227,7 @@ describeLive("image generation live (provider sweep)", () => {
     async () => {
       const cfg = withPluginsEnabled(loadConfig());
       const configuredModels = resolveConfiguredLiveImageModels(cfg);
-      const agentDir = resolveOpenClawAgentDir();
+      const agentDir = resolveDefaultAgentDir(cfg);
       const attempted: string[] = [];
       const skipped: string[] = [];
       const failures: string[] = [];
@@ -207,7 +249,7 @@ describeLive("image generation live (provider sweep)", () => {
           requireProfileKeys: REQUIRE_PROFILE_KEYS,
           hasLiveKeys,
         });
-        let authLabel = "unresolved";
+        let authLabel;
         try {
           const auth = await resolveApiKeyForProvider({
             provider: providerCase.providerId,
@@ -254,7 +296,7 @@ describeLive("image generation live (provider sweep)", () => {
               size: testCase.size,
               resolution: testCase.resolution,
               inputImages: testCase.inputImages,
-              timeoutMs: 60_000,
+              timeoutMs: LIVE_IMAGE_GENERATION_TIMEOUT_MS,
             });
 
             expect(result.images.length).toBeGreaterThan(0);
@@ -266,6 +308,13 @@ describeLive("image generation live (provider sweep)", () => {
             );
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
+            if (isBillingErrorMessage(message)) {
+              skipped.push(`${testCase.id} (${authLabel}): billing drift`);
+              console.warn(
+                `[live:image-generation] skip ${testCase.id} ms=${Date.now() - startedAt} reason=billing drift error=${message}`,
+              );
+              continue;
+            }
             failures.push(`${testCase.id} (${authLabel}): ${message}`);
             console.error(
               `[live:image-generation] failed ${testCase.id} ms=${Date.now() - startedAt} error=${message}`,
@@ -278,13 +327,21 @@ describeLive("image generation live (provider sweep)", () => {
         `[live:image-generation] attempted=${attempted.join(", ") || "none"} skipped=${skipped.join(", ") || "none"} failures=${failures.join(" | ") || "none"} shellEnv=${getShellEnvAppliedKeys().join(", ") || "none"}`,
       );
 
-      if (attempted.length === 0) {
-        expect(failures).toEqual([]);
-        console.warn("[live:image-generation] no provider had usable auth; skipping assertions");
-        return;
-      }
-      expect(failures).toEqual([]);
+      expectImageLiveSweepPassed({ attempted, failures, providerFilter, skipped });
     },
-    10 * 60_000,
+    15 * 60_000,
   );
+});
+
+describe("image generation live provider filter coverage", () => {
+  it("fails filtered sweeps when no requested provider is attempted", () => {
+    expect(() =>
+      expectImageLiveSweepPassed({
+        attempted: [],
+        failures: [],
+        providerFilter: new Set(["openai"]),
+        skipped: ["openai: no usable auth"],
+      }),
+    ).toThrow(/requested provider filter produced no live attempts: openai/u);
+  });
 });

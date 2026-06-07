@@ -26,7 +26,7 @@ export type {
   ChannelThreadingToolContext,
   ChannelToolSend,
 } from "../channels/plugins/types.public.js";
-export type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
+export type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/legacy-state-migration.types.js";
 
 export type {
   ChannelDirectoryAdapter,
@@ -38,6 +38,7 @@ export type {
   ChannelGatewayContext,
   ChannelOutboundAdapter,
   ChannelOutboundContext,
+  ChannelOutboundPayloadHint,
   ChannelStatusAdapter,
 } from "../channels/plugins/types.adapters.js";
 export type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";

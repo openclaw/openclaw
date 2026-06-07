@@ -6,8 +6,6 @@ read_when:
   - Setting up Fly volumes, secrets, and first-run config
 ---
 
-# Fly.io Deployment
-
 **Goal:** OpenClaw Gateway running on a [Fly.io](https://fly.io) machine with persistent storage, automatic HTTPS, and Discord/channel access.
 
 ## What you need
@@ -45,7 +43,7 @@ read_when:
   <Step title="Configure fly.toml">
     Edit `fly.toml` to match your app name and requirements.
 
-    **Security note:** The default config exposes a public URL. For a hardened deployment with no public IP, see [Private Deployment](#private-deployment-hardened) or use `fly.private.toml`.
+    **Security note:** The default config exposes a public URL. For a hardened deployment with no public IP, see [Private Deployment](#private-deployment-hardened) or use `deploy/fly.private.toml`.
 
     ```toml
     app = "my-openclaw"  # Your app name
@@ -80,6 +78,8 @@ read_when:
       destination = "/data"
     ```
 
+    The OpenClaw Docker image uses `tini` as its entrypoint. Fly process commands replace Docker `CMD` without replacing `ENTRYPOINT`, so the process still runs under `tini`.
+
     **Key settings:**
 
     | Setting                        | Why                                                                         |
@@ -98,14 +98,14 @@ read_when:
     fly secrets set OPENCLAW_GATEWAY_TOKEN=$(openssl rand -hex 32)
 
     # Model provider API keys
-    fly secrets set ANTHROPIC_API_KEY=sk-ant-...
+    fly secrets set ANTHROPIC_API_KEY=example-anthropic-key-not-real
 
     # Optional: Other providers
-    fly secrets set OPENAI_API_KEY=sk-...
+    fly secrets set OPENAI_API_KEY=example-openai-key-not-real
     fly secrets set GOOGLE_API_KEY=...
 
     # Channel tokens
-    fly secrets set DISCORD_BOT_TOKEN=MTQ...
+    fly secrets set DISCORD_BOT_TOKEN=example-discord-bot-token
     ```
 
     **Notes:**
@@ -392,11 +392,11 @@ For a hardened deployment with **no public exposure**, use the private template.
 
 ### Setup
 
-Use `fly.private.toml` instead of the standard config:
+Use `deploy/fly.private.toml` instead of the standard config:
 
 ```bash
 # Deploy with private config
-fly deploy -c fly.private.toml
+fly deploy -c deploy/fly.private.toml
 ```
 
 Or convert an existing deployment:
@@ -411,7 +411,7 @@ fly ips release <public-ipv6> -a my-openclaw
 
 # Switch to private config so future deploys don't re-allocate public IPs
 # (remove [http_service] or deploy with the private template)
-fly deploy -c fly.private.toml
+fly deploy -c deploy/fly.private.toml
 
 # Allocate private-only IPv6
 fly ips allocate-v6 --private -a my-openclaw

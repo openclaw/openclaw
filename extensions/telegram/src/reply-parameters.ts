@@ -1,8 +1,9 @@
-import type { MessageEntity } from "@grammyjs/types";
+// Telegram plugin module implements reply parameters behavior.
+import type { MessageEntity } from "grammy/types";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
-export type TelegramReplyParameters = {
+type TelegramReplyParameters = {
   message_id: number;
   allow_sending_without_reply: true;
   quote?: string;
@@ -10,7 +11,7 @@ export type TelegramReplyParameters = {
   quote_entities?: MessageEntity[];
 };
 
-export type TelegramThreadReplyParams = {
+type TelegramThreadReplyParams = {
   message_thread_id?: number;
   reply_parameters?: TelegramReplyParameters;
   reply_to_message_id?: number;
@@ -27,8 +28,8 @@ export function resolveTelegramSendThreadSpec(params: {
   if (messageThreadId == null) {
     return undefined;
   }
-  // Telegram supports DM topics; keep direct chat thread IDs and rely on
-  // thread-not-found retry fallback when a plain DM rejects them.
+  // Telegram supports DM topics; keep direct chat thread IDs and let invalid
+  // topics fail closed instead of sending to the base chat.
   return {
     id: messageThreadId,
     scope: params.chatType === "direct" ? "dm" : "forum",

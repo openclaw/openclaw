@@ -1,3 +1,4 @@
+// Verifies secret resolution config types and defaults.
 import { describe, expect, it } from "vitest";
 import {
   normalizeResolvedSecretInputString,
@@ -89,6 +90,11 @@ describe("parseLegacySecretRefEnvMarker", () => {
       source: "env",
       provider: "default",
       id: "OPENAI_API_KEY",
+    });
+    expect(parseLegacySecretRefEnvMarker("__env__:BAILIAN_API_KEY")).toEqual({
+      source: "env",
+      provider: "default",
+      id: "BAILIAN_API_KEY",
     });
     expect(parseLegacySecretRefEnvMarker("secretref-env:not-valid")).toBeNull();
     expect(

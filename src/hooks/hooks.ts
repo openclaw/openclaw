@@ -1,14 +1,9 @@
-export * from "./internal-hooks.js";
-
-export type HookEventType = import("./internal-hooks.js").InternalHookEventType;
-export type HookEvent = import("./internal-hooks.js").InternalHookEvent;
+/** Public hook handler alias exposed to bundled/workspace hook modules. */
 export type HookHandler = import("./internal-hook-types.js").InternalHookHandler;
 
+/** Public hook API facade for hook modules that should not import internals directly. */
+export type { AgentBootstrapHookContext } from "./internal-hooks.js";
 export {
-  registerInternalHook as registerHook,
-  unregisterInternalHook as unregisterHook,
-  clearInternalHooks as clearHooks,
-  getRegisteredEventKeys as getRegisteredHookEventKeys,
-  triggerInternalHook as triggerHook,
   createInternalHookEvent as createHookEvent,
+  isAgentBootstrapEvent,
 } from "./internal-hooks.js";

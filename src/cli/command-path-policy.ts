@@ -1,3 +1,4 @@
+// Resolves CLI command path policy from the declarative command catalog.
 import { isGatewayConfigBypassCommandPath } from "../gateway/explicit-connection-policy.js";
 import { getCommandPathWithRootOptions } from "./argv.js";
 import {
@@ -12,13 +13,15 @@ const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
   bypassConfigGuard: false,
   routeConfigGuard: "never",
   loadPlugins: "never",
+  pluginRegistry: { scope: "all" },
   hideBanner: false,
   ensureCliPath: true,
   networkProxy: "default",
 };
 
 export function resolveCliCommandPathPolicy(commandPath: string[]): CliCommandPathPolicy {
-  let resolvedPolicy: CliCommandPathPolicy = { ...DEFAULT_CLI_COMMAND_PATH_POLICY };
+  // Later catalog entries can refine broader root policies with exact subcommand overrides.
+  const resolvedPolicy: CliCommandPathPolicy = { ...DEFAULT_CLI_COMMAND_PATH_POLICY };
   for (const entry of cliCommandCatalog) {
     if (!entry.policy) {
       continue;
@@ -39,6 +42,7 @@ function isCommandPathPrefix(commandPath: string[], pattern: readonly string[]):
 }
 
 export function resolveCliCatalogCommandPath(argv: string[]): string[] {
+  // Gateway `run openclaw ...` argv needs catalog routing against the embedded command path.
   const tokens =
     resolveGatewayCatalogCommandPath(argv) ?? getCommandPathWithRootOptions(argv, argv.length);
   if (tokens.length === 0) {

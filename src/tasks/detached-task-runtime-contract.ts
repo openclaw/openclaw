@@ -1,3 +1,4 @@
+// Defines the detached task runtime contract and spawn options.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   TaskDeliveryState,
@@ -102,6 +103,7 @@ export type DetachedTaskDeliveryStatusParams = {
 export type DetachedTaskCancelParams = {
   cfg: OpenClawConfig;
   taskId: string;
+  reason?: string;
 };
 
 export type DetachedTaskCancelResult = {
@@ -123,8 +125,8 @@ export type DetachedTaskRecoveryAttemptResult = {
 };
 
 export type DetachedTaskLifecycleRuntime = {
-  createQueuedTaskRun: (params: DetachedTaskCreateParams) => TaskRecord;
-  createRunningTaskRun: (params: DetachedRunningTaskCreateParams) => TaskRecord;
+  createQueuedTaskRun: (params: DetachedTaskCreateParams) => TaskRecord | null;
+  createRunningTaskRun: (params: DetachedRunningTaskCreateParams) => TaskRecord | null;
   startTaskRunByRunId: (params: DetachedTaskStartParams) => TaskRecord[];
   recordTaskRunProgressByRunId: (params: DetachedTaskProgressParams) => TaskRecord[];
   finalizeTaskRunByRunId?: (params: DetachedTaskFinalizeParams) => TaskRecord[];

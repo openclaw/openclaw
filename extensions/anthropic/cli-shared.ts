@@ -1,8 +1,13 @@
+/**
+ * Shared Claude CLI backend normalization. It sanitizes command args, maps
+ * thinking levels, and keeps OpenClaw-managed CLI runs isolated from shell env.
+ */
 import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
+  CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
   CLAUDE_CLI_BACKEND_ID,
@@ -16,6 +21,7 @@ export {
 // consulting its local login state, so inherited shell overrides must not
 // steer OpenClaw-managed Claude CLI runs toward a different provider,
 // endpoint, token source, plugin/config tree, or telemetry bootstrap mode.
+/** Environment variables removed before launching OpenClaw-managed Claude CLI runs. */
 export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_OLD",
@@ -60,9 +66,13 @@ export const CLAUDE_CLI_CLEAR_ENV = [
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
 const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
+const CLAUDE_EFFORT_ARG = "--effort";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
 
+type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** Return whether a provider id refers to the Claude CLI backend. */
 export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
 }
@@ -77,6 +87,7 @@ function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): bo
   return security === "full" && ask === "off";
 }
 
+/** Resolve Claude permission mode from OpenClaw exec security settings. */
 export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
   mode?: string;
   overrideExisting: boolean;
@@ -86,6 +97,7 @@ export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigC
     : { overrideExisting: false };
 }
 
+/** Normalize Claude permission arguments, removing legacy skip-permissions flags. */
 export function normalizeClaudePermissionArgs(
   args?: string[],
   options?: { mode?: string; overrideExisting?: boolean },
@@ -134,6 +146,7 @@ export function normalizeClaudePermissionArgs(
   return normalized;
 }
 
+/** Ensure Claude CLI setting sources stay restricted to user settings. */
 export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefined {
   if (!args) {
     return args;
@@ -168,6 +181,63 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
   return normalized;
 }
 
+/** Map OpenClaw thinking levels to Claude CLI effort flags for a model id. */
+export function mapClaudeCliThinkingLevelToEffort(
+  thinkingLevel?: string | null,
+): ClaudeCliEffort | undefined {
+  switch (normalizeOptionalLowercaseString(thinkingLevel)) {
+    case "minimal":
+    case "low":
+      return "low";
+    case "adaptive":
+    case "medium":
+      return "medium";
+    case "high":
+      return "high";
+    case "xhigh":
+      return "xhigh";
+    case "max":
+      return "max";
+    default:
+      return undefined;
+  }
+}
+
+function stripClaudeEffortArgs(args: readonly string[]): string[] {
+  const normalized: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
+    if (arg === CLAUDE_EFFORT_ARG) {
+      const maybeValue = args[i + 1];
+      if (
+        typeof maybeValue === "string" &&
+        maybeValue.trim().length > 0 &&
+        !maybeValue.startsWith("-")
+      ) {
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith(`${CLAUDE_EFFORT_ARG}=`)) {
+      continue;
+    }
+    normalized.push(arg);
+  }
+  return normalized;
+}
+
+/** Resolve final Claude CLI execution args for one backend invocation. */
+export function resolveClaudeCliExecutionArgs(
+  context: CliBackendResolveExecutionArgsContext,
+): string[] {
+  const effort = mapClaudeCliThinkingLevelToEffort(context.thinkingLevel);
+  if (!effort) {
+    return [...context.baseArgs];
+  }
+  return [...stripClaudeEffortArgs(context.baseArgs), CLAUDE_EFFORT_ARG, effort];
+}
+
+/** Normalize Claude CLI backend config before registration or execution. */
 export function normalizeClaudeBackendConfig(
   config: CliBackendConfig,
   context?: CliBackendNormalizeConfigContext,

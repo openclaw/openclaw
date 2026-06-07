@@ -1,3 +1,4 @@
+// MCP stdio server exposes OpenClaw tools over the MCP stdio transport.
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -14,8 +15,8 @@ export function createToolsMcpServer(params: { name: string; tools: AnyAgentTool
   );
 
   server.setRequestHandler(ListToolsRequestSchema, handlers.listTools);
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    return await handlers.callTool(request.params);
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    return await handlers.callTool(request.params, extra.signal);
   });
 
   return server;

@@ -1,3 +1,5 @@
+// Docker image tests cover sandbox image inspection and actionable setup errors
+// without invoking a real Docker daemon.
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +20,7 @@ type MockDockerChild = EventEmitter & {
 const spawnState = vi.hoisted(() => ({
   calls: [] as SpawnCall[],
   imageExists: true,
+  inspectError: "",
 }));
 
 function createMockDockerChild(): MockDockerChild {
@@ -40,7 +43,9 @@ function spawnDockerProcess(command: string, args: string[]) {
     stderr = `unexpected command: ${command}`;
   } else if (args[0] === "image" && args[1] === "inspect") {
     code = spawnState.imageExists ? 0 : 1;
-    stderr = spawnState.imageExists ? "" : `Error response from daemon: No such image: ${args[2]}`;
+    stderr = spawnState.imageExists
+      ? ""
+      : spawnState.inspectError || `Error response from daemon: No such image: ${args[2]}`;
   } else if (args[0] === "pull" || args[0] === "tag") {
     code = 0;
   } else {
@@ -79,6 +84,7 @@ describe("ensureDockerImage", () => {
   beforeEach(async () => {
     spawnState.calls.length = 0;
     spawnState.imageExists = true;
+    spawnState.inspectError = "";
     await loadFreshDockerModuleForTest();
   });
 
@@ -94,6 +100,8 @@ describe("ensureDockerImage", () => {
   });
 
   it("does not satisfy the missing default sandbox image by tagging plain Debian", async () => {
+    // The default image carries Python/helper contracts; tagging a base distro
+    // would pass image inspection but fail sandbox file operations later.
     spawnState.imageExists = false;
 
     let err: unknown;
@@ -106,6 +114,23 @@ describe("ensureDockerImage", () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("scripts/sandbox-setup.sh");
     expect((err as Error).message).toContain("python3");
+    expect(spawnState.calls).toEqual([
+      {
+        command: "docker",
+        args: ["image", "inspect", DEFAULT_SANDBOX_IMAGE],
+      },
+    ]);
+  });
+
+  it("throws when the Docker daemon is unavailable during image inspection", async () => {
+    spawnState.imageExists = false;
+    spawnState.inspectError =
+      "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?";
+
+    await expect(ensureDockerImage(DEFAULT_SANDBOX_IMAGE)).rejects.toThrow(
+      "Docker daemon is not available",
+    );
+
     expect(spawnState.calls).toEqual([
       {
         command: "docker",

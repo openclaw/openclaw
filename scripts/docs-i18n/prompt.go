@@ -15,14 +15,40 @@ func prettyLanguageLabel(lang string) string {
 		return "English"
 	case strings.EqualFold(trimmed, "zh-CN"):
 		return "Simplified Chinese"
+	case strings.EqualFold(trimmed, "zh-TW"):
+		return "Traditional Chinese"
 	case strings.EqualFold(trimmed, "ja-JP"):
 		return "Japanese"
+	case strings.EqualFold(trimmed, "es"):
+		return "Spanish"
+	case strings.EqualFold(trimmed, "pt-BR"):
+		return "Brazilian Portuguese"
+	case strings.EqualFold(trimmed, "ko"):
+		return "Korean"
+	case strings.EqualFold(trimmed, "fr"):
+		return "French"
+	case strings.EqualFold(trimmed, "ar"):
+		return "Arabic"
+	case strings.EqualFold(trimmed, "it"):
+		return "Italian"
+	case strings.EqualFold(trimmed, "vi"):
+		return "Vietnamese"
+	case strings.EqualFold(trimmed, "nl"):
+		return "Dutch"
+	case strings.EqualFold(trimmed, "fa"):
+		return "Persian"
+	case strings.EqualFold(trimmed, "tr"):
+		return "Turkish"
 	case strings.EqualFold(trimmed, "de"):
 		return "German"
 	case strings.EqualFold(trimmed, "th"):
 		return "Thai"
 	case strings.EqualFold(trimmed, "uk"):
 		return "Ukrainian"
+	case strings.EqualFold(trimmed, "id"):
+		return "Indonesian"
+	case strings.EqualFold(trimmed, "pl"):
+		return "Polish"
 	default:
 		return trimmed
 	}
@@ -80,7 +106,7 @@ Rules:
   English exactly as written.
 - Insert a space between Latin characters and CJK text (W3C CLREQ), e.g., “Gateway 网关”, “Skills 配置”.
 - Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes inside code spans/blocks or literal CLI/keys.
-- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
 - For the OpenClaw Gateway, use “Gateway 网关”.
 - Keep these terms in English: Skills, local loopback, Tailscale.
 - Never output an empty response; if unsure, return the source text unchanged.
@@ -117,7 +143,7 @@ Rules:
   English exactly as written.
 - Use Japanese quotation marks 「 and 」 for Japanese prose; keep ASCII quotes inside code spans/blocks or literal CLI/keys.
 - Do not add or remove spacing around Latin text just because it borders Japanese; keep spacing stable unless required by Japanese grammar.
-- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
 - Keep these terms in English: Skills, local loopback, Tailscale.
 - Never output an empty response; if unsure, return the source text unchanged.
 
@@ -152,7 +178,7 @@ Rules:
   UI-style labels.
 - If a glossary target is identical to the source text, preserve that term in
   English exactly as written.
-- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
 - Keep these terms in English: Skills, local loopback, Tailscale.
 - Never output an empty response; if unsure, return the source text unchanged.
 

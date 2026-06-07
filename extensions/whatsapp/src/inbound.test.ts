@@ -1,3 +1,4 @@
+// Whatsapp tests cover inbound plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   extractContactContext,
@@ -10,21 +11,21 @@ describe("web inbound helpers", () => {
   it("prefers the main conversation body", () => {
     const body = extractText({
       conversation: " hello ",
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(body).toBe("hello");
   });
 
   it("falls back to captions when conversation text is missing", () => {
     const body = extractText({
       imageMessage: { caption: " caption " },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(body).toBe("caption");
   });
 
   it("handles document captions", () => {
     const body = extractText({
       documentMessage: { caption: " doc " },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(body).toBe("doc");
   });
 
@@ -40,7 +41,7 @@ describe("web inbound helpers", () => {
           "END:VCARD",
         ].join("\n"),
       },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(body).toBe("<contact>");
     expect(
       extractContactContext({
@@ -54,7 +55,7 @@ describe("web inbound helpers", () => {
             "END:VCARD",
           ].join("\n"),
         },
-      } as unknown as import("@whiskeysockets/baileys").proto.IMessage),
+      } as unknown as import("baileys").proto.IMessage),
     ).toEqual({
       kind: "contact",
       total: 1,
@@ -74,7 +75,7 @@ describe("web inbound helpers", () => {
           "END:VCARD",
         ].join("\n"),
       },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(body).toBe("<contact>");
   });
 
@@ -89,7 +90,7 @@ describe("web inbound helpers", () => {
           "END:VCARD",
         ].join("\n"),
       },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(body).toBe("<contact>");
   });
 
@@ -106,7 +107,7 @@ describe("web inbound helpers", () => {
           "END:VCARD",
         ].join("\n"),
       },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(body).toBe("<contact>");
   });
 
@@ -157,7 +158,7 @@ describe("web inbound helpers", () => {
           },
         ],
       },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(body).toBe("<contacts: 4 contacts>");
   });
 
@@ -179,7 +180,7 @@ describe("web inbound helpers", () => {
           {},
         ],
       },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(body).toBe("<contacts: 3 contacts>");
   });
 
@@ -195,7 +196,7 @@ describe("web inbound helpers", () => {
           "END:VCARD",
         ].join("\n"),
       },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(body).toBe("<contact>");
     expect(body).not.toContain("Yohann >");
     expect(body).not.toContain("<Eric");
@@ -211,7 +212,7 @@ describe("web inbound helpers", () => {
           "END:VCARD",
         ].join("\n"),
       },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(context?.contacts[0]?.name).toContain("Yohann >");
   });
 
@@ -220,7 +221,7 @@ describe("web inbound helpers", () => {
       contactsArrayMessage: {
         contacts: [{}, {}],
       },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(body).toBe("<contacts: 2 contacts>");
   });
 
@@ -229,7 +230,7 @@ describe("web inbound helpers", () => {
       viewOnceMessageV2Extension: {
         message: { conversation: " hello " },
       },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(body).toBe("hello");
   });
 
@@ -237,12 +238,12 @@ describe("web inbound helpers", () => {
     expect(
       extractMediaPlaceholder({
         imageMessage: {},
-      } as unknown as import("@whiskeysockets/baileys").proto.IMessage),
+      } as unknown as import("baileys").proto.IMessage),
     ).toBe("<media:image>");
     expect(
       extractMediaPlaceholder({
         audioMessage: {},
-      } as unknown as import("@whiskeysockets/baileys").proto.IMessage),
+      } as unknown as import("baileys").proto.IMessage),
     ).toBe("<media:audio>");
   });
 
@@ -256,7 +257,7 @@ describe("web inbound helpers", () => {
         accuracyInMeters: 12,
         comment: "Meet here",
       },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(location).toEqual({
       latitude: 48.858844,
       longitude: 2.294351,
@@ -277,7 +278,7 @@ describe("web inbound helpers", () => {
         accuracyInMeters: 20,
         caption: "On the move",
       },
-    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    } as unknown as import("baileys").proto.IMessage);
     expect(location).toEqual({
       latitude: 37.819929,
       longitude: -122.478255,

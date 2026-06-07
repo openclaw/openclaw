@@ -12,19 +12,18 @@ CONTAINER_NAME="openclaw-mcp-e2e-$$"
 CLIENT_LOG="$(mktemp -t openclaw-mcp-client-log.XXXXXX)"
 
 cleanup() {
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   rm -f "$CLIENT_LOG"
 }
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-channels
-docker_e2e_harness_mount_args
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 mcp-channels empty)"
 
 echo "Running in-container gateway + MCP smoke..."
 # Harness files are mounted read-only; the app under test comes from /app/dist.
 set +e
-docker run --rm \
+docker_e2e_run_with_harness \
   --name "$CONTAINER_NAME" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
   -e "OPENCLAW_SKIP_CHANNELS=1" \
@@ -37,7 +36,6 @@ docker run --rm \
   -e "GW_URL=ws://127.0.0.1:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   -e "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
     source scripts/lib/openclaw-e2e-instance.sh
@@ -67,7 +65,7 @@ docker run --rm \
     openclaw_e2e_wait_mock_openai \"\$mock_port\"
     tsx scripts/e2e/mcp-channels-seed.ts >/tmp/mcp-channels-seed.log
     gateway_pid=\"\$(openclaw_e2e_start_gateway \"\$entry\" $PORT /tmp/mcp-channels-gateway.log)\"
-    openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/mcp-channels-gateway.log 480
+    openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/mcp-channels-gateway.log 480 $PORT
     tsx scripts/e2e/mcp-channels-docker-client.ts
   " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}
@@ -75,8 +73,9 @@ set -e
 
 if [ "$status" -ne 0 ]; then
   echo "Docker MCP smoke failed"
-  cat "$CLIENT_LOG"
+  docker_e2e_print_log "$CLIENT_LOG"
   exit "$status"
 fi
 
+docker_e2e_print_log "$CLIENT_LOG"
 echo "OK"

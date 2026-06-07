@@ -1,3 +1,4 @@
+// Command startup policy tests cover which CLI commands require startup side effects.
 import { describe, expect, it } from "vitest";
 import {
   resolveCliStartupPolicy,
@@ -11,8 +12,10 @@ import {
 describe("command-startup-policy", () => {
   it("matches config guard bypass commands", () => {
     expect(shouldBypassConfigGuardForCommandPath(["backup", "create"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["config"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "validate"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "schema"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["config", "set"])).toBe(false);
     expect(shouldBypassConfigGuardForCommandPath(["status"])).toBe(false);
   });
 
@@ -22,7 +25,7 @@ describe("command-startup-policy", () => {
         commandPath: ["status"],
         suppressDoctorStdout: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldSkipRouteConfigGuardForCommandPath({
         commandPath: ["gateway", "status"],
@@ -115,13 +118,16 @@ describe("command-startup-policy", () => {
     ).toBe(true);
     expect(
       shouldLoadPluginsForCommandPath({
+        commandPath: ["agents"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
         commandPath: ["agents", "list"],
         jsonOutputMode: false,
       }),
-    ).toBe(true);
-    // text-only opts agents list out of plugin preload in --json mode so
-    // dashboards/scripts that poll this command don't pay the bundled-plugin
-    // import waterfall when they only consume config-derived fields. (#71739)
+    ).toBe(false);
     expect(
       shouldLoadPluginsForCommandPath({
         commandPath: ["agents", "list"],
@@ -172,11 +178,39 @@ describe("command-startup-policy", () => {
     expect(shouldHideCliBannerForCommandPath(["status"], {})).toBe(false);
   });
 
+  it("uses process env banner suppression when startup env is omitted", () => {
+    const originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+    try {
+      process.env.OPENCLAW_HIDE_BANNER = "1";
+
+      expect(
+        resolveCliStartupPolicy({
+          commandPath: ["status"],
+          jsonOutputMode: false,
+        }).hideBanner,
+      ).toBe(true);
+      expect(
+        resolveCliStartupPolicy({
+          commandPath: ["status"],
+          jsonOutputMode: false,
+          env: {},
+        }).hideBanner,
+      ).toBe(false);
+    } finally {
+      if (originalHideBanner === undefined) {
+        delete process.env.OPENCLAW_HIDE_BANNER;
+      } else {
+        process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
+      }
+    }
+  });
+
   it("matches CLI PATH bootstrap policy", () => {
     expect(shouldEnsureCliPathForCommandPath(["status"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["sessions"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["config", "get"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["models", "status"])).toBe(false);
+    expect(shouldEnsureCliPathForCommandPath(["tools", "effective"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["message", "send"])).toBe(true);
     expect(shouldEnsureCliPathForCommandPath([])).toBe(true);
   });
@@ -186,25 +220,29 @@ describe("command-startup-policy", () => {
       resolveCliStartupPolicy({
         commandPath: ["status"],
         jsonOutputMode: true,
+        env: {},
       }),
     ).toEqual({
       suppressDoctorStdout: true,
       hideBanner: false,
       skipConfigGuard: false,
       loadPlugins: false,
+      pluginRegistry: { scope: "channels" },
     });
 
     expect(
       resolveCliStartupPolicy({
         commandPath: ["status"],
         jsonOutputMode: true,
+        env: {},
         routeMode: true,
       }),
     ).toEqual({
       suppressDoctorStdout: true,
       hideBanner: false,
-      skipConfigGuard: true,
+      skipConfigGuard: false,
       loadPlugins: false,
+      pluginRegistry: { scope: "channels" },
     });
   });
 });

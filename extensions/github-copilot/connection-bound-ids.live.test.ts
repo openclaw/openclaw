@@ -1,7 +1,8 @@
-import { streamOpenAIResponses, type AssistantMessage, type Model } from "@mariozechner/pi-ai";
-import { buildCopilotDynamicHeaders } from "openclaw/plugin-sdk/provider-stream-shared";
+// Github Copilot tests cover connection bound ids plugin behavior.
+import { stream as streamModel, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { resolveFirstGithubToken } from "./auth.js";
+import { buildCopilotDynamicHeaders } from "./stream.js";
 import { wrapCopilotOpenAIResponsesStream } from "./stream.js";
 import { resolveCopilotApiToken } from "./token.js";
 
@@ -133,11 +134,16 @@ function extractText(response: unknown): string {
   if (!Array.isArray(content)) {
     return "";
   }
-  return content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text?.trim() ?? "")
-    .filter(Boolean)
-    .join(" ");
+  const text: string[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      const trimmed = block.text?.trim() ?? "";
+      if (trimmed.length > 0) {
+        text.push(trimmed);
+      }
+    }
+  }
+  return text.join(" ");
 }
 
 describeLive("github-copilot connection-bound Responses IDs live", () => {
@@ -190,7 +196,7 @@ describeLive("github-copilot connection-bound Responses IDs live", () => {
     };
     let capturedPayload: Record<string, unknown> | undefined;
 
-    const wrappedStream = wrapCopilotOpenAIResponsesStream(streamOpenAIResponses as never);
+    const wrappedStream = wrapCopilotOpenAIResponsesStream(streamModel as never);
     if (!wrappedStream) {
       throw new Error("expected Copilot Responses stream wrapper");
     }
@@ -216,7 +222,9 @@ describeLive("github-copilot connection-bound Responses IDs live", () => {
     const input = Array.isArray(capturedPayload?.input) ? capturedPayload.input : [];
     const replayedAssistant = input.find(
       (item): item is Record<string, unknown> =>
-        !!item && typeof item === "object" && (item as Record<string, unknown>).type === "message",
+        Boolean(item) &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "message",
     );
 
     expect(replayedAssistant?.id).toMatch(/^msg_[a-f0-9]{16}$/);

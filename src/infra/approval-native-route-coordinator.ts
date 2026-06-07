@@ -1,13 +1,15 @@
+// Coordinates native approval delivery routing and notices.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelApprovalNativeDeliveryPlan,
   ChannelApprovalNativePlannedTarget,
 } from "./approval-native-delivery.js";
 import {
   describeApprovalDeliveryDestination,
+  resolveApprovalDeliveryFailedNoticeText,
   resolveApprovalRoutedElsewhereNoticeText,
 } from "./approval-native-route-notice.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
@@ -151,7 +153,21 @@ function didReportDeliverToOrigin(report: ApprovalRouteReport, originAccountId?:
   );
 }
 
+function hasPlannedNativeTargets(report: ApprovalRouteReport): boolean {
+  return report.deliveryPlan.targets.length > 0;
+}
+
+function readAllowedDecisionStrings(request: ApprovalRequest): string[] | undefined {
+  const allowedDecisions =
+    "allowedDecisions" in request.request ? request.request.allowedDecisions : undefined;
+  if (!Array.isArray(allowedDecisions)) {
+    return undefined;
+  }
+  return allowedDecisions.filter((value): value is string => typeof value === "string");
+}
+
 function resolveApprovalRouteNotice(params: {
+  approvalKind: ChannelApprovalKind;
   request: ApprovalRequest;
   reports: readonly ApprovalRouteReport[];
 }): { requestGateway: GatewayRequestFn; target: RouteNoticeTarget; text: string } | null {
@@ -176,6 +192,20 @@ function resolveApprovalRouteNotice(params: {
     return null;
   }
   const originAccountId = normalizeOptionalString(target.accountId);
+  const deliveredAnyTarget = params.reports.some((report) => report.deliveredTargets.length > 0);
+  if (!deliveredAnyTarget && params.reports.some(hasPlannedNativeTargets)) {
+    return {
+      requestGateway:
+        params.reports.find((report) => activeApprovalRouteRuntimes.has(report.runtimeId))
+          ?.requestGateway ?? params.reports[0].requestGateway,
+      target,
+      text: resolveApprovalDeliveryFailedNoticeText({
+        approvalId: params.request.id,
+        approvalKind: params.approvalKind,
+        allowedDecisions: readAllowedDecisionStrings(params.request),
+      }),
+    };
+  }
 
   // If any same-channel runtime already delivered into the origin chat, every
   // other fallback delivery becomes supplemental and should not trigger a notice.
@@ -237,6 +267,28 @@ function resolveApprovalRouteNotice(params: {
   };
 }
 
+/** Returns whether a native approval runtime is active for the requested channel/account scope. */
+export function hasActiveApprovalNativeRouteRuntime(params: {
+  approvalKind: ChannelApprovalKind;
+  channel?: string | null;
+  accountId?: string | null;
+}): boolean {
+  const channel = normalizeChannel(params.channel);
+  const accountId = normalizeOptionalString(params.accountId);
+  return Array.from(activeApprovalRouteRuntimes.values()).some((runtime) => {
+    if (!runtime.handledKinds.has(params.approvalKind)) {
+      return false;
+    }
+    if (channel && normalizeChannel(runtime.channel) !== channel) {
+      return false;
+    }
+    const runtimeAccountId = normalizeOptionalString(runtime.accountId);
+    return (
+      accountId === undefined || runtimeAccountId === undefined || runtimeAccountId === accountId
+    );
+  });
+}
+
 async function maybeFinalizeApprovalRouteNotice(approvalId: string): Promise<void> {
   const entry = pendingApprovalRouteNotices.get(approvalId);
   if (!entry || entry.finalized) {
@@ -249,8 +301,10 @@ async function maybeFinalizeApprovalRouteNotice(approvalId: string): Promise<voi
   }
 
   entry.finalized = true;
+  // Only runtimes observed with the request can block finalization; later runtimes must not delay it.
   const reports = Array.from(entry.reports.values());
   const notice = resolveApprovalRouteNotice({
+    approvalKind: entry.approvalKind,
     request: entry.request,
     reports,
   });
@@ -273,6 +327,7 @@ async function maybeFinalizeApprovalRouteNotice(approvalId: string): Promise<voi
   }
 }
 
+/** Tracks native approval deliveries and sends origin-chat notices after all observed runtimes report. */
 export function createApprovalNativeRouteReporter(params: {
   handledKinds: ReadonlySet<ChannelApprovalKind>;
   channel?: string;
@@ -345,13 +400,13 @@ export function createApprovalNativeRouteReporter(params: {
       });
       registered = true;
     },
-    async reportSkipped(params: {
+    async reportSkipped(paramsValue: {
       approvalKind: ChannelApprovalKind;
       request: ApprovalRequest;
     }): Promise<void> {
       await report({
-        approvalKind: params.approvalKind,
-        request: params.request,
+        approvalKind: paramsValue.approvalKind,
+        request: paramsValue.request,
         deliveryPlan: {
           targets: [],
           originTarget: null,
@@ -360,13 +415,13 @@ export function createApprovalNativeRouteReporter(params: {
         deliveredTargets: [],
       });
     },
-    async reportDelivery(params: {
+    async reportDelivery(paramsLocal: {
       approvalKind: ChannelApprovalKind;
       request: ApprovalRequest;
       deliveryPlan: ChannelApprovalNativeDeliveryPlan;
       deliveredTargets: readonly ChannelApprovalNativePlannedTarget[];
     }): Promise<void> {
-      await report(params);
+      await report(paramsLocal);
     },
     async stop(): Promise<void> {
       if (!registered) {
@@ -386,6 +441,7 @@ export function createApprovalNativeRouteReporter(params: {
   };
 }
 
+/** Clears in-memory native approval route coordination state between tests. */
 export function clearApprovalNativeRouteStateForTest(): void {
   for (const approvalId of Array.from(pendingApprovalRouteNotices.keys())) {
     clearPendingApprovalRouteNotice(approvalId);

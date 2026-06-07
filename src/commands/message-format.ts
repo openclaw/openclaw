@@ -1,13 +1,14 @@
+/** Human-readable formatter for `openclaw message` action results. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.public.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { isRich, theme } from "../terminal/theme.js";
 import { shortenText } from "./text-format.js";
 
 const resolveChannelLabel = (channel: ChannelId) =>
@@ -31,24 +32,6 @@ function extractMessageId(payload: unknown): string | null {
     }
   }
   return null;
-}
-
-export type MessageCliJsonEnvelope = {
-  action: ChannelMessageActionName;
-  channel: ChannelId;
-  dryRun: boolean;
-  handledBy: "plugin" | "core" | "dry-run";
-  payload: unknown;
-};
-
-export function buildMessageCliJson(result: MessageActionRunResult): MessageCliJsonEnvelope {
-  return {
-    action: result.action,
-    channel: result.channel,
-    dryRun: result.dryRun,
-    handledBy: result.handledBy,
-    payload: result.payload,
-  };
 }
 
 type FormatOpts = {
@@ -344,7 +327,8 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     return [ok(`✅ Poll sent via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`)];
   }
 
-  // channel actions (non-send/poll)
+  // Channel actions share the generic plugin-action payload shape, so format
+  // known read/reaction shapes first and fall back to a compact object table.
   const payload = result.payload;
   const lines: string[] = [];
 

@@ -1,3 +1,4 @@
+// Imessage tests cover watch error log plugin behavior.
 import { describe, expect, it } from "vitest";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
@@ -18,13 +19,13 @@ describe("sanitizeIMessageWatchErrorPayload", () => {
   });
 
   it("drops non-object payloads and unsupported fields", () => {
-    expect(sanitizeIMessageWatchErrorPayload("boom")).toEqual({});
+    expect(sanitizeIMessageWatchErrorPayload("boom")).toStrictEqual({});
     expect(
       sanitizeIMessageWatchErrorPayload({
         code: Number.POSITIVE_INFINITY,
         message: 123,
         data: { sender: "+15555550123" },
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 });
