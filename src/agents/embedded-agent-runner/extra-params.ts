@@ -831,6 +831,7 @@ function applyPostPluginStreamWrappers(
       shouldPatchModel: (model) =>
         isDeepSeekV4OpenAICompatibleModel(model) && deepSeekV4NativeThinkingAllowedByCompat(model),
     });
+    ctx.agent.streamFn = createDeepSeekV4NonNativeCompatSanitizerWrapper(ctx.agent.streamFn);
 
     // MiMo reasoning models use the same DeepSeek-style reasoning_content wire
     // format. When MiMo is reached through an unowned proxy/custom provider
@@ -921,10 +922,13 @@ function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
 }
 
 function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
+  return isDeepSeekV4OpenAICompletionsModel(model) && !isMicrosoftFoundryProviderId(model.provider);
+}
+
+function isDeepSeekV4OpenAICompletionsModel(model: Parameters<StreamFn>[0]): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
     model.api === "openai-completions" &&
-    !isMicrosoftFoundryProviderId(model.provider) &&
     (normalizedModelId === "deepseek-v4-flash" || normalizedModelId === "deepseek-v4-pro")
   );
 }
@@ -953,6 +957,40 @@ function deepSeekV4NativeThinkingAllowedByCompat(model: Parameters<StreamFn>[0])
   const compat = (model as ProviderRuntimeModel).compat;
   const thinkingFormat = compat && typeof compat === "object" ? compat.thinkingFormat : undefined;
   return thinkingFormat === undefined || thinkingFormat === "deepseek";
+}
+
+function createDeepSeekV4NonNativeCompatSanitizerWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn | undefined {
+  if (!baseStreamFn) {
+    return undefined;
+  }
+  return (model, context, options) => {
+    if (
+      !isDeepSeekV4OpenAICompletionsModel(model) ||
+      deepSeekV4NativeThinkingAllowedByCompat(model)
+    ) {
+      return baseStreamFn(model, context, options);
+    }
+    return streamWithPayloadPatch(baseStreamFn, model, context, options, (payload) => {
+      delete payload.thinking;
+      delete payload.reasoning_effort;
+      delete payload.reasoning;
+      stripDeepSeekV4ReasoningContent(payload);
+    });
+  };
+}
+
+function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.messages)) {
+    return;
+  }
+  for (const message of payload.messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    delete (message as Record<string, unknown>).reasoning_content;
+  }
 }
 
 const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
