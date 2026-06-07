@@ -4,6 +4,7 @@ import {
   registerProviderPlugin,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -216,6 +217,38 @@ describe("opencode-go provider plugin", () => {
         resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
       } as never),
     ).resolves.toBeNull();
+  });
+
+  it("does not mix provider-specific runtime auth with shared discovery auth", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("blocked fetch"));
+
+    try {
+      const result = await provider.catalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey: (providerId: string) =>
+          providerId === "opencode-go"
+            ? {
+                apiKey: NON_ENV_SECRETREF_MARKER,
+                discoveryApiKey: undefined,
+              }
+            : {
+                apiKey: "shared-opencode-key",
+                discoveryApiKey: "shared-opencode-key",
+              },
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      } as never);
+
+      if (!result || !("provider" in result)) {
+        throw new Error("expected OpenCode Go provider result");
+      }
+      expect(result.provider.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+      expect(result.provider.models.map((model) => model.id)).toContain("deepseek-v4-pro");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("uses cached live OpenCode Go discovery and falls back to static rows on failure", async () => {
