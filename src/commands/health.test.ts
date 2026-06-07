@@ -111,7 +111,7 @@ vi.mock("../config/sessions/store.js", () => ({
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: (...args: unknown[]) =>
+  listReadOnlyChannelPluginsForConfig: (...args: Parameters<typeof import("../channels/plugins/read-only.js").listReadOnlyChannelPluginsForConfig>) =>
     listReadOnlyChannelPluginsForConfigMock(...args),
 }));
 
@@ -163,7 +163,7 @@ describe("getHealthSnapshot", () => {
           isEnabled: () => true,
           isConfigured: () => true,
         },
-      },
+      } as never,
     ]);
     recordChannelActivity({
       channel: "discord",

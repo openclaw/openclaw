@@ -200,7 +200,6 @@ function mergeRecordedActivityTimestamp(params: {
   const existing = params.account[params.key];
   if (existing == null) {
     params.account[params.key] = params.recorded;
-    return;
   }
 }
 
