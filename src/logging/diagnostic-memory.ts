@@ -164,6 +164,31 @@ function shouldEmitPressure(
   return true;
 }
 
+function formatPressureBytes(label: string, value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "";
+  }
+  const mib = (value / MB).toFixed(1);
+  return ` ${label}=${value} (${mib} MiB)`;
+}
+
+function formatPressureBytesWithThreshold(
+  label: string,
+  value: number | undefined,
+  threshold: number | undefined,
+): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "";
+  }
+  const mib = (value / MB).toFixed(1);
+  const parts = [`${label}=${value} (${mib} MiB)`];
+  if (typeof threshold === "number" && Number.isFinite(threshold) && threshold > 0) {
+    const pct = ((value / threshold) * 100).toFixed(0);
+    parts.push(`${pct}% of ${(threshold / MB).toFixed(0)} MiB threshold`);
+  }
+  return ` ${parts.join(", ")}`;
+}
+
 function formatOptionalPressureMetric(label: string, value: number | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? ` ${label}=${value}` : "";
 }
@@ -175,9 +200,8 @@ function logMemoryPressure(params: {
   const { pressure } = params;
   const message =
     `memory pressure: level=${pressure.level} reason=${pressure.reason}` +
-    ` rssBytes=${pressure.memory.rssBytes}` +
-    ` heapUsedBytes=${pressure.memory.heapUsedBytes}` +
-    formatOptionalPressureMetric("thresholdBytes", pressure.thresholdBytes) +
+    formatPressureBytesWithThreshold("rss", pressure.memory.rssBytes, pressure.thresholdBytes) +
+    formatPressureBytes("heapUsed", pressure.memory.heapUsedBytes) +
     formatOptionalPressureMetric("rssGrowthBytes", pressure.rssGrowthBytes) +
     formatOptionalPressureMetric("windowMs", pressure.windowMs) +
     (pressure.level === "critical"
