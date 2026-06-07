@@ -21,7 +21,7 @@ on:
         type: string
       profile:
         description: Isolated OpenClaw profile used by the proof
-        default: pr91044proof
+        default: default
         required: true
         type: string
 

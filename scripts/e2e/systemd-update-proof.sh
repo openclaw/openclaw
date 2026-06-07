@@ -5,9 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCENARIO="${OPENCLAW_SYSTEMD_PROOF_SCENARIO:-intact-systemd-update}"
 ARTIFACT_DIR="${OPENCLAW_SYSTEMD_PROOF_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/systemd-update-proof/$SCENARIO}"
 BASELINE_SPEC="${OPENCLAW_SYSTEMD_PROOF_BASELINE_SPEC:-openclaw@2026.6.1-beta.2}"
-PROFILE="${OPENCLAW_SYSTEMD_PROOF_PROFILE:-pr91044proof}"
+PROFILE="${OPENCLAW_SYSTEMD_PROOF_PROFILE:-default}"
 PORT="${OPENCLAW_SYSTEMD_PROOF_PORT:-19879}"
-UNIT="openclaw-gateway-${PROFILE}.service"
+if [ -z "$PROFILE" ] || [ "$PROFILE" = "default" ]; then
+  UNIT="openclaw-gateway.service"
+else
+  UNIT="openclaw-gateway-${PROFILE}.service"
+fi
 PREFIX="$ARTIFACT_DIR/npm-prefix"
 HOME_DIR="$ARTIFACT_DIR/home"
 STATE_DIR="$ARTIFACT_DIR/state"
