@@ -675,7 +675,7 @@ describe("tui command handlers", () => {
   });
 
   it("continues to forward unknown slash commands in local mode", async () => {
-    const { handleCommand, sendChat, addUser, addSystem, requestRender } = createHarness({
+    const { handleCommand, sendChat, addPendingUser, addSystem, requestRender } = createHarness({
       opts: { local: true },
     });
 
@@ -686,7 +686,7 @@ describe("tui command handlers", () => {
       sessionKey: "agent:main:main",
       message: "/not-a-real-command",
     });
-    expect(addUser).toHaveBeenCalledWith("/not-a-real-command");
+    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/not-a-real-command");
     expect(requestRender).toHaveBeenCalled();
     expect(addSystem).not.toHaveBeenCalled();
   });
