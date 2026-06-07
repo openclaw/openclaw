@@ -17,6 +17,7 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveCliRuntimeCanonicalProvider } from "../cli-backends.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
@@ -180,8 +181,19 @@ export async function updateSessionStoreAfterAgentRun(params: {
     // When there is no prior runtime model, do nothing: a heartbeat turn
     // should not establish initial model state on an empty session.
   } else {
+    // Map CLI runtime ids (e.g. "claude-cli", "google-antigravity-cli") back to
+    // their canonical provider (e.g. "anthropic", "google") before persisting,
+    // so display surfaces and downstream consumers see "anthropic/<model>"
+    // instead of leaking the runtime id. Falls back to the raw value when no
+    // canonical mapping is available.
+    const canonicalProviderForPersistence =
+      resolveCliRuntimeCanonicalProvider({
+        runtime: providerUsed,
+        config: cfg,
+        includeSetupRegistry: true,
+      }) ?? providerUsed;
     setSessionRuntimeModel(next, {
-      provider: providerUsed,
+      provider: canonicalProviderForPersistence,
       model: modelUsed,
     });
   }
