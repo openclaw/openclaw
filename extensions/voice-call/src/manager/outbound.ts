@@ -234,6 +234,7 @@ export async function initiateCall(
       webhookUrl: ctx.webhookUrl,
       inlineTwiml,
       preConnectTwiml,
+      ...(initialMessage ? { message: initialMessage } : {}),
       ...(streamSession
         ? { streamUrl: streamSession.streamUrl, streamAuthToken: streamSession.token }
         : {}),

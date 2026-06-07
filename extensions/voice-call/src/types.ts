@@ -225,6 +225,11 @@ export type InitiateCallInput = {
   streamUrl?: string;
   /** Per-call auth token the carrier echoes back on the WS upgrade. */
   streamAuthToken?: string;
+  /**
+   * Initial message to deliver on connect. Carriers use TwiML/webhook flows for
+   * this; the msteams realtime outbound path speaks it as the opening greeting.
+   */
+  message?: string;
 };
 
 export type InitiateCallResult = {

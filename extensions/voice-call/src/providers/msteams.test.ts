@@ -98,13 +98,14 @@ describe("MsteamsProvider (stub surface)", () => {
         callId: "internal-1",
         from: "msteams-bot",
         to: "user:aad-123",
+        message: "Your report is ready.",
         webhookUrl: "http://localhost/voice/webhook",
       } as unknown as Parameters<MsteamsProvider["initiateCall"]>[0]);
 
       expect(result).toEqual({ providerCallId: "graph-call-9", status: "initiated" });
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-      expect(url).toBe("https://worker.example/api/calls/place");
+      expect(url).toBe("https://worker.example/api/calls");
       expect(init.method).toBe("POST");
       expect(JSON.parse(init.body as string)).toEqual({
         userObjectId: "aad-123",
