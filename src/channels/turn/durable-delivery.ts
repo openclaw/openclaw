@@ -13,7 +13,7 @@ import {
 } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
-import { sendDurableMessageBatch } from "../message/send.js";
+import { sendDurableMessageBatch, type DurableMessageSuppressionReason } from "../message/send.js";
 import { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
 import type { ChannelDeliveryInfo, ChannelDeliveryResult } from "./types.js";
 
@@ -51,7 +51,11 @@ export type DurableInboundReplyDeliveryResult =
       capability?: DurableFinalDeliveryRequirement;
     }
   | { status: "handled_visible"; delivery: ChannelDeliveryResult }
-  | { status: "handled_no_send"; reason: "no_visible_result"; delivery: ChannelDeliveryResult }
+  | {
+      status: "handled_no_send";
+      reason: DurableMessageSuppressionReason;
+      delivery: ChannelDeliveryResult;
+    }
   | { status: "failed"; error: unknown; sentBeforeError?: true };
 
 function resolveDeliveryTarget(params: DurableInboundReplyDeliveryParams): string | undefined {
@@ -229,7 +233,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
   });
   if (send.status === "suppressed") {
-    return { status: "handled_no_send", reason: "no_visible_result", delivery };
+    return { status: "handled_no_send", reason: send.reason, delivery };
   }
   return { status: "handled_visible", delivery };
 }

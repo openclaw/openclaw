@@ -4273,6 +4273,132 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("replays a visible final DM response when durable delivery reports no visible result", async () => {
+    const statusReactionController = createStatusReactionController();
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    readLatestAssistantTextFromSessionTranscript.mockResolvedValueOnce({
+      text: "Original final answer",
+      timestamp: Date.now() - 1_000,
+    });
+    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+      text: "Recovered final answer",
+      timestamp: Date.now() + 1_000,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Original final answer" }, { kind: "final" });
+      return { queuedFinal: false };
+    });
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_no_send",
+      reason: "no_visible_result",
+      delivery: {
+        messageIds: ["m1"],
+        visibleReplySent: false,
+      },
+    });
+    deliverReplies.mockResolvedValueOnce({ delivered: false });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        removeAckAfterReply: false,
+        statusReactionController: statusReactionController as never,
+        ctxPayload: {
+          SessionKey: "agent:default:telegram:direct:123",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledTimes(1);
+    expect(deliverInboundReplyWithMessageSendContext.mock.calls[0]?.[0]).toMatchObject({
+      payload: { text: "Original final answer" },
+      info: { kind: "final" },
+    });
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies.mock.calls[0]?.[0]?.replies?.[0]?.text).toEqual(expect.any(String));
+  });
+
+  it("does not retry a deliberately suppressed final DM response", async () => {
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+      text: "Recovered final answer",
+      timestamp: Date.now() + 1_000,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Original final answer" }, { kind: "final" });
+      return { queuedFinal: false };
+    });
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_no_send",
+      reason: "cancelled_by_message_sending_hook",
+      delivery: {
+        messageIds: ["m1"],
+        visibleReplySent: false,
+      },
+    });
+    deliverReplies.mockResolvedValue({ delivered: false });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:default:telegram:direct:123",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledTimes(1);
+    expect(deliverInboundReplyWithMessageSendContext.mock.calls[0]?.[0]).toMatchObject({
+      payload: { text: "Original final answer" },
+      info: { kind: "final" },
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not retry an empty final DM payload that resolves to no visible payload", async () => {
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+      text: "Recovered final answer",
+      timestamp: Date.now() + 1_000,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Original final answer" }, { kind: "final" });
+      return { queuedFinal: false };
+    });
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_no_send",
+      reason: "no_visible_payload",
+      delivery: {
+        messageIds: ["m1"],
+        visibleReplySent: false,
+      },
+    });
+    deliverReplies.mockResolvedValue({ delivered: false });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:default:telegram:direct:123",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledTimes(1);
+    expect(deliverInboundReplyWithMessageSendContext.mock.calls[0]?.[0]).toMatchObject({
+      payload: { text: "Original final answer" },
+      info: { kind: "final" },
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("does not emit a silent-reply fallback for no-response group turns", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
