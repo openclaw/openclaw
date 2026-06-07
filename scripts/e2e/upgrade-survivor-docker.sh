@@ -181,11 +181,17 @@ GATEWAY_LOG="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/gateway.log"
 SYSTEMCTL_SHIM_LOG="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim.log"
 SYSTEMCTL_SHIM_PID_FILE="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim.pid"
 SYSTEMCTL_SHIM_DAEMON_LOG="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim-gateway.log"
+SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim-missing-supervisor.arm"
+SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim-missing-supervisor-next-show"
+SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim-missing-supervisor-consumed"
 BASELINE_SERVICE_INSTALL_JSON="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/baseline-service-install.json"
 BASELINE_SERVICE_INSTALL_ERR="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/baseline-service-install.err"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG="$SYSTEMCTL_SHIM_LOG"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$SYSTEMCTL_SHIM_PID_FILE"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$SYSTEMCTL_SHIM_DAEMON_LOG"
+export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM="$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM"
+export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW="$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW"
+export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED="$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED"
 export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON="$BASELINE_SERVICE_INSTALL_JSON"
 export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR="$BASELINE_SERVICE_INSTALL_ERR"
 
@@ -288,6 +294,41 @@ NODE
   return 1
 }
 
+missing_supervisor_after_refresh_enabled() {
+  [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "missing-supervisor-after-refresh" ]
+}
+
+arm_missing_supervisor_after_refresh_probe() {
+  missing_supervisor_after_refresh_enabled || return 0
+  if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
+    echo "missing-supervisor-after-refresh requires OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth" >&2
+    return 1
+  fi
+  rm -f "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW" "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED"
+  : >"$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM"
+}
+
+assert_missing_supervisor_after_refresh_probe() {
+  missing_supervisor_after_refresh_enabled || return 0
+  if [ ! -f "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED" ]; then
+    echo "missing-supervisor-after-refresh scenario did not exercise the missing supervisor runtime probe" >&2
+    cat "$SYSTEMCTL_SHIM_LOG" >&2 || true
+    return 1
+  fi
+  if grep -q "Gateway already reports the updated version after service refresh; skipped redundant restart." /tmp/openclaw-upgrade-survivor-update.err /tmp/openclaw-upgrade-survivor-update.json 2>/dev/null; then
+    echo "missing-supervisor-after-refresh scenario incorrectly accepted healthy gateway without supervisor proof" >&2
+    cat /tmp/openclaw-upgrade-survivor-update.err >&2 || true
+    cat /tmp/openclaw-upgrade-survivor-update.json >&2 || true
+    return 1
+  fi
+  if ! grep -q "managed service supervision was not verified" /tmp/openclaw-upgrade-survivor-update.err /tmp/openclaw-upgrade-survivor-update.json 2>/dev/null; then
+    echo "missing-supervisor-after-refresh scenario did not emit the expected supervisor diagnostic" >&2
+    cat /tmp/openclaw-upgrade-survivor-update.err >&2 || true
+    cat /tmp/openclaw-upgrade-survivor-update.json >&2 || true
+    return 1
+  fi
+}
+
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
 
@@ -312,6 +353,8 @@ echo "Running package update against the mounted tarball..."
 update_args=(update --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" --yes --json)
 if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
   update_args+=(--no-restart)
+else
+  arm_missing_supervisor_after_refresh_probe
 fi
 set +e
 openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_ALLOW_ROOT=1 openclaw "${update_args[@]}" >/tmp/openclaw-upgrade-survivor-update.json 2>/tmp/openclaw-upgrade-survivor-update.err
@@ -325,6 +368,7 @@ if [ "$update_status" -ne 0 ]; then
 fi
 
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+  assert_missing_supervisor_after_refresh_probe
   echo "Skipping doctor repair until after restart proof."
 else
   echo "Running non-interactive doctor repair..."

@@ -79,6 +79,9 @@ BASELINE_SERVICE_INSTALL_ERR="$ARTIFACT_ROOT/baseline-service-install.err"
 SYSTEMCTL_SHIM_LOG="$ARTIFACT_ROOT/systemctl-shim.log"
 SYSTEMCTL_SHIM_PID_FILE="$ARTIFACT_ROOT/systemctl-shim.pid"
 SYSTEMCTL_SHIM_DAEMON_LOG="$ARTIFACT_ROOT/systemctl-shim-gateway.log"
+SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM="$ARTIFACT_ROOT/systemctl-shim-missing-supervisor.arm"
+SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW="$ARTIFACT_ROOT/systemctl-shim-missing-supervisor-next-show"
+SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED="$ARTIFACT_ROOT/systemctl-shim-missing-supervisor-consumed"
 CONFIG_COVERAGE_JSON="$ARTIFACT_ROOT/config-recipe.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
 rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
@@ -326,6 +329,10 @@ configured_plugin_installs_enabled() {
 
 source_only_plugin_shadow_enabled() {
   [ "$SCENARIO" = "stale-source-plugin-shadow" ]
+}
+
+missing_supervisor_after_refresh_enabled() {
+  [ "$SCENARIO" = "missing-supervisor-after-refresh" ]
 }
 
 seed_source_only_plugin_shadow() {
@@ -728,6 +735,9 @@ set -euo pipefail
 log_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-/tmp/openclaw-systemctl-shim.log}"
 pid_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-/tmp/openclaw-systemctl-shim.pid}"
 daemon_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-/tmp/openclaw-systemctl-shim-gateway.log}"
+missing_supervisor_arm="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM:-}"
+missing_supervisor_next_show="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW:-}"
+missing_supervisor_consumed="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED:-}"
 printf '%s\n' "$*" >>"$log_file"
 
 filtered=()
@@ -815,6 +825,24 @@ start_gateway() {
   )
 }
 
+arm_missing_supervisor_show_after_restart() {
+  [ -n "$missing_supervisor_arm" ] || return 0
+  [ -f "$missing_supervisor_arm" ] || return 0
+  [ -n "$missing_supervisor_next_show" ] || return 0
+  [ -f "$missing_supervisor_consumed" ] && return 0
+  : >"$missing_supervisor_next_show"
+  rm -f "$missing_supervisor_arm"
+}
+
+maybe_simulate_missing_supervisor_show() {
+  [ -n "$missing_supervisor_next_show" ] || return 1
+  [ -f "$missing_supervisor_next_show" ] || return 1
+  rm -f "$missing_supervisor_next_show"
+  [ -n "$missing_supervisor_consumed" ] && : >"$missing_supervisor_consumed"
+  printf 'Unit openclaw-gateway.service could not be found.\n' >&2
+  exit 1
+}
+
 case "$command" in
   daemon-reload | enable | disable)
     exit 0
@@ -830,6 +858,7 @@ case "$command" in
   restart | start)
     stop_gateway
     start_gateway
+    arm_missing_supervisor_show_after_restart
     exit 0
     ;;
   is-enabled)
@@ -840,6 +869,7 @@ case "$command" in
     exit 3
     ;;
   show)
+    maybe_simulate_missing_supervisor_show
     if is_running; then
       printf 'ActiveState=active\nSubState=running\nMainPID=%s\nExecMainStatus=0\nExecMainCode=0\n' "$(cat "$pid_file")"
     else
@@ -857,7 +887,41 @@ SHIM
   export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG="$SYSTEMCTL_SHIM_LOG"
   export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$SYSTEMCTL_SHIM_PID_FILE"
   export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$SYSTEMCTL_SHIM_DAEMON_LOG"
+  export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM="$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM"
+  export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW="$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW"
+  export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED="$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED"
   export PATH="$shim_dir:$PATH"
+}
+
+arm_missing_supervisor_after_refresh_probe() {
+  missing_supervisor_after_refresh_enabled || return 0
+  if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
+    echo "missing-supervisor-after-refresh requires OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth" >&2
+    return 1
+  fi
+  rm -f "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW" "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED"
+  : >"$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM"
+}
+
+assert_missing_supervisor_after_refresh_probe() {
+  missing_supervisor_after_refresh_enabled || return 0
+  if [ ! -f "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED" ]; then
+    echo "missing-supervisor-after-refresh scenario did not exercise the missing supervisor runtime probe" >&2
+    cat "$SYSTEMCTL_SHIM_LOG" >&2 || true
+    return 1
+  fi
+  if grep -q "Gateway already reports the updated version after service refresh; skipped redundant restart." "$UPDATE_ERR" "$UPDATE_JSON" 2>/dev/null; then
+    echo "missing-supervisor-after-refresh scenario incorrectly accepted healthy gateway without supervisor proof" >&2
+    cat "$UPDATE_ERR" >&2 || true
+    cat "$UPDATE_JSON" >&2 || true
+    return 1
+  fi
+  if ! grep -q "managed service supervision was not verified" "$UPDATE_ERR" "$UPDATE_JSON" 2>/dev/null; then
+    echo "missing-supervisor-after-refresh scenario did not emit the expected supervisor diagnostic" >&2
+    cat "$UPDATE_ERR" >&2 || true
+    cat "$UPDATE_JSON" >&2 || true
+    return 1
+  fi
 }
 
 install_update_restart_service_unit() {
@@ -1105,6 +1169,7 @@ update_candidate() {
     update_args+=(--no-restart)
   else
     update_start="$(node -e "process.stdout.write(String(Date.now()))")"
+    arm_missing_supervisor_after_refresh_probe
   fi
   if [ "$ROOT_MANAGED_VPS" != "1" ]; then
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
@@ -1119,6 +1184,7 @@ update_candidate() {
     update_end="$(node -e "process.stdout.write(String(Date.now()))")"
     update_restart_seconds=$(((update_end - update_start + 999) / 1000))
     assert_update_json_ok "$UPDATE_JSON"
+    assert_missing_supervisor_after_refresh_probe
   fi
   installed_version="$(read_installed_version)"
 }

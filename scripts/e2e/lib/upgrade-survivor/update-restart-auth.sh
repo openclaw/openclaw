@@ -10,6 +10,9 @@ set -euo pipefail
 log_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-/tmp/openclaw-systemctl-shim.log}"
 pid_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-/tmp/openclaw-systemctl-shim.pid}"
 daemon_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-/tmp/openclaw-systemctl-shim-gateway.log}"
+missing_supervisor_arm="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM:-}"
+missing_supervisor_next_show="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW:-}"
+missing_supervisor_consumed="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED:-}"
 printf '%s\n' "$*" >>"$log_file"
 
 filtered=()
@@ -97,6 +100,24 @@ start_gateway() {
   )
 }
 
+arm_missing_supervisor_show_after_restart() {
+  [ -n "$missing_supervisor_arm" ] || return 0
+  [ -f "$missing_supervisor_arm" ] || return 0
+  [ -n "$missing_supervisor_next_show" ] || return 0
+  [ -f "$missing_supervisor_consumed" ] && return 0
+  : >"$missing_supervisor_next_show"
+  rm -f "$missing_supervisor_arm"
+}
+
+maybe_simulate_missing_supervisor_show() {
+  [ -n "$missing_supervisor_next_show" ] || return 1
+  [ -f "$missing_supervisor_next_show" ] || return 1
+  rm -f "$missing_supervisor_next_show"
+  [ -n "$missing_supervisor_consumed" ] && : >"$missing_supervisor_consumed"
+  printf 'Unit openclaw-gateway.service could not be found.\n' >&2
+  exit 1
+}
+
 case "$command" in
   daemon-reload | enable | disable)
     exit 0
@@ -112,6 +133,7 @@ case "$command" in
   restart | start)
     stop_gateway
     start_gateway
+    arm_missing_supervisor_show_after_restart
     exit 0
     ;;
   is-enabled)
@@ -122,6 +144,7 @@ case "$command" in
     exit 3
     ;;
   show)
+    maybe_simulate_missing_supervisor_show
     if is_running; then
       printf 'ActiveState=active\nSubState=running\nMainPID=%s\nExecMainStatus=0\nExecMainCode=0\n' "$(cat "$pid_file")"
     else

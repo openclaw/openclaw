@@ -438,11 +438,15 @@ export const mainLanes = [
     { resources: ["npm"], stateScenario: "empty", weight: 3 },
   ),
   ...createPackageUpdateMaintenanceLanes(),
-  npmLane("update-migration", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-migration", {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 30 * 60 * 1000,
-    weight: 3,
-  }),
+  npmLane(
+    "update-migration",
+    "OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-migration",
+    {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 30 * 60 * 1000,
+      weight: 3,
+    },
+  ),
   lane("plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins", {
     resources: ["npm", "service"],
     stateScenario: "empty",
