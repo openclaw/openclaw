@@ -71,6 +71,8 @@ final class TalkRealtimeRelaySession {
     private var isOutputPlaying = false
     private var outputPlaybackExpectedEndMs: Double = 0
     private var lastBargeInAtMs: Double = 0
+    private var didLogFirstAudioAppend = false
+    private var didLogFirstOutputAudio = false
 
     init(
         client: TalkRealtimeRelayGatewayClient = TalkRealtimeRelayGatewayClient(),
@@ -88,6 +90,8 @@ final class TalkRealtimeRelaySession {
 
     func start() async throws {
         self.isClosed = false
+        self.didLogFirstAudioAppend = false
+        self.didLogFirstOutputAudio = false
         self.onPhaseChanged(.thinking)
         let result = try await self.client.createSession(options: self.options)
         guard let sessionId = result.relaysessionid?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -100,6 +104,9 @@ final class TalkRealtimeRelaySession {
         self.sessionId = sessionId
         self.audioSender = TalkRealtimeRelayAudioSender(client: self.client, sessionId: sessionId)
         self.configureAudioContract(result.audio)
+        self.logger.info(
+            "talk realtime relay session created inputHz=\(self.inputSampleRateHz, privacy: .public) " +
+                "outputHz=\(self.outputSampleRateHz, privacy: .public)")
         let stream = await self.client.subscribe(bufferingNewest: 200)
         self.startEventPump(stream: stream)
         do {
@@ -119,6 +126,7 @@ final class TalkRealtimeRelaySession {
     func cancelOutput(reason: String = "user") {
         self.stopOutputPlayback()
         guard let sessionId else { return }
+        self.logger.info("talk realtime relay cancel output reason=\(Self.safeLogMessage(reason), privacy: .public)")
         Task { [client] in
             await client.cancelOutput(sessionId: sessionId, reason: reason)
         }
@@ -374,15 +382,23 @@ final class TalkRealtimeRelaySession {
                     return true
                 }
                 guard shouldSend, let audioSender else { return }
-                guard let message = await audioSender.send(encoded, timestampMs: timestampMs) else { return }
+                let message = await audioSender.send(encoded, timestampMs: timestampMs)
                 await MainActor.run { [weak self] in
-                    self?.logger.error(
-                        "realtime append audio failed: \(Self.safeLogMessage(message), privacy: .public)")
+                    guard let self else { return }
+                    if let message {
+                        self.logger.error(
+                            "realtime append audio failed: \(Self.safeLogMessage(message), privacy: .public)")
+                    } else {
+                        self.markAudioAppendSucceeded(byteCount: encoded.count)
+                    }
                 }
             }
         }
         self.audioEngine.prepare()
         try self.audioEngine.start()
+        self.logger.info(
+            "talk realtime relay microphone started inputHz=\(format.sampleRate, privacy: .public) " +
+                "targetHz=\(targetSampleRate, privacy: .public)")
     }
 
     private func stopMicrophonePump() {
@@ -407,6 +423,9 @@ final class TalkRealtimeRelaySession {
                 if !result.finished, let interruptedAt = result.interruptedAt {
                     self.logger.info("realtime output interrupted at \(interruptedAt, privacy: .public)s")
                 }
+                self.logger.info(
+                    "talk realtime relay output playback finished=\(result.finished, privacy: .public) " +
+                        "interruptedAt=\(result.interruptedAt ?? -1, privacy: .public)")
                 self.markOutputPlaybackFinished()
                 self.startPendingOutputPlaybackIfNeeded()
             }
@@ -445,11 +464,21 @@ final class TalkRealtimeRelaySession {
     }
 
     private func markOutputAudioStarted(byteCount: Int, nowMs: Double) {
+        if !self.didLogFirstOutputAudio {
+            self.didLogFirstOutputAudio = true
+            self.logger.info("talk realtime relay output audio received bytes=\(byteCount, privacy: .public)")
+        }
         self.isOutputPlaying = true
         let bytesPerSecond = max(1, self.outputSampleRateHz * Double(MemoryLayout<Int16>.size))
         let chunkDurationMs = (Double(byteCount) / bytesPerSecond) * 1000
         self.outputPlaybackExpectedEndMs = max(nowMs, self.outputPlaybackExpectedEndMs) + chunkDurationMs
         self.scheduleOutputPlaybackIdle(expectedEndMs: self.outputPlaybackExpectedEndMs)
+    }
+
+    private func markAudioAppendSucceeded(byteCount: Int) {
+        guard !self.didLogFirstAudioAppend else { return }
+        self.didLogFirstAudioAppend = true
+        self.logger.info("talk realtime relay microphone audio forwarded bytes=\(byteCount, privacy: .public)")
     }
 
     private func scheduleOutputPlaybackIdle(expectedEndMs: Double) {
