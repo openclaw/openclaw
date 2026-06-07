@@ -19,6 +19,70 @@ import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 import { startDailySessionResetScheduler } from "./session-daily-reset-scheduler.js";
+import { loadGatewaySessionRow } from "./session-utils.js";
+
+function broadcastScheduledDailyReset(params: {
+  broadcast: (
+    event: string,
+    payload: unknown,
+    opts?: {
+      dropIfSlow?: boolean;
+      stateVersion?: { presence?: number; health?: number };
+    },
+  ) => void;
+  nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
+  sessionKey: string;
+  agentId?: string;
+}) {
+  const sessionRow = loadGatewaySessionRow(
+    params.sessionKey,
+    params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : undefined,
+  );
+  const payload = {
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    reason: "reset",
+    ts: Date.now(),
+    ...(sessionRow
+      ? {
+          updatedAt: sessionRow.updatedAt ?? undefined,
+          sessionId: sessionRow.sessionId,
+          kind: sessionRow.kind,
+          channel: sessionRow.channel,
+          subject: sessionRow.subject,
+          groupChannel: sessionRow.groupChannel,
+          space: sessionRow.space,
+          chatType: sessionRow.chatType,
+          origin: sessionRow.origin,
+          label: sessionRow.label,
+          displayName: sessionRow.displayName,
+          deliveryContext: sessionRow.deliveryContext,
+          parentSessionKey: sessionRow.parentSessionKey,
+          sendPolicy: sessionRow.sendPolicy,
+          systemSent: sessionRow.systemSent,
+          abortedLastRun: sessionRow.abortedLastRun,
+          inputTokens: sessionRow.inputTokens,
+          outputTokens: sessionRow.outputTokens,
+          lastChannel: sessionRow.lastChannel,
+          lastTo: sessionRow.lastTo,
+          lastAccountId: sessionRow.lastAccountId,
+          lastThreadId: sessionRow.lastThreadId,
+          totalTokens: sessionRow.totalTokens,
+          totalTokensFresh: sessionRow.totalTokensFresh,
+          contextTokens: sessionRow.contextTokens,
+          responseUsage: sessionRow.responseUsage,
+          modelProvider: sessionRow.modelProvider,
+          model: sessionRow.model,
+          status: sessionRow.status,
+          startedAt: sessionRow.startedAt,
+          endedAt: sessionRow.endedAt,
+          runtimeMs: sessionRow.runtimeMs,
+        }
+      : {}),
+  };
+  params.broadcast("sessions.changed", payload, { dropIfSlow: true });
+  params.nodeSendToAllSubscribed("sessions.changed", payload);
+}
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -271,6 +335,14 @@ export function startGatewayMaintenanceTimers(params: {
                 .map((entry) => entry.sessionKey)
                 .filter((sessionKey) => sessionKey.trim()),
             ),
+          onSuccessfulReset: ({ sessionKey, agentId }) => {
+            broadcastScheduledDailyReset({
+              broadcast: params.broadcast,
+              nodeSendToAllSubscribed: params.nodeSendToAllSubscribed,
+              sessionKey,
+              agentId,
+            });
+          },
         })
       : null;
 

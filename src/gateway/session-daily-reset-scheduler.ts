@@ -37,6 +37,7 @@ export async function resetStaleDailySessions(params: {
   cfg: OpenClawConfig;
   nowMs?: number;
   activeSessionKeys?: ReadonlySet<string>;
+  onSuccessfulReset?: (payload: { sessionKey: string; agentId?: string }) => void;
   performReset?: (
     key: string,
     expectedEntry?: DailySessionResetExpectedEntry,
@@ -192,6 +193,10 @@ export async function resetStaleDailySessions(params: {
       });
       if (result.ok) {
         reset += 1;
+        params.onSuccessfulReset?.({
+          sessionKey: resetSessionKey,
+          agentId: sessionTarget.agentId,
+        });
       } else if (!("skipped" in result && result.skipped)) {
         errors += 1;
       }
@@ -233,6 +238,7 @@ export function startDailySessionResetScheduler(params: {
   intervalMs?: number;
   getNowMs?: () => number;
   getActiveSessionKeys?: () => ReadonlySet<string>;
+  onSuccessfulReset?: (payload: { sessionKey: string; agentId?: string }) => void;
   performReset?: (key: string) => Promise<{ ok: boolean }>;
 }): ReturnType<typeof setInterval> {
   let inFlight = false;
@@ -245,6 +251,7 @@ export function startDailySessionResetScheduler(params: {
       cfg: params.getConfig?.() ?? params.cfg,
       nowMs: params.getNowMs?.(),
       activeSessionKeys: params.getActiveSessionKeys?.(),
+      onSuccessfulReset: params.onSuccessfulReset,
       performReset: params.performReset,
     })
       .then((result) => {

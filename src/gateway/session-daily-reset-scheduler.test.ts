@@ -426,4 +426,32 @@ describe("daily session reset scheduler", () => {
     });
     clearInterval(timer);
   });
+
+  it("notifies successful scheduled daily resets with the canonical session key", async () => {
+    const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
+    const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const sessionKey = "agent:main:telegram:direct:user-1";
+    const { cfg } = await makeStore({
+      [sessionKey]: {
+        sessionId: "old-session",
+        updatedAt: beforeReset,
+        sessionStartedAt: beforeReset,
+      },
+    });
+    const performReset = vi.fn(async () => ({ ok: true }));
+    const onSuccessfulReset = vi.fn();
+
+    const result = await resetStaleDailySessions({
+      cfg,
+      nowMs: afterReset,
+      performReset,
+      onSuccessfulReset,
+    });
+
+    expect(result).toEqual({ checked: 1, reset: 1, errors: 0 });
+    expect(onSuccessfulReset).toHaveBeenCalledWith({
+      sessionKey,
+      agentId: "main",
+    });
+  });
 });
