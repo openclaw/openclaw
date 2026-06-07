@@ -1184,6 +1184,15 @@ describe("chat loading skeleton", () => {
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
 
+  it("shows prompt-bar progress while a submitted prompt is awaiting acknowledgement", () => {
+    const container = renderChatView({ sending: true });
+
+    const status = container.querySelector(".agent-chat__run-status--in-progress");
+    expect(status).toBeInstanceOf(HTMLElement);
+    expect(status?.textContent).toContain("In progress");
+    expect(status?.closest(".agent-chat__toolbar-left")).not.toBeNull();
+  });
+
   it("lets terminal run status win over stale abortable session UI", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
