@@ -311,6 +311,62 @@ export class MsteamsProvider implements VoiceCallProvider {
   // WebSocket lifecycle wiring.
   // ---------------------------------------------------------------------------
 
+  /**
+   * Create the streaming STT session + per-call state, register it in {@link calls}, and start
+   * connect() — flushing pre-connect audio on success, tearing the call down on failure. Shared by
+   * the inbound and outbound session-start paths (callers differ only in the internal call id).
+   * Requires {@link transcription} to be wired (callers guard this before calling).
+   */
+  private createStreamingCallState(
+    session: MsteamsSession,
+    providerCallId: string,
+    internalCallId: string,
+  ): void {
+    const transcription = this.transcription;
+    if (!transcription) {
+      return;
+    }
+    const sttSession = transcription.provider.createSession({
+      cfg: transcription.cfg,
+      providerConfig: transcription.providerConfig,
+      onPartial: (partial) => {
+        this.logger?.debug?.(`MsteamsProvider: partial ${providerCallId} chars=${partial.length}`);
+      },
+      onTranscript: (transcript) => this.handleTranscript(providerCallId, transcript),
+      onSpeechStart: () => this.handleSpeechStart(providerCallId),
+      onError: (error) => {
+        this.logger?.warn(`MsteamsProvider: STT error ${providerCallId} — ${error.message}`);
+      },
+    });
+
+    const state: MsteamsCallState = {
+      providerCallId,
+      internalCallId,
+      session,
+      sttSession,
+      ttsAbort: null,
+      outboundSeq: 0,
+      outboundTimestampMs: 0,
+      turnId: 0,
+      recordingActive: session.recordingStatus === "active",
+      pendingAudio: [],
+      humanCount: 1,
+    };
+    this.calls.set(providerCallId, state);
+
+    void sttSession
+      .connect()
+      .then(() => this.flushPendingAudio(providerCallId))
+      .catch((err: unknown) => {
+        this.logger?.error(
+          `MsteamsProvider: STT connect failed for ${providerCallId} — ${describeError(err)}`,
+        );
+        // No transcription path means the caller would sit in silence; tear the call down
+        // (hang up the worker session) instead of leaving it open.
+        this.failCall(providerCallId, "stt-connect-failed");
+      });
+  }
+
   private handleSessionStart(session: MsteamsSession): void {
     const providerCallId = session.callId;
     // Caller identity drives both the inbound-policy check and the session key
@@ -406,46 +462,8 @@ export class MsteamsProvider implements VoiceCallProvider {
       return;
     }
 
-    const sttSession = this.transcription.provider.createSession({
-      cfg: this.transcription.cfg,
-      providerConfig: this.transcription.providerConfig,
-      onPartial: (partial) => {
-        this.logger?.debug?.(`MsteamsProvider: partial ${providerCallId} chars=${partial.length}`);
-      },
-      onTranscript: (transcript) => this.handleTranscript(providerCallId, transcript),
-      onSpeechStart: () => this.handleSpeechStart(providerCallId),
-      onError: (error) => {
-        this.logger?.warn(`MsteamsProvider: STT error ${providerCallId} — ${error.message}`);
-      },
-    });
-
-    const state: MsteamsCallState = {
-      providerCallId,
-      internalCallId: record.callId,
-      session,
-      sttSession,
-      ttsAbort: null,
-      outboundSeq: 0,
-      outboundTimestampMs: 0,
-      turnId: 0,
-      recordingActive: session.recordingStatus === "active",
-      pendingAudio: [],
-      humanCount: 1,
-    };
-    // Register state BEFORE `call.answered` so the greeting's playTts can find it.
-    this.calls.set(providerCallId, state);
-
-    void sttSession
-      .connect()
-      .then(() => this.flushPendingAudio(providerCallId))
-      .catch((err: unknown) => {
-        this.logger?.error(
-          `MsteamsProvider: STT connect failed for ${providerCallId} — ${describeError(err)}`,
-        );
-        // No transcription path means the caller would sit in silence; tear the
-        // call down (hang up the worker session) instead of leaving it open.
-        this.failCall(providerCallId, "stt-connect-failed");
-      });
+    // Registers state in this.calls BEFORE `call.answered` so the greeting's playTts can find it.
+    this.createStreamingCallState(session, providerCallId, record.callId);
 
     this.manager.processEvent(this.buildEvent(providerCallId, { type: "call.answered", from, to }));
     this.logger?.info(
@@ -484,43 +502,7 @@ export class MsteamsProvider implements VoiceCallProvider {
       return;
     }
 
-    const sttSession = this.transcription.provider.createSession({
-      cfg: this.transcription.cfg,
-      providerConfig: this.transcription.providerConfig,
-      onPartial: (partial) => {
-        this.logger?.debug?.(`MsteamsProvider: partial ${providerCallId} chars=${partial.length}`);
-      },
-      onTranscript: (transcript) => this.handleTranscript(providerCallId, transcript),
-      onSpeechStart: () => this.handleSpeechStart(providerCallId),
-      onError: (error) => {
-        this.logger?.warn(`MsteamsProvider: STT error ${providerCallId} — ${error.message}`);
-      },
-    });
-
-    const state: MsteamsCallState = {
-      providerCallId,
-      internalCallId: pending.internalCallId,
-      session,
-      sttSession,
-      ttsAbort: null,
-      outboundSeq: 0,
-      outboundTimestampMs: 0,
-      turnId: 0,
-      recordingActive: session.recordingStatus === "active",
-      pendingAudio: [],
-      humanCount: 1,
-    };
-    this.calls.set(providerCallId, state);
-
-    void sttSession
-      .connect()
-      .then(() => this.flushPendingAudio(providerCallId))
-      .catch((err: unknown) => {
-        this.logger?.error(
-          `MsteamsProvider: STT connect failed for outbound ${providerCallId} — ${describeError(err)}`,
-        );
-        this.failCall(providerCallId, "stt-connect-failed");
-      });
+    this.createStreamingCallState(session, providerCallId, pending.internalCallId);
 
     // The CallRecord exists in "initiated"; mark it answered so the manager speaks
     // the initial message (notify) or starts the conversation.
