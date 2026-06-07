@@ -87,6 +87,10 @@ export type AgentCommandDeliveryResult = {
 };
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
+const INTER_SESSION_CONTROL_REPLY_SOURCE_TOOLS: ReadonlySet<string> = new Set([
+  "sessions_send",
+  "subagent_announce",
+]);
 
 type FreshSessionEntryForDeliveryResolver = () => Promise<SessionEntry | undefined>;
 
@@ -184,6 +188,76 @@ function hasNonEmptyStringArray(value: unknown): value is string[] {
 
 function hasNonEmptyArray<T>(value: T[] | undefined): value is T[] {
   return Array.isArray(value) && value.length > 0;
+}
+
+function hasMessagingToolDeliveryEvidence(result: RunResult): boolean {
+  return (
+    result.didSendViaMessagingTool === true ||
+    hasNonEmptyStringArray(result.messagingToolSentTexts) ||
+    hasNonEmptyStringArray(result.messagingToolSentMediaUrls) ||
+    hasNonEmptyArray(result.messagingToolSentTargets)
+  );
+}
+
+function isInternalInterSessionControlReplySource(opts: AgentCommandOpts): boolean {
+  const provenance = opts.inputProvenance;
+  if (provenance?.kind !== "inter_session") {
+    return false;
+  }
+  const sourceTool = provenance.sourceTool?.trim().toLowerCase();
+  if (!sourceTool || !INTER_SESSION_CONTROL_REPLY_SOURCE_TOOLS.has(sourceTool)) {
+    return false;
+  }
+  const sourceChannel =
+    opts.runContext?.messageChannel ??
+    opts.messageChannel ??
+    opts.channel ??
+    provenance.sourceChannel;
+  return isInternalMessageChannel(sourceChannel);
+}
+
+function isSingleTextOnlyPayload(payloads: readonly NormalizedOutboundPayload[]): boolean {
+  if (payloads.length !== 1) {
+    return false;
+  }
+  const payload = payloads[0];
+  return Boolean(
+    payload?.text.trim() &&
+    payload.mediaUrls.length === 0 &&
+    payload.audioAsVoice !== true &&
+    !payload.presentation &&
+    !payload.delivery &&
+    !payload.interactive &&
+    !payload.channelData &&
+    !payload.hookContent,
+  );
+}
+
+function shouldSuppressInterSessionControlReply(params: {
+  opts: AgentCommandOpts;
+  result: RunResult;
+  deliveryChannel: string;
+  deliveryTarget?: string | null;
+  deliveryPayloads: readonly NormalizedOutboundPayload[];
+}): boolean {
+  return (
+    !isInternalMessageChannel(params.deliveryChannel) &&
+    Boolean(params.deliveryTarget) &&
+    isInternalInterSessionControlReplySource(params.opts) &&
+    hasMessagingToolDeliveryEvidence(params.result) &&
+    isSingleTextOnlyPayload(params.deliveryPayloads)
+  );
+}
+
+function interSessionControlReplyStatus(): AgentCommandDeliveryStatus {
+  return {
+    requested: true,
+    attempted: false,
+    status: "suppressed",
+    succeeded: true,
+    reason: "inter_session_control_reply",
+    resultCount: 0,
+  };
 }
 
 function buildDeliveryResult(params: {
@@ -707,6 +781,26 @@ export async function deliverAgentCommandResult(
     }
     emitJsonEnvelope();
     return buildDeliveryResult({ payloads: normalizedPayloads, meta: resultMeta, result });
+  }
+  if (
+    !deliveryStatus &&
+    shouldSuppressInterSessionControlReply({
+      opts,
+      result,
+      deliveryChannel,
+      deliveryTarget,
+      deliveryPayloads,
+    })
+  ) {
+    deliveryStatus = interSessionControlReplyStatus();
+    emitJsonEnvelope(deliveryStatus);
+    return buildDeliveryResult({
+      payloads: normalizedPayloads,
+      meta: resultMeta,
+      result,
+      deliverySucceeded: true,
+      deliveryStatus,
+    });
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget && !deliveryStatus) {

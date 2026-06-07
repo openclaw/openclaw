@@ -346,6 +346,123 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
   });
 
+  it("suppresses internal inter-session messaging-tool acknowledgements before external delivery", async () => {
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "internal ack",
+        deliver: true,
+        bestEffortDeliver: true,
+        messageChannel: "webchat",
+        sessionKey: "agent:tester:main",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "sessions_send",
+        },
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:main",
+        agentId: "tester",
+      } as never,
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        deliveryContext: {
+          channel: "slack",
+          to: "U123",
+          accountId: "workspace-1",
+        },
+      },
+      payloads: [{ text: "I've received the confirmation that the message was routed." }],
+      result: {
+        ...createResult(),
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "U123",
+            text: "The actual user-facing reply.",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(delivered.didSendViaMessagingTool).toBe(true);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: false,
+      status: "suppressed",
+      succeeded: true,
+      reason: "inter_session_control_reply",
+      resultCount: 0,
+    });
+  });
+
+  it("keeps delivering genuine internal inter-session completions without messaging-tool evidence", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "internal completion",
+        deliver: true,
+        bestEffortDeliver: true,
+        messageChannel: "webchat",
+        sessionKey: "agent:tester:main",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "sessions_send",
+        },
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:main",
+        agentId: "tester",
+      } as never,
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        deliveryContext: {
+          channel: "slack",
+          to: "U123",
+          accountId: "workspace-1",
+        },
+      },
+      payloads: [{ text: "The requested summary is ready." }],
+      result: createResult(),
+    });
+
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    const deliverArgs = latestOutboundDeliveryArgs();
+    expect(deliverArgs.channel).toBe("slack");
+    expect(deliverArgs.to).toBe("U123");
+    expectTextPayload(deliverArgs.payloads[0], "The requested summary is ready.");
+    expect(delivered.deliverySucceeded).toBe(true);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: true,
+      status: "sent",
+      succeeded: true,
+      resultCount: 1,
+    });
+  });
+
   it("refreshes stale implicit session routing before final delivery", async () => {
     deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
     const runtime = { log: vi.fn(), error: vi.fn() };
