@@ -9,8 +9,10 @@ import {
 } from "@openclaw/media-core/read-response-with-limit";
 import type { Dispatcher } from "undici";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
+import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import {
   fetchWithRuntimeDispatcherOrMockedGlobal,
   isMockedFetch,
@@ -44,10 +46,22 @@ import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
 export const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
+const DEFAULT_MEDIA_MAX_REDIRECTS = 3;
+const MEDIA_REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
 function resolveDispatcherTimeoutMs(timeoutMs: number | undefined): number | undefined {
   const resolved = timeoutMs ?? globalUndiciStreamTimeoutMs;
   return resolved === undefined ? undefined : resolveTimerTimeoutMs(resolved, 1);
+}
+
+function resolveMediaMaxRedirects(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : DEFAULT_MEDIA_MAX_REDIRECTS;
+}
+
+function mediaRedirectVisitKey(url: string, init: RequestInit | undefined): string {
+  return `${init?.method?.toUpperCase() ?? "GET"} ${url}`;
 }
 
 /** Remote media bytes plus metadata before they are persisted to the media store. */
@@ -351,6 +365,63 @@ function captureMediaFetchExchange(params: {
   });
 }
 
+function dropMediaBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
+  if (!headers) {
+    return headers;
+  }
+  const next = new Headers(headers);
+  next.delete("content-length");
+  next.delete("content-type");
+  return next;
+}
+
+function rewriteMediaRedirectInitForMethod(params: {
+  init?: RequestInit;
+  status: number;
+}): RequestInit | undefined {
+  const init = params.init;
+  if (!init) {
+    return init;
+  }
+  const method = init.method?.toUpperCase() ?? "GET";
+  const shouldRewriteToGet =
+    params.status === 303 ||
+    ((params.status === 301 || params.status === 302) && method === "POST");
+  if (!shouldRewriteToGet) {
+    return init;
+  }
+  return {
+    ...init,
+    method: "GET",
+    body: undefined,
+    headers: dropMediaBodyHeaders(init.headers),
+  };
+}
+
+function rewriteMediaRedirectInitForCrossOrigin(params: {
+  init?: RequestInit;
+  currentOrigin: string;
+  nextOrigin: string;
+}): RequestInit | undefined {
+  const init = params.init;
+  if (!init || params.currentOrigin === params.nextOrigin) {
+    return init;
+  }
+  const method = init.method?.toUpperCase() ?? "GET";
+  const safeReplay = method === "GET" || method === "HEAD";
+  const nextInit = safeReplay
+    ? init
+    : {
+        ...init,
+        body: undefined,
+        headers: dropMediaBodyHeaders(init.headers),
+      };
+  return {
+    ...nextInit,
+    headers: retainSafeHeadersForCrossOriginRedirect(nextInit.headers),
+  };
+}
+
 async function createMediaFetchDispatcher(params: {
   url: URL;
   attempt: FetchDispatcherAttempt;
@@ -394,8 +465,7 @@ async function fetchNativeMediaAttempt(
 ): Promise<NativeMediaResponse> {
   const { url, fetchImpl, requestInit, timeoutMs, ssrfPolicy, lookupFn, trustExplicitProxyDns } =
     options;
-  const requestUrl = assertMediaUrlAllowedByPolicy(url, ssrfPolicy);
-  const parsedRequestUrl = new URL(requestUrl);
+  const sourceUrl = assertMediaUrlAllowedByPolicy(url, ssrfPolicy);
   const signal = resolveFetchSignal({
     requestSignal: requestInit?.signal,
     timeoutMs,
@@ -411,41 +481,86 @@ async function fetchNativeMediaAttempt(
     await closeDispatcher(dispatcher);
   };
   try {
-    dispatcher = await createMediaFetchDispatcher({
-      url: parsedRequestUrl,
-      attempt,
-      fetchImpl,
-      lookupFn,
-      ssrfPolicy,
-      timeoutMs,
-      trustExplicitProxyDns,
-    });
-    const init: DispatcherAwareRequestInit = {
-      ...requestInit,
-      ...(signal.signal ? { signal: signal.signal } : {}),
-      ...(dispatcher ? { dispatcher } : {}),
-      redirect:
-        requestInit?.redirect === "manual" || requestInit?.redirect === "error"
-          ? requestInit.redirect
-          : "error",
-    };
-    const response = fetchImpl
-      ? await fetchImpl(requestUrl, init)
-      : await fetchWithRuntimeDispatcherOrMockedGlobal(requestUrl, init);
-    const finalUrl = response.url || requestUrl;
-    try {
-      assertMediaUrlAllowedByPolicy(finalUrl, ssrfPolicy);
-    } catch (err) {
-      await discardIgnoredResponseBody(response);
-      throw err;
+    let currentUrl = sourceUrl;
+    let currentInit = normalizeRequestInitHeadersForFetch(
+      requestInit ? { ...requestInit } : undefined,
+    );
+    const followRedirects = currentInit?.redirect !== "manual" && currentInit?.redirect !== "error";
+    const maxRedirects = resolveMediaMaxRedirects(options.maxRedirects);
+    const visited = new Set<string>([mediaRedirectVisitKey(currentUrl, currentInit)]);
+    let redirectCount = 0;
+
+    while (true) {
+      const parsedRequestUrl = new URL(currentUrl);
+      dispatcher = await createMediaFetchDispatcher({
+        url: parsedRequestUrl,
+        attempt,
+        fetchImpl,
+        lookupFn,
+        ssrfPolicy,
+        timeoutMs,
+        trustExplicitProxyDns,
+      });
+      const init: DispatcherAwareRequestInit = {
+        ...currentInit,
+        ...(signal.signal ? { signal: signal.signal } : {}),
+        ...(dispatcher ? { dispatcher } : {}),
+        redirect: followRedirects ? "manual" : currentInit?.redirect,
+      };
+      const response = fetchImpl
+        ? await fetchImpl(currentUrl, init)
+        : await fetchWithRuntimeDispatcherOrMockedGlobal(currentUrl, init);
+      const finalUrl = response.url || currentUrl;
+      try {
+        assertMediaUrlAllowedByPolicy(finalUrl, ssrfPolicy);
+      } catch (err) {
+        await discardIgnoredResponseBody(response);
+        throw err;
+      }
+      captureMediaFetchExchange({ url: currentUrl, finalUrl, init, response });
+
+      if (followRedirects && MEDIA_REDIRECT_STATUS_CODES.has(response.status)) {
+        const location = response.headers.get("location");
+        if (!location) {
+          await discardIgnoredResponseBody(response);
+          throw new Error(`Redirect missing location header (${response.status})`);
+        }
+        redirectCount += 1;
+        if (redirectCount > maxRedirects) {
+          await discardIgnoredResponseBody(response);
+          throw new Error(`Too many redirects (limit: ${maxRedirects})`);
+        }
+        const nextParsedUrl = new URL(location, parsedRequestUrl);
+        const nextUrl = assertMediaUrlAllowedByPolicy(nextParsedUrl.toString(), ssrfPolicy);
+        currentInit = rewriteMediaRedirectInitForMethod({
+          init: currentInit,
+          status: response.status,
+        });
+        currentInit = rewriteMediaRedirectInitForCrossOrigin({
+          init: currentInit,
+          currentOrigin: parsedRequestUrl.origin,
+          nextOrigin: nextParsedUrl.origin,
+        });
+        const visitKey = mediaRedirectVisitKey(nextUrl, currentInit);
+        if (visited.has(visitKey)) {
+          await discardIgnoredResponseBody(response);
+          throw new Error("Redirect loop detected");
+        }
+        visited.add(visitKey);
+        await discardIgnoredResponseBody(response);
+        await closeDispatcher(dispatcher);
+        dispatcher = null;
+        currentUrl = nextUrl;
+        continue;
+      }
+
+      return {
+        response,
+        finalUrl,
+        release,
+        sourceUrl: redactMediaUrl(url),
+      };
     }
-    captureMediaFetchExchange({ url: requestUrl, finalUrl, init, response });
-    return {
-      response,
-      finalUrl,
-      release,
-      sourceUrl: redactMediaUrl(url),
-    };
   } catch (err) {
     await release();
     throw err;

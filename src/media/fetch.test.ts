@@ -745,28 +745,64 @@ describe("readRemoteMediaBuffer", () => {
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2, 3, 4]));
   });
 
-  it("uses no-redirect fetch behavior and still derives names from the native response URL", async () => {
-    const redirectedResponse = new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+  it("follows media redirects up to maxRedirects and derives names from the final URL", async () => {
+    const redirectResponse = new Response(null, {
+      status: 302,
+      headers: { location: "https://cdn.example.com/files/photo.png" },
+    });
+    const finalResponse = new Response(makeStream([new Uint8Array([1, 2, 3])]), {
       status: 200,
       headers: { "content-type": "image/png" },
     });
-    Object.defineProperty(redirectedResponse, "url", {
+    Object.defineProperty(finalResponse, "url", {
       value: "https://cdn.example.com/files/photo.png",
     });
-    const fetchImpl = vi.fn(async () => redirectedResponse);
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse)
+      .mockResolvedValueOnce(finalResponse);
 
     const saved = await saveRemoteMedia({
       url: "https://example.com/download",
       fetchImpl,
       lookupFn: makeLookupFn(),
       maxBytes: 8,
+      maxRedirects: 1,
     });
 
     expect(saved.fileName).toBe("photo.png");
-    expect(fetchImpl).toHaveBeenCalledWith(
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
       "https://example.com/download",
-      expect.objectContaining({ redirect: "error" }),
+      expect.objectContaining({ redirect: "manual" }),
     );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      "https://cdn.example.com/files/photo.png",
+      expect.objectContaining({ redirect: "manual" }),
+    );
+  });
+
+  it("honors maxRedirects zero for media fetches", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://cdn.example.com/files/photo.png" },
+        }),
+    );
+
+    await expect(
+      saveRemoteMedia({
+        url: "https://example.com/download",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 8,
+        maxRedirects: 0,
+      }),
+    ).rejects.toThrow("Too many redirects (limit: 0)");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("captures native media fetches for debug proxy traces", async () => {

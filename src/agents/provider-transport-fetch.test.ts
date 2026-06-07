@@ -46,6 +46,7 @@ const {
   resolvePinnedHostnameWithPolicyMock,
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
+  globalUndiciStreamTimeoutMsState,
   managedStreamCleanupRegistrations,
 } = vi.hoisted(() => {
   // Mock FinalizationRegistry so stream cleanup registrations are directly assertable.
@@ -148,6 +149,7 @@ const {
       }),
     ),
     shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
+    globalUndiciStreamTimeoutMsState: { value: undefined as number | undefined },
     managedStreamCleanupRegistrations: managedStreamCleanupRegistrationsLocal,
   };
 });
@@ -178,6 +180,12 @@ vi.mock("../infra/net/ssrf.js", async (importOriginal) => {
     resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
   };
 });
+
+vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
+  get globalUndiciStreamTimeoutMs() {
+    return globalUndiciStreamTimeoutMsState.value;
+  },
+}));
 
 vi.mock("../proxy-capture/runtime.js", () => ({
   captureHttpExchange: captureHttpExchangeMock,
@@ -275,6 +283,7 @@ describe("buildGuardedModelFetch", () => {
       .mockClear()
       .mockReturnValue({ allowPrivateNetwork: false, policy: { endpointClass: "local" } });
     shouldUseEnvHttpProxyForUrlMock.mockClear().mockReturnValue(false);
+    globalUndiciStreamTimeoutMsState.value = undefined;
     delete process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
     delete process.env.OPENCLAW_DEBUG_PROXY_URL;
     delete process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS;
@@ -869,6 +878,26 @@ describe("buildGuardedModelFetch", () => {
     );
     expect((latestGuardedFetchParams().init as Record<string, unknown>).dispatcher).toBe(
       createHttp1AgentMock.mock.results[0]?.value,
+    );
+  });
+
+  it("uses the configured global stream timeout when provider timeout is omitted", async () => {
+    globalUndiciStreamTimeoutMsState.value = 1_900_000;
+    buildProviderRequestDispatcherPolicyMock.mockReturnValueOnce({ mode: "direct" });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+
+    await buildGuardedModelFetch(model)("https://api.openai.com/v1/responses", {
+      method: "POST",
+    });
+
+    expect(createHttp1AgentMock).toHaveBeenCalledWith(
+      { connect: { lookup: expect.any(Function) } },
+      1_900_000,
     );
   });
 

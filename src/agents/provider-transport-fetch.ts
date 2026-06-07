@@ -33,6 +33,7 @@ import {
   type PinnedDispatcherPolicy,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import { globalUndiciStreamTimeoutMs } from "../infra/net/undici-global-dispatcher.js";
 import { createHttp1EnvHttpProxyAgent } from "../infra/net/undici-runtime.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -729,6 +730,11 @@ type ProviderTransportFetchResult = {
   refreshTimeout?: () => void;
 };
 
+function resolveProviderDispatcherTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  const resolved = timeoutMs ?? globalUndiciStreamTimeoutMs;
+  return resolved === undefined ? undefined : clampTimerTimeoutMs(resolved);
+}
+
 function assertExplicitProxySupportsProviderTarget(
   url: URL,
   dispatcherPolicy?: PinnedDispatcherPolicy,
@@ -754,16 +760,17 @@ async function createProviderTransportDispatcher(params: {
   assertExplicitProxySupportsProviderTarget(parsedUrl, params.dispatcherPolicy);
   await assertExplicitProxyAllowedWithPolicy(params.dispatcherPolicy, { policy: params.policy });
   const policyForUrl = resolveSsrFPolicyForUrl(parsedUrl, params.policy);
+  const dispatcherTimeoutMs = resolveProviderDispatcherTimeoutMs(params.timeoutMs);
 
   if (params.useEnvProxy && !params.dispatcherPolicy) {
     assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
-    return createHttp1EnvHttpProxyAgent(undefined, params.timeoutMs);
+    return createHttp1EnvHttpProxyAgent(undefined, dispatcherTimeoutMs);
   }
 
   const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
     policy: policyForUrl,
   });
-  return createPinnedDispatcher(pinned, params.dispatcherPolicy, policyForUrl, params.timeoutMs);
+  return createPinnedDispatcher(pinned, params.dispatcherPolicy, policyForUrl, dispatcherTimeoutMs);
 }
 
 function captureProviderTransportExchange(params: {
