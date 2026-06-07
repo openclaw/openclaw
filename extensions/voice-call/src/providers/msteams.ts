@@ -535,6 +535,15 @@ export class MsteamsProvider implements VoiceCallProvider {
       typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
     const effectiveConfig = resolveVoiceCallEffectiveConfig(voiceConfig, numberRouteKey).config;
 
+    // Inbound vision (streaming path): when the caller is sharing video, attach the latest frame
+    // so the agent can answer visual questions in the same turn (the realtime path uses the
+    // look_at_screen tool; the streaming agent runs per-turn, so we attach the frame directly).
+    // getLatestVideoFrame only returns recording-gated frames, so this is off until recording is active.
+    const frame = this.getLatestVideoFrame(state.providerCallId);
+    const images = frame
+      ? [{ type: "image" as const, data: frame.dataBase64, mimeType: frame.mime }]
+      : undefined;
+
     const result = await generateVoiceResponse({
       voiceConfig: effectiveConfig,
       coreConfig,
@@ -544,6 +553,7 @@ export class MsteamsProvider implements VoiceCallProvider {
       from: call.from,
       transcript: call.transcript,
       userMessage,
+      images,
     });
 
     if (result.error) {
