@@ -210,7 +210,7 @@ describe("MsteamsProvider (audio loop wiring)", () => {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });
-    return { port, captured, manager, tts, sttControl, provider: provider! };
+    return { port, captured, manager, tts, sttControl, provider };
   }
 
   function connect(port: number, callId: string): Promise<{ ws: WebSocket; inbound: unknown[] }> {
@@ -397,7 +397,7 @@ describe("MsteamsProvider (audio loop wiring)", () => {
   });
 
   it("drops inbound video frames until Teams recording status is active (Media Access API)", async () => {
-    const { port, captured, provider } = await setup();
+    const { port, captured, provider: videoProvider } = await setup();
     const callId = "teams-call-vid";
     const { ws } = await connect(port, callId);
 
@@ -427,7 +427,7 @@ describe("MsteamsProvider (audio loop wiring)", () => {
     await new Promise<void>((r) => {
       setTimeout(r, 50);
     });
-    expect(provider.getLatestVideoFrame(callId)).toBeUndefined();
+    expect(videoProvider.getLatestVideoFrame(callId)).toBeUndefined();
 
     // Worker reports recording active -> subsequent frames are buffered.
     ws.send(JSON.stringify({ type: "recording.status", status: "active" }));
@@ -445,8 +445,8 @@ describe("MsteamsProvider (audio loop wiring)", () => {
         dataBase64: "BAUG",
       }),
     );
-    await waitFor(() => provider.getLatestVideoFrame(callId) !== undefined);
-    expect(provider.getLatestVideoFrame(callId)).toMatchObject({
+    await waitFor(() => videoProvider.getLatestVideoFrame(callId) !== undefined);
+    expect(videoProvider.getLatestVideoFrame(callId)).toMatchObject({
       dataBase64: "BAUG",
       width: 640,
       height: 360,
