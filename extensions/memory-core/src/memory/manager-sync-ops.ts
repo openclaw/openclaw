@@ -40,7 +40,6 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterId,
-  resolveEmbeddingProviderFallbackModel,
   type EmbeddingProvider,
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
@@ -50,6 +49,7 @@ import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   applyMemoryFallbackProviderState,
+  resolveConfiguredEmbeddingProviderModelIdentity,
   resolveMemoryFallbackProviderRequest,
   resolveFallbackCurrentProviderId,
   type MemoryProviderLifecycleState,
@@ -310,9 +310,10 @@ export abstract class MemoryManagerSyncOps {
             id:
               resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
               this.settings.provider,
-            model:
-              this.settings.model.trim() ||
-              resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg),
+            model: resolveConfiguredEmbeddingProviderModelIdentity({
+              cfg: this.cfg,
+              settings: this.settings,
+            }),
           };
     const provider = hasProviderOverride
       ? params.provider!

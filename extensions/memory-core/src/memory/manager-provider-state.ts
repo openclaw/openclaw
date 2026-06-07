@@ -4,11 +4,13 @@ import type {
   ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
+  resolveEmbeddingProviderAdapterId,
   resolveEmbeddingProviderFallbackModel,
   type EmbeddingProvider,
   type EmbeddingProviderResult,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
+import { DEFAULT_LOCAL_MODEL } from "./provider-adapters.js";
 
 type MemoryResolvedProviderState = {
   provider: EmbeddingProvider | null;
@@ -104,6 +106,26 @@ export function resolveFallbackCurrentProviderId(params: {
     return params.lifecycle.providerId;
   }
   return null;
+}
+
+export function resolveConfiguredEmbeddingProviderModelIdentity(params: {
+  cfg: OpenClawConfig;
+  settings: ResolvedMemorySearchConfig;
+}): string {
+  if (params.settings.provider === "none") {
+    return "";
+  }
+  const adapterId =
+    resolveEmbeddingProviderAdapterId(params.settings.provider, params.cfg) ??
+    params.settings.provider;
+  if (params.settings.provider === "local" || adapterId === "local") {
+    const modelPath = params.settings.local?.modelPath?.trim();
+    return modelPath || DEFAULT_LOCAL_MODEL;
+  }
+  return (
+    params.settings.model.trim() ||
+    resolveEmbeddingProviderFallbackModel(params.settings.provider, "", params.cfg)
+  );
 }
 
 export function resolveMemoryPrimaryProviderRequest(params: {

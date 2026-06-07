@@ -74,6 +74,7 @@ vi.mock("./embeddings.js", () => {
       provider?: string;
       model?: string;
       outputDimensionality?: number;
+      local?: { modelPath?: string };
     }) => {
       providerCalls.push({
         provider: options.provider,
@@ -86,6 +87,24 @@ vi.mock("./embeddings.js", () => {
           provider: null,
           requestedProvider: options.provider ?? "auto",
           providerUnavailableReason: "No API key found for provider",
+        };
+      }
+      if (options.provider === "local") {
+        const modelPath = options.local?.modelPath?.trim() || DEFAULT_LOCAL_MODEL;
+        return {
+          requestedProvider: "local",
+          provider: {
+            id: "local",
+            model: modelPath,
+            close: async () => {
+              providerCloseCalls += 1;
+            },
+            embedQuery: async (text: string) => embedText(text),
+            embedBatch: async (texts: string[]) => {
+              embedBatchCalls += 1;
+              return texts.map(embedText);
+            },
+          },
         };
       }
       const providerId =
@@ -278,6 +297,7 @@ describe("memory index", () => {
     provider?: string;
     fallback?: "none" | "gemini" | "fallback-provider";
     providerAliases?: NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
+    local?: { modelPath?: string; contextSize?: number };
     model?: string;
     outputDimensionality?: number;
     multimodal?: {
@@ -298,7 +318,8 @@ describe("memory index", () => {
           memorySearch: {
             ...(params.provider !== undefined ? { provider: params.provider } : {}),
             model: params.model ?? "mock-embed",
-            fallback: params.fallback,
+            fallback: params.fallback ?? (params.provider === "local" ? "none" : undefined),
+            local: params.local,
             outputDimensionality: params.outputDimensionality,
             store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
@@ -456,6 +477,30 @@ describe("memory index", () => {
       });
     } finally {
       await nextManager.close?.();
+    }
+  });
+
+  it("keeps status clean when local provider uses custom modelPath", async () => {
+    const customModelPath = "/home/node/.node-llama-cpp/models/embeddinggemma-300M-Q8_0.gguf";
+    const dbPath = path.join(workspaceDir, "index-local-modelpath-status.sqlite");
+    const cfg = createCfg({
+      storePath: dbPath,
+      provider: "local",
+      local: { modelPath: customModelPath },
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const indexManager = await getFreshManager(cfg);
+    await indexManager.sync({ reason: "test", force: true });
+    await indexManager.close?.();
+
+    const statusManager = await getFreshManager(cfg, "status");
+    try {
+      const status = statusManager.status();
+
+      expect(status.dirty).toBe(false);
+      expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await statusManager.close?.();
     }
   });
 
