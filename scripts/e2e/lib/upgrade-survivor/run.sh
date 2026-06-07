@@ -966,7 +966,7 @@ const rawPublicKey =
     : spki;
 const publicKeyRaw = base64UrlEncode(rawPublicKey);
 const deviceId = crypto.createHash("sha256").update(rawPublicKey).digest("hex");
-const token = base64UrlEncode(crypto.randomBytes(32));
+const token = process.env.GATEWAY_AUTH_TOKEN_REF ?? base64UrlEncode(crypto.randomBytes(32));
 const now = Date.now();
 const scopes = ["operator.read"];
 
