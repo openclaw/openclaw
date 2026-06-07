@@ -80,11 +80,11 @@ function scanTextFileLines(file, onLine) {
       const text = buffer.subarray(0, bytesRead).toString("utf8");
       const lines = text.split(/\r?\n/u);
       for (let index = 0; index < lines.length - 1; index += 1) {
-        if (appendLineText(lines[index], true) === false) {
+        if (!appendLineText(lines[index], true)) {
           return;
         }
       }
-      if (appendLineText(lines.at(-1) ?? "", false) === false) {
+      if (!appendLineText(lines.at(-1) ?? "", false)) {
         return;
       }
     }

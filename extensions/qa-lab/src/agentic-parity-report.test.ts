@@ -216,7 +216,7 @@ describe("qa agentic parity report", () => {
 
   it("counts passing runtime parity scenarios with tool calls in both runtimes", () => {
     const metrics = computeQaAgenticParityMetrics({
-      scenarios: [makeRuntimeParitySummary().scenarios[0]!],
+      scenarios: [makeRuntimeParitySummary().scenarios[0]],
     });
 
     expect(metrics.validToolCallCount).toBe(1);

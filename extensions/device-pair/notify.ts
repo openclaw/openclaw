@@ -108,7 +108,7 @@ async function readNotifyState(api: OpenClawPluginApi): Promise<NotifyStateFile>
 
   const subscribers = subscriberEntries
     .map((entry) => entry.value)
-    .sort((a, b) => a.addedAtMs - b.addedAtMs);
+    .toSorted((a, b) => a.addedAtMs - b.addedAtMs);
   const notifiedRequestIds: Record<string, number> = {};
   for (const entry of seenRequestEntries) {
     const requestId = normalizeOptionalString(entry.value.requestId);

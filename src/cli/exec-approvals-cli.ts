@@ -63,7 +63,7 @@ async function readStdin(
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of stream) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.byteLength;
     if (total > maxBytes) {
       throw new Error(`Exec approvals stdin exceeds ${maxBytes} bytes.`);

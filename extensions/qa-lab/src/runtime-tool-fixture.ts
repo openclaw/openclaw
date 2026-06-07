@@ -115,9 +115,10 @@ function stringifyTranscriptToolResult(value: unknown): string {
     return String(value);
   }
   try {
-    return JSON.stringify(value);
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" ? serialized : "";
   } catch {
-    return String(value);
+    return "";
   }
 }
 

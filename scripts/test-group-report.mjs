@@ -465,7 +465,7 @@ function isFiniteNumber(value) {
 }
 
 function validateCounter(counter, reportPath, fieldName, index = null) {
-  const label = index === null ? fieldName : `${fieldName}[${index}]`;
+  const label = index === null ? fieldName : `${fieldName}[${String(index)}]`;
   if (!counter || typeof counter !== "object" || Array.isArray(counter)) {
     throw new Error(
       `[test-group-report] invalid grouped report ${reportPath}: ${label} must be an object`,

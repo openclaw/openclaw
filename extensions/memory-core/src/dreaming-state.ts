@@ -87,6 +87,7 @@ function openWorkspaceStore<T>(namespace: string): PluginStateKeyedStore<Workspa
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Workspace state reads are caller-typed by namespace.
 export async function readMemoryCoreWorkspaceEntries<T>(params: {
   namespace: string;
   workspaceDir: string;
@@ -99,6 +100,7 @@ export async function readMemoryCoreWorkspaceEntries<T>(params: {
     .map((entry) => ({ key: entry.value.key, value: entry.value.value }));
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Workspace state writes preserve caller-specific namespace payloads.
 export async function writeMemoryCoreWorkspaceEntries<T>(params: {
   namespace: string;
   workspaceDir: string;
@@ -126,6 +128,7 @@ export async function writeMemoryCoreWorkspaceEntries<T>(params: {
   }
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Workspace state writes preserve caller-specific namespace payloads.
 export async function writeMemoryCoreWorkspaceEntry<T>(params: {
   namespace: string;
   workspaceDir: string;

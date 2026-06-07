@@ -2499,7 +2499,6 @@ export async function auditShortTermPromotionArtifacts(params: {
   const storePath = resolveStorePath(workspaceDir);
   const lockPath = resolveLockPath(workspaceDir);
   const issues: ShortTermAuditIssue[] = [];
-  let exists = false;
   let entryCount = 0;
   let promotedCount = 0;
   let spacedEntryCount = 0;
@@ -2513,7 +2512,7 @@ export async function auditShortTermPromotionArtifacts(params: {
     namespace: SHORT_TERM_RECALL_NAMESPACE,
     workspaceDir,
   });
-  exists = rawEntries.length > 0;
+  const exists = rawEntries.length > 0;
   if (exists) {
     const parsed = {
       version: 1,
@@ -2788,9 +2787,7 @@ export const testing = {
       writeMemoryCoreWorkspaceEntries({
         namespace: SHORT_TERM_RECALL_NAMESPACE,
         workspaceDir,
-        entries: entries
-          ? Object.entries(entries).map(([key, value]) => ({ key, value: value as unknown }))
-          : [],
+        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
       }),
       writeMemoryCoreWorkspaceEntry({
         namespace: SHORT_TERM_META_NAMESPACE,
@@ -2812,9 +2809,7 @@ export const testing = {
       writeMemoryCoreWorkspaceEntries({
         namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
         workspaceDir,
-        entries: entries
-          ? Object.entries(entries).map(([key, value]) => ({ key, value: value as unknown }))
-          : [],
+        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
       }),
       writeMemoryCoreWorkspaceEntry({
         namespace: SHORT_TERM_META_NAMESPACE,
