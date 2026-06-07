@@ -170,6 +170,7 @@ describe("MsteamsProvider (audio loop wiring)", () => {
     manager: CallManager;
     tts: MsteamsTtsProvider;
     sttControl: SttControl;
+    provider: MsteamsProvider;
   }> {
     installVoiceCallStateRuntimeForTests();
     const port = randomPort();
@@ -209,7 +210,7 @@ describe("MsteamsProvider (audio loop wiring)", () => {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 50);
     });
-    return { port, captured, manager, tts, sttControl };
+    return { port, captured, manager, tts, sttControl, provider: provider! };
   }
 
   function connect(port: number, callId: string): Promise<{ ws: WebSocket; inbound: unknown[] }> {
@@ -391,6 +392,65 @@ describe("MsteamsProvider (audio loop wiring)", () => {
     expect(
       (generateVoiceResponseMock.mock.calls[0][0] as { userMessage: string }).userMessage,
     ).toBe("now do it");
+
+    ws.close();
+  });
+
+  it("drops inbound video frames until Teams recording status is active (Media Access API)", async () => {
+    const { port, captured, provider } = await setup();
+    const callId = "teams-call-vid";
+    const { ws } = await connect(port, callId);
+
+    // session.start WITHOUT recordingStatus -> recording not active.
+    ws.send(
+      JSON.stringify({
+        type: "session.start",
+        callId,
+        threadId: "thread-vid",
+        caller: { aadId: "aad-vid" },
+      }),
+    );
+    await waitFor(() => captured.current !== undefined);
+
+    // A video frame before recording is active must be dropped (not buffered).
+    ws.send(
+      JSON.stringify({
+        type: "video.frame",
+        source: "screenshare",
+        ts: 1,
+        width: 1280,
+        height: 720,
+        mime: "image/jpeg",
+        dataBase64: "AQID",
+      }),
+    );
+    await new Promise<void>((r) => {
+      setTimeout(r, 50);
+    });
+    expect(provider.getLatestVideoFrame(callId)).toBeUndefined();
+
+    // Worker reports recording active -> subsequent frames are buffered.
+    ws.send(JSON.stringify({ type: "recording.status", status: "active" }));
+    await new Promise<void>((r) => {
+      setTimeout(r, 20);
+    });
+    ws.send(
+      JSON.stringify({
+        type: "video.frame",
+        source: "screenshare",
+        ts: 2,
+        width: 640,
+        height: 360,
+        mime: "image/jpeg",
+        dataBase64: "BAUG",
+      }),
+    );
+    await waitFor(() => provider.getLatestVideoFrame(callId) !== undefined);
+    expect(provider.getLatestVideoFrame(callId)).toMatchObject({
+      dataBase64: "BAUG",
+      width: 640,
+      height: 360,
+    });
 
     ws.close();
   });
