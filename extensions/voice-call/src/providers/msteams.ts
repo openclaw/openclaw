@@ -6,6 +6,7 @@ import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
 } from "openclaw/plugin-sdk/realtime-transcription";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isInboundCallAllowed } from "../allowlist.js";
 import { resolveVoiceCallEffectiveConfig, type VoiceCallConfig } from "../config.js";
 import type { CoreAgentDeps, CoreConfig } from "../core-bridge.js";
@@ -964,9 +965,12 @@ export class MsteamsProvider implements VoiceCallProvider {
       .digest("hex");
     const url = `${workerBaseUrl.replace(/\/+$/, "")}/api/calls`;
 
-    let response: Response;
-    try {
-      response = await fetch(url, {
+    // Use the SSRF-guarded fetch (required for channel/plugin network calls). The worker is
+    // operator-configured trusted infra, typically co-located on loopback (e.g. 127.0.0.1:9440),
+    // so private/loopback targets must be permitted.
+    const { response, release } = await fetchWithSsrFGuard({
+      url,
+      init: {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -974,21 +978,28 @@ export class MsteamsProvider implements VoiceCallProvider {
           "x-openclawteamsbridge-signature": signature,
         },
         body: JSON.stringify({ userObjectId, tenantId }),
-      });
-    } catch (err) {
+      },
+      policy: { allowedHostnames: [new URL(url).hostname], allowPrivateNetwork: true },
+    }).catch((err: unknown) => {
       throw new Error(
         `MsteamsProvider.initiateCall: request to worker failed — ${describeError(err)}`,
         { cause: err },
       );
+    });
+
+    let workerCallId: string | undefined;
+    try {
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(
+          `MsteamsProvider.initiateCall: worker returned ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 200)}` : ""}`,
+        );
+      }
+      const payload = (await response.json().catch(() => ({}))) as { callId?: string };
+      workerCallId = payload.callId;
+    } finally {
+      await release();
     }
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(
-        `MsteamsProvider.initiateCall: worker returned ${response.status} ${response.statusText}${text ? ` — ${text.slice(0, 200)}` : ""}`,
-      );
-    }
-    const payload = (await response.json().catch(() => ({}))) as { callId?: string };
-    const workerCallId = payload.callId;
     if (!workerCallId) {
       throw new Error("MsteamsProvider.initiateCall: worker response did not include a callId");
     }
