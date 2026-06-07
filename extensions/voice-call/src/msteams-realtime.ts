@@ -39,13 +39,18 @@ import {
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps } from "./core-bridge.js";
 import type { GroupCallGateConfig } from "./group-call-gate.js";
-import type { MsteamsLogger, MsteamsSession } from "./msteams-media-stream.js";
+import {
+  MSTEAMS_PCM_SAMPLE_RATE_HZ,
+  type MsteamsLogger,
+  type MsteamsSession,
+} from "./msteams-media-stream.js";
 import type { MsteamsVideoFrame } from "./msteams-video-frame.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
+import { readArgText } from "./utils.js";
 
 /** Teams bridge wire format. */
-const MSTEAMS_SAMPLE_RATE_HZ = 16_000;
+const MSTEAMS_SAMPLE_RATE_HZ = MSTEAMS_PCM_SAMPLE_RATE_HZ;
 /** OpenAI/Azure realtime PCM format. */
 const REALTIME_SAMPLE_RATE_HZ = 24_000;
 /** Cap the consult transcript context so it cannot grow without bound on long calls. */
@@ -156,16 +161,6 @@ const MSTEAMS_ASYNC_TASK_NO_TARGET = {
 const MSTEAMS_RECORDING_BLOCKED = {
   text: "I can't act on that yet — call recording isn't active. Please make sure recording is on and ask again.",
 };
-
-function readArgString(args: unknown, key: string): string | undefined {
-  if (args && typeof args === "object" && !Array.isArray(args)) {
-    const value = (args as Record<string, unknown>)[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
 
 /**
  * Append the group-call gate as a model instruction. The realtime bridge owns turn-taking and
@@ -510,7 +505,7 @@ export function createMsteamsRealtimeCall(params: {
       return;
     }
 
-    const sourceArg = readArgString(event.args, "source");
+    const sourceArg = readArgText(event.args, "source");
     const source = sourceArg === "camera" || sourceArg === "screenshare" ? sourceArg : undefined;
     const frame = deps.getLatestFrame(source);
     if (!frame) {
@@ -611,8 +606,8 @@ export function createMsteamsRealtimeCall(params: {
       rtSession.submitToolResult(event.callId, MSTEAMS_ASYNC_TASK_NO_TARGET);
       return;
     }
-    const task = readArgString(event.args, "task") ?? readArgString(event.args, "question");
-    const deliverVia = readArgString(event.args, "deliverVia") === "call" ? "call" : "message";
+    const task = readArgText(event.args, "task") ?? readArgText(event.args, "question");
+    const deliverVia = readArgText(event.args, "deliverVia") === "call" ? "call" : "message";
     // Ack immediately so the model speaks the "I'll reach you" line and the call
     // is free to continue or hang up.
     rtSession.submitToolResult(
