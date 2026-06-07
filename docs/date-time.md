@@ -60,10 +60,10 @@ You can override this behavior:
 [WhatsApp +1555 +30s Sun 2026-01-18T05:19:00Z] follow-up
 ```
 
-## System prompt: current date and time
+## System prompt: time zone
 
 If the user timezone is known, the system prompt includes a dedicated
-**Current Date & Time** section with the **time zone only** (no clock/time format)
+**Time Zone** section with the **time zone only** (no clock/time format)
 to keep prompt caching stable:
 
 ```

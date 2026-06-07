@@ -63,7 +63,7 @@ The prompt is intentionally compact and uses fixed sections:
 - **Documentation**: local path to OpenClaw docs/source and when to read them.
 - **Workspace Files (injected)**: indicates bootstrap files are included below.
 - **Sandbox** (when enabled): indicates sandboxed runtime, sandbox paths, and whether elevated exec is available.
-- **Current Date & Time**: time zone only (cache-stable; the live clock comes from `session_status`).
+- **Time Zone**: time zone only (cache-stable; the live clock comes from `session_status`).
 - **Assistant Output Directives**: compact attachment, voice-note, and reply tag syntax.
 - **Heartbeats**: heartbeat prompt and ack behavior, when heartbeats are enabled for the default agent.
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
@@ -120,7 +120,7 @@ OpenClaw can render smaller system prompts for sub-agents. The runtime sets a
 - `minimal`: used for sub-agents; omits **Memory Recall**, **OpenClaw
   Self-Update**, **Model Aliases**, **User Identity**, **Assistant Output Directives**,
   **Messaging**, **Silent Replies**, and **Heartbeats**. Tooling, **Safety**,
-  **Skills** when supplied, Workspace, Sandbox, Current Date & Time (when
+  **Skills** when supplied, Workspace, Sandbox, Time Zone (when
   known), Runtime, and injected context stay available.
 - `none`: returns only the base identity line.
 
@@ -237,7 +237,7 @@ To inspect how much each injected file contributes (raw vs injected, truncation,
 
 ## Time handling
 
-The system prompt includes a dedicated **Current Date & Time** section when the
+The system prompt includes a dedicated **Time Zone** section when the
 user timezone is known. To keep the prompt cache-stable, it now only includes
 the **time zone** (no dynamic clock or time format).
 
