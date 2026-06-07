@@ -1,6 +1,7 @@
 // Assertions for live plugin tool E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
@@ -52,15 +53,16 @@ function agentErrorPath() {
   return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_ERROR_PATH || "/tmp/openclaw-agent.err";
 }
 
-function scanFileForNeedles(file, pendingNeedles) {
+function scanFileForNeedles(file, needles) {
+  const pendingNeedles = new Set(needles);
   let stat;
   try {
     stat = fs.statSync(file);
   } catch {
-    return;
+    return pendingNeedles;
   }
   if (!stat.isFile() || stat.size <= 0 || pendingNeedles.size === 0) {
-    return;
+    return pendingNeedles;
   }
 
   const maxNeedleLength = Math.max(...Array.from(pendingNeedles, (needle) => needle.length));
@@ -88,6 +90,7 @@ function scanFileForNeedles(file, pendingNeedles) {
   } finally {
     fs.closeSync(fd);
   }
+  return pendingNeedles;
 }
 
 function scanSessionTranscripts(sessionsDir, needles) {
@@ -105,7 +108,7 @@ function scanSessionTranscripts(sessionsDir, needles) {
   }
 
   const pendingDirs = [sessionsDir];
-  while (pendingDirs.length > 0 && pendingNeedles.size > 0) {
+  while (pendingDirs.length > 0) {
     const dir = pendingDirs.pop();
     const entries = fs
       .readdirSync(dir, { withFileTypes: true })
@@ -123,9 +126,9 @@ function scanSessionTranscripts(sessionsDir, needles) {
       if (checkedFiles.length < SESSION_FILE_LIST_LIMIT) {
         checkedFiles.push(path.relative(sessionsDir, entryPath));
       }
-      scanFileForNeedles(entryPath, pendingNeedles);
-      if (pendingNeedles.size === 0) {
-        break;
+      if (scanFileForNeedles(entryPath, needles).size === 0) {
+        pendingNeedles.clear();
+        return { checkedFiles, filesChecked, missingDir: false, pendingNeedles };
       }
     }
   }
@@ -354,7 +357,7 @@ function assertAgentTurn() {
   const errorPath = agentErrorPath();
   const stdout = fs.readFileSync(outputPath, "utf8");
   const response = JSON.parse(stdout);
-  const text = (response.payloads || []).map((payload) => payload?.text || "").join("\n");
+  const text = extractAgentReplyTexts(JSON.stringify(response)).join("\n");
   if (!text.includes(expected)) {
     const stderrTail = readTextFileTail(errorPath, ERROR_DETAIL_TAIL_BYTES);
     throw new Error(

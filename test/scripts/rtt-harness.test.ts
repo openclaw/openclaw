@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -28,6 +28,7 @@ const CREDENTIAL_SCRIPT_PATH = path.resolve(
   "../../scripts/e2e/npm-telegram-rtt-credentials.mjs",
 );
 const CONFIG_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-rtt-config.mjs");
+const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
 
@@ -170,6 +171,14 @@ describe("RTT harness", () => {
       "OPENCLAW_QA_CREDENTIAL_HTTP_MAX_BODY_BYTES",
       installEnvSnapshotIndex,
     );
+    const payloadByteLimitForwardIndex = script.indexOf(
+      "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES",
+      installEnvSnapshotIndex,
+    );
+    const payloadChunkLimitForwardIndex = script.indexOf(
+      "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS",
+      installEnvSnapshotIndex,
+    );
     const packageInstallIndex = script.indexOf("npm install -g");
     const credentialAcquireIndex = script.indexOf(
       "node /app/scripts/e2e/npm-telegram-rtt-credentials.mjs acquire",
@@ -182,6 +191,8 @@ describe("RTT harness", () => {
     expect(installEnvSnapshotIndex).toBeGreaterThanOrEqual(0);
     expect(convexSecretForwardIndex).toBeGreaterThan(installEnvSnapshotIndex);
     expect(bodyLimitForwardIndex).toBeGreaterThan(installEnvSnapshotIndex);
+    expect(payloadByteLimitForwardIndex).toBeGreaterThan(installEnvSnapshotIndex);
+    expect(payloadChunkLimitForwardIndex).toBeGreaterThan(installEnvSnapshotIndex);
     expect(packageInstallIndex).toBeLessThan(credentialAcquireIndex);
     expect(script).toContain(
       '-e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"',
@@ -214,6 +225,29 @@ describe("RTT harness", () => {
     expect(script).toContain("Mock OpenAI server did not become ready");
     expect(script).not.toContain("fetch('http://127.0.0.1:${mock_port}/health')");
     expect(script).not.toContain('export TELEGRAM_BOT_TOKEN="$OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN"');
+  });
+
+  it("rejects oversized chunked RTT credential markers before hydration", async () => {
+    const credentialModule = (await import(
+      `${pathToFileURL(CREDENTIAL_SCRIPT_PATH).href}?case=chunk-marker-${Date.now()}`
+    )) as {
+      parseChunkedPayloadMarker(payload: unknown): unknown;
+    };
+
+    expect(() =>
+      credentialModule.parseChunkedPayloadMarker({
+        [CHUNKED_PAYLOAD_MARKER]: true,
+        byteLength: 1,
+        chunkCount: 4097,
+      }),
+    ).toThrow("Chunked credential payload exceeds 4096 chunks.");
+    expect(() =>
+      credentialModule.parseChunkedPayloadMarker({
+        [CHUNKED_PAYLOAD_MARKER]: true,
+        byteLength: 64 * 1024 * 1024 + 1,
+        chunkCount: 1,
+      }),
+    ).toThrow("Chunked credential payload exceeds 67108864 bytes.");
   });
 
   it("keeps RTT Docker artifacts isolated by default", async () => {
@@ -526,6 +560,48 @@ describe("RTT harness", () => {
     expect(result.rtt).toEqual({ canaryMs: 5948, mentionReplyMs: undefined });
   });
 
+  it("marks malformed RTT summaries as failed results", () => {
+    const baseParams = {
+      artifacts: {
+        rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
+        rawReportPath: "runs/run/raw/telegram-qa-report.md",
+        rawSummaryPath: "runs/run/raw/telegram-qa-summary.json",
+        resultPath: "runs/run/result.json",
+      },
+      finishedAt: new Date("2026-05-01T00:00:12.000Z"),
+      providerMode: "mock-openai" as const,
+      runId: "run",
+      scenarios: ["telegram-mentioned-message-reply"],
+      spec: "openclaw@latest",
+      startedAt: new Date("2026-05-01T00:00:00.000Z"),
+      version: "2026.4.29",
+    };
+
+    for (const rawSummary of [
+      { scenarios: [] },
+      { scenarios: [{ id: "telegram-canary", rttMs: 5948, status: "pass" }] },
+      {
+        scenarios: [
+          { id: "telegram-canary", rttMs: 5948, status: "pass" },
+          { id: "telegram-mentioned-message-reply", status: "skipped" },
+        ],
+      },
+      {
+        scenarios: [
+          { id: "telegram-canary", rttMs: 5948, status: "pass" },
+          {
+            id: "telegram-mentioned-message-reply",
+            samples: [],
+            stats: { failed: 0, passed: 0, total: 0 },
+            status: "pass",
+          },
+        ],
+      },
+    ]) {
+      expect(buildRttResult({ ...baseParams, rawSummary }).run.status).toBe("fail");
+    }
+  });
+
   it("appends JSONL rows", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-test-"));
     tempDirs.push(tempDir);
@@ -575,5 +651,17 @@ describe("RTT harness", () => {
       scenarios: ["telegram-mentioned-message-reply"],
       timeoutMs: 240_000,
     });
+  });
+
+  it("rejects missing CLI path option values", () => {
+    for (const [flag, next] of [
+      ["--package-tgz", "--runs"],
+      ["--harness-root", "--output"],
+      ["--output", "--samples"],
+    ] as const) {
+      expect(() => cliTesting.parseArgs(["openclaw@latest", flag, next])).toThrow(
+        `${flag} requires a path.`,
+      );
+    }
   });
 });

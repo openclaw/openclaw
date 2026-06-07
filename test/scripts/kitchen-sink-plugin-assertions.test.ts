@@ -313,6 +313,25 @@ describe("kitchen-sink plugin assertions", () => {
     }
   });
 
+  it("rejects kitchen-sink log scans that find no files", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
+    const home = path.join(parent, "home");
+    const scratchRoot = path.join(parent, "scratch");
+    try {
+      mkdirSync(home, { recursive: true });
+      mkdirSync(scratchRoot, { recursive: true });
+
+      const result = runScanLogs({ home, scratchRoot });
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        "kitchen-sink log scan found no files",
+      );
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
   it("bounds repeated kitchen-sink log scan findings", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
     const home = path.join(parent, "home");
@@ -384,6 +403,72 @@ test ! -e "$KITCHEN_SINK_TMP_DIR"
       const scratchRoot = readFileSync(marker, "utf8").trim();
       expect(scratchRoot).toContain("/tmp/openclaw-kitchen-sink.");
       expect(existsSync(scratchRoot)).toBe(false);
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
+  it("preserves successful kitchen-sink CLI command logs for the final scan", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-log-"));
+    const scratchRoot = path.join(parent, "scratch");
+    const entry = path.join(parent, "entry.mjs");
+    try {
+      mkdirSync(scratchRoot, { recursive: true });
+      writeFileSync(entry, "console.log(`cli transcript: ${process.argv.slice(2).join(' ')}`);\n");
+
+      const result = runSweepShell(
+        `
+set -euo pipefail
+export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
+export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
+export OPENCLAW_ENTRY="$ENTRY"
+source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
+run_kitchen_sink_openclaw_logged "install/log" plugins install demo
+test -f "$SCRATCH_ROOT/install_log.log"
+grep -q "cli transcript: plugins install demo" "$SCRATCH_ROOT/install_log.log"
+`,
+        {
+          ENTRY: entry,
+          SCRATCH_ROOT: scratchRoot,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("cli transcript: plugins install demo");
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
+  it("includes expected-failure transcripts in the final kitchen-sink log scan", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-failure-log-"));
+    const home = path.join(parent, "home");
+    const scratchRoot = path.join(parent, "scratch");
+    try {
+      mkdirSync(home, { recursive: true });
+      mkdirSync(scratchRoot, { recursive: true });
+
+      const result = runSweepShell(
+        `
+set -euo pipefail
+export HOME="$HOME_DIR"
+export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
+export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
+export KITCHEN_SINK_SOURCE=npm
+export KITCHEN_SINK_SPEC=npm:@openclaw/kitchen-sink@0.0.0
+source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
+run_expect_failure "install/failure" bash -c 'printf "%s\\n" "npm ERR! No matching version @openclaw/kitchen-sink@0.0.0"; exit 1'
+test -f "$SCRATCH_ROOT/kitchen-sink-expected-failure-install_failure.log"
+scan_logs_for_unexpected_errors
+`,
+        {
+          HOME_DIR: home,
+          SCRATCH_ROOT: scratchRoot,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("log scan passed");
     } finally {
       rmSync(parent, { force: true, recursive: true });
     }

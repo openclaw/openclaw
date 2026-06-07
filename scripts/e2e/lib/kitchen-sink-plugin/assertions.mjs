@@ -86,7 +86,7 @@ function scanLogs() {
       return;
     }
     if (stat.isDirectory()) {
-      for (const child of fs.readdirSync(entry)) {
+      for (const child of fs.readdirSync(entry).toSorted()) {
         visit(path.join(entry, child));
       }
       return;
@@ -100,6 +100,11 @@ function scanLogs() {
   };
   for (const root of roots) {
     visit(root);
+  }
+  if (files.length === 0) {
+    throw new Error(
+      "kitchen-sink log scan found no files under the isolated scratch root or OpenClaw home",
+    );
   }
 
   const deny = [

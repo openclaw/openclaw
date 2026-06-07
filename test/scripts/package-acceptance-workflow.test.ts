@@ -1096,7 +1096,12 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("- live-e2e");
     expect(workflow).toContain("- qa-live");
-    expect(workflow).toContain("QA release-check lanes are advisory");
+    expect(workflow).toContain("disabled_required_lanes=()");
+    expect(workflow).toContain("live_suite_filter explicitly requested disabled QA live lane(s)");
+    expect(workflow).toContain("OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED");
+    expect(workflow).not.toContain(
+      "QA release-check lanes are advisory and do not block release validation.",
+    );
   });
 
   it("detects Matrix fail-fast support for older release refs", () => {
@@ -1133,9 +1138,42 @@ describe("package artifact reuse", () => {
       );
       expect(releaseWorkflow).toContain(`qa_live_${lower}_enabled="$qa_live_${lower}_ci_enabled"`);
       expect(releaseWorkflow).toContain(
+        `needs.resolve_target.outputs.qa_live_${lower}_enabled == 'true'`,
+      );
+      expect(releaseWorkflow).not.toContain(
         `vars.OPENCLAW_RELEASE_QA_${channel}_LIVE_CI_ENABLED == 'true'`,
       );
       expect(qaWorkflow).not.toContain(`OPENCLAW_QA_${channel}_LIVE_CI_ENABLED`);
+    }
+  });
+
+  it("fails Docker E2E release lanes when summary artifacts are missing", () => {
+    const cases = [
+      {
+        jobName: "validate_docker_e2e",
+        summaryStep: "Summarize Docker E2E chunk",
+        uploadStep: "Upload Docker E2E chunk artifacts",
+      },
+      {
+        jobName: "validate_docker_lanes",
+        summaryStep: "Summarize targeted Docker E2E lanes",
+        uploadStep: "Upload targeted Docker E2E artifacts",
+      },
+      {
+        jobName: "validate_docker_openwebui",
+        summaryStep: "Summarize Open WebUI Docker E2E chunk",
+        uploadStep: "Upload Open WebUI Docker E2E artifacts",
+      },
+    ];
+
+    for (const item of cases) {
+      const job = workflowJob(LIVE_E2E_WORKFLOW, item.jobName);
+      const summaryStep = workflowStep(job, item.summaryStep);
+      const uploadStep = workflowStep(job, item.uploadStep);
+
+      expect(summaryStep.run, item.jobName).toContain("summary missing:");
+      expect(summaryStep.run, item.jobName).toContain("exit 1");
+      expect(uploadStep.with?.["if-no-files-found"], item.jobName).toBe("error");
     }
   });
 
@@ -1262,7 +1300,7 @@ describe("package artifact reuse", () => {
     expectTextToIncludeAll(fullReleaseDocs, [
       "pre-publish candidate",
       "cross_os_suite_filter",
-      "QA release-check lanes are advisory",
+      "QA release-check failures block normal release validation",
       "silently skip that",
       "Telegram package lane",
       "| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`. |",
@@ -1361,7 +1399,7 @@ describe("package artifact reuse", () => {
     ]);
   });
 
-  it("keeps release QA advisory failures visible to the verifier", () => {
+  it("keeps release QA status artifacts blocking in the verifier", () => {
     const advisoryJobNames = [
       "qa_lab_parity_lane_release_checks",
       "qa_lab_parity_report_release_checks",
@@ -1408,8 +1446,12 @@ describe("package artifact reuse", () => {
       'elif [[ "$fallback" == "success" ]]; then',
       "advisory_status_override_allowed()",
       'if advisory_status_override_allowed "$name"; then',
-      "QA release-check lanes are advisory and do not block release validation.",
+      "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory.",
+      "::error::${name} ended with ${result}",
     ]);
+    expect(verifyStep.run).not.toContain(
+      "QA release-check lanes are advisory and do not block release validation.",
+    );
   });
 
   it("summarizes queue time separately from execution time in full validation", () => {

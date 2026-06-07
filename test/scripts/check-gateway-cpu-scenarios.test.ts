@@ -76,6 +76,20 @@ describe("gateway CPU scenario guard", () => {
     ).toThrow("--cpu-core-warn must be a positive number");
   });
 
+  it("rejects missing valued options instead of consuming the next flag", () => {
+    for (const flag of [
+      "--output-dir",
+      "--startup-case",
+      "--qa-scenario",
+      "--runs",
+      "--warmup",
+      "--cpu-core-warn",
+      "--hot-wall-warn-ms",
+    ]) {
+      expect(() => testing.parseArgs([flag, "--skip-qa"])).toThrow(`Missing value for ${flag}`);
+    }
+  });
+
   it("prepares CLI startup artifacts before running the startup bench", async () => {
     const outputDir = makeTempRoot();
     const startupOutput = path.join(outputDir, "gateway-startup-bench.json");

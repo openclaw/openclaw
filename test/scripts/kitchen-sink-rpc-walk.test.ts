@@ -462,6 +462,21 @@ describe("kitchen-sink RPC command output capture", () => {
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
   });
 
+  it("honors the resolved command output capture limit", async () => {
+    const result = await runCommand(
+      process.execPath,
+      ["-e", "process.stdout.write('abcdef'); process.stderr.write('UVWXYZ');"],
+      {
+        outputCaptureChars: 3,
+      },
+    );
+
+    expect(result.stdout).toBe("def");
+    expect(result.stderr).toBe("XYZ");
+    expect(result.stdoutTruncatedChars).toBe(3);
+    expect(result.stderrTruncatedChars).toBe(3);
+  });
+
   posixIt("kills timed command process groups", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-timeout-"));
     const scriptPath = path.join(root, "trap-term.mjs");
@@ -566,6 +581,36 @@ setInterval(() => {}, 1000);
       rssMiB: 512,
     });
     expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("rejects required command resource proof when sampling captures nothing", async () => {
+    const samples: unknown[] = [];
+
+    await expect(
+      runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
+        requireResourceSample: true,
+        resourceLabel: "plugins install",
+        resourceSampleIntervalMs: 1,
+        resourceSamples: samples,
+        sampleProcessImpl: async () => null,
+      }),
+    ).rejects.toThrow("plugins install RSS sample was not captured");
+
+    expect(samples).toEqual([]);
+  });
+
+  it("includes sampler errors in required command resource proof failures", async () => {
+    await expect(
+      runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
+        requireResourceSample: true,
+        resourceLabel: "plugins install",
+        resourceSampleIntervalMs: 1,
+        resourceSamples: [],
+        sampleProcessImpl: async () => {
+          throw new Error("ps failed");
+        },
+      }),
+    ).rejects.toThrow("plugins install RSS sample was not captured: ps failed");
   });
 
   it("rejects command spawn failures as Error objects", async () => {
@@ -728,6 +773,24 @@ describe("kitchen-sink RPC command catalog assertions", () => {
         ok: true,
         source: "plugin",
         output: { route: "tool:kitchen_sink_search" },
+      }),
+    ).toThrow("Kitchen Sink text tool output missed expected fixture");
+  });
+
+  it("rejects tool invocation canaries outside the structured result fields", () => {
+    expect(() =>
+      assertKitchenSinkSearchInvokeResult({
+        ok: true,
+        source: "plugin",
+        output: { note: "prompt mentioned Kitchen Sink image fixture" },
+      }),
+    ).toThrow("Kitchen Sink search tool output missed expected fixture");
+
+    expect(() =>
+      assertKitchenSinkTextInvokeResult({
+        ok: true,
+        source: "plugin",
+        output: { text: "Kitchen Sink prompt echoed tool:kitchen_sink_text" },
       }),
     ).toThrow("Kitchen Sink text tool output missed expected fixture");
   });

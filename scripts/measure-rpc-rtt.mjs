@@ -33,7 +33,7 @@ function usage() {
 
 function readFlagValue(argv, index, flag) {
   const value = argv[index + 1];
-  if (!value) {
+  if (!value || value.startsWith("--")) {
     throw new Error(`${flag} requires a value.`);
   }
   return value;
@@ -453,14 +453,24 @@ function quantile(sorted, q) {
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * q) - 1))];
 }
 
-function stats(samples) {
+function roundMeasuredMs(value, label) {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative finite duration.`);
+  }
+  return Math.max(1, Math.round(value));
+}
+
+export function summarizeRttSamples(samples) {
+  if (samples.length === 0) {
+    throw new Error("RPC RTT measurement produced no samples.");
+  }
   const sorted = samples.toSorted((left, right) => left - right);
   return {
-    avgMs: Math.round(sorted.reduce((sum, value) => sum + value, 0) / sorted.length),
-    maxMs: Math.round(sorted.at(-1)),
-    minMs: Math.round(sorted[0]),
-    p50Ms: Math.round(quantile(sorted, 0.5)),
-    p95Ms: Math.round(quantile(sorted, 0.95)),
+    avgMs: roundMeasuredMs(sorted.reduce((sum, value) => sum + value, 0) / sorted.length, "avgMs"),
+    maxMs: roundMeasuredMs(sorted.at(-1), "maxMs"),
+    minMs: roundMeasuredMs(sorted[0], "minMs"),
+    p50Ms: roundMeasuredMs(quantile(sorted, 0.5), "p50Ms"),
+    p95Ms: roundMeasuredMs(quantile(sorted, 0.95), "p95Ms"),
   };
 }
 
@@ -477,7 +487,7 @@ function toText(data) {
   return Buffer.from(data).toString("utf8");
 }
 
-function createGatewayClient({ WebSocket, url }) {
+export function createGatewayClient({ WebSocket, openTimeoutMs = 8_000, url }) {
   const ws = new WebSocket(url, { handshakeTimeout: 8_000 });
   const pending = new Map();
   const rejectPending = (error) => {
@@ -512,15 +522,28 @@ function createGatewayClient({ WebSocket, url }) {
   });
   const waitOpen = async () =>
     await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("gateway websocket open timeout")), 8_000);
-      ws.once("open", () => {
+      let settled = false;
+      const settle = (callback) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         clearTimeout(timer);
-        resolve();
-      });
-      ws.once("error", (error) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      });
+        ws.off?.("open", onOpen);
+        ws.off?.("error", onError);
+        callback();
+      };
+      const onOpen = () => settle(resolve);
+      const onError = (error) =>
+        settle(() => reject(error instanceof Error ? error : new Error(String(error))));
+      const timer = setTimeout(() => {
+        settle(() => {
+          ws.close();
+          reject(new Error("gateway websocket open timeout"));
+        });
+      }, openTimeoutMs);
+      ws.once("open", onOpen);
+      ws.once("error", onError);
     });
   const request = async (method, params, timeoutMs = 10_000) =>
     await new Promise((resolve, reject) => {
@@ -612,6 +635,7 @@ async function main() {
   const stdoutPath = path.join(tempRoot, "gateway.stdout.log");
   const stderrPath = path.join(tempRoot, "gateway.stderr.log");
   let gatewayChild;
+  let client;
   let removeGatewayParentCleanup = () => {};
   let status = "fail";
   let details = "";
@@ -653,7 +677,7 @@ async function main() {
     const protocol = await import(
       pathToFileURL(path.join(repoRoot, "packages/gateway-protocol/src/version.ts")).href
     );
-    const client = createGatewayClient({ WebSocket, url: `ws://127.0.0.1:${port}` });
+    client = createGatewayClient({ WebSocket, url: `ws://127.0.0.1:${port}` });
     await client.waitOpen();
     const connectStarted = performance.now();
     const connect = await client.request(
@@ -686,7 +710,7 @@ async function main() {
       payload: {
         method: "connect",
         ok: true,
-        durationMs: Math.round(performance.now() - connectStarted),
+        durationMs: roundMeasuredMs(performance.now() - connectStarted, "connect durationMs"),
       },
     });
     const samples = [];
@@ -694,23 +718,29 @@ async function main() {
       for (let iteration = 1; iteration <= args.iterations; iteration += 1) {
         const requestStartedAtMs = performance.now();
         const response = await client.request(method, {}, 10_000);
-        const durationMs = Math.round(performance.now() - requestStartedAtMs);
+        const durationMs = performance.now() - requestStartedAtMs;
+        const roundedDurationMs = roundMeasuredMs(durationMs, `${method} durationMs`);
         if (!response.ok) {
           throw new Error(`${method} failed: ${JSON.stringify(response.error)}`);
         }
         samples.push({ method, durationMs });
         events.push({
           event: "gateway-rpc",
-          payload: { kind: "gateway-rpc", method, ok: true, durationMs, iteration },
+          payload: {
+            kind: "gateway-rpc",
+            method,
+            ok: true,
+            durationMs: roundedDurationMs,
+            iteration,
+          },
         });
       }
     }
-    client.close();
-    const sampleStats = stats(samples.map((sample) => sample.durationMs));
+    const sampleStats = summarizeRttSamples(samples.map((sample) => sample.durationMs));
     const byMethod = Object.fromEntries(
       args.methods.map((method) => [
         method,
-        stats(
+        summarizeRttSamples(
           samples.filter((sample) => sample.method === method).map((sample) => sample.durationMs),
         ),
       ]),
@@ -732,6 +762,7 @@ async function main() {
     details = error instanceof Error ? (error.stack ?? error.message) : String(error);
   } finally {
     try {
+      client?.close();
       if (gatewayChild) {
         await stopGateway(gatewayChild).catch(() => {});
       }

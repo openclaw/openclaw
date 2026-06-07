@@ -245,6 +245,8 @@ export function runCommand(command, args, options = {}) {
       resourceSampleIntervalMs = 1000,
       resourceSampleOptions,
       resourceSamples,
+      outputCaptureChars = config.outputCaptureChars,
+      requireResourceSample = false,
       sampleProcessImpl = sampleProcess,
       timeoutKillGraceMs = 2000,
       timeoutMs = config.commandTimeoutMs,
@@ -262,6 +264,8 @@ export function runCommand(command, args, options = {}) {
     let forceKillTimer;
     let sampleTimer;
     let resourceSampleInFlight = null;
+    let capturedResourceSampleCount = 0;
+    let lastResourceSampleError = null;
     const commandLabel = resourceLabel ?? [command, ...args.slice(0, 2)].join(" ");
     const shouldSampleResources = Array.isArray(resourceSamples);
     const collectResourceSample = () => {
@@ -272,6 +276,7 @@ export function runCommand(command, args, options = {}) {
         .then(() => sampleProcessImpl(child.pid, resourceSampleOptions ?? {}))
         .then((sample) => {
           if (sample) {
+            capturedResourceSampleCount += 1;
             resourceSamples.push({
               ...sample,
               elapsedMs: Date.now() - startedAt,
@@ -279,7 +284,9 @@ export function runCommand(command, args, options = {}) {
             });
           }
         })
-        .catch(() => {})
+        .catch((error) => {
+          lastResourceSampleError = error;
+        })
         .finally(() => {
           resourceSampleInFlight = null;
         });
@@ -288,6 +295,12 @@ export function runCommand(command, args, options = {}) {
     const stopResourceSampling = async () => {
       clearInterval(sampleTimer);
       await resourceSampleInFlight?.catch(() => {});
+      if (requireResourceSample && capturedResourceSampleCount === 0) {
+        const detail =
+          lastResourceSampleError instanceof Error ? `: ${lastResourceSampleError.message}` : "";
+        return new Error(`${commandLabel} RSS sample was not captured${detail}`);
+      }
+      return null;
     };
     if (shouldSampleResources) {
       void collectResourceSample();
@@ -306,10 +319,10 @@ export function runCommand(command, args, options = {}) {
       forceKillTimer.unref();
     }, timeoutMs);
     child.stdout?.on("data", (chunk) => {
-      stdout = appendBoundedOutput(stdout, chunk);
+      stdout = appendBoundedOutput(stdout, chunk, outputCaptureChars);
     });
     child.stderr?.on("data", (chunk) => {
-      stderr = appendBoundedOutput(stderr, chunk);
+      stderr = appendBoundedOutput(stderr, chunk, outputCaptureChars);
     });
     child.on("error", (error) => {
       clearTimeout(timer);
@@ -321,8 +334,12 @@ export function runCommand(command, args, options = {}) {
     child.on("close", (status, signal) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
-      void stopResourceSampling().then(() => {
+      void stopResourceSampling().then((resourceSampleFailure) => {
         if (!timedOut && status === 0) {
+          if (resourceSampleFailure) {
+            reject(resourceSampleFailure);
+            return;
+          }
           resolve({
             stdout: stdout.text,
             stderr: stderr.text,
@@ -379,6 +396,8 @@ async function runOpenClaw(runner, args, env, options = {}) {
     resourceSampleIntervalMs: options.resourceSampleIntervalMs,
     resourceSampleOptions: options.resourceSampleOptions,
     resourceSamples: options.resourceSamples,
+    outputCaptureChars: config.outputCaptureChars,
+    requireResourceSample: options.requireResourceSample,
     timeoutMs: options.timeoutMs ?? config.commandTimeoutMs,
   });
 }
@@ -1110,10 +1129,12 @@ export function assertKitchenSinkSearchInvokeResult(payload) {
   if (payload?.ok !== true || payload?.source !== "plugin") {
     throw new Error(`Kitchen Sink search tool invoke failed: ${JSON.stringify(payload)}`);
   }
-  const text = JSON.stringify(payload.output ?? payload);
-  if (!text.includes("Kitchen Sink image fixture")) {
+  const output = assertObjectPayload(payload.output, "Kitchen Sink search tool output");
+  const results = Array.isArray(output.results) ? output.results : [];
+  const hasFixture = results.some((entry) => entry?.title === "Kitchen Sink image fixture");
+  if (!hasFixture) {
     throw new Error(
-      `Kitchen Sink search tool output missed expected fixture: ${text.slice(0, 1000)}`,
+      `Kitchen Sink search tool output missed expected fixture: ${JSON.stringify(output).slice(0, 1000)}`,
     );
   }
 }
@@ -1122,10 +1143,14 @@ export function assertKitchenSinkTextInvokeResult(payload) {
   if (payload?.ok !== true || payload?.source !== "plugin") {
     throw new Error(`Kitchen Sink text tool invoke failed: ${JSON.stringify(payload)}`);
   }
-  const text = JSON.stringify(payload.output ?? payload);
-  if (!text.includes("tool:kitchen_sink_text") || !text.includes("Kitchen Sink")) {
+  const output = assertObjectPayload(payload.output, "Kitchen Sink text tool output");
+  if (
+    output.route !== "tool:kitchen_sink_text" ||
+    typeof output.text !== "string" ||
+    !output.text.includes("Kitchen Sink")
+  ) {
     throw new Error(
-      `Kitchen Sink text tool output missed expected fixture: ${text.slice(0, 1000)}`,
+      `Kitchen Sink text tool output missed expected fixture: ${JSON.stringify(output).slice(0, 1000)}`,
     );
   }
 }
@@ -1769,6 +1794,7 @@ export async function main() {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
     await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, {
       ...commandResourceOptions,
+      requireResourceSample: true,
       resourceLabel: "plugins install",
       timeoutMs: config.installTimeoutMs,
     });

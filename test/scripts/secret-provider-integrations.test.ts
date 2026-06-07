@@ -237,6 +237,86 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "fails mandatory commands that exit by signal",
+    async () => {
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=signal-${Date.now()}`
+      );
+
+      await expect(
+        proof.runCommand(process.execPath, [
+          "--input-type=module",
+          "--eval",
+          "process.kill(process.pid, 'SIGTERM');",
+        ]),
+      ).rejects.toThrow("command terminated by signal (SIGTERM)");
+    },
+  );
+
+  it.each([
+    ["OPENCLAW_SECRET_PROOF_COMMAND_MS", "150ms"],
+    ["OPENCLAW_SECRET_PROOF_READY_MS", "0"],
+    ["OPENCLAW_SECRET_PROOF_OUTPUT_BYTES", "4mb"],
+    ["OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES", "4mb"],
+  ])("rejects malformed proof env limit %s=%s", async (name, value) => {
+    const previous = process.env[name];
+    process.env[name] = value;
+    try {
+      await expect(
+        import(`${pathToFileURL(proofScriptPath).href}?case=env-${name}-${Date.now()}`),
+      ).rejects.toThrow(`${name} must be a positive integer`);
+    } finally {
+      if (previous === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = previous;
+      }
+    }
+  });
+
+  it("bounds generated resolver stdin before reading the secret store", async () => {
+    const root = makeTempDir();
+    const stateDir = path.join(root, "state");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const storePath = path.join(stateDir, "proof-secret-store.json");
+    fs.writeFileSync(
+      storePath,
+      `${JSON.stringify({ mode: "ok", calls: 0, values: { "proof/id": "ok" } }, null, 2)}\n`,
+      "utf8",
+    );
+    const previousLimit = process.env.OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES;
+    process.env.OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES = "64";
+
+    try {
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=resolver-stdin-${Date.now()}`
+      );
+      const plugin = proof.writeProofPlugin({ stateDir });
+      const result = spawnSync(process.execPath, [plugin.resolverPath], {
+        cwd: plugin.pluginRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PROOF_SECRET_STORE_PATH: storePath,
+        },
+        input: JSON.stringify({ ids: ["proof/id"], padding: "x".repeat(512) }),
+        timeout: 5_000,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(`${result.stderr}${result.stdout}`).toContain("resolver stdin exceeded 64 bytes");
+      expect(JSON.parse(fs.readFileSync(storePath, "utf8")).calls).toBe(0);
+    } finally {
+      if (previousLimit === undefined) {
+        delete process.env.OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES;
+      } else {
+        process.env.OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES = previousLimit;
+      }
+    }
+  });
+
   it("fails when proof temp cleanup cannot remove the root", async () => {
     const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=cleanup-${Date.now()}`);
     const rmSync = vi.spyOn(fs, "rmSync").mockImplementation(() => {
