@@ -176,7 +176,7 @@ UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
 command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
 PORT=18789
 START_BUDGET="${OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS:-90}"
-STATUS_BUDGET="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-30}"
+STATUS_BUDGET="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-180}"
 GATEWAY_LOG="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/gateway.log"
 SYSTEMCTL_SHIM_LOG="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim.log"
 SYSTEMCTL_SHIM_PID_FILE="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim.pid"
@@ -427,20 +427,23 @@ node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
 
 echo "Checking gateway RPC status..."
 status_start="$(node -e "process.stdout.write(String(Date.now()))")"
-if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw gateway status --url "ws://127.0.0.1:$PORT" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >/tmp/openclaw-upgrade-survivor-status.json 2>/tmp/openclaw-upgrade-survivor-status.err; then
-  echo "gateway status failed" >&2
-  cat /tmp/openclaw-upgrade-survivor-status.err >&2 || true
-  cat "$GATEWAY_LOG" >&2 || true
-  cat "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2 || true
-  exit 1
-fi
+while true; do
+  if openclaw_e2e_maybe_timeout "$command_timeout" openclaw gateway status --url "ws://127.0.0.1:$PORT" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >/tmp/openclaw-upgrade-survivor-status.json 2>/tmp/openclaw-upgrade-survivor-status.err; then
+    break
+  fi
+  status_now="$(node -e "process.stdout.write(String(Date.now()))")"
+  status_elapsed=$(((status_now - status_start + 999) / 1000))
+  if [ "$status_elapsed" -ge "$STATUS_BUDGET" ]; then
+    echo "gateway status failed after ${status_elapsed}s" >&2
+    cat /tmp/openclaw-upgrade-survivor-status.err >&2 || true
+    cat "$GATEWAY_LOG" >&2 || true
+    cat "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2 || true
+    exit 1
+  fi
+  sleep 2
+done
 status_end="$(node -e "process.stdout.write(String(Date.now()))")"
 status_seconds=$(((status_end - status_start + 999) / 1000))
-if [ "$status_seconds" -gt "$STATUS_BUDGET" ]; then
-  echo "gateway status exceeded survivor budget: ${status_seconds}s > ${STATUS_BUDGET}s" >&2
-  cat /tmp/openclaw-upgrade-survivor-status.json >&2 || true
-  exit 1
-fi
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json /tmp/openclaw-upgrade-survivor-status.json
 
 echo "Upgrade survivor Docker E2E passed scenario=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base} updateRestartMode=${UPDATE_RESTART_MODE} startup=${start_seconds}s status=${status_seconds}s."

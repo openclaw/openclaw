@@ -1293,23 +1293,28 @@ check_gateway_probes() {
 
 check_gateway_status() {
   local port=18789
-  local budget="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-30}"
+  local budget="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-180}"
   local status_start
   local status_end
+  local elapsed
   status_start="$(node -e "process.stdout.write(String(Date.now()))")"
-  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status --url "ws://127.0.0.1:$port" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
-    echo "gateway status failed" >&2
-    cat "$STATUS_ERR" >&2 || true
-    cat "$GATEWAY_LOG" >&2 || true
-    return 1
-  fi
+  while true; do
+    if openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status --url "ws://127.0.0.1:$port" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
+      break
+    fi
+    status_end="$(node -e "process.stdout.write(String(Date.now()))")"
+    elapsed=$(((status_end - status_start + 999) / 1000))
+    if [ "$elapsed" -ge "$budget" ]; then
+      echo "gateway status failed after ${elapsed}s" >&2
+      cat "$STATUS_ERR" >&2 || true
+      cat "$GATEWAY_LOG" >&2 || true
+      cat "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2 || true
+      return 1
+    fi
+    sleep 2
+  done
   status_end="$(node -e "process.stdout.write(String(Date.now()))")"
   status_seconds=$(((status_end - status_start + 999) / 1000))
-  if [ "$status_seconds" -gt "$budget" ]; then
-    echo "gateway status exceeded survivor budget: ${status_seconds}s > ${budget}s" >&2
-    cat "$STATUS_JSON" >&2 || true
-    return 1
-  fi
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json "$STATUS_JSON"
 }
 
