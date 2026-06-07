@@ -3,6 +3,22 @@ import { describe, expect, it } from "vitest";
 import { runGatewaySmoke } from "../../scripts/dev/gateway-smoke.js";
 
 describe("gateway-smoke", () => {
+  function healthResponse() {
+    return {
+      ok: true,
+      payload: {
+        agents: [],
+        channelOrder: [],
+        channels: {},
+        defaultAgentId: "codex",
+        durationMs: 3,
+        ok: true,
+        sessions: { count: 0, path: "/state/sessions", recent: [] },
+        ts: Date.now(),
+      },
+    };
+  }
+
   function createSmokeDeps(
     responses: Record<string, { error?: string; ok: boolean } & Record<string, unknown>>,
     calls: Array<{ method: string; timeout?: number }> = [],
@@ -82,7 +98,7 @@ describe("gateway-smoke", () => {
   it("requires connect, health, and chat history in order", async () => {
     const fake = createSmokeDeps({
       connect: { ok: true },
-      health: { ok: true },
+      health: healthResponse(),
       "chat.history": { ok: true, payload: { messages: [] } },
     });
 
@@ -105,7 +121,7 @@ describe("gateway-smoke", () => {
   it("fails when chat history success is missing message evidence", async () => {
     const fake = createSmokeDeps({
       connect: { ok: true },
-      health: { ok: true },
+      health: healthResponse(),
       "chat.history": { ok: true },
     });
 
@@ -128,7 +144,7 @@ describe("gateway-smoke", () => {
   it("fails when chat history messages are not an array", async () => {
     const fake = createSmokeDeps({
       connect: { ok: true },
-      health: { ok: true },
+      health: healthResponse(),
       "chat.history": { ok: true, payload: { messages: {} } },
     });
 
@@ -159,10 +175,27 @@ describe("gateway-smoke", () => {
     expect(fake.stderr).toEqual(["health failed: not healthy"]);
   });
 
-  it("fails after health when chat history is unavailable", async () => {
+  it("fails when health success is missing summary evidence", async () => {
     const fake = createSmokeDeps({
       connect: { ok: true },
       health: { ok: true },
+    });
+
+    const code = await runGatewaySmoke(
+      { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" },
+      fake.deps,
+    );
+
+    expect(code).toBe(3);
+    expect(fake.closed).toBe(1);
+    expect(fake.calls.map((call) => call.method)).toEqual(["connect", "health"]);
+    expect(fake.stderr).toEqual(["health failed: missing health summary payload"]);
+  });
+
+  it("fails after health when chat history is unavailable", async () => {
+    const fake = createSmokeDeps({
+      connect: { ok: true },
+      health: healthResponse(),
       "chat.history": { ok: false, error: "session store unavailable" },
     });
 

@@ -29,6 +29,28 @@ type GatewaySmokeDeps = {
   stdout?: (message: string) => void;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasHealthSummaryPayload(response: unknown): boolean {
+  if (!isRecord(response) || !isRecord(response.payload)) {
+    return false;
+  }
+  const { payload } = response;
+  return (
+    payload.ok === true &&
+    typeof payload.ts === "number" &&
+    typeof payload.durationMs === "number" &&
+    typeof payload.defaultAgentId === "string" &&
+    payload.defaultAgentId.trim() !== "" &&
+    Array.isArray(payload.agents) &&
+    isRecord(payload.channels) &&
+    Array.isArray(payload.channelOrder) &&
+    isRecord(payload.sessions)
+  );
+}
+
 function hasChatHistoryMessages(
   response: unknown,
 ): response is { payload: { messages: unknown[] } } {
@@ -91,6 +113,10 @@ export async function runGatewaySmoke(
     const healthRes = await request("health");
     if (!healthRes.ok) {
       stderr(`health failed: ${String(healthRes.error)}`);
+      return 3;
+    }
+    if (!hasHealthSummaryPayload(healthRes)) {
+      stderr("health failed: missing health summary payload");
       return 3;
     }
 
