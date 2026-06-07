@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   buildPluginCompatibilityWarnings: vi.fn(),
   listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
   listTasksForFlowId: vi.fn<(flowId: string) => unknown[]>((_flowId: string) => []),
+  loadInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
+  detectPluginVersionDrift: vi.fn(() => ({ gatewayVersion: "9.9.9-test", drifts: [] })),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -42,6 +44,19 @@ vi.mock("../tasks/runtime-internal.js", () => ({
   listTasksForFlowId: (flowId: string) => mocks.listTasksForFlowId(flowId),
 }));
 
+vi.mock("../version.js", () => ({
+  VERSION: "9.9.9-test",
+}));
+
+vi.mock("../plugins/installed-plugin-index-record-reader.js", () => ({
+  loadInstalledPluginIndexInstallRecords: (...args: unknown[]) =>
+    mocks.loadInstalledPluginIndexInstallRecords(...args),
+}));
+
+vi.mock("../plugins/plugin-version-drift.js", () => ({
+  detectPluginVersionDrift: (...args: unknown[]) => mocks.detectPluginVersionDrift(...args),
+}));
+
 async function runNoteWorkspaceStatusForTest(
   loadResult: ReturnType<typeof createPluginLoadResult>,
   compatibilityWarnings: string[] = [],
@@ -66,7 +81,7 @@ async function runNoteWorkspaceStatusForTest(
   );
 
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-  noteWorkspaceStatus({});
+  await noteWorkspaceStatus({});
   return noteSpy;
 }
 
@@ -203,6 +218,44 @@ describe("noteWorkspaceStatus", () => {
       expect(compatibilityCalls).toHaveLength(1);
       const [[body]] = compatibilityCalls;
       expect(body).toContain("legacy-plugin still uses legacy before_agent_start");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("reports plugin version drift when official plugins are stale", async () => {
+    mocks.detectPluginVersionDrift.mockReturnValueOnce({
+      gatewayVersion: "2026.6.2",
+      drifts: [
+        {
+          pluginId: "codex",
+          installedVersion: "2026.5.30-beta.1",
+          gatewayVersion: "2026.6.2",
+          source: "npm",
+          packageName: "@openclaw/codex",
+        },
+      ],
+    });
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: "codex",
+            name: "Codex",
+          }),
+        ],
+      }),
+    );
+    try {
+      const driftCalls = noteSpy.mock.calls.filter(([, title]) =>
+        String(title).includes("Plugin version drift"),
+      );
+      expect(driftCalls).toHaveLength(1);
+      const [[body]] = driftCalls;
+      expect(body).toContain("codex");
+      expect(body).toContain("2026.5.30-beta.1");
+      expect(body).toContain("2026.6.2");
+      expect(body).toContain("openclaw plugins update");
     } finally {
       noteSpy.mockRestore();
     }

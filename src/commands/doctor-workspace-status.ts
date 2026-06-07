@@ -3,6 +3,8 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
+import { detectPluginVersionDrift } from "../plugins/plugin-version-drift.js";
 import {
   buildPluginCompatibilityWarnings,
   buildPluginRegistrySnapshotReport,
@@ -10,6 +12,7 @@ import {
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
+import { VERSION } from "../version.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
 
 function noteFlowRecoveryHints() {
@@ -54,7 +57,7 @@ function noteFlowRecoveryHints() {
 }
 
 /** Emits workspace, skills, plugin, and TaskFlow recovery status notes for doctor. */
-export function noteWorkspaceStatus(cfg: OpenClawConfig) {
+export async function noteWorkspaceStatus(cfg: OpenClawConfig) {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const legacyWorkspace = detectLegacyWorkspaceDirs({ workspaceDir });
   if (legacyWorkspace.legacyDirs.length > 0) {
@@ -115,6 +118,28 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
   if (compatibilityWarnings.length > 0) {
     note(compatibilityWarnings.map((line) => `- ${line}`).join("\n"), "Plugin compatibility");
   }
+  // Check official managed plugin version drift against the running gateway.
+  const installRecords = await loadInstalledPluginIndexInstallRecords({
+    env: process.env,
+  });
+  const driftReport = detectPluginVersionDrift({
+    gatewayVersion: VERSION,
+    installRecords,
+    config: cfg,
+  });
+  if (driftReport.drifts.length > 0) {
+    const driftLines = driftReport.drifts.map(
+      (d) => `- ${d.pluginId}: ${d.installedVersion} -> expected ${d.gatewayVersion}`,
+    );
+    driftLines.push(
+      `Fix: ${formatCliCommand("openclaw plugins update <plugin-id>")} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
+    );
+    note(
+      driftLines.join("\n"),
+      `Plugin version drift: ${driftReport.drifts.length} active official plugin${driftReport.drifts.length !== 1 ? "s" : ""} not on gateway ${driftReport.gatewayVersion}`,
+    );
+  }
+
   if (pluginRegistry.diagnostics.length > 0) {
     const lines = pluginRegistry.diagnostics.map((diag) => {
       const prefix = diag.level.toUpperCase();
