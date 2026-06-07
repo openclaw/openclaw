@@ -71,6 +71,46 @@ export function readToolSearchGatewayFetchLimits(
 
 const DEFAULT_FETCH_LIMITS = readToolSearchGatewayFetchLimits();
 
+type ToolSearchGatewayEnvSnapshot = {
+  configPath: string | undefined;
+  stateDir: string | undefined;
+  testFast: string | undefined;
+};
+
+export function snapshotToolSearchGatewayEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): ToolSearchGatewayEnvSnapshot {
+  return {
+    configPath: env.OPENCLAW_CONFIG_PATH,
+    stateDir: env.OPENCLAW_STATE_DIR,
+    testFast: env.OPENCLAW_TEST_FAST,
+  };
+}
+
+function restoreEnvValue(
+  env: NodeJS.ProcessEnv,
+  key: keyof Pick<
+    NodeJS.ProcessEnv,
+    "OPENCLAW_CONFIG_PATH" | "OPENCLAW_STATE_DIR" | "OPENCLAW_TEST_FAST"
+  >,
+  value: string | undefined,
+): void {
+  if (value === undefined) {
+    delete env[key];
+  } else {
+    env[key] = value;
+  }
+}
+
+export function restoreToolSearchGatewayEnv(
+  snapshot: ToolSearchGatewayEnvSnapshot,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  restoreEnvValue(env, "OPENCLAW_CONFIG_PATH", snapshot.configPath);
+  restoreEnvValue(env, "OPENCLAW_STATE_DIR", snapshot.stateDir);
+  restoreEnvValue(env, "OPENCLAW_TEST_FAST", snapshot.testFast);
+}
+
 function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
 }
@@ -481,11 +521,13 @@ async function runLane(params: {
   const configPath = path.join(stateDir, "openclaw.json");
   const workspaceDir = path.join(params.rootDir, params.lane, "workspace");
   const gatewayPort = await freePort();
+  const previousEnv = snapshotToolSearchGatewayEnv();
   await fs.mkdir(workspaceDir, { recursive: true });
   const [{ resetConfigRuntimeState }, { startGatewayServer }] = await Promise.all([
     import("../src/config/config.js"),
     import("../src/gateway/server.js"),
   ]);
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   await writeConfig({
     lane: params.lane,
     stateDir,
@@ -501,13 +543,13 @@ async function runLane(params: {
   process.env.OPENCLAW_TEST_FAST = "1";
   resetConfigRuntimeState();
 
-  const server = await startGatewayServer(gatewayPort, {
-    host: "127.0.0.1",
-    auth: { mode: "none" },
-    controlUiEnabled: false,
-    openResponsesEnabled: true,
-  });
   try {
+    server = await startGatewayServer(gatewayPort, {
+      host: "127.0.0.1",
+      auth: { mode: "none" },
+      controlUiEnabled: false,
+      openResponsesEnabled: true,
+    });
     const beforeRequests = (await fetchJson(
       `${params.providerBaseUrl}/debug/requests`,
     )) as unknown[];
@@ -565,8 +607,12 @@ async function runLane(params: {
       }),
     };
   } finally {
-    await server.close({ reason: `${params.lane} lane complete` });
-    resetConfigRuntimeState();
+    try {
+      await server?.close({ reason: `${params.lane} lane complete` });
+      resetConfigRuntimeState();
+    } finally {
+      restoreToolSearchGatewayEnv(previousEnv);
+    }
   }
 }
 
@@ -579,7 +625,8 @@ export function assertToolSearchLaneResults(params: {
   assert(
     normal.providerPlannedTools.includes(targetTool) &&
       normal.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
-      normal.gatewayOutputText.includes(targetTool),
+      normal.gatewayOutputText.includes(targetTool) &&
+      normal.sessionLogToolMentions[targetTool] > 0,
     `normal lane did not call ${targetTool}`,
   );
   assert(

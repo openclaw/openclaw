@@ -318,13 +318,17 @@ describe("agent session resolution", () => {
         storePath: resolution.storePath,
         agentId: "main",
       });
-      expect(canonicalPath(resolvedTranscript.sessionFile)).toBe(canonicalPath(sessionFile));
+      expect(fs.realpathSync.native(resolvedTranscript.sessionFile)).toBe(
+        fs.realpathSync.native(sessionFile),
+      );
 
       const persisted = loadSessionStore(resolution.storePath, { skipCache: true })[
         resolution.sessionKey
       ];
       expect(persisted?.sessionId).toBe(sessionId);
-      expect(canonicalPath(persisted?.sessionFile ?? "")).toBe(canonicalPath(sessionFile));
+      expect(fs.realpathSync.native(persisted?.sessionFile ?? "")).toBe(
+        fs.realpathSync.native(sessionFile),
+      );
       expect(persisted?.status).toBe("done");
       expect(persisted?.startedAt).toBe(registryUpdatedAt - 1_000);
       expect(persisted?.endedAt).toBe(registryUpdatedAt - 100);

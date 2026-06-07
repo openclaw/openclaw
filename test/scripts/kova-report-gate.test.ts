@@ -11,9 +11,22 @@ const SCRIPT_PATH = "scripts/lib/kova-report-gate.mjs";
 
 function partialReport(overrides: Record<string, unknown> = {}) {
   return {
-    gate: { verdict: "PARTIAL", blockingCount: 0 },
-    summary: { statuses: { PASS: 3 } },
     baseline: { comparison: { regressionCount: 0 } },
+    gate: { verdict: "PARTIAL", blockingCount: 0 },
+    performance: {
+      groups: [
+        {
+          metrics: {
+            cpuPercentMax: { count: 1 },
+            resourcePeakGatewayRssMb: { count: 1 },
+          },
+          scenario: "gateway",
+          state: "clean",
+        },
+      ],
+    },
+    records: [{ scenario: "gateway", state: "clean", status: "PASS" }],
+    summary: { statuses: { PASS: 3 } },
     ...overrides,
   };
 }
@@ -105,6 +118,62 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
         }),
       ),
     ).toEqual({ ok: false, reason: "non-pass statuses present: FAIL=1" });
+  });
+
+  it("rejects partial reports without selected scenario records", () => {
+    expect(
+      evaluateToleratedPartialKovaReport(
+        partialReport({
+          records: [],
+        }),
+      ),
+    ).toEqual({ ok: false, reason: "missing selected scenario records" });
+  });
+
+  it("rejects partial reports without performance groups", () => {
+    expect(
+      evaluateToleratedPartialKovaReport(
+        partialReport({
+          performance: {},
+        }),
+      ),
+    ).toEqual({ ok: false, reason: "missing performance groups" });
+  });
+
+  it("rejects partial reports without sampled RSS metrics", () => {
+    expect(
+      evaluateToleratedPartialKovaReport(
+        partialReport({
+          performance: {
+            groups: [
+              {
+                metrics: { cpuPercentMax: { count: 1 } },
+                scenario: "gateway",
+                state: "clean",
+              },
+            ],
+          },
+        }),
+      ),
+    ).toEqual({ ok: false, reason: "missing sampled RSS metric in performance groups" });
+  });
+
+  it("rejects partial reports without sampled CPU metrics", () => {
+    expect(
+      evaluateToleratedPartialKovaReport(
+        partialReport({
+          performance: {
+            groups: [
+              {
+                metrics: { resourcePeakGatewayRssMb: { count: 1 } },
+                scenario: "gateway",
+                state: "clean",
+              },
+            ],
+          },
+        }),
+      ),
+    ).toEqual({ ok: false, reason: "missing sampled CPU metric in performance groups" });
   });
 
   it("exits non-zero for malformed tolerated-partial candidates", () => {

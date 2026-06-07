@@ -244,8 +244,8 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-            echo "OPENAI_API_KEY is not configured; live GPT 5.5 lane will be skipped." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            echo "OPENAI_API_KEY is not configured; live GPT 5.5 lane cannot run without live evidence." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
           kova setup --ci --json
           kova setup --non-interactive --auth env-only --provider openai --env-var OPENAI_API_KEY --json
@@ -261,11 +261,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$REPORT_DIR" "$BUNDLE_DIR" "$SUMMARY_DIR"
-
-          if [[ "$MATRIX_LIVE" == "true" && -z "${OPENAI_API_KEY:-}" ]]; then
-            echo "skipped=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
 
           repeat="$REQUESTED_REPEAT"
           if [[ "$MATRIX_REPEAT" != "input" ]]; then
@@ -358,6 +353,28 @@ jobs:
 
           if [[ "$FAIL_ON_REGRESSION" == "true" && "$effective_status" != "0" ]]; then
             exit "$effective_status"
+          fi
+
+      - name: Validate Kova evidence
+        if: ${{ always() && steps.lane.outputs.run == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          if ! find "$REPORT_DIR" -maxdepth 1 -type f -name '*.json' -size +0c -print -quit | grep -q .; then
+            echo "::error::Kova JSON report is missing for ${LANE_ID}."
+            missing=1
+          fi
+          if [[ ! -s "$BUNDLE_DIR/bundle.json" ]]; then
+            echo "::error::Kova bundle evidence is missing for ${LANE_ID}."
+            missing=1
+          fi
+          if [[ ! -s "$SUMMARY_DIR/${LANE_ID}.md" ]]; then
+            echo "::error::Kova summary evidence is missing for ${LANE_ID}."
+            missing=1
+          fi
+          if [[ "$missing" != "0" ]]; then
+            exit 1
           fi
 
       - name: Fetch previous source performance baseline
@@ -530,7 +547,7 @@ jobs:
             .artifacts/kova/bundles/${{ matrix.lane }}
             .artifacts/kova/summaries/${{ matrix.lane }}.md
             .artifacts/openclaw-performance/source/${{ matrix.lane }}
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
 
       - name: Prepare clawgrit reports checkout
