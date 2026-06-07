@@ -50,11 +50,18 @@ describe("exec security floor", () => {
       "OPENCLAW_STATE_DIR",
       "SHELL",
     ]);
-    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-security-floor-"));
+    // realpath so fixture paths match the resolved (realpath'd) executable paths the allowlist
+    // compares against — os.tmpdir() is a symlink on macOS (/tmp -> /private/tmp).
+    tempRoot = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-security-floor-")),
+    );
     process.env.HOME = tempRoot;
     process.env.USERPROFILE = tempRoot;
     process.env.OPENCLAW_HOME = tempRoot;
-    process.env.OPENCLAW_STATE_DIR = path.join(tempRoot, "state");
+    // The fixtures write exec-approvals.json under <tempRoot>/.openclaw, so point the state
+    // dir there too. exec-approvals now resolves via OPENCLAW_STATE_DIR (the state dir), so an
+    // unrelated state dir would leave the fixtures unread.
+    process.env.OPENCLAW_STATE_DIR = path.join(tempRoot, ".openclaw");
     if (process.platform === "win32") {
       const parsed = path.parse(tempRoot);
       process.env.HOMEDRIVE = parsed.root.slice(0, 2);

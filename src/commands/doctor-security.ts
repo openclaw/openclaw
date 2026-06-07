@@ -14,6 +14,7 @@ import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import {
   loadExecApprovals,
+  resolveExecApprovalsPath,
   type ExecAsk,
   type ExecMode,
   type ExecSecurity,
@@ -22,6 +23,7 @@ import { isLikelySensitiveModelProviderHeaderName } from "../secrets/model-provi
 import { hasConfiguredPlaintextSecretValue } from "../secrets/secret-value.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
+import { shortenHomePath } from "../utils.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
 function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): string[] {
@@ -246,7 +248,9 @@ export async function collectSecurityWarnings(
   if (cfg.approvals?.exec?.enabled === false) {
     warnings.push(
       "- Note: approvals.exec.enabled=false disables approval forwarding only.",
-      "  Host exec gating still comes from ~/.openclaw/exec-approvals.json.",
+      // Resolve the live path so relocated (OPENCLAW_STATE_DIR) installs point operators at the
+      // real policy file; shortenHomePath keeps default installs showing ~/.openclaw.
+      `  Host exec gating still comes from ${shortenHomePath(resolveExecApprovalsPath())}.`,
       `  Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
     );
   }

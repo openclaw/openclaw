@@ -15,8 +15,9 @@ import { analyzeShellCommand, type ExecCommandSegment } from "./exec-approvals-a
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { isShellWrapperInvocation } from "./exec-wrapper-resolution.js";
 import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
-import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
+import { expandHomePrefix } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
+import { resolveStateDir } from "./state-dir.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -284,8 +285,12 @@ const DEFAULT_SECURITY: ExecSecurity = "full";
 const DEFAULT_ASK: ExecAsk = "off";
 export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
-const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
-const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
+// Exported so the doctor state-dir relocation migration moves the same policy file
+// the runtime reads, without redefining the filename.
+export const EXEC_APPROVALS_FILENAME = "exec-approvals.json";
+// Exported so the doctor state-dir relocation migration can recognize and rewrite
+// the generated default socket path using the same filename the runtime persists.
+export const EXEC_APPROVALS_SOCKET_FILENAME = "exec-approvals.sock";
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
@@ -294,12 +299,17 @@ function hashExecApprovalsRaw(raw: string | null): string {
     .digest("hex");
 }
 
+// exec-approvals state belongs in the OpenClaw state directory alongside the rest of
+// the runtime state. resolveStateDir() honors OPENCLAW_STATE_DIR and falls back to
+// <home>/.openclaw, so default installs are unchanged, while a relocated state dir
+// resolves to the real directory instead of always traversing $HOME/.openclaw (which
+// breaks when state is relocated or $HOME/.openclaw is a symlink).
 export function resolveExecApprovalsPath(): string {
-  return expandHomePrefix(DEFAULT_FILE);
+  return path.join(resolveStateDir(), EXEC_APPROVALS_FILENAME);
 }
 
 export function resolveExecApprovalsSocketPath(): string {
-  return expandHomePrefix(DEFAULT_SOCKET);
+  return path.join(resolveStateDir(), EXEC_APPROVALS_SOCKET_FILENAME);
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
@@ -343,7 +353,7 @@ function mergeLegacyAgent(
 
 function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
-  assertNoExecApprovalsSymlinkParents(dir, resolveRequiredHomeDir());
+  assertNoExecApprovalsSymlinkParents(dir, path.dirname(dir));
   fs.mkdirSync(dir, { recursive: true });
   const dirStat = fs.lstatSync(dir);
   if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
@@ -359,6 +369,10 @@ function ensureDir(filePath: string) {
   return dir;
 }
 
+// Callers pass the state dir's parent as `trustedRoot`, so the guard checks the final
+// state-dir component (e.g. `.openclaw`). When OPENCLAW_STATE_DIR is unset this equals
+// <home> — identical to the historical behavior — and when state is relocated it still
+// guards the state dir rather than skipping the check via allowOutsideRoot.
 function assertNoExecApprovalsSymlinkParents(targetPath: string, trustedRoot: string): void {
   assertNoSymlinkParentsSync({
     rootDir: trustedRoot,
@@ -837,7 +851,7 @@ export function ensureExecApprovals(): ExecApprovalsFile {
 
 function readExecApprovalsForNoPersistence(filePath: string): ExecApprovalsFile {
   const dir = path.dirname(filePath);
-  assertNoExecApprovalsSymlinkParents(dir, resolveRequiredHomeDir());
+  assertNoExecApprovalsSymlinkParents(dir, path.dirname(dir));
   assertSafeExecApprovalsDestination(filePath);
 
   let raw: string;

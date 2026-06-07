@@ -79,6 +79,13 @@ Approvals live in a local JSON file on the execution host:
 ~/.openclaw/exec-approvals.json
 ```
 
+The file and its companion socket resolve from the OpenClaw state directory, so
+the `~/.openclaw` paths shown here are the default location. When you relocate
+state with `OPENCLAW_STATE_DIR`, the approvals file and socket move with it (for
+example `$OPENCLAW_STATE_DIR/exec-approvals.json`). After upgrading, run
+`openclaw doctor --fix` to migrate an existing `~/.openclaw/exec-approvals.json`
+policy into the relocated state directory.
+
 Example schema:
 
 ```json

@@ -2,6 +2,7 @@
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { shortenHomePath } from "../utils.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   resolveExecApprovalAllowedDecisions,
@@ -9,6 +10,7 @@ import {
   maxAsk,
   minSecurity,
   resolveExecApprovalsFromFile,
+  resolveExecApprovalsPath,
   resolveExecModeFromPolicy,
   resolveExecModePolicy,
   type ExecApprovalsFile,
@@ -20,7 +22,6 @@ import {
 
 const DEFAULT_REQUESTED_SECURITY: ExecSecurity = "full";
 const DEFAULT_REQUESTED_ASK: ExecAsk = "off";
-const DEFAULT_HOST_PATH = "~/.openclaw/exec-approvals.json";
 const REQUESTED_DEFAULT_LABEL = {
   security: DEFAULT_REQUESTED_SECURITY,
   ask: DEFAULT_REQUESTED_ASK,
@@ -367,7 +368,9 @@ export function resolveExecPolicyScopeSnapshot(params: {
       ask: requestedPolicy.ask,
     },
   });
-  const hostPath = params.hostPath ?? DEFAULT_HOST_PATH;
+  // No explicit snapshot path means resolve the live default, which now honors
+  // OPENCLAW_STATE_DIR; shortenHomePath keeps the default install showing ~/.openclaw.
+  const hostPath = params.hostPath ?? shortenHomePath(resolveExecApprovalsPath());
   const effectiveSecurity = minSecurity(requestedPolicy.security, resolved.agent.security);
   const effectiveAsk = maxAsk(requestedPolicy.ask, resolved.agent.ask);
   const effectiveAskFallback = minSecurity(effectiveSecurity, resolved.agent.askFallback);

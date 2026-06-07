@@ -27,6 +27,7 @@ import {
 } from "./shared/config-mutation-state.js";
 import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engine-host-compat.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
+import { relocateLegacyExecApprovalsStateFile } from "./shared/exec-approvals-state-dir-relocation.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
@@ -153,6 +154,13 @@ export async function runDoctorRepairSequence(params: {
 
   applyMutation(maybeRepairLegacyToolsBySenderKeys(state.candidate));
   applyMutation(maybeRepairExecSafeBinProfiles(state.candidate));
+  const execApprovalsRelocation = await relocateLegacyExecApprovalsStateFile({ env });
+  if (execApprovalsRelocation.changes.length > 0) {
+    changeNotes.push(sanitizeLines(execApprovalsRelocation.changes));
+  }
+  if (execApprovalsRelocation.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(execApprovalsRelocation.warnings));
+  }
   const pluginDependencyCleanup = await cleanupLegacyPluginDependencyState({ env });
   if (pluginDependencyCleanup.changes.length > 0) {
     changeNotes.push(sanitizeLines(pluginDependencyCleanup.changes));
