@@ -1623,6 +1623,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let includelastmessage: Bool?
     public let label: String?
     public let spawnedby: String?
+    public let hubdelegatedowner: String?
     public let agentid: String?
     public let search: String?
 
@@ -1637,6 +1638,7 @@ public struct SessionsListParams: Codable, Sendable {
         includelastmessage: Bool?,
         label: String?,
         spawnedby: String?,
+        hubdelegatedowner: String?,
         agentid: String? = nil,
         search: String?)
     {
@@ -1650,6 +1652,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.includelastmessage = includelastmessage
         self.label = label
         self.spawnedby = spawnedby
+        self.hubdelegatedowner = hubdelegatedowner
         self.agentid = agentid
         self.search = search
     }
@@ -1665,6 +1668,7 @@ public struct SessionsListParams: Codable, Sendable {
         case includelastmessage = "includeLastMessage"
         case label
         case spawnedby = "spawnedBy"
+        case hubdelegatedowner = "hubDelegatedOwner"
         case agentid = "agentId"
         case search
     }
@@ -1754,6 +1758,7 @@ public struct SessionsResolveParams: Codable, Sendable {
     public let label: String?
     public let agentid: String?
     public let spawnedby: String?
+    public let hubdelegatedowner: String?
     public let includeglobal: Bool?
     public let includeunknown: Bool?
 
@@ -1763,6 +1768,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         label: String?,
         agentid: String? = nil,
         spawnedby: String?,
+        hubdelegatedowner: String?,
         includeglobal: Bool?,
         includeunknown: Bool?)
     {
@@ -1771,6 +1777,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         self.label = label
         self.agentid = agentid
         self.spawnedby = spawnedby
+        self.hubdelegatedowner = hubdelegatedowner
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
     }
@@ -1781,6 +1788,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         case label
         case agentid = "agentId"
         case spawnedby = "spawnedBy"
+        case hubdelegatedowner = "hubDelegatedOwner"
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
     }
@@ -2229,6 +2237,8 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execnode: AnyCodable?
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
+    public let parentsessionkey: AnyCodable?
+    public let hubdelegated: AnyCodable?
     public let spawnedworkspacedir: AnyCodable?
     public let spawnedcwd: AnyCodable?
     public let spawndepth: AnyCodable?
@@ -2256,6 +2266,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         execnode: AnyCodable?,
         model: AnyCodable?,
         spawnedby: AnyCodable?,
+        parentsessionkey: AnyCodable?,
+        hubdelegated: AnyCodable?,
         spawnedworkspacedir: AnyCodable?,
         spawnedcwd: AnyCodable?,
         spawndepth: AnyCodable?,
@@ -2282,6 +2294,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execnode = execnode
         self.model = model
         self.spawnedby = spawnedby
+        self.parentsessionkey = parentsessionkey
+        self.hubdelegated = hubdelegated
         self.spawnedworkspacedir = spawnedworkspacedir
         self.spawnedcwd = spawnedcwd
         self.spawndepth = spawndepth
@@ -2310,6 +2324,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execnode = "execNode"
         case model
         case spawnedby = "spawnedBy"
+        case parentsessionkey = "parentSessionKey"
+        case hubdelegated = "hubDelegated"
         case spawnedworkspacedir = "spawnedWorkspaceDir"
         case spawnedcwd = "spawnedCwd"
         case spawndepth = "spawnDepth"
