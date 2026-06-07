@@ -911,6 +911,7 @@ export class MsteamsProvider implements VoiceCallProvider {
     } catch (err) {
       throw new Error(
         `MsteamsProvider.initiateCall: request to worker failed — ${describeError(err)}`,
+        { cause: err },
       );
     }
     if (!response.ok) {
