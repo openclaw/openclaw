@@ -117,7 +117,7 @@ extension AgentProTab {
     @MainActor
     func refreshOverview(force: Bool) async {
         guard self.scenePhase == .active else { return }
-        guard self.appModel.isOperatorGatewayConnected else {
+        guard self.liveGatewayConnected else {
             self.overview = nil
             self.overviewErrorText = nil
             self.overviewLoading = false

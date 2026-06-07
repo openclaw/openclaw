@@ -308,10 +308,19 @@ struct CommandCenterTab: View {
 
     private var recentSessionsRefreshID: String {
         [
-            self.appModel.isOperatorGatewayConnected ? "connected" : "offline",
+            self.sessionListMode,
             self.appModel.chatSessionKey,
             self.scenePhase == .active ? "active" : "inactive",
         ].joined(separator: ":")
+    }
+
+    private var sessionListAvailable: Bool {
+        self.appModel.isAppleReviewDemoModeEnabled || self.appModel.isOperatorGatewayConnected
+    }
+
+    private var sessionListMode: String {
+        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
+        return self.appModel.isOperatorGatewayConnected ? "operator" : "offline"
     }
 
     private var sessionItems: [WorkItem] {
@@ -339,7 +348,7 @@ struct CommandCenterTab: View {
 
     private func refreshRecentSessionsIfNeeded() async {
         guard self.scenePhase == .active else { return }
-        guard self.appModel.isOperatorGatewayConnected else {
+        guard self.sessionListAvailable else {
             if self.defaultChatSessionEntry != nil {
                 self.defaultChatSessionEntry = nil
             }
@@ -350,7 +359,9 @@ struct CommandCenterTab: View {
         }
 
         do {
-            let transport = IOSGatewayChatTransport(gateway: appModel.operatorSession)
+            let transport: any OpenClawChatTransport = self.appModel.isAppleReviewDemoModeEnabled
+                ? AppleReviewDemoChatTransport()
+                : IOSGatewayChatTransport(gateway: self.appModel.operatorSession)
             let response = try await transport.listSessions(limit: Self.recentSessionsFetchLimit)
             self.defaultChatSessionEntry = response.sessions.first {
                 $0.key == self.appModel.defaultChatSessionKey
@@ -612,10 +623,10 @@ private struct CommandSessionsScreen: View {
                 } else if self.sessionRows.isEmpty {
                     CommandEmptyStateRow(
                         icon: self.appModel
-                            .isOperatorGatewayConnected ? "bubble.left.and.text.bubble.right.fill" : "wifi.slash",
-                        title: self.appModel.isOperatorGatewayConnected ? "No recent sessions" : "Gateway offline",
+                            .isCommandSessionListAvailable ? "bubble.left.and.text.bubble.right.fill" : "wifi.slash",
+                        title: self.appModel.isCommandSessionListAvailable ? "No recent sessions" : "Gateway offline",
                         detail: self.appModel
-                            .isOperatorGatewayConnected ? "Start a chat and it will appear here." :
+                            .isCommandSessionListAvailable ? "Start a chat and it will appear here." :
                             "Connect to the gateway.")
                         .padding(.horizontal, 10)
                         .padding(.bottom, 10)
@@ -642,7 +653,7 @@ private struct CommandSessionsScreen: View {
         if self.isLoading, self.sessions.isEmpty { return "Loading recent sessions" }
         let count = self.sessionRows.count
         if count == 0 {
-            return self.appModel.isOperatorGatewayConnected ? "No recent sessions" : "Gateway offline"
+            return self.appModel.isCommandSessionListAvailable ? "No recent sessions" : "Gateway offline"
         }
         return "\(count) \(count == 1 ? "session" : "sessions")"
     }
@@ -661,7 +672,7 @@ private struct CommandSessionsScreen: View {
     }
 
     private var refreshID: String {
-        self.appModel.isOperatorGatewayConnected ? "connected" : "offline"
+        self.appModel.commandSessionListMode
     }
 
     private func open(_ item: CommandCenterTab.WorkItem) {
@@ -676,7 +687,7 @@ private struct CommandSessionsScreen: View {
     }
 
     private func refreshSessions() async {
-        guard self.appModel.isOperatorGatewayConnected else {
+        guard self.appModel.isCommandSessionListAvailable else {
             self.sessions = []
             self.loadErrorText = nil
             return
@@ -687,12 +698,25 @@ private struct CommandSessionsScreen: View {
         defer { self.isLoading = false }
 
         do {
-            let transport = IOSGatewayChatTransport(gateway: appModel.operatorSession)
+            let transport: any OpenClawChatTransport = self.appModel.isAppleReviewDemoModeEnabled
+                ? AppleReviewDemoChatTransport()
+                : IOSGatewayChatTransport(gateway: self.appModel.operatorSession)
             let response = try await transport.listSessions(limit: CommandCenterTab.recentSessionsFetchLimit)
             self.sessions = response.sessions
         } catch {
             self.sessions = []
             self.loadErrorText = "Try again after the gateway reconnects."
         }
+    }
+}
+
+extension NodeAppModel {
+    fileprivate var isCommandSessionListAvailable: Bool {
+        self.isAppleReviewDemoModeEnabled || self.isOperatorGatewayConnected
+    }
+
+    fileprivate var commandSessionListMode: String {
+        if self.isAppleReviewDemoModeEnabled { return "demo" }
+        return self.isOperatorGatewayConnected ? "operator" : "offline"
     }
 }

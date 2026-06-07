@@ -135,6 +135,9 @@ struct SettingsProTab: View {
                     onGatewayLink: { link in
                         self.handleScannedGatewayLink(link)
                     },
+                    onSetupCode: { code in
+                        self.handleScannedSetupCode(code)
+                    },
                     onError: { error in
                         self.showQRScanner = false
                         self.setupStatusText = "Scanner error: \(error)"

@@ -542,6 +542,12 @@ extension AgentProTab {
         GatewayStatusBuilder.build(appModel: self.appModel) == .connected
     }
 
+    var liveGatewayConnected: Bool {
+        !self.appModel.isAppleReviewDemoModeEnabled &&
+            self.gatewayConnected &&
+            self.appModel.isOperatorGatewayConnected
+    }
+
     private var searchFieldFill: Color {
         self.colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.78)
     }
