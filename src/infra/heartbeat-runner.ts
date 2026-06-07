@@ -74,7 +74,7 @@ import {
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasActiveCronJobs } from "../cron/active-jobs.js";
@@ -169,6 +169,7 @@ function loadHeartbeatRunnerRuntime() {
 
 const HEARTBEAT_ALWAYS_BUSY_LANES = [CommandLane.Cron, CommandLane.CronNested] as const;
 const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 10 * 60;
+const HEARTBEAT_CONTEXT_SPIRAL_LIGHT_CONTEXT_TOKENS = 750_000;
 
 function hasQueuedWorkInLanes(
   lanes: readonly string[],
@@ -522,6 +523,24 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatC
     heartbeat?.ackMaxChars ??
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
       DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  );
+}
+
+function shouldUseHeartbeatLightContext(params: {
+  heartbeat?: HeartbeatConfig;
+  entry?: SessionEntry;
+}): boolean {
+  if (params.heartbeat?.lightContext === true) {
+    return true;
+  }
+  if (params.heartbeat?.lightContext === false) {
+    return false;
+  }
+  const totalTokens = resolveFreshSessionTotalTokens(params.entry);
+  return (
+    typeof totalTokens === "number" &&
+    Number.isFinite(totalTokens) &&
+    totalTokens >= HEARTBEAT_CONTEXT_SPIRAL_LIGHT_CONTEXT_TOKENS
   );
 }
 
@@ -1776,8 +1795,12 @@ export async function runHeartbeatOnce(opts: {
     const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const timeoutOverrideSeconds = resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat);
-    const bootstrapContextMode: "lightweight" | undefined =
-      heartbeat?.lightContext === true ? "lightweight" : undefined;
+    const bootstrapContextMode: "lightweight" | undefined = shouldUseHeartbeatLightContext({
+      heartbeat,
+      entry: recentSessionEntry,
+    })
+      ? "lightweight"
+      : undefined;
     const replyOpts = {
       isHeartbeat: true,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),

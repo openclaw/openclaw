@@ -919,6 +919,17 @@ export function markDiagnosticSessionProgress(params: SessionRef) {
   markActivity();
 }
 
+export function markDiagnosticSessionPendingFinalDelivery(
+  params: SessionRef & { pending: boolean },
+) {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  const state = getDiagnosticSessionState(params);
+  state.hasPendingFinalDelivery = params.pending;
+  markActivity();
+}
+
 function sessionAttentionFields(params: {
   classification: SessionAttentionClassification;
   activity: DiagnosticSessionActivitySnapshot;
@@ -991,6 +1002,7 @@ export function logSessionAttention(
     queueDepth: state.queueDepth,
     activity,
     staleMs: params.thresholdMs,
+    hasPendingFinalDelivery: state.hasPendingFinalDelivery === true,
   });
   const recoveryEligible =
     classification.recoveryEligible ||
@@ -1041,7 +1053,9 @@ export function logSessionAttention(
     state.queueDepth
   } reason=${classification.reason} classification=${classification.classification}${
     classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
-  }${detailFields ? ` ${detailFields}` : ""} recovery=${recoveryEligible ? "checking" : "none"}`;
+  }${state.hasPendingFinalDelivery ? " pendingFinalDelivery=true" : ""}${
+    detailFields ? ` ${detailFields}` : ""
+  } recovery=${recoveryEligible ? "checking" : "none"}`;
   if (classification.eventType === "session.long_running" && state.queueDepth <= 0) {
     diag.debug(message);
   } else {
@@ -1054,6 +1068,7 @@ export function logSessionAttention(
     ageMs: params.ageMs,
     queueDepth: state.queueDepth,
     reason: classification.reason,
+    ...(state.hasPendingFinalDelivery ? { pendingFinalDelivery: true } : {}),
     ...sessionAttentionFields({ classification, activity }),
   };
   if (classification.eventType === "session.long_running") {

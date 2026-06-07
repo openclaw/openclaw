@@ -40,6 +40,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { markDiagnosticSessionPendingFinalDelivery } from "../../logging/diagnostic.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -93,7 +94,10 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  resolveSlackDirectPendingFinalDeliveryContext,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import {
@@ -196,12 +200,20 @@ function resolveReplyRunDeliveryContext(params: {
     normalizeOptionalString(
       parseSessionThreadInfoFast(params.sessionCtx.SessionKey ?? params.sessionKey).threadId,
     );
-  return normalizeDeliveryContext({
+  const context = normalizeDeliveryContext({
     ...resolveEffectiveReplyRoute({
       ctx: params.sessionCtx,
       entry: params.sessionEntry,
     }),
     threadId,
+  });
+  return resolveSlackDirectPendingFinalDeliveryContext({
+    context,
+    nativeChannelId: normalizeOptionalString(params.sessionCtx.NativeChannelId),
+    chatType: normalizeOptionalString(params.sessionCtx.ChatType),
+    directUserTarget: normalizeOptionalString(
+      params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
+    ),
   });
 }
 
@@ -2334,6 +2346,9 @@ export async function runReplyAgent(params: {
         });
       }
       const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
+      const pendingFinalDeliveryIntentId = normalizeOptionalString(
+        sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+      );
       const agentId = followupRun.run.agentId;
       const heartbeatAgentCfg = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
       const heartbeatAckMaxChars = Math.max(
@@ -2369,10 +2384,12 @@ export async function runReplyAgent(params: {
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: resolvedPendingText,
             pendingFinalDeliveryContext,
+            pendingFinalDeliveryIntentId,
             pendingFinalDeliveryCreatedAt: Date.now(),
             updatedAt: Date.now(),
           },
         });
+        markDiagnosticSessionPendingFinalDelivery({ sessionKey, pending: true });
       }
     }
 

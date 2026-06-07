@@ -65,6 +65,7 @@ import {
   logMessageDispatchCompleted,
   logMessageDispatchStarted,
   markDiagnosticSessionProgress,
+  markDiagnosticSessionPendingFinalDelivery,
 } from "../../logging/diagnostic.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -91,6 +92,7 @@ import {
   shouldCleanTtsDirectiveText,
   shouldAttemptTtsPayload,
 } from "../../tts/tts-config.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   isNativeCommandTurn,
@@ -136,6 +138,12 @@ import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import {
+  isSameRoutePendingFinalDeliveryReplaySafe,
+  pendingFinalDeliveryClearedPatch,
+  resolveSlackDirectPendingFinalDeliveryContext,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type {
   DispatcherOutcomeCountsView,
@@ -717,17 +725,12 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
       if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
         return null;
       }
-      return {
-        pendingFinalDelivery: undefined,
-        pendingFinalDeliveryText: undefined,
-        pendingFinalDeliveryCreatedAt: undefined,
-        pendingFinalDeliveryLastAttemptAt: undefined,
-        pendingFinalDeliveryAttemptCount: undefined,
-        pendingFinalDeliveryLastError: undefined,
-        pendingFinalDeliveryContext: undefined,
-        updatedAt: Date.now(),
-      };
+      return pendingFinalDeliveryClearedPatch();
     },
+  });
+  markDiagnosticSessionPendingFinalDelivery({
+    sessionKey: params.sessionKey,
+    pending: false,
   });
 }
 
@@ -1154,6 +1157,13 @@ export async function dispatchReplyFromConfig(
   const sessionStoreEntry = boundAcpDispatchSessionKey
     ? resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
     : initialSessionStoreEntry;
+  markDiagnosticSessionPendingFinalDelivery({
+    sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+    pending: Boolean(
+      sessionStoreEntry.entry?.pendingFinalDelivery ||
+      sessionStoreEntry.entry?.pendingFinalDeliveryText,
+    ),
+  });
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: acpDispatchSessionKey,
     config: cfg,
@@ -2115,6 +2125,108 @@ export async function dispatchReplyFromConfig(
       };
     };
 
+    const replayPendingFinalDeliveryForCurrentRoute = async (): Promise<{
+      queuedFinal: boolean;
+      routedFinalCount: number;
+      replayedCurrentTurnFinal: boolean;
+    }> => {
+      const noReplay = {
+        queuedFinal: false,
+        routedFinalCount: 0,
+        replayedCurrentTurnFinal: false,
+      };
+      const entry = sessionStoreEntry.entry;
+      if (
+        !entry?.pendingFinalDelivery ||
+        typeof entry.pendingFinalDeliveryText !== "string" ||
+        suppressDelivery ||
+        sendPolicyDenied
+      ) {
+        return noReplay;
+      }
+      if (
+        !dispatchReplyOperation &&
+        preDispatchAbortOperation &&
+        !preDispatchAbortOperation.result
+      ) {
+        return noReplay;
+      }
+      const text = sanitizePendingFinalDeliveryText(entry.pendingFinalDeliveryText);
+      if (!text) {
+        await clearPendingFinalDeliveryAfterSuccess({
+          storePath: sessionStoreEntry.storePath,
+          sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+        });
+        return noReplay;
+      }
+      const currentContext = resolveSlackDirectPendingFinalDeliveryContext({
+        context: normalizeDeliveryContext({
+          channel: shouldRouteToOriginating
+            ? routeReplyChannel
+            : (replyRoute.channel ?? deliveryChannel),
+          to: shouldRouteToOriginating ? routeReplyTo : replyRoute.to,
+          accountId: replyRoute.accountId,
+          threadId: routeReplyThreadId,
+        }),
+        nativeChannelId: normalizeOptionalString(ctx.NativeChannelId),
+        chatType: normalizeOptionalString(ctx.ChatType),
+        directUserTarget: normalizeOptionalString(ctx.OriginatingTo ?? ctx.To),
+      });
+      const pendingContext = resolveSlackDirectPendingFinalDeliveryContext({
+        context: entry.pendingFinalDeliveryContext,
+        nativeChannelId: normalizeOptionalString(
+          entry.origin?.nativeChannelId ?? ctx.NativeChannelId,
+        ),
+        chatType: normalizeOptionalString(entry.origin?.chatType ?? ctx.ChatType),
+        directUserTarget: normalizeOptionalString(entry.origin?.to ?? ctx.OriginatingTo ?? ctx.To),
+      });
+      if (
+        !isSameRoutePendingFinalDeliveryReplaySafe({
+          pendingContext,
+          currentContext,
+        })
+      ) {
+        return noReplay;
+      }
+      const result = await sendFinalPayload({ text }, { abortSignal: getPreDispatchAbortSignal() });
+      if (result.queuedFinal || result.routedFinalCount > 0) {
+        await clearPendingFinalDeliveryAfterSuccess({
+          storePath: sessionStoreEntry.storePath,
+          sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+        });
+        logVerbose(
+          `dispatch-from-config: replayed pending final delivery for session=${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"}`,
+        );
+      }
+      const pendingIntentId = normalizeOptionalString(
+        entry.pendingFinalDeliveryIntentId ?? undefined,
+      );
+      const currentIntentId = normalizeOptionalString(ctx.MessageSidFull ?? ctx.MessageSid);
+      return {
+        ...result,
+        replayedCurrentTurnFinal: Boolean(
+          (result.queuedFinal || result.routedFinalCount > 0) &&
+          pendingIntentId &&
+          currentIntentId &&
+          pendingIntentId === currentIntentId,
+        ),
+      };
+    };
+
+    const replayedPendingFinalDelivery = await replayPendingFinalDeliveryForCurrentRoute();
+    if (replayedPendingFinalDelivery.replayedCurrentTurnFinal) {
+      const counts = dispatcher.getQueuedCounts();
+      counts.final += replayedPendingFinalDelivery.routedFinalCount;
+      recordProcessed("completed", { reason: "pending_final_delivery_replayed" });
+      markIdle("message_completed");
+      commitInboundDedupeIfClaimed();
+      completeDispatchReplyOperation();
+      return attachSourceReplyDeliveryMode({
+        queuedFinal: replayedPendingFinalDelivery.queuedFinal,
+        counts,
+      });
+    }
+
     // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
     if (hookRunner?.hasHooks("before_dispatch")) {
       const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
@@ -2157,6 +2269,8 @@ export async function dispatchReplyFromConfig(
           queuedFinal = handledReply.queuedFinal;
           routedFinalCount += handledReply.routedFinalCount;
         }
+        queuedFinal = replayedPendingFinalDelivery.queuedFinal || queuedFinal;
+        routedFinalCount += replayedPendingFinalDelivery.routedFinalCount;
         const counts = dispatcher.getQueuedCounts();
         counts.final += routedFinalCount;
         recordProcessed("completed", { reason: "before_dispatch_handled" });
@@ -2203,11 +2317,13 @@ export async function dispatchReplyFromConfig(
         ),
       );
       if (replyDispatchResult?.handled) {
+        const counts = { ...replyDispatchResult.counts };
+        counts.final += replayedPendingFinalDelivery.routedFinalCount;
         commitInboundDedupeIfClaimed();
         completeDispatchReplyOperation();
         return attachSourceReplyDeliveryMode({
-          queuedFinal: replyDispatchResult.queuedFinal,
-          counts: replyDispatchResult.counts,
+          queuedFinal: replyDispatchResult.queuedFinal || replayedPendingFinalDelivery.queuedFinal,
+          counts,
         });
       }
     }
@@ -2871,8 +2987,8 @@ export async function dispatchReplyFromConfig(
       (reply) => getReplyPayloadMetadata(reply)?.beforeAgentRunBlocked === true,
     );
 
-    let queuedFinal = false;
-    let routedFinalCount = 0;
+    let queuedFinal = replayedPendingFinalDelivery.queuedFinal;
+    let routedFinalCount = replayedPendingFinalDelivery.routedFinalCount;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
     // Explicit command turns (native or authorized text-slash like /compact) are

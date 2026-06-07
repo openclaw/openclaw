@@ -23,6 +23,8 @@ type HeartbeatSessionSeed = {
   pendingFinalDeliveryCreatedAt?: number;
   pendingFinalDeliveryAttemptCount?: number;
   pendingFinalDeliveryLastError?: string | null;
+  totalTokens?: number;
+  totalTokensFresh?: boolean;
   agentHarnessId?: string;
   agentRuntimeOverride?: string;
   model?: string;

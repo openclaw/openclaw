@@ -32,6 +32,7 @@ const diagnosticMocks = vi.hoisted(() => ({
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
   markDiagnosticSessionProgress: vi.fn(),
+  markDiagnosticSessionPendingFinalDelivery: vi.fn(),
 }));
 const hookMocks = vi.hoisted(() => ({
   registry: {
@@ -205,6 +206,8 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
+  markDiagnosticSessionPendingFinalDelivery:
+    diagnosticMocks.markDiagnosticSessionPendingFinalDelivery,
 }));
 vi.mock("../../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: (sessionKey: string | undefined) =>
@@ -414,7 +417,7 @@ export function setDiscordTestRegistry() {
   );
 }
 
-export function createHookCtx() {
+export function createHookCtx(overrides: Parameters<typeof buildTestCtx>[0] = {}) {
   return buildTestCtx({
     Body: "hello",
     BodyForAgent: "hello",
@@ -423,5 +426,6 @@ export function createHookCtx() {
     Surface: "telegram",
     ChatType: "private",
     SessionKey: "agent:test:session",
+    ...overrides,
   });
 }
