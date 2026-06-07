@@ -324,6 +324,29 @@ describe("legacy memory search config migrate", () => {
     ]);
   });
 
+  it("does not report a skipped codex merge when blocked provider needs no mutation", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+            params: { store: true },
+            models: [{ id: "text-embedding-3-small" }],
+          },
+          "openai-codex": {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            models: [{ id: "gpt-5.5", api: "openai-chatgpt-responses" }],
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
   it("merges distinct legacy model ids even when display names collide", () => {
     const res = migrateLegacyConfigForTest({
       models: {

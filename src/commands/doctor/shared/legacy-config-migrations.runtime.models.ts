@@ -1018,9 +1018,6 @@ function collectModelMergeBlockers(params: {
       blockers.push(`models.providers.${OPENAI_PROVIDER_ID}.${key}`);
     }
   }
-  if (hasOwnDefinedProperty(params.canonical, "headers")) {
-    blockers.push(`models.providers.${OPENAI_PROVIDER_ID}.headers`);
-  }
   return blockers;
 }
 
@@ -1134,10 +1131,10 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
         if (normalized.changed) {
           providers[providerId] = normalized.value;
           providersChanged = true;
+          changes.push(
+            `Skipped merging models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} into models.providers.${OPENAI_PROVIDER_ID} because provider-level defaults cannot be represented safely on merged models: ${mergeBlockers.join(", ")}.`,
+          );
         }
-        changes.push(
-          `Skipped merging models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} into models.providers.${OPENAI_PROVIDER_ID} because provider-level defaults cannot be represented safely on merged models: ${mergeBlockers.join(", ")}.`,
-        );
         continue;
       }
       // Stamp model-scoped legacy provider defaults onto each merged model so it
