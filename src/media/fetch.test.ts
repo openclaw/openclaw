@@ -627,7 +627,7 @@ describe("readRemoteMediaBuffer", () => {
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2, 3, 4]));
   });
 
-  it("uses the native response URL as the final media URL after redirects", async () => {
+  it("uses no-redirect fetch behavior and still derives names from the native response URL", async () => {
     const redirectedResponse = new Response(makeStream([new Uint8Array([1, 2, 3])]), {
       status: 200,
       headers: { "content-type": "image/png" },
@@ -645,6 +645,10 @@ describe("readRemoteMediaBuffer", () => {
     });
 
     expect(saved.fileName).toBe("photo.png");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://example.com/download",
+      expect.objectContaining({ redirect: "error" }),
+    );
   });
 
   it("rejects media URLs outside the configured hostname allowlist before fetch", async () => {

@@ -13,7 +13,19 @@
 
 import * as fs from "node:fs";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  fetchWithRuntimeDispatcherOrMockedGlobal,
+  isMockedFetch,
+  type DispatcherAwareRequestInit,
+} from "openclaw/plugin-sdk/runtime-fetch";
+import {
+  closeDispatcher,
+  createPinnedDispatcher,
+  isBlockedHostnameOrIp,
+  resolvePinnedHostnameWithPolicy,
+  type LookupFn,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import type { Dispatcher } from "undici";
 import {
   MediaFileType,
   type ChatScope,
@@ -65,10 +77,26 @@ function assertDirectUploadDownloadHostAllowed(hostname: string): void {
   }
 }
 
-async function fetchDirectUploadDownload(url: string) {
+async function createDirectUploadDispatcher(
+  url: URL,
+  lookupFn: LookupFn | undefined,
+): Promise<Dispatcher | null> {
+  if (lookupFn === undefined && isMockedFetch(globalThis.fetch)) {
+    return null;
+  }
+  const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, { lookupFn });
+  return createPinnedDispatcher(pinned);
+}
+
+async function fetchDirectUploadDownload(
+  url: URL,
+  lookupFn: LookupFn | undefined,
+): Promise<{ response: Response; release: () => Promise<void> }> {
   const controller = new AbortController();
   const timeoutError = new Error("Direct-upload media URL fetch timed out");
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let dispatcher: Dispatcher | null = null;
+  dispatcher = await createDirectUploadDispatcher(url, lookupFn);
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
       controller.abort(timeoutError);
@@ -76,16 +104,34 @@ async function fetchDirectUploadDownload(url: string) {
     }, DIRECT_UPLOAD_DOWNLOAD_TIMEOUT_MS);
     unrefTimer(timeout);
   });
-  const downloadFetch = fetch(url, {
+  const init: DispatcherAwareRequestInit = {
     signal: controller.signal,
     redirect: "error",
-  });
-  try {
-    return await Promise.race([downloadFetch, timeoutPromise]);
-  } finally {
+    ...(dispatcher ? { dispatcher } : {}),
+  };
+  const downloadFetch = fetchWithRuntimeDispatcherOrMockedGlobal(url.toString(), init);
+  let released = false;
+  const release = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
     if (timeout) {
       clearTimeout(timeout);
+      timeout = undefined;
     }
+    await closeDispatcher(dispatcher);
+  };
+  try {
+    const response = await Promise.race([downloadFetch, timeoutPromise]);
+    if (timeout) {
+      clearTimeout(timeout);
+      timeout = undefined;
+    }
+    return { response, release };
+  } catch (err) {
+    await release();
+    throw err;
   }
 }
 
@@ -133,7 +179,7 @@ async function readDirectUploadResponse(response: Response, maxBytes: number): P
 
 export async function downloadDirectUploadUrl(
   url: string,
-  opts: { maxBytes?: number } = {},
+  opts: { maxBytes?: number; lookupFn?: LookupFn } = {},
 ): Promise<Buffer> {
   let parsed: URL;
   try {
@@ -147,11 +193,15 @@ export async function downloadDirectUploadUrl(
   }
 
   assertDirectUploadDownloadHostAllowed(parsed.hostname);
-  const response = await fetchDirectUploadDownload(parsed.toString());
-  if (!response.ok) {
-    throw new Error(`Direct-upload media URL returned HTTP ${response.status}`);
+  const { response, release } = await fetchDirectUploadDownload(parsed, opts.lookupFn);
+  try {
+    if (!response.ok) {
+      throw new Error(`Direct-upload media URL returned HTTP ${response.status}`);
+    }
+    return await readDirectUploadResponse(response, opts.maxBytes ?? MAX_UPLOAD_SIZE);
+  } finally {
+    await release();
   }
-  return await readDirectUploadResponse(response, opts.maxBytes ?? MAX_UPLOAD_SIZE);
 }
 
 /**

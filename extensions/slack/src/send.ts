@@ -8,6 +8,10 @@ import {
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createHttp1EnvHttpProxyAgent,
+  shouldUseEnvHttpProxyForUrl,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
@@ -18,6 +22,11 @@ import {
 } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  fetchWithRuntimeDispatcherOrMockedGlobal,
+  type DispatcherAwareRequestInit,
+} from "openclaw/plugin-sdk/runtime-fetch";
+import { closeDispatcher } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -535,6 +544,28 @@ export function clearSlackSendQueuesForTest(): void {
   slackSendQueues.clear();
 }
 
+async function uploadSlackFileContent(params: {
+  uploadUrl: string;
+  body: BodyInit;
+  contentType?: string;
+}): Promise<Response> {
+  const dispatcher = shouldUseEnvHttpProxyForUrl(params.uploadUrl)
+    ? createHttp1EnvHttpProxyAgent()
+    : null;
+  const init: DispatcherAwareRequestInit = {
+    method: "POST",
+    ...(params.contentType ? { headers: { "Content-Type": params.contentType } } : {}),
+    body: params.body,
+    redirect: "error",
+    ...(dispatcher ? { dispatcher } : {}),
+  };
+  try {
+    return await fetchWithRuntimeDispatcherOrMockedGlobal(params.uploadUrl, init);
+  } finally {
+    await closeDispatcher(dispatcher);
+  }
+}
+
 async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
@@ -575,11 +606,10 @@ async function uploadSlackFile(params: {
 
   // Upload the file content to the presigned URL
   const uploadBody = new Uint8Array(buffer) as BodyInit;
-  const uploadResp = await fetch(uploadUrlResp.upload_url, {
-    method: "POST",
-    ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
+  const uploadResp = await uploadSlackFileContent({
+    uploadUrl: uploadUrlResp.upload_url,
     body: uploadBody,
-    redirect: "error",
+    ...(contentType ? { contentType } : {}),
   });
   if (!uploadResp.ok) {
     throw new Error(`Failed to upload file: HTTP ${uploadResp.status}`);

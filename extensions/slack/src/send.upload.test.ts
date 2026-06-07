@@ -32,6 +32,21 @@ vi.mock("./runtime-api.js", async () => {
 const { sendMessageSlack, clearSlackDmChannelCache, clearSlackSendQueuesForTest } =
   await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
+const PROXY_ENV_KEYS = [
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "https_proxy",
+  "http_proxy",
+  "NO_PROXY",
+  "no_proxy",
+] as const;
+const ORIGINAL_PROXY_ENV: Partial<Record<(typeof PROXY_ENV_KEYS)[number], string>> = {};
+for (const key of PROXY_ENV_KEYS) {
+  const value = process.env[key];
+  if (value !== undefined) {
+    ORIGINAL_PROXY_ENV[key] = value;
+  }
+}
 
 type UploadTestClient = WebClient & {
   conversations: { open: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>> };
@@ -132,10 +147,28 @@ function createUploadTestClient(): UploadTestClient {
   } as unknown as UploadTestClient;
 }
 
+function clearProxyEnvForTest(): void {
+  for (const key of PROXY_ENV_KEYS) {
+    delete process.env[key];
+  }
+}
+
+function restoreProxyEnvForTest(): void {
+  for (const key of PROXY_ENV_KEYS) {
+    const original = ORIGINAL_PROXY_ENV[key];
+    if (original === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = original;
+    }
+  }
+}
+
 describe("sendMessageSlack file upload with user IDs", () => {
   const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
+    clearProxyEnvForTest();
     globalThis.fetch = vi.fn(
       async () => new Response("ok", { status: 200 }),
     ) as unknown as typeof fetch;
@@ -147,6 +180,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    restoreProxyEnvForTest();
     vi.restoreAllMocks();
   });
 
@@ -366,6 +400,23 @@ describe("sendMessageSlack file upload with user IDs", () => {
     });
     expect(hasSlackThreadParticipation("default", "C123CHAN", "171.222")).toBe(true);
     expect(result.receipt.threadId).toBe("171.222");
+  });
+
+  it("uses the configured env proxy dispatcher for presigned upload bytes", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
+    const client = createUploadTestClient();
+
+    await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/threaded.png",
+    });
+
+    const fetchCalls = (globalThis.fetch as unknown as MockCalls).mock.calls;
+    expect(fetchCalls).toHaveLength(1);
+    const [, fetchInit] = fetchCalls[0] ?? [];
+    expect(requireRecord(fetchInit, "fetch init").dispatcher).toBeDefined();
   });
 
   it("uses explicit upload filename and title overrides when provided", async () => {

@@ -263,11 +263,9 @@ Defaults when omitted:
 
 Security note:
 
-- URL allowlists are enforced before fetch and on the final native-fetch URL
-  after redirects.
-- URL fetches use native fetch redirects. The former positive `maxRedirects`
-  caps are deprecated; set `maxRedirects: 0` only when you want URL fetches to
-  reject redirects.
+- URL allowlists are enforced before fetch and on the final native-fetch URL.
+- URL fetches reject redirects. The former `maxRedirects` caps are deprecated
+  and no longer change redirect behavior.
 - For internet-exposed gateways, use [Network proxy](/security/network-proxy)
   when you need outbound destination policy.
 

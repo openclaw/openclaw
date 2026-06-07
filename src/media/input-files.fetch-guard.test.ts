@@ -235,32 +235,35 @@ describe("HEIC input image normalization", () => {
 });
 
 describe("fetchWithGuard", () => {
-  it("uses native no-redirect fetch behavior when maxRedirects is zero", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      new Response(Buffer.from("input"), {
-        status: 200,
-        headers: { "content-type": "text/plain" },
-      }),
-    );
+  it.each([0, 3] as const)(
+    "uses native no-redirect fetch behavior when maxRedirects is %s",
+    async (maxRedirects) => {
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        new Response(Buffer.from("input"), {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        }),
+      );
 
-    await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.txt",
-        maxBytes: 1024,
-        timeoutMs: 1000,
-        maxRedirects: 0,
-      }),
-    ).resolves.toMatchObject({
-      buffer: Buffer.from("input"),
-      mimeType: "text/plain",
-      contentType: "text/plain",
-    });
+      await expect(
+        fetchWithGuard({
+          url: "https://example.com/file.txt",
+          maxBytes: 1024,
+          timeoutMs: 1000,
+          maxRedirects,
+        }),
+      ).resolves.toMatchObject({
+        buffer: Buffer.from("input"),
+        mimeType: "text/plain",
+        contentType: "text/plain",
+      });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://example.com/file.txt",
-      expect.objectContaining({ redirect: "error" }),
-    );
-  });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://example.com/file.txt",
+        expect.objectContaining({ redirect: "error" }),
+      );
+    },
+  );
 
   it("keeps the request timeout active while reading the response body", async () => {
     vi.useFakeTimers();

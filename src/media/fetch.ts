@@ -335,15 +335,7 @@ async function fetchNativeMediaAttempt(
   options: FetchMediaOptions,
   attempt: FetchDispatcherAttempt,
 ): Promise<NativeMediaResponse> {
-  const {
-    url,
-    fetchImpl,
-    requestInit,
-    maxRedirects,
-    timeoutMs,
-    ssrfPolicy,
-    trustExplicitProxyDns,
-  } = options;
+  const { url, fetchImpl, requestInit, timeoutMs, ssrfPolicy, trustExplicitProxyDns } = options;
   const requestUrl = assertMediaUrlAllowedByPolicy(url, ssrfPolicy);
   const parsedRequestUrl = new URL(requestUrl);
   const signal = resolveFetchSignal({
@@ -371,7 +363,10 @@ async function fetchNativeMediaAttempt(
     ...requestInit,
     ...(signal.signal ? { signal: signal.signal } : {}),
     ...(dispatcher ? { dispatcher } : {}),
-    ...(maxRedirects === 0 && requestInit?.redirect === undefined ? { redirect: "error" } : {}),
+    redirect:
+      requestInit?.redirect === "manual" || requestInit?.redirect === "error"
+        ? requestInit.redirect
+        : "error",
   };
   try {
     const response = fetchImpl

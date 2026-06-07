@@ -18,19 +18,8 @@ const DEPRECATED_GENERIC_FETCH_CONFIG_PATHS = [
   ["gateway", "http", "endpoints", "responses", "images", "maxRedirects"],
 ] as const;
 
-const GATEWAY_MAX_REDIRECTS_PATHS = new Set([
-  "gateway.http.endpoints.chatCompletions.images.maxRedirects",
-  "gateway.http.endpoints.responses.files.maxRedirects",
-  "gateway.http.endpoints.responses.images.maxRedirects",
-]);
-
 function formatConfigPath(path: readonly string[]): string {
   return path.join(".");
-}
-
-function shouldRemoveDeprecatedConfigValue(path: readonly string[], value: unknown): boolean {
-  const formatted = formatConfigPath(path);
-  return !GATEWAY_MAX_REDIRECTS_PATHS.has(formatted) || value !== 0;
 }
 
 function removeConfigPath(raw: Record<string, unknown>, path: readonly string[]): boolean {
@@ -52,9 +41,6 @@ function removeConfigPath(raw: Record<string, unknown>, path: readonly string[])
   if (!Object.hasOwn(parent, key)) {
     return false;
   }
-  if (!shouldRemoveDeprecatedConfigValue(path, parent[key])) {
-    return false;
-  }
   delete parent[key];
   return true;
 }
@@ -63,7 +49,6 @@ const DEPRECATED_GENERIC_FETCH_CONFIG_RULES: LegacyConfigRule[] =
   DEPRECATED_GENERIC_FETCH_CONFIG_PATHS.map((path) => ({
     path: [...path],
     message: DEPRECATED_GENERIC_FETCH_CONFIG_MESSAGE,
-    match: (value) => shouldRemoveDeprecatedConfigValue(path, value),
     requireSourceLiteral: true,
   }));
 

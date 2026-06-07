@@ -271,7 +271,7 @@ export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFil
   };
 }
 
-/** Fetches an input source URL with native redirect, timeout, and byte-limit behavior. */
+/** Fetches an input source URL with timeout, byte-limit, and no-redirect behavior. */
 export async function fetchWithGuard(params: {
   url: string;
   maxBytes: number;
@@ -300,7 +300,7 @@ export async function fetchWithGuard(params: {
     const init: DispatcherAwareRequestInit = {
       headers: { "User-Agent": "OpenClaw-Gateway/1.0" },
       signal: controller.signal,
-      redirect: params.maxRedirects === 0 ? "error" : "follow",
+      redirect: "error",
       ...(dispatcher ? { dispatcher } : {}),
     };
     response = await fetchWithRuntimeDispatcherOrMockedGlobal(url.toString(), init);

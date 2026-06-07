@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MediaFileType, type UploadMediaResponse } from "../types.js";
 import { MAX_UPLOAD_SIZE } from "../utils/file-utils.js";
 import { ApiClient } from "./api-client.js";
-import { MediaApi } from "./media.js";
+import { downloadDirectUploadUrl, MediaApi } from "./media.js";
 import { TokenManager } from "./token.js";
+
+type LookupFn = NonNullable<Parameters<typeof downloadDirectUploadUrl>[1]>["lookupFn"];
 
 const readResponseWithLimitMock = vi.hoisted(() => vi.fn());
 
@@ -334,6 +336,21 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       expect(client["request"]).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects direct URL hosts that resolve to private addresses before fetch", async () => {
+    vi.restoreAllMocks();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected"));
+    const lookupFn: LookupFn = async () => ({
+      address: "127.0.0.1",
+      family: 4,
+    });
+
+    await expect(
+      downloadDirectUploadUrl("https://cdn.example.com/assets/photo.png", { lookupFn }),
+    ).rejects.toThrow("resolves to private/internal/special-use IP address");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   it("does not forward URLs when the native download fails", async () => {
     vi.restoreAllMocks();

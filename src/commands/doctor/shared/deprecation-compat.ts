@@ -319,7 +319,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/security/network-proxy",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
     notes:
-      "Doctor keeps these deprecated generic fetch keys loadable and removable during rollout. Zero-valued gateway maxRedirects remains meaningful as no-redirect policy. This does not claim Proxyline has exact feature parity with the old fetch guard knobs.",
+      "Doctor keeps these deprecated generic fetch keys loadable and removable during rollout. Gateway input URL fetches now reject redirects by default, so gateway maxRedirects is no longer a behavior switch. This does not claim Proxyline has exact feature parity with the old fetch guard knobs.",
   }),
   deprecatedCompatRecord({
     code: "doctor-x-search-plugin-config",

@@ -144,7 +144,7 @@ describe("deprecated generic fetch config migrate", () => {
     ]);
   });
 
-  it("preserves zero-valued gateway maxRedirects because zero still rejects redirects", () => {
+  it("reports and removes zero-valued gateway maxRedirects because gateway URL fetches now always reject redirects", () => {
     const raw = {
       tools: {
         web: {
@@ -176,15 +176,23 @@ describe("deprecated generic fetch config migrate", () => {
 
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
       "tools.web.fetch.maxRedirects",
+      "gateway.http.endpoints.chatCompletions.images.maxRedirects",
+      "gateway.http.endpoints.responses.files.maxRedirects",
+      "gateway.http.endpoints.responses.images.maxRedirects",
     ]);
 
     const res = migrateLegacyConfigForTest(raw);
 
     expect(res.config?.tools?.web?.fetch).toEqual({});
-    expect(res.config?.gateway?.http?.endpoints?.chatCompletions?.images?.maxRedirects).toBe(0);
-    expect(res.config?.gateway?.http?.endpoints?.responses?.files?.maxRedirects).toBe(0);
-    expect(res.config?.gateway?.http?.endpoints?.responses?.images?.maxRedirects).toBe(0);
-    expect(res.changes).toEqual(["Removed deprecated tools.web.fetch.maxRedirects."]);
+    expect(res.config?.gateway?.http?.endpoints?.chatCompletions?.images).toEqual({});
+    expect(res.config?.gateway?.http?.endpoints?.responses?.files).toEqual({});
+    expect(res.config?.gateway?.http?.endpoints?.responses?.images).toEqual({});
+    expect(res.changes).toEqual([
+      "Removed deprecated tools.web.fetch.maxRedirects.",
+      "Removed deprecated gateway.http.endpoints.chatCompletions.images.maxRedirects.",
+      "Removed deprecated gateway.http.endpoints.responses.files.maxRedirects.",
+      "Removed deprecated gateway.http.endpoints.responses.images.maxRedirects.",
+    ]);
   });
 });
 
