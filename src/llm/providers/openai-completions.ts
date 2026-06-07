@@ -1274,6 +1274,10 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 
   const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
   const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
+  const isXiaomi =
+    provider === "xiaomi" ||
+    provider === "xiaomi-token-plan" ||
+    baseUrl.includes("api.ai.xiaomi.com");
   const cacheControlFormat =
     provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
 
@@ -1287,7 +1291,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     requiresToolResultName: false,
     requiresAssistantAfterToolResult: false,
     requiresThinkingAsText: false,
-    requiresReasoningContentOnAssistantMessages: isDeepSeek,
+    requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
     thinkingFormat: isDeepSeek
       ? "deepseek"
       : isZai
