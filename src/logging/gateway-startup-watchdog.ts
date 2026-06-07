@@ -25,9 +25,17 @@ let lastEmittedLine: string | undefined;
 /**
  * Parse the watchdog threshold from the environment.
  *
- * Returns `0` when the env var is set to `0` (operator disables the
- * watchdog) and the default when it is unset, blank, or not a finite
- * non-negative integer.
+ * Returns:
+ * - the default (`60000`) when the env var is unset or blank;
+ * - `0` (disabled) when the operator sets it to `0`;
+ * - `0` (disabled) when the operator sets it to a malformed value such as
+ *   a negative number, `NaN`, or a non-numeric string. Malformed input is
+ *   treated as an explicit "do not arm" rather than silently falling back
+ *   to the default — the watchdog is diagnostic-only and the safer
+ *   posture for a bad operator override is to leave it off so the
+ *   misconfiguration becomes visible (no spurious watchdog lines) rather
+ *   than re-arming a default the operator did not ask for.
+ * - the floored positive integer otherwise.
  */
 export function resolveStartupWatchdogThresholdMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[ENV_THRESHOLD];
@@ -36,18 +44,37 @@ export function resolveStartupWatchdogThresholdMs(env: NodeJS.ProcessEnv = proce
   }
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed < 0) {
-    return DEFAULT_THRESHOLD_MS;
+    // Defensive parsing for an external-boundary value: malformed override
+    // disables the watchdog rather than silently re-arming the default.
+    return 0;
   }
   return Math.floor(parsed);
+}
+
+/**
+ * Render a phase name safe for inclusion in the single-line stderr
+ * diagnostic. Phase names today come from string literals in source, but
+ * if a future caller passes user-derived content an embedded newline or
+ * quote would break the single-line parse contract operators rely on.
+ *
+ * `JSON.stringify` of a string produces a double-quoted token with `\n`,
+ * `\r`, `"`, and `\\` escaped per JSON, which is exactly the escape set
+ * we need for a stderr log line.
+ */
+function quotePhaseName(name: string): string {
+  return JSON.stringify(name);
 }
 
 function formatPending(phases: ReadonlyArray<{ name: string; elapsedMs: number }>): string {
   if (phases.length === 0) {
     return "[]";
   }
-  // Render outermost \u2192 innermost so operators reading stderr see the
-  // call-tree from top to bottom.
-  const items = phases.map((phase) => `${phase.name}@${phase.elapsedMs.toFixed(1)}ms`);
+  // Render outermost → innermost so operators reading stderr see the
+  // call-tree from top to bottom. Each phase name is quoted-and-escaped so
+  // an embedded newline or quote cannot break the single-line invariant.
+  const items = phases.map(
+    (phase) => `${quotePhaseName(phase.name)}@${phase.elapsedMs.toFixed(1)}ms`,
+  );
   return `[${items.join(" ")}]`;
 }
 
@@ -63,7 +90,7 @@ export function emitStartupWatchdogFiredLine(thresholdMs: number): string {
   const stuck = phases.at(-1);
   const stuckName = stuck?.name ?? "(unknown)";
   const stuckElapsed = stuck?.elapsedMs ?? thresholdMs;
-  const line = `[startup-watchdog] stuck step=${JSON.stringify(stuckName)} elapsed=${stuckElapsed.toFixed(1)}ms threshold=${thresholdMs}ms pending=${formatPending(phases)}\n`;
+  const line = `[startup-watchdog] stuck step=${quotePhaseName(stuckName)} elapsed=${stuckElapsed.toFixed(1)}ms threshold=${thresholdMs}ms pending=${formatPending(phases)}\n`;
   // Direct stderr write \u2014 bypasses the logger so a starved/filtered
   // logging pipeline does not eat the diagnostic on the hang path.
   try {

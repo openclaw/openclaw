@@ -68,8 +68,31 @@ describe("getRecentDiagnosticPhases", () => {
 });
 
 describe("getActiveDiagnosticPhases", () => {
-  it("returns an empty array when no phase is active", () => {
+  it("returns an empty array when no phase has ever been active", () => {
     resetDiagnosticPhasesForTest();
+    expect(getActiveDiagnosticPhases()).toEqual([]);
+  });
+
+  it("returns an empty array after all phases have exited (stale-stack edge)", async () => {
+    // Belt-and-suspenders: a watchdog firing outside any phase must see
+    // pending=[], not a leftover frame whose elapsedMs would otherwise be
+    // computed against a stale `startedWallMs`. Sysdes follow-up
+    // 2026-06-07: `getActiveDiagnosticPhases() outside any phase → []`.
+    resetDiagnosticPhasesForTest();
+    await withDiagnosticPhase("transient", async () => {
+      // Inside the phase the stack is populated, by construction.
+      expect(getActiveDiagnosticPhases().map((p) => p.name)).toEqual(["transient"]);
+    });
+    expect(getActiveDiagnosticPhases()).toEqual([]);
+  });
+
+  it("returns an empty array even when the phase finished with a thrown error", async () => {
+    resetDiagnosticPhasesForTest();
+    await expect(
+      withDiagnosticPhase("throws", async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
     expect(getActiveDiagnosticPhases()).toEqual([]);
   });
 

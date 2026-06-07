@@ -52,13 +52,31 @@ describe("resolveStartupWatchdogThresholdMs", () => {
     ).toBe(1500);
   });
 
-  it("falls back to the default for negative or non-numeric values", () => {
-    expect(resolveStartupWatchdogThresholdMs({ OPENCLAW_STARTUP_WATCHDOG_MS: "-5" })).toBe(60_000);
+  it("falls back to disabled (NOT the default) for negative or non-numeric values", () => {
+    // Defensive parsing for an external-boundary value: a malformed
+    // OPENCLAW_STARTUP_WATCHDOG_MS override must NOT silently re-arm the
+    // default 60s. Sysdes (Q2-followup, 2026-06-07): "NaN-ish / negative /
+    // non-numeric → disabled, NOT default."
+    expect(resolveStartupWatchdogThresholdMs({ OPENCLAW_STARTUP_WATCHDOG_MS: "-5" })).toBe(0);
     expect(
       resolveStartupWatchdogThresholdMs({
         OPENCLAW_STARTUP_WATCHDOG_MS: "notanumber",
       }),
-    ).toBe(60_000);
+    ).toBe(0);
+    expect(resolveStartupWatchdogThresholdMs({ OPENCLAW_STARTUP_WATCHDOG_MS: "NaN" })).toBe(0);
+  });
+
+  it("treats Infinity/-Infinity overrides as disabled (not finite)", () => {
+    expect(
+      resolveStartupWatchdogThresholdMs({
+        OPENCLAW_STARTUP_WATCHDOG_MS: "Infinity",
+      }),
+    ).toBe(0);
+    expect(
+      resolveStartupWatchdogThresholdMs({
+        OPENCLAW_STARTUP_WATCHDOG_MS: "-Infinity",
+      }),
+    ).toBe(0);
   });
 });
 
@@ -124,7 +142,9 @@ describe("armStartupWatchdog", () => {
       expect(line).toMatch(/^\[startup-watchdog\] /);
       expect(line).toContain('stuck step="cli.inner-step"');
       expect(line).toContain("threshold=5000ms");
-      expect(line).toMatch(/pending=\[cli\.outer-step@[0-9.]+ms cli\.inner-step@[0-9.]+ms\]/);
+      // Phase names inside pending=[...] are JSON-quoted so embedded
+      // newlines/quotes cannot break the single-line parse contract.
+      expect(line).toMatch(/pending=\["cli\.outer-step"@[0-9.]+ms "cli\.inner-step"@[0-9.]+ms\]/);
       expect(line.endsWith("\n")).toBe(true);
       expect(isStartupWatchdogArmedForTest()).toBe(false);
       expect(getLastStartupWatchdogLineForTest()).toBe(line);
@@ -214,6 +234,31 @@ describe("emitStartupWatchdogFiredLine", () => {
       expect(() => emitStartupWatchdogFiredLine(60_000)).not.toThrow();
     } finally {
       process.stderr.write = original;
+    }
+  });
+
+  it("escapes embedded newlines and quotes in phase names so the line stays single-line", async () => {
+    // Sysdes follow-up 2026-06-07: "formatter must escape `\n` and `"` in
+    // phase names". Phase names are string literals in source today, but if a
+    // future caller passes user-derived content an unescaped newline would
+    // break the single-line parse contract operators rely on when grepping
+    // production stderr.
+    const capture = captureStderr();
+    try {
+      await withDiagnosticPhase('with"quote\nnewline', async () => {
+        emitStartupWatchdogFiredLine(60_000);
+      });
+      expect(capture.lines).toHaveLength(1);
+      const line = capture.lines[0] ?? "";
+      // Exactly one trailing newline: the structured line itself.
+      expect(line.match(/\n/g)?.length).toBe(1);
+      expect(line.endsWith("\n")).toBe(true);
+      // `stuck step=` value is JSON-quoted with embedded `\n` and `\"`.
+      expect(line).toContain('stuck step="with\\"quote\\nnewline"');
+      // `pending=[...]` entry uses the same quoting/escaping discipline.
+      expect(line).toMatch(/pending=\["with\\"quote\\nnewline"@[0-9.]+ms\]/);
+    } finally {
+      capture.restore();
     }
   });
 });
