@@ -81,7 +81,7 @@ describe("Anthropic provider", () => {
     expect(config.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer gateway-token");
   });
 
-  it("preserves provider-signed Anthropic thinking text on replay", async () => {
+  it("preserves provider-signed Anthropic thinking and drops reasoning_content placeholders", async () => {
     const highSurrogate = String.fromCharCode(0xd83d);
     const signedThinking = `keep${highSurrogate}signed`;
     let capturedPayload: unknown;
@@ -161,11 +161,6 @@ describe("Anthropic provider", () => {
         type: "thinking",
         thinking: signedThinking,
         signature: "sig_1",
-      },
-      {
-        type: "thinking",
-        thinking: "sanitizesynthetic",
-        signature: "reasoning_content",
       },
     ]);
   });
