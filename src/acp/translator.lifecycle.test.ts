@@ -468,12 +468,13 @@ describe("acp translator stable lifecycle handlers", () => {
   });
 
   it("resolves prompts when chat send returns a terminal ok ack", async () => {
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    const requestMock = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "chat.send") {
         return { runId: params?.idempotencyKey, status: "ok" };
       }
       return { ok: true };
-    }) as GatewayClient["request"];
+    });
+    const request = requestMock as GatewayClient["request"];
     const sessionStore = createInMemorySessionStore();
     sessionStore.createSession({
       sessionId: "session-1",
@@ -489,7 +490,7 @@ describe("acp translator stable lifecycle handlers", () => {
     ).resolves.toEqual({
       stopReason: "end_turn",
     });
-    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(requestMock.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   });
 
   it("closes sessions by aborting active work, resolving pending prompts, and deleting bridge state", async () => {

@@ -71,6 +71,15 @@ function requireFirstRequestCall(request: ReturnType<typeof vi.fn>): unknown[] {
   return call;
 }
 
+function createStartedChatSendAck(params: unknown) {
+  const requestParams = requireRecord(params);
+  const runId = requestParams.idempotencyKey;
+  if (typeof runId !== "string") {
+    throw new Error("Expected chat.send idempotencyKey");
+  }
+  return { runId, status: "started" as const };
+}
+
 function expectTextChatMessage(message: unknown, role: string, text: string): void {
   const record = requireRecord(message);
   expect(record.role).toBe(role);
@@ -1752,7 +1761,9 @@ describe("sendChatMessage", () => {
         sessionId: "session-before-reconnect",
         messages: [],
       })
-      .mockResolvedValueOnce({ runId: "run-1", status: "started" });
+      .mockImplementationOnce((_method: string, params?: unknown) =>
+        createStartedChatSendAck(params),
+      );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2016,7 +2027,9 @@ describe("sendChatMessage", () => {
   });
 
   it("serializes non-image chat attachments as files", async () => {
-    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const request = vi.fn((_method: string, params?: unknown) =>
+      Promise.resolve(createStartedChatSendAck(params)),
+    );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2061,7 +2074,9 @@ describe("sendChatMessage", () => {
   });
 
   it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
-    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const request = vi.fn((_method: string, params?: unknown) =>
+      Promise.resolve(createStartedChatSendAck(params)),
+    );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2115,7 +2130,9 @@ describe("sendChatMessage", () => {
   });
 
   it("sends inline image payloads without copying data URLs into optimistic chat state", async () => {
-    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const request = vi.fn((_method: string, params?: unknown) =>
+      Promise.resolve(createStartedChatSendAck(params)),
+    );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2155,7 +2172,9 @@ describe("sendChatMessage", () => {
     ]);
     expect(JSON.stringify(state.chatMessages)).not.toContain("data:image/png;base64");
 
-    const captionedRequest = vi.fn().mockResolvedValue({ runId: "run-2", status: "started" });
+    const captionedRequest = vi.fn((_method: string, params?: unknown) =>
+      Promise.resolve(createStartedChatSendAck(params)),
+    );
     const captionedState = createState({
       connected: true,
       client: { request: captionedRequest } as unknown as ChatState["client"],
