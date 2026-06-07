@@ -184,16 +184,21 @@ type RuntimePluginsModule = Pick<
   "ensureRuntimePluginsLoaded"
 >;
 
-const SUBAGENT_REGISTRY_RUNTIME_SPEC = ["./subagent-registry.runtime", ".js"] as const;
+const CONTEXT_ENGINE_INIT_RUNTIME_SPEC = ["./context-engine-init.runtime", ".js"] as const;
+const CONTEXT_ENGINE_REGISTRY_RUNTIME_SPEC = ["./context-engine-registry.runtime", ".js"] as const;
+const RUNTIME_PLUGINS_RUNTIME_SPEC = ["./runtime-plugins.runtime", ".js"] as const;
 
 const contextEngineInitLoader = createLazyPromiseLoader(() =>
-  importRuntimeModule<ContextEngineInitModule>(import.meta.url, SUBAGENT_REGISTRY_RUNTIME_SPEC),
+  importRuntimeModule<ContextEngineInitModule>(import.meta.url, CONTEXT_ENGINE_INIT_RUNTIME_SPEC),
 );
 const contextEngineRegistryLoader = createLazyPromiseLoader(() =>
-  importRuntimeModule<ContextEngineRegistryModule>(import.meta.url, SUBAGENT_REGISTRY_RUNTIME_SPEC),
+  importRuntimeModule<ContextEngineRegistryModule>(
+    import.meta.url,
+    CONTEXT_ENGINE_REGISTRY_RUNTIME_SPEC,
+  ),
 );
 const runtimePluginsLoader = createLazyPromiseLoader(() =>
-  importRuntimeModule<RuntimePluginsModule>(import.meta.url, SUBAGENT_REGISTRY_RUNTIME_SPEC),
+  importRuntimeModule<RuntimePluginsModule>(import.meta.url, RUNTIME_PLUGINS_RUNTIME_SPEC),
 );
 
 let sweeper: NodeJS.Timeout | null = null;

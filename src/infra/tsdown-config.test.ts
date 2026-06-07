@@ -113,6 +113,9 @@ describe("tsdown config", () => {
       "plugins/hook-runner-global",
       "plugins/provider-discovery.runtime",
       "plugins/provider-runtime.runtime",
+      "context-engine-init.runtime",
+      "context-engine-registry.runtime",
+      "runtime-plugins.runtime",
       "plugins/runtime/index",
       "plugins/synthetic-auth.runtime",
       "web-fetch/runtime",
@@ -170,6 +173,20 @@ describe("tsdown config", () => {
     expect(importSpecifiers).toEqual(["../../plugins/synthetic-auth.runtime.js"]);
     expect(entrySources(distGraph)["plugins/synthetic-auth.runtime"]).toBe(
       "src/plugins/synthetic-auth.runtime.ts",
+    );
+  });
+
+  it("keeps subagent lazy runtime surfaces behind separate stable dist entries", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["context-engine-init.runtime"]).toBe(
+      "src/agents/context-engine-init.runtime.ts",
+    );
+    expect(entrySources(distGraph)["context-engine-registry.runtime"]).toBe(
+      "src/agents/context-engine-registry.runtime.ts",
+    );
+    expect(entrySources(distGraph)["runtime-plugins.runtime"]).toBe(
+      "src/agents/runtime-plugins.runtime.ts",
     );
   });
 
