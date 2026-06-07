@@ -98,5 +98,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: systemd-update-proof-${{ matrix.scenario }}
-          path: .artifacts/systemd-update-proof/${{ matrix.scenario }}
+          path: |
+            .artifacts/systemd-update-proof/${{ matrix.scenario }}/summary.json
+            .artifacts/systemd-update-proof/${{ matrix.scenario }}/logs/**
           if-no-files-found: warn

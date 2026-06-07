@@ -81,6 +81,8 @@ install_baseline_service() {
   log "installing baseline $BASELINE_SPEC"
   npm install -g "$BASELINE_SPEC" --omit=optional --no-audit --no-fund >"$LOG_DIR/npm-install-baseline.out" 2>"$LOG_DIR/npm-install-baseline.err"
   openclaw --version >"$LOG_DIR/baseline-version.out" 2>"$LOG_DIR/baseline-version.err"
+  log "writing isolated local gateway config"
+  openclaw config set gateway.mode local >"$LOG_DIR/config-set-gateway-mode.out" 2>"$LOG_DIR/config-set-gateway-mode.err"
   log "installing real systemd user service $UNIT"
   openclaw gateway install --force --json >"$LOG_DIR/baseline-gateway-install.json" 2>"$LOG_DIR/baseline-gateway-install.err"
   systemctl --user daemon-reload >"$LOG_DIR/baseline-daemon-reload.out" 2>"$LOG_DIR/baseline-daemon-reload.err"
