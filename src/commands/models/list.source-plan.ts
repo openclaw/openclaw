@@ -112,6 +112,20 @@ export async function planAllModelListSources(params: {
   const hasProviderStaticCatalogForFilter =
     params.dependencies?.hasProviderStaticCatalogForFilter ??
     providerCatalog.hasProviderStaticCatalogForFilter;
+
+  const staticManifestCatalogRows = loadStaticManifestCatalogRowsForList({
+    cfg: params.cfg,
+    providerFilter: params.providerFilter,
+    metadataSnapshot: params.metadataSnapshot,
+  });
+  if (staticManifestCatalogRows.length > 0) {
+    return createSourcePlan({
+      kind: "manifest",
+      manifestCatalogRows: staticManifestCatalogRows,
+      skipRuntimeModelSuppression: true,
+    });
+  }
+
   const hasProviderRuntimeCatalog = await hasProviderRuntimeCatalogForFilter({
     cfg: params.cfg,
     providerFilter: params.providerFilter,
@@ -124,34 +138,19 @@ export async function planAllModelListSources(params: {
     });
   }
 
-  const staticManifestCatalogRows = loadStaticManifestCatalogRowsForList({
+  const manifestCatalogRows = loadSupplementalManifestCatalogRowsForList({
     cfg: params.cfg,
     providerFilter: params.providerFilter,
     metadataSnapshot: params.metadataSnapshot,
   });
-  const manifestCatalogRows =
-    staticManifestCatalogRows.length === 0
-      ? loadSupplementalManifestCatalogRowsForList({
-          cfg: params.cfg,
-          providerFilter: params.providerFilter,
-          metadataSnapshot: params.metadataSnapshot,
-        })
-      : staticManifestCatalogRows;
 
   if (manifestCatalogRows.length > 0) {
-    if (staticManifestCatalogRows.length === 0) {
-      // Supplemental manifest rows still need the registry for runtime-backed
-      // availability and suppression decisions.
-      return createSourcePlan({
-        kind: "registry",
-        manifestCatalogRows,
-        requiresInitialRegistry: true,
-      });
-    }
+    // Supplemental manifest rows still need the registry for runtime-backed
+    // availability and suppression decisions.
     return createSourcePlan({
-      kind: "manifest",
+      kind: "registry",
       manifestCatalogRows,
-      skipRuntimeModelSuppression: true,
+      requiresInitialRegistry: true,
     });
   }
 
