@@ -19,6 +19,7 @@ import {
   resetMemoryCoreDreamingStateForTests,
 } from "./src/dreaming-state.js";
 import { testing as shortTermTesting } from "./src/short-term-promotion.js";
+import { asOpenClawConfig } from "./src/tools.test-helpers.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -243,7 +244,7 @@ describe("memory-core doctor dreaming migration", () => {
       }),
       "utf8",
     );
-    const config = { agents: { list: [{ id: "main", default: true }] } };
+    const config = asOpenClawConfig({ agents: { list: [{ id: "main", default: true }] } });
 
     const preview = await stateMigrations[0].detectLegacyState(migrationParams(config));
     expect(preview?.preview).toEqual([expect.stringContaining("Memory Core short-term recall")]);
