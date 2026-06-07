@@ -352,7 +352,10 @@ describe("diagnostic memory", () => {
       expect.arrayContaining([
         expect.objectContaining({
           level: "WARN",
-          message: expect.stringContaining("memory pressure: level=critical reason=rss_threshold"),
+          // After #90783: message includes MiB units and threshold percentage.
+          // For test values (rss=4000, threshold=3000 bytes):
+          // "rss=4000 (0.0 MiB), 133% of 0 MiB threshold heapUsed=3000 (0.0 MiB)"
+          message: expect.stringContaining("(0.0 MiB), 133% of 0 MiB threshold"),
           attributes: expect.objectContaining({
             subsystem: "gateway/diagnostics/memory",
           }),
@@ -364,6 +367,85 @@ describe("diagnostic memory", () => {
           attributes: expect.objectContaining({
             subsystem: "gateway/diagnostics/memory",
           }),
+        }),
+      ]),
+    );
+  });
+
+  it("includes human-readable MiB and threshold percentage in the pressure log message", async () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const records: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const stop = onInternalDiagnosticEvent((event) => {
+      if (event.type === "log.record") {
+        records.push(event);
+      }
+    });
+    try {
+      // rss=1700 with rssWarningBytes=1000 → warning level (1700 >= 1000, < 3000 critical)
+      emitDiagnosticMemorySample({
+        now: Date.parse("2026-04-22T12:00:00.000Z"),
+        memoryUsage: memoryUsage({ rss: 1700, heapUsed: 500 }),
+        thresholds: {
+          rssWarningBytes: 1000,
+          rssCriticalBytes: 3000,
+          pressureRepeatMs: 60_000,
+        },
+      });
+      await flushDiagnosticEvents();
+    } finally {
+      stop();
+    }
+
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "INFO",
+          message: expect.stringContaining(
+            "heapUsed=500 (0.0 MiB)",
+          ),
+        }),
+      ]),
+    );
+  });
+
+  it("formats growth pressure events with MiB units", async () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const records: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const stop = onInternalDiagnosticEvent((event) => {
+      if (event.type === "log.record") {
+        records.push(event);
+      }
+    });
+    try {
+      // First sample establishes baseline
+      resetDiagnosticMemoryForTest();
+      emitDiagnosticMemorySample({
+        now: Date.parse("2026-04-22T12:00:00.000Z"),
+        memoryUsage: memoryUsage({ rss: 1000, heapUsed: 200 }),
+        thresholds: {
+          rssGrowthWarningBytes: 500,
+          pressureRepeatMs: 0,
+        },
+      });
+      // Second sample with +600 rss growth triggers warning
+      emitDiagnosticMemorySample({
+        now: Date.parse("2026-04-22T12:01:00.000Z"),
+        memoryUsage: memoryUsage({ rss: 1600, heapUsed: 300 }),
+        thresholds: {
+          rssGrowthWarningBytes: 500,
+          pressureRepeatMs: 0,
+        },
+      });
+      await flushDiagnosticEvents();
+    } finally {
+      stop();
+    }
+
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "INFO",
+          message: expect.stringContaining("memory pressure: level=warning reason=rss_growth"),
         }),
       ]),
     );
