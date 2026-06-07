@@ -141,14 +141,14 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
     id: "gpt-test-a",
     name: "A-Model",
     provider: "openai",
-    available: true,
+    available: false,
     contextWindow: 8000,
   },
   {
     id: "gpt-test-z",
     name: "gpt-test-z",
     provider: "openai",
-    available: true,
+    available: false,
   },
 ];
 
@@ -212,10 +212,18 @@ const expectedConfiguredProviderModel = (params: ConfiguredProviderModelFixture)
 
 describe("gateway server models + voicewake", () => {
   const listModels = async (params?: { view?: "default" | "configured" | "all" }) =>
-    withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () =>
-      params
-        ? await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
-        : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
+    withEnvAsync(
+      {
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        CODEX_API_KEY: undefined,
+        OPENAI_API_KEY: undefined,
+        OPENAI_OAUTH_TOKEN: undefined,
+        CHATGPT_OAUTH_TOKEN: undefined,
+      },
+      async () =>
+        params
+          ? await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
+          : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
     );
 
   const setAgentCatalog = async (entries: AgentCatalogFixtureEntry[]) => {
@@ -655,7 +663,7 @@ describe("gateway server models + voicewake", () => {
             id: "gpt-test-z",
             name: "gpt-test-z",
             provider: "openai",
-            available: true,
+            available: false,
           },
         ]);
       },
@@ -701,7 +709,7 @@ describe("gateway server models + voicewake", () => {
           id: "gpt-test-z",
           name: "gpt-test-z",
           provider: "openai",
-          available: true,
+          available: false,
         },
       ],
     });
@@ -718,7 +726,7 @@ describe("gateway server models + voicewake", () => {
           id: "not-in-catalog",
           name: "not-in-catalog",
           provider: "openai",
-          available: true,
+          available: false,
         },
       ],
     });
