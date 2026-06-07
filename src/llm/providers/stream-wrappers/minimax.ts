@@ -26,7 +26,7 @@ function isMinimaxAnthropicMessagesModel(model: { api?: unknown; provider?: unkn
  * + `thinking_delta`) and **requires** thinking to be active to produce any
  * visible text. Pinning `thinking: { type: "disabled" }` on M3 makes the model
  * return an empty content array with `stop_reason: "end_turn"` and 1 output
- * token — observed against `https://api.minimax.io/anthropic/v1/messages`.
+ * token, observed against `https://api.minimax.io/anthropic/v1/messages`.
  *
  * The legacy MiniMax-M2.x family still needs the disable-thinking shim
  * because their Anthropic-compat streams leak `reasoning_content` in
@@ -70,7 +70,7 @@ export function createMinimaxFastModeWrapper(
  * outgoing payload so MiniMax does not produce reasoning_content deltas
  * during streaming.
  *
- * **Skipped for MiniMax-M3+**, which emits proper Anthropic-shape thinking
+ * Skipped for MiniMax-M3 and M3.x, which emit proper Anthropic-shape thinking
  * blocks and requires thinking enabled to produce any visible content.
  * Disabling thinking on M3 causes the model to return an empty content
  * array with `stop_reason: "end_turn"` and 1 output token. See

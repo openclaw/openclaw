@@ -74,7 +74,7 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
 
   it("does NOT disable thinking for MiniMax-M3 on anthropic-messages", () => {
     // M3 emits Anthropic-shape thinking blocks and returns empty content
-    // when thinking is disabled — see isMinimaxModelRequiringThinking.
+    // when thinking is disabled; see isMinimaxModelRequiringThinking.
     expect(
       captureThinkingPayload({
         provider: "minimax",
