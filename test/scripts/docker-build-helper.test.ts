@@ -352,6 +352,7 @@ printf '%s\\n' "$count" >"$TMPDIR/docker-count"
 printf '%s\\n' "$$" >"$TMPDIR/docker.pid"
 printf 'rpc error: code = Unavailable\\n'
 trap 'printf "term\\n" >"$TMPDIR/docker.term"; exit 0' TERM
+printf 'ready\\n' >"$TMPDIR/docker.ready"
 while true; do
   /bin/sleep 1
 done
@@ -401,6 +402,7 @@ docker_build_run e2e-build -t demo-image .
       const runInterruptedBuild = async (signal: NodeJS.Signals, expectedCode: number) => {
         rmSync(join(workDir, "docker.pid"), { force: true });
         rmSync(join(workDir, "docker.term"), { force: true });
+        rmSync(join(workDir, "docker.ready"), { force: true });
         rmSync(join(workDir, "docker-count"), { force: true });
         const runner = spawn(join(workDir, "runner.sh"), {
           env: { ...process.env, TMPDIR: workDir },
@@ -409,6 +411,7 @@ docker_build_run e2e-build -t demo-image .
         try {
           const pidPath = join(workDir, "docker.pid");
           await waitForFile(pidPath);
+          await waitForFile(join(workDir, "docker.ready"));
           const buildPid = Number.parseInt(readFileSync(pidPath, "utf8"), 10);
 
           runner.kill(signal);

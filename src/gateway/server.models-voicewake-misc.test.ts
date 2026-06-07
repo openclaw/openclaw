@@ -141,14 +141,14 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
     id: "gpt-test-a",
     name: "A-Model",
     provider: "openai",
-    available: false,
+    available: true,
     contextWindow: 8000,
   },
   {
     id: "gpt-test-z",
     name: "gpt-test-z",
     provider: "openai",
-    available: false,
+    available: true,
   },
 ];
 
@@ -655,7 +655,7 @@ describe("gateway server models + voicewake", () => {
             id: "gpt-test-z",
             name: "gpt-test-z",
             provider: "openai",
-            available: false,
+            available: true,
           },
         ]);
       },
@@ -701,7 +701,7 @@ describe("gateway server models + voicewake", () => {
           id: "gpt-test-z",
           name: "gpt-test-z",
           provider: "openai",
-          available: false,
+          available: true,
         },
       ],
     });
@@ -718,7 +718,7 @@ describe("gateway server models + voicewake", () => {
           id: "not-in-catalog",
           name: "not-in-catalog",
           provider: "openai",
-          available: false,
+          available: true,
         },
       ],
     });

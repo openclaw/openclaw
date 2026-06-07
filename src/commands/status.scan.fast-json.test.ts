@@ -234,7 +234,7 @@ describe("scanStatusJsonFast", () => {
     });
   });
 
-  it("skips gateway and update probes on cold-start status --json", async () => {
+  it("keeps cold-start status --json probes local and lightweight", async () => {
     await withTemporaryEnv(
       {
         OPENCLAW_TWITCH_ACCESS_TOKEN: undefined,
@@ -248,8 +248,19 @@ describe("scanStatusJsonFast", () => {
       },
     );
 
-    expect(mocks.getUpdateCheckResult).not.toHaveBeenCalled();
-    expect(mocks.probeGateway).not.toHaveBeenCalled();
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fetchGit: false,
+        includeRegistry: false,
+        updateConfigChannel: null,
+      }),
+    );
+    expect(mocks.probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detailLevel: "presence",
+        timeoutMs: 1000,
+      }),
+    );
   });
 
   it("keeps cold-start gateway probes with local-only updates when a channel is configured from manifest env vars", async () => {

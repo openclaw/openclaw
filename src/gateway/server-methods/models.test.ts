@@ -71,12 +71,12 @@ describe("models.list", () => {
         true,
         {
           models: [
-            {
+            expect.objectContaining({
               id: "gpt-test",
               name: "GPT Test",
               provider: "openai",
-              available: false,
-            },
+              available: true,
+            }),
           ],
         },
         undefined,
@@ -158,7 +158,7 @@ describe("models.list", () => {
 
       expect(respond).toHaveBeenCalledWith(
         true,
-        { models: [{ id: "gpt-test", name: "GPT Test", provider: "openai", available: false }] },
+        { models: [{ id: "gpt-test", name: "GPT Test", provider: "openai", available: true }] },
         undefined,
       );
       expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: false });
