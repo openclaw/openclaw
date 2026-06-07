@@ -3100,6 +3100,59 @@ describe("applyExtraParamsToAgent", () => {
     expect(capturedOptions?.replayResponsesItemIds).toBe(true);
   });
 
+  it("keeps Responses replay item ids enabled for Azure OpenAI store-enabled requests", () => {
+    let capturedOptions:
+      | (SimpleStreamOptions & {
+          replayResponsesItemIds?: boolean;
+        })
+      | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedOptions = options;
+      return {} as ReturnType<StreamFn>;
+    };
+    const streamFn = createOpenAIResponsesContextManagementWrapper(baseStreamFn, undefined);
+
+    void streamFn(
+      {
+        api: "openai-responses",
+        provider: "azure-openai",
+        id: "gpt-5-mini",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      } as unknown as Model<"openai-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(capturedOptions?.replayResponsesItemIds).toBe(true);
+  });
+
+  it("does not disable replay defaults for store-capable third-party Responses routes", () => {
+    let capturedOptions:
+      | (SimpleStreamOptions & {
+          replayResponsesItemIds?: boolean;
+        })
+      | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedOptions = options;
+      return {} as ReturnType<StreamFn>;
+    };
+    const streamFn = createOpenAIResponsesContextManagementWrapper(baseStreamFn, undefined);
+
+    void streamFn(
+      {
+        api: "openai-responses",
+        provider: "custom-openai-responses",
+        id: "store-capable-model",
+        baseUrl: "https://custom.example.invalid/v1",
+        compat: { supportsStore: true },
+      } as unknown as Model<"openai-responses">,
+      { messages: [] },
+      { replayResponsesItemIds: true } as never,
+    );
+
+    expect(capturedOptions?.replayResponsesItemIds).toBe(true);
+  });
+
   it("disables Responses replay item ids when custom Responses routes strip store", () => {
     let capturedOptions:
       | (SimpleStreamOptions & {
