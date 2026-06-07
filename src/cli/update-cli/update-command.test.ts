@@ -90,6 +90,17 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
     ).toBe(true);
   });
 
+  it("does not treat a loaded running package service without command metadata as user-managed", () => {
+    expect(
+      shouldPrepareUpdatedInstallRestart({
+        updateMode: "npm",
+        serviceInstalled: false,
+        serviceLoaded: true,
+        serviceRunning: true,
+      }),
+    ).toBe(false);
+  });
+
   it("keeps non-package updates tied to the loaded service state", () => {
     expect(
       shouldPrepareUpdatedInstallRestart({

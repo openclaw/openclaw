@@ -5196,6 +5196,64 @@ describe("update-cli", () => {
     expect(logs).toContain("Unit openclaw-gateway.service could not be found.");
   });
 
+  it("refuses to rewrite a loaded running service when package update cannot read a managed command", async () => {
+    const updatedRoot = createCaseDir("openclaw-updated-root");
+    const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");
+    setupUpdatedRootRefresh({
+      entrypoints: [updatedEntrypoint],
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: updatedRoot,
+          before: { version: "2026.5.20" },
+          after: { version: "2026.6.1" },
+        }),
+    });
+    serviceReadCommand.mockResolvedValue(null);
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+      detail: "active system-scoped service",
+      systemd: { unit: "openclaw-gateway.service" },
+    });
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: {
+        version: "2026.6.1",
+        connId: "system-scoped-gateway",
+      },
+      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+      connectLatencyMs: 1,
+      error: null,
+      url: "ws://127.0.0.1:18789",
+    });
+
+    await updateCommand({ yes: true });
+
+    expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeUndefined();
+    expect(gatewayCommandCall(updatedEntrypoint, "restart")).toBeUndefined();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    const logs = vi
+      .mocked(defaultRuntime.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(logs).toContain(
+      "Package update restart refused because the gateway service is loaded and running",
+    );
+    expect(logs).toContain("refusing to rewrite it with a user service install");
+    expect(logs).toContain("installed=false");
+    expect(logs).toContain("loaded=true");
+    expect(logs).toContain("running=true");
+  });
+
   it("writes the control-plane update sentinel after managed package restart health passes", async () => {
     const stateDir = await createTrackedTempDir("openclaw-update-sentinel-state-");
     const metaDir = await createTrackedTempDir("openclaw-update-sentinel-meta-");

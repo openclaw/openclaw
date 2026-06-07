@@ -632,9 +632,21 @@ export function shouldPrepareUpdatedInstallRestart(params: {
   serviceRunning?: boolean;
 }): boolean {
   if (isPackageManagerUpdateMode(params.updateMode)) {
-    return params.serviceInstalled || params.serviceRunning === true;
+    return params.serviceInstalled || Boolean(params.serviceRunning && !params.serviceLoaded);
   }
   return params.serviceLoaded;
+}
+
+function packageServiceRefreshBlockedDiagnostics(state: GatewayServiceState): string[] {
+  if (!state.running || !state.loaded || state.installed || !state.runtime?.systemd?.unit) {
+    return [];
+  }
+  return [
+    "Package update restart refused because the gateway service is loaded and running, but OpenClaw could not read a user-managed service command.",
+    "This may be an externally or system-scoped supervisor; refusing to rewrite it with a user service install.",
+    ...formatGatewayServiceSupervisionDiagnostics(state),
+    `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details, then restart the external/system supervisor manually if appropriate.`,
+  ];
 }
 
 export function shouldUseLegacyProcessRestartAfterUpdate(params: {
@@ -3726,6 +3738,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
 
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnvLocal = false;
+  let blockedPackageServiceRefreshDiagnostics: string[] = [];
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let gatewayPort = resolveUpdatedGatewayRestartPort({
     config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
@@ -3740,7 +3753,12 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
           prePackageServiceEnv: prePackageServiceStop?.serviceEnv,
         }),
       });
+      if (isPackageManagerUpdateMode(resultWithPostUpdate.mode)) {
+        blockedPackageServiceRefreshDiagnostics =
+          packageServiceRefreshBlockedDiagnostics(serviceState);
+      }
       if (
+        blockedPackageServiceRefreshDiagnostics.length === 0 &&
         shouldPrepareUpdatedInstallRestart({
           updateMode: resultWithPostUpdate.mode,
           serviceInstalled: serviceState.installed,
@@ -3773,6 +3791,29 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
     jsonMode: Boolean(opts.json),
   });
+
+  if (blockedPackageServiceRefreshDiagnostics.length > 0) {
+    if (opts.json) {
+      defaultRuntime.error(blockedPackageServiceRefreshDiagnostics.join("\n"));
+    } else {
+      defaultRuntime.log(
+        theme.warn(
+          blockedPackageServiceRefreshDiagnostics[0] ??
+            "Package update restart refused for an externally managed gateway service.",
+        ),
+      );
+      for (const line of blockedPackageServiceRefreshDiagnostics.slice(1)) {
+        defaultRuntime.log(theme.muted(line));
+      }
+    }
+    await markControlPlaneUpdateRestartSentinelFailureBestEffort({
+      meta: controlPlaneUpdateSentinelMeta,
+      reason: "restart-external-supervisor",
+      jsonMode: Boolean(opts.json),
+    });
+    defaultRuntime.exit(1);
+    return;
+  }
 
   const restartOk = await maybeRestartService({
     shouldRestart,
