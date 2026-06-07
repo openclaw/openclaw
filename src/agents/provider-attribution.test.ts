@@ -731,6 +731,23 @@ describe("provider attribution", () => {
       googleVertexRegion: "global",
     });
 
+    expectRecordFields(resolveProviderEndpoint("https://aiplatform.eu.rep.googleapis.com"), {
+      endpointClass: "google-vertex",
+      hostname: "aiplatform.eu.rep.googleapis.com",
+      googleVertexRegion: "eu",
+    });
+
+    expectRecordFields(resolveProviderEndpoint("https://aiplatform.us.rep.googleapis.com"), {
+      endpointClass: "google-vertex",
+      hostname: "aiplatform.us.rep.googleapis.com",
+      googleVertexRegion: "us",
+    });
+
+    expectRecordFields(resolveProviderEndpoint("https://discoveryengine.eu.rep.googleapis.com"), {
+      endpointClass: "custom",
+      hostname: "discoveryengine.eu.rep.googleapis.com",
+    });
+
     expectRecordFields(resolveProviderEndpoint("https://proxy.example.com/google"), {
       endpointClass: "custom",
       hostname: "proxy.example.com",

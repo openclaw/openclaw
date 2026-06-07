@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { resolveGoogleVertexBaseOrigin } from "./transport-stream.js";
+import { describe, expect, it } from "vitest";
 import { isGoogleVertexHostname } from "./provider-policy.js";
+import { resolveGoogleVertexBaseOrigin } from "./transport-stream.js";
 
 // Minimal Vertex model whose baseUrl carries the {location} template, so the
 // base-origin resolver falls through to location-based host construction
@@ -54,6 +54,11 @@ describe("Google Vertex hostname recognition", () => {
   it("recognizes the multi-region rep host as a Vertex host", () => {
     expect(isGoogleVertexHostname("aiplatform.eu.rep.googleapis.com")).toBe(true);
     expect(isGoogleVertexHostname("aiplatform.us.rep.googleapis.com")).toBe(true);
+  });
+
+  it("does not classify unrelated rep hosts as Vertex hosts", () => {
+    expect(isGoogleVertexHostname("discoveryengine.eu.rep.googleapis.com")).toBe(false);
+    expect(isGoogleVertexHostname("not-aiplatform.eu.rep.googleapis.com")).toBe(false);
   });
 
   it("still recognizes the unprefixed and regional Vertex hosts", () => {
