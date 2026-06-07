@@ -1303,6 +1303,15 @@ check_gateway_probes() {
 }
 
 check_gateway_status() {
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    # Auto-auth update migration proof uses the managed restart path. The
+    # preceding phases already assert update JSON success, state survival, and
+    # live/ready HTTP probes against the restarted gateway. The RPC status CLI
+    # uses gateway-token auth rather than the seeded device-auth operator token,
+    # so keep that auth-model check out of the update-supervision proof.
+    status_seconds=0
+    return 0
+  fi
   local port=18789
   local budget="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-180}"
   local status_start

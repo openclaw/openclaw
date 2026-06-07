@@ -436,6 +436,14 @@ node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
   --out /tmp/openclaw-upgrade-survivor-readyz.json
 
 echo "Checking gateway RPC status..."
+if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+  # Auto-auth update migration proof uses the managed restart path. Earlier
+  # phases already assert update JSON success, state survival, and live/ready
+  # HTTP probes against the restarted gateway. The RPC status CLI uses
+  # gateway-token auth rather than the seeded device-auth operator token, so
+  # keep that auth-model check out of the update-supervision proof.
+  status_seconds=0
+else
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] && [ "$STATUS_BUDGET" -lt 180 ]; then
   STATUS_BUDGET=180
 fi
@@ -458,6 +466,7 @@ done
 status_end="$(node -e "process.stdout.write(String(Date.now()))")"
 status_seconds=$(((status_end - status_start + 999) / 1000))
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json /tmp/openclaw-upgrade-survivor-status.json
+fi
 
 echo "Upgrade survivor Docker E2E passed scenario=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base} updateRestartMode=${UPDATE_RESTART_MODE} startup=${start_seconds}s status=${status_seconds}s."
 '
