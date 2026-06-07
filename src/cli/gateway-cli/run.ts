@@ -773,9 +773,15 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
     return;
   }
   if (resolvedAuthMode === "none") {
-    gatewayLog.warn(
-      "Gateway auth mode=none explicitly configured; all gateway connections are unauthenticated.",
-    );
+    if (bind !== "loopback") {
+      gatewayLog.warn(
+        "Gateway auth mode=none explicitly configured; all gateway connections are unauthenticated.",
+      );
+    } else {
+      gatewayLog.debug(
+        "Gateway auth mode=none on loopback; all gateway connections are unauthenticated.",
+      );
+    }
   }
   const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
   if (
