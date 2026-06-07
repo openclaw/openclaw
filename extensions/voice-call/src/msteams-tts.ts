@@ -10,6 +10,7 @@
  */
 
 import { resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
+import { TtsConfigSchema } from "../api.js";
 import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import { deepMergeDefined } from "./deep-merge.js";
@@ -69,7 +70,9 @@ function applyTtsOverride(coreConfig: CoreConfig, override?: VoiceCallTtsConfig)
     return coreConfig;
   }
   const base = coreConfig.messages?.tts;
-  const merged = base ? (deepMergeDefined(base, override) as VoiceCallTtsConfig) : override;
+  // Validate the merged result against the canonical TTS schema instead of an unchecked cast
+  // (mirrors normalizeVoiceCallTtsConfig in config.ts), so an incompatible override surfaces here.
+  const merged = base ? TtsConfigSchema.parse(deepMergeDefined(base, override)) : override;
   return {
     ...coreConfig,
     messages: {
