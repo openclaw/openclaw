@@ -925,6 +925,15 @@ const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
+const MODEL_UNSCOPED_PROVIDER_DEFAULT_KEYS = [
+  "apiKey",
+  "request",
+  "timeoutSeconds",
+  "region",
+  "injectNumCtxForOpenAICompat",
+  "localService",
+  "authHeader",
+] as const;
 
 function hasCanonicalOpenAIProvider(providers: Record<string, unknown>): boolean {
   return Object.keys(providers).some(
@@ -970,6 +979,82 @@ function normalizeLegacyOpenAIResponsesApi(
   }
 
   return { value: next, changed };
+}
+
+function hasOwnDefinedProperty(record: Record<string, unknown>, key: string): boolean {
+  return Object.hasOwn(record, key) && record[key] !== undefined;
+}
+
+function getStringRecord(value: unknown): Record<string, string> | undefined {
+  const record = getRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  return Object.values(record).every((entry) => typeof entry === "string")
+    ? (record as Record<string, string>)
+    : undefined;
+}
+
+function collectModelMergeBlockers(params: {
+  canonical: Record<string, unknown>;
+  legacy: Record<string, unknown>;
+}): string[] {
+  const blockers: string[] = [];
+  for (const key of MODEL_UNSCOPED_PROVIDER_DEFAULT_KEYS) {
+    if (hasOwnDefinedProperty(params.legacy, key)) {
+      blockers.push(`models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID}.${key}`);
+    }
+    if (hasOwnDefinedProperty(params.canonical, key)) {
+      blockers.push(`models.providers.${OPENAI_PROVIDER_ID}.${key}`);
+    }
+  }
+  if (hasOwnDefinedProperty(params.legacy, "headers") && !getStringRecord(params.legacy.headers)) {
+    blockers.push(`models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID}.headers`);
+  }
+  if (hasOwnDefinedProperty(params.canonical, "headers")) {
+    blockers.push(`models.providers.${OPENAI_PROVIDER_ID}.headers`);
+  }
+  return blockers;
+}
+
+function buildMergedLegacyOpenAIModel(
+  model: unknown,
+  legacyProvider: Record<string, unknown>,
+): unknown {
+  const modelRecord = getRecord(model);
+  if (!modelRecord) {
+    return model;
+  }
+
+  const patch: Record<string, unknown> = {};
+  const legacyBaseUrl =
+    typeof legacyProvider.baseUrl === "string" ? legacyProvider.baseUrl : undefined;
+  const legacyApi = typeof legacyProvider.api === "string" ? legacyProvider.api : undefined;
+  const legacyHeaders = getStringRecord(legacyProvider.headers);
+  const legacyParams = getRecord(legacyProvider.params);
+  const legacyAgentRuntime = getRecord(legacyProvider.agentRuntime);
+
+  if (legacyBaseUrl && !modelRecord.baseUrl) {
+    patch.baseUrl = legacyBaseUrl;
+  }
+  if (legacyApi && !modelRecord.api) {
+    patch.api = legacyApi;
+  }
+  for (const key of ["contextWindow", "contextTokens", "maxTokens"] as const) {
+    if (typeof legacyProvider[key] === "number" && modelRecord[key] === undefined) {
+      patch[key] = legacyProvider[key];
+    }
+  }
+  if (legacyParams && modelRecord.params === undefined) {
+    patch.params = legacyParams;
+  }
+  if (legacyAgentRuntime && modelRecord.agentRuntime === undefined) {
+    patch.agentRuntime = legacyAgentRuntime;
+  }
+  if (legacyHeaders && modelRecord.headers === undefined) {
+    patch.headers = legacyHeaders;
+  }
+  return Object.keys(patch).length > 0 ? Object.assign({}, modelRecord, patch) : model;
 }
 
 function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes: string[]): void {
@@ -1038,26 +1123,24 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
         }
         return (!id || !canonicalModelIds.has(id)) && (!name || !canonicalModelNames.has(name));
       });
-      // Stamp legacy provider-level baseUrl and api onto each merged model that
-      // lacks its own, so the model continues to route to the correct endpoint
-      // instead of inheriting the canonical provider's (e.g. api.openai.com).
-      const legacyBaseUrl =
-        typeof normalized.value.baseUrl === "string" ? normalized.value.baseUrl : undefined;
-      const legacyApi = typeof normalized.value.api === "string" ? normalized.value.api : undefined;
-      const stamped = modelsToMerge.map((m) => {
-        const mr = getRecord(m);
-        if (!mr) {
-          return m;
+      const mergeBlockers =
+        modelsToMerge.length > 0
+          ? collectModelMergeBlockers({ canonical, legacy: normalized.value })
+          : [];
+      if (mergeBlockers.length > 0) {
+        if (normalized.changed) {
+          providers[providerId] = normalized.value;
+          providersChanged = true;
         }
-        const patch: Record<string, unknown> = {};
-        if (legacyBaseUrl && !mr.baseUrl) {
-          patch.baseUrl = legacyBaseUrl;
-        }
-        if (legacyApi && !mr.api) {
-          patch.api = legacyApi;
-        }
-        return Object.keys(patch).length > 0 ? Object.assign({}, mr, patch) : m;
-      });
+        changes.push(
+          `Skipped merging models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} into models.providers.${OPENAI_PROVIDER_ID} because provider-level defaults cannot be represented safely on merged models: ${mergeBlockers.join(", ")}.`,
+        );
+        continue;
+      }
+      // Stamp model-scoped legacy provider defaults onto each merged model so it
+      // keeps the Codex endpoint and runtime metadata instead of inheriting the
+      // canonical provider's OpenAI platform defaults.
+      const stamped = modelsToMerge.map((m) => buildMergedLegacyOpenAIModel(m, normalized.value));
       if (stamped.length > 0) {
         providers[canonicalKey] = { ...canonical, models: [...canonicalModels, ...stamped] };
         const mergedIds = stamped

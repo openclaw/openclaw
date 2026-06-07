@@ -201,6 +201,90 @@ describe("legacy memory search config migrate", () => {
     ]);
   });
 
+  it("preserves model-scoped legacy provider defaults when merging codex models", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "text-embedding-3-small" }],
+          },
+          "openai-codex": {
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            contextWindow: 200000,
+            contextTokens: 180000,
+            maxTokens: 8192,
+            params: { store: false },
+            agentRuntime: { id: "codex" },
+            headers: { "x-openclaw-test": "codex" },
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
+      },
+    });
+
+    const openai = res.config?.models?.providers?.openai as Record<string, unknown> | undefined;
+    expect(openai?.models).toEqual([
+      { id: "text-embedding-3-small" },
+      {
+        id: "gpt-5.5",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        contextWindow: 200000,
+        contextTokens: 180000,
+        maxTokens: 8192,
+        params: { store: false },
+        agentRuntime: { id: "codex" },
+        headers: { "x-openclaw-test": "codex" },
+      },
+    ]);
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "Merged 1 model(s) from models.providers.openai-codex into models.providers.openai: gpt-5.5",
+    ]);
+  });
+
+  it("keeps legacy codex provider when existing openai defaults would leak into merged models", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            apiKey: "OPENAI_API_KEY",
+            baseUrl: "https://api.openai.com/v1",
+            request: { retry: { maxAttempts: 1 } },
+            models: [{ id: "text-embedding-3-small" }],
+          },
+          "openai-codex": {
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            models: [{ id: "gpt-5.5", api: "openai-codex-responses" }],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.openai).toEqual({
+      api: "openai-responses",
+      apiKey: "OPENAI_API_KEY",
+      baseUrl: "https://api.openai.com/v1",
+      request: { retry: { maxAttempts: 1 } },
+      models: [{ id: "text-embedding-3-small" }],
+    });
+    expect(res.config?.models?.providers?.["openai-codex"]).toEqual({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      models: [{ id: "gpt-5.5", api: "openai-chatgpt-responses" }],
+    });
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      'Moved models.providers.openai-codex.api "openai-codex-responses" → "openai-chatgpt-responses"',
+      'Moved models.providers.openai-codex.models[0].api "openai-codex-responses" → "openai-chatgpt-responses"',
+      "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai.apiKey, models.providers.openai.request",
+    ]);
+  });
+
   it("removes openai-codex when all its models already exist in canonical openai", () => {
     const res = migrateLegacyConfigForTest({
       models: {
