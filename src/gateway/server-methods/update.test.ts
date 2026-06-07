@@ -29,6 +29,15 @@ const startManagedServiceUpdateHandoffMock = vi.fn(async () => ({
 
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
 
+type PostCoreFinalizeOutcome = Awaited<
+  ReturnType<
+    typeof import("../../infra/update-post-core-finalize.js").runPostCoreFinalizeAfterGatewayUpdate
+  >
+>;
+const runPostCoreFinalizeAfterGatewayUpdateMock = vi.fn<() => Promise<PostCoreFinalizeOutcome>>(
+  async () => ({ status: "skipped", reason: "not-git-update" }),
+);
+
 type UpdateRunPayload = {
   ok: boolean;
   result?: { status?: string; reason?: string; mode?: string };
@@ -106,6 +115,18 @@ vi.mock("../../infra/update-runner.js", () => ({
   runGatewayUpdate: runGatewayUpdateMock,
 }));
 
+// Keep the real `foldPostCoreFinalizeIntoResult` so the restart-gate behavior on
+// finalize failure is exercised; only stub the subprocess-spawning finalizer.
+vi.mock("../../infra/update-post-core-finalize.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/update-post-core-finalize.js")>(
+    "../../infra/update-post-core-finalize.js",
+  );
+  return {
+    ...actual,
+    runPostCoreFinalizeAfterGatewayUpdate: runPostCoreFinalizeAfterGatewayUpdateMock,
+  };
+});
+
 vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
   validateUpdateStatusParams: () => true,
   validateUpdateRunParams: () => true,
@@ -170,6 +191,11 @@ beforeEach(() => {
   startManagedServiceUpdateHandoffMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true });
+  runPostCoreFinalizeAfterGatewayUpdateMock.mockClear();
+  runPostCoreFinalizeAfterGatewayUpdateMock.mockResolvedValue({
+    status: "skipped",
+    reason: "not-git-update",
+  });
 });
 
 async function invokeUpdateRun(
@@ -513,6 +539,73 @@ describe("update.run restart scheduling", () => {
     expect(payload?.result?.status).toBe("skipped");
     expect(payload?.result?.reason).toBe("restart-unavailable");
     expect(payload?.result?.mode).toBe("npm");
+  });
+});
+
+describe("update.run post-core plugin finalize", () => {
+  function mockGitOkUpdate(root: string) {
+    runGatewayUpdateMock.mockResolvedValueOnce({
+      status: "ok",
+      mode: "git",
+      root,
+      after: { version: "2026.6.1" },
+      steps: [],
+      durationMs: 100,
+    });
+    mockGitInstallSurface(root);
+  }
+
+  it("resumes official plugin convergence after a git/source core update", async () => {
+    runPostCoreFinalizeAfterGatewayUpdateMock.mockResolvedValueOnce({
+      status: "ok",
+      entrypoint: "/tmp/openclaw-git/dist/index.mjs",
+    });
+    mockGitOkUpdate("/tmp/openclaw-git");
+
+    const payload = await captureUpdateRunPayload();
+
+    expect(runPostCoreFinalizeAfterGatewayUpdateMock).toHaveBeenCalledTimes(1);
+    const [finalizeParams] = firstMockCall(
+      runPostCoreFinalizeAfterGatewayUpdateMock,
+      "post-core finalize",
+    ) as [{ result?: UpdateRunResult }];
+    expect(finalizeParams.result?.mode).toBe("git");
+    expect(finalizeParams.result?.status).toBe("ok");
+    // Convergence succeeded, so the gateway is allowed to restart onto the new core.
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    expect(payload?.ok).toBe(true);
+    expect(payload?.result?.status).toBe("ok");
+  });
+
+  it("blocks the restart when post-core plugin finalize fails", async () => {
+    runPostCoreFinalizeAfterGatewayUpdateMock.mockResolvedValueOnce({
+      status: "error",
+      reason: "nonzero-exit",
+      entrypoint: "/tmp/openclaw-git/dist/index.mjs",
+      exitCode: 1,
+      message: "convergence failed",
+    });
+    mockGitOkUpdate("/tmp/openclaw-git");
+
+    const payload = await captureUpdateRunPayload();
+
+    // Restarting onto the new core with unreconciled plugins is the bug we avoid.
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(payload?.ok).toBe(false);
+    expect(payload?.result?.status).toBe("error");
+    expect(payload?.result?.reason).toBe("post-core-plugin-finalize-failed");
+    expect(readCapturedPayload().status).toBe("error");
+  });
+
+  it("does not run finalize on the managed-service handoff path", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGlobalInstallSurface();
+
+    await captureUpdateRunPayload();
+
+    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(runPostCoreFinalizeAfterGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
   });
 });
 
