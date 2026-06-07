@@ -195,10 +195,14 @@ export async function dispatchPendingContinuationWork(params: {
         { sessionKey: work.sessionKey, trusted: true },
       );
       if (isRetryableHeartbeatBusySkipReason(skippedReason)) {
-        requeuePendingWork(work, {
-          dueAt: Date.now() + BUSY_RETRY_MS,
+        const retryDueAt = Date.now() + BUSY_RETRY_MS;
+        const requeued = requeuePendingWork(work, {
+          dueAt: retryDueAt,
           summary: `Retryable busy skip: ${skippedReason}`,
         });
+        if (requeued) {
+          armWorkTimer(work.sessionKey, retryDueAt);
+        }
       } else {
         markPendingWorkFailed(work, `Continuation turn was not granted: ${skippedReason}`);
         failed++;

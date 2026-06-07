@@ -326,5 +326,19 @@ describe("durable continuation_work dispatch", () => {
       expect.objectContaining({ text: expect.stringContaining("busy proof") }),
       expect.objectContaining({ text: expect.stringContaining("was not granted") }),
     ]);
+
+    activeSessions.clear();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTimers();
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          SessionKey: sessionKey,
+          Body: expect.stringContaining("busy proof"),
+        }),
+        options: expect.objectContaining({ continuationTrigger: "work-wake" }),
+      }),
+    ]);
   });
 });

@@ -29,7 +29,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import type { ContinueWorkRequest } from "../continuation/types.js";
+import type { ChainState, ContinueWorkRequest } from "../continuation/types.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -1064,6 +1064,7 @@ export function createFollowupRunner(params: {
 
       await drainProgressDeliveries();
 
+      let continuationChainStateAfterDelegateDispatch: ChainState | undefined;
       // Consume and dispatch continue_delegate queue enqueued during this
       // followup turn. Parallels the main-session dispatch in agent-runner.ts:
       // without this, delegates queued by continue_work-triggered heartbeats
@@ -1163,6 +1164,7 @@ export function createFollowupRunner(params: {
         // (delayed-only delegates, all-deferred dispatches, or pure
         // continue_work turns), causing token-budget drift across hops.
         if (dispatchResult) {
+          continuationChainStateAfterDelegateDispatch = dispatchResult.chainState;
           await persistDispatchChainState(dispatchResult.chainState);
         }
       }
@@ -1179,16 +1181,20 @@ export function createFollowupRunner(params: {
           { resolveLiveContinuationRuntimeConfig },
           { loadContinuationChainState, persistContinuationChainState },
           { scheduleContinuationWork },
+          { updateSessionStore: updateSessionStoreFromStoreModule, resolveSessionStoreEntry },
         ] = await Promise.all([
           import("../continuation/config.js"),
           import("../continuation/state.js"),
           import("../continuation/lazy.runtime.js"),
+          import("../../config/sessions/store.js"),
         ]);
         const continuationConfig = resolveLiveContinuationRuntimeConfig(runtimeConfig);
         const tailUsage = runResult.meta?.agentMeta?.usage;
         const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
         const tailEntry = (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
-        const chainState = loadContinuationChainState(tailEntry, turnTokens);
+        const chainState =
+          continuationChainStateAfterDelegateDispatch ??
+          loadContinuationChainState(tailEntry, turnTokens);
         const scheduleResult = await scheduleContinuationWork({
           sessionKey,
           chainState,
@@ -1207,6 +1213,35 @@ export function createFollowupRunner(params: {
               ? { chainId: scheduleResult.chainState.chainId }
               : {}),
           });
+          // Followup usage persistence only writes usage/model fields. Persist
+          // continuation chain counters explicitly so recovered TaskFlow work
+          // reloads the advanced budget after cache eviction or restart.
+          if (storePath) {
+            try {
+              await updateSessionStoreFromStoreModule(storePath, (store) => {
+                const resolved = resolveSessionStoreEntry({ store, sessionKey });
+                if (!resolved.existing) {
+                  return;
+                }
+                store[resolved.normalizedKey] = {
+                  ...resolved.existing,
+                  continuationChainCount: scheduleResult.chainState.currentChainCount,
+                  continuationChainStartedAt: scheduleResult.chainState.chainStartedAt,
+                  continuationChainTokens: scheduleResult.chainState.accumulatedChainTokens,
+                  ...(scheduleResult.chainState.chainId
+                    ? { continuationChainId: scheduleResult.chainState.chainId }
+                    : {}),
+                };
+                for (const legacyKey of resolved.legacyKeys) {
+                  delete store[legacyKey];
+                }
+              });
+            } catch (err) {
+              defaultRuntime.error?.(
+                `[followup-runner] failed to persist continue_work chain state for ${sessionKey}: ${String(err)}`,
+              );
+            }
+          }
         }
       }
 
