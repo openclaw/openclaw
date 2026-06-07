@@ -161,8 +161,13 @@ export class MsteamsProvider implements VoiceCallProvider {
 
   /** Shared secret (also used to sign the outbound place-call request). */
   private readonly sharedSecret?: string;
-  /** Outbound calling config (worker base URL + tenant). */
-  private readonly outbound?: { enabled: boolean; workerBaseUrl?: string; tenantId?: string };
+  /** Outbound calling config (worker base URL + tenant + optional answer timeout). */
+  private readonly outbound?: {
+    enabled: boolean;
+    workerBaseUrl?: string;
+    tenantId?: string;
+    answerTimeoutMs?: number;
+  };
   /**
    * Calls OpenClaw placed via the worker, keyed by the worker/Graph callId it
    * returned, awaiting their media WebSocket `session.start` to attach.
