@@ -167,7 +167,7 @@ describe("createHostedOutboundMediaStore", () => {
     expect(entry?.buffer.toString("utf8")).toBe("image-bytes");
   });
 
-  it("registers metadata and chunk rows with storage ttl", async () => {
+  it("keeps metadata long enough to clean up expired chunk rows", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);
     loadWebMediaMock.mockResolvedValueOnce({
@@ -211,6 +211,9 @@ describe("createHostedOutboundMediaStore", () => {
     expect(await chunkStore.entries()).toHaveLength(3);
 
     vi.setSystemTime(1101);
+    expect(await metadataStore.entries()).toHaveLength(1);
+    expect(await chunkStore.entries()).toEqual([]);
+    await store.cleanupExpired(1101);
     expect(await metadataStore.entries()).toEqual([]);
     expect(await chunkStore.entries()).toEqual([]);
   });

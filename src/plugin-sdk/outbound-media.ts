@@ -101,6 +101,7 @@ export type CreateHostedOutboundMediaStoreOptions = {
 const DEFAULT_HOSTED_OUTBOUND_MEDIA_RAW_CHUNK_BYTES = 36 * 1024;
 const DEFAULT_HOSTED_OUTBOUND_MEDIA_MAX_ENTRIES = 64;
 const DEFAULT_HOSTED_OUTBOUND_MEDIA_CHUNK_ROWS_PER_ENTRY_BUDGET = 512;
+const HOSTED_OUTBOUND_MEDIA_METADATA_TTL_GRACE_MS = 60_000;
 
 function createHostedOutboundMediaId(): string {
   return randomBytes(12).toString("hex");
@@ -116,6 +117,10 @@ function buildHostedOutboundMediaMetaKey(id: string): string {
 
 function buildHostedOutboundMediaChunkKey(id: string, index: number): string {
   return `media:${id}:chunk:${String(index).padStart(4, "0")}`;
+}
+
+function resolveHostedOutboundMediaMetadataTtlMs(ttlMs: number): number {
+  return ttlMs + Math.min(ttlMs, HOSTED_OUTBOUND_MEDIA_METADATA_TTL_GRACE_MS);
 }
 
 function isFutureHostedOutboundMediaExpiry(expiresAt: unknown, nowMs: number): expiresAt is number {
@@ -243,6 +248,7 @@ export function createHostedOutboundMediaStore(
       });
       const id = createId();
       const token = createToken();
+      const metadataTtlMs = resolveHostedOutboundMediaMetadataTtlMs(options.ttlMs);
       const chunkCount = Math.max(1, Math.ceil(media.buffer.byteLength / rawChunkBytes));
       if (chunkCount > maxChunkRows) {
         throw new Error(
@@ -274,7 +280,7 @@ export function createHostedOutboundMediaStore(
             chunkCount,
             byteLength: media.buffer.byteLength,
           }),
-          { ttlMs: options.ttlMs },
+          { ttlMs: metadataTtlMs },
         );
       } catch (error) {
         await deleteEntryRows(id, chunkCount);
