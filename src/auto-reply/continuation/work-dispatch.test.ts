@@ -20,6 +20,23 @@ vi.mock("../../config/sessions/store-load.js", () => ({
   loadSessionStore: () => mockSessionStore,
 }));
 
+vi.mock("../../config/sessions/store-entry.js", () => ({
+  resolveSessionStoreEntry: ({
+    store,
+    sessionKey,
+  }: {
+    store: Record<string, unknown>;
+    sessionKey: string;
+  }) => {
+    const normalizedKey = sessionKey.trim();
+    return {
+      normalizedKey,
+      existing: store[normalizedKey] ?? store[sessionKey],
+      legacyKeys: normalizedKey === sessionKey ? [] : [sessionKey],
+    };
+  },
+}));
+
 vi.mock("../../sessions/session-key-utils.js", () => ({
   parseAgentSessionKey: (sessionKey: string) => {
     const match = /^agent:([^:]+)/.exec(sessionKey);
@@ -338,6 +355,33 @@ describe("durable continuation_work dispatch", () => {
       }),
     ]);
     expect(systemEvents).toEqual([]);
+  });
+
+  it("resolves normalized session-store aliases before treating work as missing-session", async () => {
+    const normalizedSessionKey = "agent:main:alias";
+    const queuedSessionKey = `${normalizedSessionKey} `;
+    mockSessionStore[normalizedSessionKey] = { sessionKey: normalizedSessionKey };
+    enqueuePendingWork({
+      sessionKey: queuedSessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "alias proof",
+    });
+
+    const result = await dispatchPendingContinuationWork({ sessionKey: queuedSessionKey });
+
+    expect(result).toEqual({ dispatched: 1, failed: 0 });
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          SessionKey: queuedSessionKey,
+          Body: expect.stringContaining("alias proof"),
+        }),
+      }),
+    ]);
   });
 
   it("requeues instead of losing a claimed continuation when the session is busy", async () => {

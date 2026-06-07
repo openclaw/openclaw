@@ -894,17 +894,37 @@ export async function runAgentAttempt(params: {
   // token parsed from the final payload as well as the tool callback.
   if (continuationEnabled && params.sessionKey) {
     try {
-      const { extractContinuationSignal } = await import("../../auto-reply/continuation/signal.js");
+      const [{ extractContinuationSignal }, { stripContinuationSignal }] = await Promise.all([
+        import("../../auto-reply/continuation/signal.js"),
+        import("../../auto-reply/tokens.js"),
+      ]);
+      const continuationPayloads = embeddedRunResult.payloads ?? [];
       const extraction = extractContinuationSignal({
-        payloads: embeddedRunResult.payloads ?? [],
+        payloads: continuationPayloads.map((payload) => ({ ...payload })),
         ...(attemptContinueWorkRequest ? { continueWorkRequest: attemptContinueWorkRequest } : {}),
         enabled: true,
         sessionKey: params.sessionKey,
       });
       if (extraction.signal?.kind === "work") {
+        if (extraction.fromBracket) {
+          for (let i = continuationPayloads.length - 1; i >= 0; i--) {
+            const payload = continuationPayloads[i];
+            if (!payload?.text) {
+              continue;
+            }
+            const stripped = stripContinuationSignal(payload.text);
+            if (stripped.signal?.kind !== "work") {
+              continue;
+            }
+            payload.text = stripped.text;
+            break;
+          }
+        }
         await scheduleSpawnInitContinueWorkWake({
           sessionKey: params.sessionKey,
           sessionEntry: params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
+          sessionStore: params.sessionStore,
+          storePath: params.storePath,
           runId: params.runId,
           request: {
             reason: extraction.workReason ?? "",
@@ -941,6 +961,8 @@ export async function runAgentAttempt(params: {
 async function scheduleSpawnInitContinueWorkWake(params: {
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
   runId: string;
   request: { reason: string; delaySeconds?: number; traceparent?: string };
   cfg: OpenClawConfig;
@@ -950,10 +972,12 @@ async function scheduleSpawnInitContinueWorkWake(params: {
     { resolveLiveContinuationRuntimeConfig },
     { loadContinuationChainState, persistContinuationChainState },
     { scheduleContinuationWork },
+    { resolveSessionStoreEntry, updateSessionStore },
   ] = await Promise.all([
     import("../../auto-reply/continuation/config.js"),
     import("../../auto-reply/continuation/state.js"),
     import("../../auto-reply/continuation/lazy.runtime.js"),
+    import("../../config/sessions/store.js"),
   ]);
 
   const continuationConfig = resolveLiveContinuationRuntimeConfig(params.cfg);
@@ -982,6 +1006,28 @@ async function scheduleSpawnInitContinueWorkWake(params: {
     tokens: result.chainState.accumulatedChainTokens,
     ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
   });
+  if (params.storePath && params.sessionStore) {
+    await updateSessionStore(params.storePath, (store) => {
+      const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+      if (!resolved.existing) {
+        return undefined;
+      }
+      const updated = {
+        ...resolved.existing,
+        continuationChainCount: result.chainState.currentChainCount,
+        continuationChainStartedAt: result.chainState.chainStartedAt,
+        continuationChainTokens: result.chainState.accumulatedChainTokens,
+        ...(result.chainState.chainId ? { continuationChainId: result.chainState.chainId } : {}),
+      };
+      store[resolved.normalizedKey] = updated;
+      params.sessionStore![resolved.normalizedKey] = updated;
+      for (const legacyKey of resolved.legacyKeys) {
+        delete store[legacyKey];
+        delete params.sessionStore![legacyKey];
+      }
+      return updated;
+    });
+  }
 }
 
 export function buildAcpResult(params: {

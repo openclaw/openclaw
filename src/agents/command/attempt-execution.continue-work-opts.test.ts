@@ -136,7 +136,7 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
   });
 
   async function runEmbeddedAttempt(cfg: OpenClawConfig) {
-    await runAgentAttempt({
+    return await runAgentAttempt({
       providerOverride: "anthropic",
       originalProvider: "anthropic",
       modelOverride: "claude-sonnet-4.7",
@@ -197,6 +197,51 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
   // requestContinuation alone is necessary but not sufficient — the closure
   // must actually capture continue_work tool-call payloads for the post-turn
   // heartbeat scheduler to fire.
+
+  it("persists spawn-init continue_work chain state to the session store", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "persist budgets", delaySeconds: 30 });
+      return makeEmbeddedResult();
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
+    expect(persisted[sessionKey]?.continuationChainCount).toBe(1);
+    expect(persisted[sessionKey]?.continuationChainTokens).toBe(2);
+  });
+
+  it("does not strip bracket continue_delegate markers while peeking for spawn-init continue_work", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done\n[[CONTINUE_DELEGATE: next hop]]" }],
+      meta: {
+        durationMs: 1,
+        finalAssistantVisibleText: "done",
+        agentMeta: {
+          sessionId: "session-embedded",
+          provider: "anthropic",
+          model: "claude-sonnet-4.7",
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+        },
+      },
+    } satisfies EmbeddedAgentRunResult);
+
+    const result = await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    expect(result.payloads?.[0]?.text).toContain("[[CONTINUE_DELEGATE: next hop]]");
+  });
+
   it("captured continue_work request is invocable end-to-end on spawn-init (turn-1 cure-mechanism pin)", async () => {
     // Simulate a runEmbeddedAgent run that fires continue_work mid-turn by
     // invoking the supplied closure with a representative request payload.

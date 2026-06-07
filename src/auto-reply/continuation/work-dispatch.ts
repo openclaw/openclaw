@@ -117,6 +117,7 @@ async function driveContinuationTurn(
     { getRuntimeConfig },
     { resolveStorePath },
     { loadSessionStore },
+    { resolveSessionStoreEntry },
     { parseAgentSessionKey },
     { getReplyFromConfig },
     { replyRunRegistry },
@@ -125,6 +126,7 @@ async function driveContinuationTurn(
     import("../../config/config.js"),
     import("../../config/sessions/paths.js"),
     import("../../config/sessions/store-load.js"),
+    import("../../config/sessions/store-entry.js"),
     import("../../sessions/session-key-utils.js"),
     import("../reply/get-reply.js"),
     import("../reply/reply-run-registry.js"),
@@ -151,8 +153,8 @@ async function driveContinuationTurn(
   const agentId = parseAgentSessionKey(work.sessionKey)?.agentId;
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const entry = store[work.sessionKey];
-  if (!entry) {
+  const resolvedEntry = resolveSessionStoreEntry({ store, sessionKey: work.sessionKey });
+  if (!resolvedEntry.existing) {
     return { status: "skipped", reason: "missing-session" };
   }
 
