@@ -9,6 +9,7 @@ import {
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
+import { resolveGroupCallGateConfig } from "./group-call-gate.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
@@ -123,6 +124,31 @@ const MsteamsConfigSchema = z
       })
       .strict()
       .default({ enabled: false }),
+    /**
+     * Group/meeting calls: when more than one human is on the call, only respond once the assistant
+     * is addressed by name — mirroring the chat channel's group @mention gate. 1:1 calls always
+     * respond. A call has no structured @mention, so "addressed" is matched from the transcript
+     * against `wakePhrases` (the bot's name). After being addressed, `followUpWindowMs` keeps the
+     * bot engaged for a natural back-and-forth without re-stating its name each turn.
+     */
+    groupCall: z
+      .object({
+        /** Require the bot to be addressed by name before responding in a group call. Default true. */
+        requireAddress: z.boolean().default(true),
+        /**
+         * Phrases that count as addressing the bot (case-insensitive, boundary-aware), e.g. the
+         * bot's display name. With the gate on and this empty, the gate is inert (the bot would
+         * otherwise be muted forever). Set this to your bot's name. Default ["assistant"].
+         */
+        wakePhrases: z.array(z.string().min(1)).default(["assistant"]),
+        /**
+         * After an addressed turn, keep responding to follow-ups without re-addressing for this many
+         * ms. Default 12000. 0 = the bot must be addressed on every turn.
+         */
+        followUpWindowMs: z.number().int().nonnegative().default(12_000),
+      })
+      .strict()
+      .default({ requireAddress: true, wakePhrases: ["assistant"], followUpWindowMs: 12_000 }),
   })
   .strict();
 export type MsteamsConfig = z.infer<typeof MsteamsConfigSchema>;
@@ -778,6 +804,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
             tenantId: config.msteams.outbound?.tenantId,
             answerTimeoutMs: config.msteams.outbound?.answerTimeoutMs,
           },
+          groupCall: resolveGroupCallGateConfig(config.msteams.groupCall),
         }
       : config.msteams,
     webhookSecurity: {

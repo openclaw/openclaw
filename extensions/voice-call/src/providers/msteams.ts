@@ -10,6 +10,11 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isInboundCallAllowed } from "../allowlist.js";
 import { resolveVoiceCallEffectiveConfig, type VoiceCallConfig } from "../config.js";
 import type { CoreAgentDeps, CoreConfig } from "../core-bridge.js";
+import {
+  type GroupCallGateConfig,
+  resolveGroupCallGateConfig,
+  shouldRespondToGroupTurn,
+} from "../group-call-gate.js";
 import type { CallManager } from "../manager.js";
 import {
   MsteamsMediaStream,
@@ -94,6 +99,10 @@ interface MsteamsCallState {
   pendingAudio: Buffer[];
   /** Last video frame (bytes) already attached to a streaming turn, to skip re-sending it unchanged. */
   lastVisionFrame?: string;
+  /** Human participants on the call (excludes the bot). >= 2 ⇒ group/meeting; default 1 (1:1). */
+  humanCount: number;
+  /** Epoch ms of the last turn that addressed the bot, for the group-call follow-up window. */
+  lastAddressedAt?: number;
 }
 
 /** PCM 16 kHz, 16-bit mono — the wire format both directions of the Teams bridge. */
@@ -208,6 +217,7 @@ export class MsteamsProvider implements VoiceCallProvider {
         onSessionEnd: (info) => this.handleSessionEnd(info),
         onAudioFrame: (frame) => this.handleAudioFrame(frame),
         onVideoFrame: (frame) => this.handleVideoFrame(frame),
+        onParticipants: (info) => this.handleParticipants(info),
         onRecordingStatus: (info) => this.handleRecordingStatus(info),
       });
     } else {
@@ -403,6 +413,7 @@ export class MsteamsProvider implements VoiceCallProvider {
       turnId: 0,
       recordingActive: session.recordingStatus === "active",
       pendingAudio: [],
+      humanCount: 1,
     };
     // Register state BEFORE `call.answered` so the greeting's playTts can find it.
     this.calls.set(providerCallId, state);
@@ -480,6 +491,7 @@ export class MsteamsProvider implements VoiceCallProvider {
       turnId: 0,
       recordingActive: session.recordingStatus === "active",
       pendingAudio: [],
+      humanCount: 1,
     };
     this.calls.set(providerCallId, state);
 
@@ -585,6 +597,23 @@ export class MsteamsProvider implements VoiceCallProvider {
     if (state.pendingAudio.length < MAX_PRECONNECT_FRAMES) {
       state.pendingAudio.push(frame.payload);
     }
+  }
+
+  /** Roster size changed: track the human count so the group-call gate knows 1:1 vs meeting. */
+  private handleParticipants(info: { callId: string; count: number }): void {
+    const state = this.calls.get(info.callId);
+    if (state) {
+      state.humanCount = info.count;
+    }
+    this.logger?.debug?.(
+      `MsteamsProvider: participants ${info.callId} humanCount=${info.count}` +
+        (info.count >= 2 ? " (group)" : " (1:1)"),
+    );
+  }
+
+  /** Effective group-call gate config (shared resolver applies the schema defaults). */
+  private groupCallGateConfig(): GroupCallGateConfig {
+    return resolveGroupCallGateConfig(this.responseRuntime?.voiceConfig.msteams?.groupCall);
   }
 
   /**
@@ -703,6 +732,8 @@ export class MsteamsProvider implements VoiceCallProvider {
       );
       return;
     }
+    // Always record the utterance (keeps the conversation transcript so the agent has heard prior
+    // turns once it is addressed) — the gate only decides whether to REPLY.
     this.manager.processEvent({
       id: `msteams-speech-${providerCallId}-${Date.now()}`,
       type: "call.speech",
@@ -712,6 +743,25 @@ export class MsteamsProvider implements VoiceCallProvider {
       transcript: trimmed,
       isFinal: true,
     });
+    // Group-call gate: in a meeting, stay quiet until addressed by name (mirrors the chat @mention
+    // gate). 1:1 calls always respond.
+    const now = Date.now();
+    const gate = shouldRespondToGroupTurn({
+      transcript: trimmed,
+      isGroup: state.humanCount >= 2,
+      config: this.groupCallGateConfig(),
+      lastAddressedAt: state.lastAddressedAt,
+      now,
+    });
+    if (gate.addressed) {
+      state.lastAddressedAt = now;
+    }
+    if (!gate.respond) {
+      this.logger?.debug?.(
+        `MsteamsProvider: group-call gate suppressed reply on ${providerCallId} (${state.humanCount} humans, not addressed)`,
+      );
+      return;
+    }
     void this.respond(state, trimmed).catch((err: unknown) => {
       this.logger?.warn(
         `MsteamsProvider: failed to respond on ${providerCallId} — ${describeError(err)}`,

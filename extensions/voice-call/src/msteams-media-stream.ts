@@ -89,12 +89,23 @@ const VideoFrameSchema = z.object({
   participantName: z.string().min(1).optional(),
 });
 
+/**
+ * Worker → OpenClaw. The human participant count on the call (excludes the bot), sent at join and
+ * whenever the roster changes. Lets OpenClaw tell a 1:1 call (count <= 1) from a group/meeting call
+ * (count >= 2) so it can apply the "speak only when addressed" gate in groups.
+ */
+const ParticipantsSchema = z.object({
+  type: z.literal("participants"),
+  count: z.number().int().nonnegative(),
+});
+
 const InboundMessageSchema = z.discriminatedUnion("type", [
   SessionStartSchema,
   SessionEndSchema,
   RecordingStatusMessageSchema,
   AudioFrameSchema,
   VideoFrameSchema,
+  ParticipantsSchema,
   PingSchema,
 ]);
 
@@ -170,6 +181,8 @@ export interface MsteamsMediaStreamConfig {
     participantId?: string;
     participantName?: string;
   }) => void;
+  /** Human participant count on the call changed (excludes the bot). count >= 2 ⇒ group/meeting. */
+  onParticipants?: (info: { callId: string; count: number }) => void;
 }
 
 const DEFAULT_HMAC_WINDOW_MS = 60_000;
@@ -512,6 +525,10 @@ export class MsteamsMediaStream {
           participantId: parsed.participantId,
           participantName: parsed.participantName,
         });
+        break;
+      }
+      case "participants": {
+        this.config.onParticipants?.({ callId, count: parsed.count });
         break;
       }
       case "ping": {
