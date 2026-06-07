@@ -1,13 +1,10 @@
-/**
- * Top-level embedded-agent run orchestration entrypoint.
- */
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { SILENT_REPLY_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { resolveStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -102,6 +99,10 @@ import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
+import {
+  NON_DELIVERABLE_TERMINAL_REPLY_TEXT,
+  normalizeGenericTerminalToolResultText,
+} from "../terminal-reply.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -115,7 +116,8 @@ import { resolveContextEngineCapabilities } from "./context-engine-capabilities.
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import {
   hasMessagingToolDeliveryEvidence,
-  hasOutboundDeliveryEvidence,
+  hasSideEffectProgressEvidence,
+  hasVisibleOutboundDeliveryEvidence,
 } from "./delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -124,7 +126,6 @@ import { resolveModelAsync } from "./model.js";
 import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
-  type PostCompactionGuardObservation,
 } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
@@ -169,13 +170,16 @@ import {
   resolveAckExecutionFastPathInstruction,
   resolveAttemptReplayMetadata,
   extractPlanningOnlyPlanDetails,
+  isPlanningOnlyAssistantText,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
+  PLANNING_ONLY_BLOCKED_TEXT,
+  resolvePlanningOnlyBlockedPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolvePlanningOnlyTerminalPayloadText,
   resolveReasoningOnlyRetryInstruction,
   resolveSilentToolResultReplyPayload,
-  STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   shouldRetryMissingAssistantTurn,
@@ -189,6 +193,11 @@ import {
   resolveEffectiveRuntimeModel,
   resolveHookModelSelection,
 } from "./run/setup.js";
+import {
+  resolveSuccessfulToolTerminalFallback,
+  resolveToolLoopAbortFallback,
+  type ToolLoopObservation,
+} from "./run/tool-loop-fallback.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import {
   resolveLiveToolResultMaxChars,
@@ -205,7 +214,6 @@ import type {
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
-
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
@@ -379,9 +387,152 @@ function hasCompletedModelProgressForIdleBreaker(attempt: EmbeddedRunAttemptForR
     attempt.assistantTexts.some((text) => text.trim().length > 0) ||
     attempt.toolMetas.length > 0 ||
     (attempt.clientToolCalls?.length ?? 0) > 0 ||
-    hasOutboundDeliveryEvidence(attempt) ||
+    hasSideEffectProgressEvidence(attempt) ||
     attempt.itemLifecycle.completedCount > 0
   );
+}
+
+function hasVisibleAssistantTextForTerminalProgress(attempt: EmbeddedRunAttemptForRunner): boolean {
+  return attempt.assistantTexts.some((text) => text.trim().length > 0);
+}
+
+function hasAsyncStartedTerminalProgress(attempt: EmbeddedRunAttemptForRunner): boolean {
+  return attempt.toolMetas.some((toolMeta) => toolMeta.asyncStarted === true);
+}
+
+function buildAssistantTextTerminalPayloads(
+  attempt: EmbeddedRunAttemptForRunner,
+): EmbeddedAgentRunResult["payloads"] | undefined {
+  const texts = attempt.assistantTexts
+    .map((text) => text.trim())
+    .filter((text) => text && !isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN));
+  return texts.length ? texts.map((text) => ({ text })) : undefined;
+}
+
+type EmbeddedRunReplyPayload = NonNullable<EmbeddedAgentRunResult["payloads"]>[number];
+
+function hasPayloadMedia(payload: EmbeddedRunReplyPayload): boolean {
+  return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
+}
+
+function areTerminalPayloadsPlanningOnlyText(
+  payloads: EmbeddedAgentRunResult["payloads"] | undefined,
+): boolean {
+  if (!payloads?.length) {
+    return false;
+  }
+  const texts: string[] = [];
+  for (const payload of payloads) {
+    if (
+      payload.isError === true ||
+      payload.isReasoning === true ||
+      hasPayloadMedia(payload) ||
+      payload.channelData
+    ) {
+      return false;
+    }
+    const text = payload.text?.trim();
+    if (!text) {
+      return false;
+    }
+    texts.push(text);
+  }
+  return isPlanningOnlyAssistantText(texts);
+}
+
+function buildAsyncTaskTerminalPayloads(
+  attempt: EmbeddedRunAttemptForRunner,
+): EmbeddedAgentRunResult["payloads"] | undefined {
+  const terminalTaskPayloads = (attempt.asyncTaskTerminalResults ?? [])
+    .map((task) => {
+      const taskLabel = task.taskKind ? `${task.taskKind} task` : "Background task";
+      const taskRef = task.taskId || task.runId || "unknown";
+      const status = normalizeOptionalString(task.status);
+      const outcome = normalizeOptionalString(task.terminalOutcome);
+      const summary = normalizeGenericTerminalToolResultText(
+        task.terminalSummary ?? task.progressSummary,
+      );
+      const statusText = [status, outcome && outcome !== status ? outcome : undefined]
+        .filter(Boolean)
+        .join("/");
+      return [
+        `${taskLabel} ${taskRef}${statusText ? ` finished with ${statusText}` : " finished"}.`,
+        summary,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n");
+    })
+    .filter((text) => text.trim().length > 0)
+    .map((text) => ({ text }));
+  if (terminalTaskPayloads.length > 0) {
+    return terminalTaskPayloads;
+  }
+
+  const startedTasks = attempt.toolMetas.filter((toolMeta) => toolMeta.asyncStarted === true);
+  if (startedTasks.length === 0) {
+    return undefined;
+  }
+  const taskDescriptions = startedTasks.map((toolMeta) => {
+    const refs = [toolMeta.asyncTaskId, toolMeta.asyncTaskRunId]
+      .map((value) => normalizeOptionalString(value))
+      .filter((value): value is string => Boolean(value));
+    return `${toolMeta.toolName}${refs.length ? ` (${refs.join(", ")})` : ""}`;
+  });
+  return [
+    {
+      text:
+        "Background task started, but the model did not provide a final answer.\n" +
+        `Task${taskDescriptions.length === 1 ? "" : "s"}: ${taskDescriptions.join(", ")}.`,
+    },
+  ];
+}
+
+function canSurfaceAttemptTerminalFallback(params: {
+  attempt: EmbeddedRunAttemptForRunner;
+  emptyAssistantReplyIsSilent: boolean;
+}): boolean {
+  return (
+    !params.emptyAssistantReplyIsSilent &&
+    !params.attempt.didSendDeterministicApprovalPrompt &&
+    !params.attempt.heartbeatToolResponse &&
+    !params.attempt.lastToolError &&
+    !params.attempt.clientToolCalls?.length &&
+    !params.attempt.yieldDetected &&
+    !hasVisibleOutboundDeliveryEvidence(params.attempt)
+  );
+}
+
+function resolveAttemptSuccessfulToolTerminalFallback(params: {
+  attempt: EmbeddedRunAttemptForRunner;
+  observations: readonly ToolLoopObservation[];
+}) {
+  return resolveSuccessfulToolTerminalFallback({
+    observations: params.observations,
+    requireDeclaredPresentableFallback: Boolean(
+      params.attempt.replayMetadata?.hadPotentialSideEffects,
+    ),
+  });
+}
+
+function shouldSurfaceNonDeliverableTerminalReply(params: {
+  terminalPayloads?: EmbeddedAgentRunResult["payloads"];
+  emptyAssistantReplyIsSilent: boolean;
+  attempt: EmbeddedRunAttemptForRunner;
+}): boolean {
+  if (
+    params.terminalPayloads?.length ||
+    params.emptyAssistantReplyIsSilent ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.heartbeatToolResponse ||
+    params.attempt.clientToolCalls?.length ||
+    params.attempt.yieldDetected ||
+    hasAsyncStartedTerminalProgress(params.attempt) ||
+    hasVisibleAssistantTextForTerminalProgress(params.attempt) ||
+    hasVisibleOutboundDeliveryEvidence(params.attempt)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function createEmptyAuthProfileStore(): AuthProfileStore {
@@ -435,6 +586,12 @@ function buildTraceToolSummary(params: {
     tools,
     failures: params.hadFailure ? 1 : 0,
   };
+}
+
+function isEmbeddedAgentRunResult(value: unknown): value is EmbeddedAgentRunResult {
+  return (
+    value !== null && typeof value === "object" && "meta" in value && !("sessionIdUsed" in value)
+  );
 }
 
 /**
@@ -1237,14 +1394,28 @@ export async function runEmbeddedAgent(
         { enabled: resolvedLoopDetectionConfig?.enabled !== false },
       );
       let postCompactionAbortController: AbortController | undefined;
-      let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
-      const observePostCompactionToolOutcome = (
-        observation: PostCompactionGuardObservation,
-      ): void => {
+      let toolLoopAbortError: Error | undefined;
+      let currentAttemptToolLoopObservations: ToolLoopObservation[] = [];
+      const observePostCompactionToolOutcome = (observation: ToolLoopObservation): void => {
+        currentAttemptToolLoopObservations.push(observation);
+        if (observation.blockedReason === "tool-loop") {
+          const message =
+            observation.blockedMessage ??
+            `CRITICAL: tool ${observation.toolName} was blocked by tool-loop detection. Aborting the run to prevent repeated blocked tool calls.`;
+          toolLoopAbortError ??= new Error(message);
+          postCompactionAbortController?.abort(toolLoopAbortError);
+          return;
+        }
         const verdict = postCompactionGuard.observe(observation);
         if (verdict.shouldAbort) {
-          postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
-          postCompactionAbortController?.abort(postCompactionAbortError);
+          const blockedObservation = {
+            ...observation,
+            blockedReason: "post-compaction-loop",
+            blockedMessage: verdict.message,
+          };
+          currentAttemptToolLoopObservations.push(blockedObservation);
+          toolLoopAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
+          postCompactionAbortController?.abort(toolLoopAbortError);
         }
       };
       let lastRetryFailoverReason: FailoverReason | null = null;
@@ -1507,6 +1678,7 @@ export async function runEmbeddedAgent(
             });
           }
           runLoopIterations += 1;
+          currentAttemptToolLoopObservations = [];
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
@@ -1587,6 +1759,65 @@ export async function runEmbeddedAgent(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
+          const buildToolLoopAbortFallbackResult = (): EmbeddedAgentRunResult | undefined => {
+            const fallback = resolveToolLoopAbortFallback({
+              observations: currentAttemptToolLoopObservations,
+            });
+            if (!fallback) {
+              return undefined;
+            }
+            log.warn(
+              `tool loop abort returned fallback payload: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} tool=${fallback.toolName}`,
+            );
+            const messagingToolSentTexts = currentAttemptToolLoopObservations.flatMap(
+              (observation) => observation.messagingToolSentTexts ?? [],
+            );
+            const messagingToolSentMediaUrls = currentAttemptToolLoopObservations.flatMap(
+              (observation) => observation.messagingToolSentMediaUrls ?? [],
+            );
+            const messagingToolSentTargets = currentAttemptToolLoopObservations.flatMap(
+              (observation) => observation.messagingToolSentTargets ?? [],
+            );
+            const didSendViaMessagingTool = currentAttemptToolLoopObservations.some(
+              (observation) => observation.didSendViaMessagingTool === true,
+            );
+            const agentMeta = buildErrorAgentMeta({
+              sessionId: activeSessionId,
+              sessionFile: activeSessionFile,
+              provider,
+              model: model.id,
+              contextTokens: ctxInfo.tokens,
+              usageAccumulator,
+              lastRunPromptUsage,
+              lastTurnTotal,
+            });
+            return {
+              payloads: [fallback.payload],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted: true,
+                replayInvalid: true,
+                livenessState: "blocked",
+                toolSummary: buildTraceToolSummary({
+                  toolMetas: currentAttemptToolLoopObservations.map((observation) => ({
+                    toolName: observation.toolName,
+                  })),
+                  hadFailure: true,
+                }),
+                completion: {
+                  stopReason: "tool_loop_abort",
+                  finishReason: "tool_loop_abort",
+                },
+              },
+              didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: false,
+              messagingToolSentTexts,
+              messagingToolSentMediaUrls,
+              messagingToolSentTargets,
+            };
+          };
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -1728,8 +1959,14 @@ export async function runEmbeddedAgent(
             onUserMessagePersisted,
             onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
           })
-            .catch((err: unknown): never => {
-              throw postCompactionAbortError ?? err;
+            .catch((err: unknown): never | EmbeddedAgentRunResult => {
+              if (toolLoopAbortError) {
+                const fallbackResult = buildToolLoopAbortFallbackResult();
+                if (fallbackResult) {
+                  return fallbackResult;
+                }
+              }
+              throw toolLoopAbortError ?? err;
             })
             .finally(() => {
               parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
@@ -1737,8 +1974,15 @@ export async function runEmbeddedAgent(
                 postCompactionAbortController = undefined;
               }
             });
-          if (postCompactionAbortError) {
-            throw postCompactionAbortError;
+          if (isEmbeddedAgentRunResult(rawAttempt)) {
+            return rawAttempt;
+          }
+          if (toolLoopAbortError) {
+            const fallbackResult = buildToolLoopAbortFallbackResult();
+            if (fallbackResult) {
+              return fallbackResult;
+            }
+            throw toolLoopAbortError;
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
 
@@ -1888,7 +2132,7 @@ export async function runEmbeddedAgent(
               ? sessionAssistantForCandidate.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
           const canRestartForLiveSwitch =
-            !hasOutboundDeliveryEvidence(attempt) &&
+            !hasSideEffectProgressEvidence(attempt) &&
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.lastToolError &&
             (attempt.toolMetas?.length ?? 0) === 0 &&
@@ -3000,10 +3244,15 @@ export async function runEmbeddedAgent(
           const finalAssistantStopReason = (sessionLastAssistant?.stopReason ?? "")
             .trim()
             .toLowerCase();
-          const recoveredFinalAssistantTextAfterPromptTimeout =
+          const recoveredFinalAssistantCandidateAfterPromptTimeout =
             timedOutDuringPrompt &&
             ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
               ? (finalAssistantVisibleText ?? finalAssistantRawText)?.trim()
+              : undefined;
+          const recoveredFinalAssistantTextAfterPromptTimeout =
+            recoveredFinalAssistantCandidateAfterPromptTimeout &&
+            !isPlanningOnlyAssistantText([recoveredFinalAssistantCandidateAfterPromptTimeout])
+              ? recoveredFinalAssistantCandidateAfterPromptTimeout
               : undefined;
           const payloadAlreadyContainsRecoveredFinalAssistant =
             recoveredFinalAssistantTextAfterPromptTimeout
@@ -3031,7 +3280,7 @@ export async function runEmbeddedAgent(
             (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&
             !attempt.clientToolCalls &&
             !attempt.yieldDetected &&
-            !attempt.didSendViaMessagingTool &&
+            !hasVisibleOutboundDeliveryEvidence(attempt) &&
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.lastToolError &&
             (attempt.toolMetas?.length ?? 0) === 0;
@@ -3052,6 +3301,22 @@ export async function runEmbeddedAgent(
             !hasSuccessfulFinalAssistantAfterPromptTimeout &&
             (shouldSurfaceCodexCompletionTimeout || !hasMessagingToolDeliveryEvidence(attempt))
           ) {
+            const canUsePromptTimeoutTerminalFallback = canSurfaceAttemptTerminalFallback({
+              attempt,
+              emptyAssistantReplyIsSilent: false,
+            });
+            const promptTimeoutAsyncFallback = canUsePromptTimeoutTerminalFallback
+              ? buildAsyncTaskTerminalPayloads(attempt)
+              : undefined;
+            const promptTimeoutToolFallback = canUsePromptTimeoutTerminalFallback
+              ? resolveAttemptSuccessfulToolTerminalFallback({
+                  attempt,
+                  observations: currentAttemptToolLoopObservations,
+                })?.payload
+              : undefined;
+            const promptTimeoutFallbackPayloads =
+              promptTimeoutAsyncFallback ??
+              (promptTimeoutToolFallback ? [promptTimeoutToolFallback] : undefined);
             const defaultTimeoutText = idleTimedOut
               ? "The model did not produce a response before the model idle timeout. " +
                 "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers. " +
@@ -3081,6 +3346,7 @@ export async function runEmbeddedAgent(
             });
             return {
               payloads: [
+                ...(promptTimeoutFallbackPayloads ?? []),
                 ...(hasPartialAssistantTextAfterPromptTimeout ? [] : payloadsWithToolMedia || []),
                 {
                   text: timeoutText,
@@ -3117,12 +3383,28 @@ export async function runEmbeddedAgent(
             };
           }
 
+          const attemptedToolNamesForTerminalFallback = new Set(
+            (attempt.toolMetas ?? [])
+              .map((entry) => entry.toolName?.trim())
+              .filter((toolName): toolName is string => Boolean(toolName)),
+          );
+          const optedOutToolNamesForTerminalFallback = new Set(
+            currentAttemptToolLoopObservations
+              .filter((observation) => observation.terminalResultFallback?.mode === "none")
+              .map((observation) => observation.toolName),
+          );
+          const suppressGenericToolResultFallback =
+            attemptedToolNamesForTerminalFallback.size > 0 &&
+            [...attemptedToolNamesForTerminalFallback].every((toolName) =>
+              optedOutToolNamesForTerminalFallback.has(toolName),
+            );
           const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
             isCronTrigger: params.trigger === "cron",
             payloadCount: payloadsWithToolMedia?.length ?? 0,
             aborted,
             timedOut,
             attempt,
+            suppressGenericToolResultFallback,
           });
           const payloadsForTerminalPath = recoveredFinalAssistantPayloadsAfterPromptTimeout
             ? recoveredFinalAssistantPayloadsAfterPromptTimeout
@@ -3139,6 +3421,23 @@ export async function runEmbeddedAgent(
             timedOut,
             attempt,
           });
+          const canUseAttemptTerminalFallback = canSurfaceAttemptTerminalFallback({
+            attempt,
+            emptyAssistantReplyIsSilent,
+          });
+          const payloadsForTerminalPathArePlanningOnlyText =
+            areTerminalPayloadsPlanningOnlyText(payloadsForTerminalPath);
+          const assistantTextsForTerminalPathArePlanningOnlyText =
+            payloadCount === 0 && isPlanningOnlyAssistantText(attempt.assistantTexts);
+          const completedToolFallbackForPlanningOnlyPayload =
+            (payloadsForTerminalPathArePlanningOnlyText ||
+              assistantTextsForTerminalPathArePlanningOnlyText) &&
+            canUseAttemptTerminalFallback
+              ? resolveAttemptSuccessfulToolTerminalFallback({
+                  attempt,
+                  observations: currentAttemptToolLoopObservations,
+                })
+              : undefined;
           const nextPlanningOnlyRetryInstruction = emptyAssistantReplyIsSilent
             ? null
             : resolvePlanningOnlyRetryInstruction({
@@ -3163,16 +3462,18 @@ export async function runEmbeddedAgent(
               });
           const nextEmptyResponseRetryInstruction = emptyAssistantReplyIsSilent
             ? null
-            : resolveEmptyResponseRetryInstruction({
-                provider: activeErrorContext.provider,
-                modelId: activeErrorContext.model,
-                modelApi: effectiveModel.api,
-                executionContract,
-                payloadCount,
-                aborted,
-                timedOut,
-                attempt,
-              });
+            : completedToolFallbackForPlanningOnlyPayload
+              ? null
+              : resolveEmptyResponseRetryInstruction({
+                  provider: activeErrorContext.provider,
+                  modelId: activeErrorContext.model,
+                  modelApi: effectiveModel.api,
+                  executionContract,
+                  payloadCount,
+                  aborted,
+                  timedOut,
+                  attempt,
+                });
           if (
             nextPlanningOnlyRetryInstruction &&
             planningOnlyRetryAttempts < maxPlanningOnlyRetryAttempts
@@ -3306,33 +3607,119 @@ export async function runEmbeddedAgent(
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} attempts=${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} — surfacing incomplete-turn error`,
             );
           }
-          if (!incompleteTurnText && nextPlanningOnlyRetryInstruction && strictAgenticActive) {
+          if (!incompleteTurnText && nextPlanningOnlyRetryInstruction) {
+            const exhaustedPlanningOnlyToolFallback = canSurfaceAttemptTerminalFallback({
+              attempt,
+              emptyAssistantReplyIsSilent,
+            })
+              ? resolveAttemptSuccessfulToolTerminalFallback({
+                  attempt,
+                  observations: currentAttemptToolLoopObservations,
+                })
+              : undefined;
+            const exhaustedPlanningOnlyPayloads = exhaustedPlanningOnlyToolFallback
+              ? [exhaustedPlanningOnlyToolFallback.payload]
+              : undefined;
+            const exhaustedPlanningOnlySurface = exhaustedPlanningOnlyToolFallback
+              ? `${exhaustedPlanningOnlyToolFallback.toolName} tool fallback`
+              : "blocked state";
             log.warn(
-              `strict-agentic run exhausted planning-only retries: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `provider=${provider}/${modelId} configured=${configuredExecutionContractForLog} — surfacing blocked state`,
+              `run exhausted planning-only retries: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} configured=${configuredExecutionContractForLog} — surfacing ${exhaustedPlanningOnlySurface}`,
             );
-            // Criterion 4 of the GPT-5.4 parity gate requires every terminal
-            // exit path to emit an explicit livenessState + replayInvalid so
-            // downstream observers never see "silent disappearance". Every
-            // other hard-error terminal branch in this file uses "blocked"
-            // for its livenessState (role ordering, image size, schema
-            // error, compaction timeout, aborted-with-no-payloads). Match
-            // that convention here so lifecycle consumers treat an
-            // isError:true strict-agentic-blocked payload the same way they
-            // treat any other error-terminal payload. Replay validity is
-            // delegated to the shared resolver because the plan-only
-            // transcript itself is replay-safe even though the run is
-            // terminal.
+            // Exhausted plan-only turns are terminal even outside the
+            // strict-agentic lane. Replay validity is delegated to the shared
+            // resolver because the repeated prose is replay-safe even though
+            // this run is blocked from the user's perspective.
             const replayInvalid = resolveReplayInvalidForAttempt(null);
-            const livenessState: EmbeddedRunLivenessState = "blocked";
+            const livenessState: EmbeddedRunLivenessState = exhaustedPlanningOnlyPayloads
+              ? "working"
+              : "blocked";
             setTerminalLifecycleMeta({
               replayInvalid,
               livenessState,
             });
             return {
-              payloads: [
+              payloads: exhaustedPlanningOnlyPayloads ?? [
                 {
-                  text: STRICT_AGENTIC_BLOCKED_TEXT,
+                  text: PLANNING_ONLY_BLOCKED_TEXT,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid,
+                livenessState,
+                toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didDeliverSourceReplyViaMessageTool:
+                attempt.didDeliverSourceReplyViaMessageTool === true,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+            };
+          }
+          const nonRetryablePlanningOnlyText = resolvePlanningOnlyBlockedPayloadText({
+            provider: activeErrorContext.provider,
+            modelId: activeErrorContext.model,
+            prompt,
+            aborted,
+            timedOut,
+            attempt,
+          });
+          const nonRetryablePlanningOnlyAsyncFallback =
+            nonRetryablePlanningOnlyText && canUseAttemptTerminalFallback
+              ? buildAsyncTaskTerminalPayloads(attempt)
+              : undefined;
+          const nonRetryablePlanningOnlyToolFallback =
+            nonRetryablePlanningOnlyText && canUseAttemptTerminalFallback
+              ? resolveAttemptSuccessfulToolTerminalFallback({
+                  attempt,
+                  observations: currentAttemptToolLoopObservations,
+                })
+              : undefined;
+          if (nonRetryablePlanningOnlyText) {
+            const planningOnlyFallbackPayloads =
+              nonRetryablePlanningOnlyAsyncFallback ??
+              (nonRetryablePlanningOnlyToolFallback
+                ? [nonRetryablePlanningOnlyToolFallback.payload]
+                : undefined);
+            const planningOnlySurface = nonRetryablePlanningOnlyAsyncFallback
+              ? "async task fallback"
+              : nonRetryablePlanningOnlyToolFallback
+                ? `${nonRetryablePlanningOnlyToolFallback.toolName} fallback`
+                : "blocked state";
+            log.warn(
+              `non-retryable planning-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} configured=${configuredExecutionContractForLog} ` +
+                `— surfacing ${planningOnlySurface}`,
+            );
+            const replayInvalid = resolveReplayInvalidForAttempt(null);
+            const livenessState: EmbeddedRunLivenessState = planningOnlyFallbackPayloads
+              ? "working"
+              : "blocked";
+            setTerminalLifecycleMeta({
+              replayInvalid,
+              livenessState,
+            });
+            return {
+              payloads: planningOnlyFallbackPayloads ?? [
+                {
+                  text: nonRetryablePlanningOnlyText,
                   isError: true,
                 },
               ],
@@ -3364,21 +3751,35 @@ export async function runEmbeddedAgent(
             };
           }
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
+            const reasoningOnlyAsyncFallback = canUseAttemptTerminalFallback
+              ? buildAsyncTaskTerminalPayloads(attempt)
+              : undefined;
+            const reasoningOnlyToolFallback = canUseAttemptTerminalFallback
+              ? resolveAttemptSuccessfulToolTerminalFallback({
+                  attempt,
+                  observations: currentAttemptToolLoopObservations,
+                })
+              : undefined;
             const replayInvalid = resolveReplayInvalidForAttempt(
-              "⚠️ Agent couldn't generate a response. Please try again.",
+              reasoningOnlyAsyncFallback || reasoningOnlyToolFallback
+                ? null
+                : "⚠️ Agent couldn't generate a response. Please try again.",
             );
-            const livenessState = resolveRunLivenessState({
-              payloadCount: 0,
-              aborted,
-              timedOut,
-              attempt,
-              incompleteTurnText: "⚠️ Agent couldn't generate a response. Please try again.",
-            });
+            const livenessState: EmbeddedRunLivenessState =
+              reasoningOnlyAsyncFallback || reasoningOnlyToolFallback
+                ? "working"
+                : resolveRunLivenessState({
+                    payloadCount: 0,
+                    aborted,
+                    timedOut,
+                    attempt,
+                    incompleteTurnText: "⚠️ Agent couldn't generate a response. Please try again.",
+                  });
             setTerminalLifecycleMeta({
               replayInvalid,
               livenessState,
             });
-            if (lastProfileId) {
+            if (lastProfileId && !reasoningOnlyAsyncFallback && !reasoningOnlyToolFallback) {
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
@@ -3386,8 +3787,8 @@ export async function runEmbeddedAgent(
               });
             }
             return {
-              payloads: [
-                {
+              payloads: reasoningOnlyAsyncFallback ?? [
+                reasoningOnlyToolFallback?.payload ?? {
                   text: "⚠️ Agent couldn't generate a response. Please try again.",
                   isError: true,
                 },
@@ -3472,14 +3873,40 @@ export async function runEmbeddedAgent(
             continue;
           }
           if (incompleteTurnText) {
-            const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
-            const livenessState = resolveRunLivenessState({
-              payloadCount,
-              aborted,
-              timedOut,
-              attempt,
-              incompleteTurnText,
-            });
+            const incompleteTurnAsyncTaskPayloads = canUseAttemptTerminalFallback
+              ? buildAsyncTaskTerminalPayloads(attempt)
+              : undefined;
+            const incompleteTurnToolFallback = canUseAttemptTerminalFallback
+              ? resolveAttemptSuccessfulToolTerminalFallback({
+                  attempt,
+                  observations: currentAttemptToolLoopObservations,
+                })
+              : undefined;
+            const replayInvalid = resolveReplayInvalidForAttempt(
+              incompleteTurnAsyncTaskPayloads || incompleteTurnToolFallback
+                ? null
+                : incompleteTurnText,
+            );
+            const livenessState: EmbeddedRunLivenessState =
+              incompleteTurnAsyncTaskPayloads || incompleteTurnToolFallback
+                ? "working"
+                : resolveRunLivenessState({
+                    payloadCount,
+                    aborted,
+                    timedOut,
+                    attempt,
+                    incompleteTurnText,
+                  });
+            const incompleteTurnPayloads =
+              incompleteTurnAsyncTaskPayloads ??
+              (incompleteTurnToolFallback
+                ? [incompleteTurnToolFallback.payload]
+                : [{ text: incompleteTurnText, isError: true }]);
+            const incompleteTurnSurface = incompleteTurnAsyncTaskPayloads
+              ? "async task fallback"
+              : incompleteTurnToolFallback
+                ? `${incompleteTurnToolFallback.toolName} tool fallback`
+                : "error";
             setTerminalLifecycleMeta({
               replayInvalid,
               livenessState,
@@ -3495,12 +3922,12 @@ export async function runEmbeddedAgent(
                 `compactions=${attemptCompactionCount} planningRetries=${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} ` +
                 `reasoningRetries=${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
                 `emptyRetries=${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} ` +
-                `missingAssistantRetries=${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — surfacing error to user`,
+                `missingAssistantRetries=${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — surfacing ${incompleteTurnSurface} to user`,
             );
 
             // Mark the failing profile for cooldown so multi-profile setups
             // rotate away from the exhausted credential on the next turn.
-            if (lastProfileId) {
+            if (lastProfileId && !incompleteTurnAsyncTaskPayloads && !incompleteTurnToolFallback) {
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
@@ -3509,12 +3936,7 @@ export async function runEmbeddedAgent(
             }
 
             return {
-              payloads: [
-                {
-                  text: incompleteTurnText,
-                  isError: true,
-                },
-              ],
+              payloads: incompleteTurnPayloads,
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
@@ -3584,8 +4006,8 @@ export async function runEmbeddedAgent(
               agentDir: params.agentDir,
             });
           }
-          const replayInvalid = resolveReplayInvalidForAttempt(null);
-          const livenessState = attempt.yieldDetected
+          let replayInvalid = resolveReplayInvalidForAttempt(null);
+          let livenessState = attempt.yieldDetected
             ? "paused"
             : resolveRunLivenessState({
                 payloadCount,
@@ -3602,6 +4024,120 @@ export async function runEmbeddedAgent(
           const terminalPayloads = emptyAssistantReplyIsSilent
             ? [{ text: SILENT_REPLY_TOKEN }]
             : payloadsForTerminalPath;
+          const renderedTerminalPayloads = terminalPayloads?.length ? terminalPayloads : undefined;
+          const hasAsyncTaskTerminalResults = (attempt.asyncTaskTerminalResults?.length ?? 0) > 0;
+          const asyncTaskTerminalPayloads =
+            (hasAsyncTaskTerminalResults || !renderedTerminalPayloads) &&
+            canUseAttemptTerminalFallback
+              ? buildAsyncTaskTerminalPayloads(attempt)
+              : undefined;
+          const assistantTextTerminalPayloads =
+            !renderedTerminalPayloads &&
+            !asyncTaskTerminalPayloads &&
+            !emptyAssistantReplyIsSilent &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.heartbeatToolResponse &&
+            !attempt.clientToolCalls?.length &&
+            !attempt.yieldDetected &&
+            !hasAsyncStartedTerminalProgress(attempt) &&
+            !hasVisibleOutboundDeliveryEvidence(attempt)
+              ? buildAssistantTextTerminalPayloads(attempt)
+              : undefined;
+          const renderedPayloadsArePlanningOnlyText =
+            areTerminalPayloadsPlanningOnlyText(renderedTerminalPayloads);
+          const renderedPayloadsHaveMedia =
+            renderedTerminalPayloads?.some(hasPayloadMedia) === true;
+          const renderedPayloadsHaveError =
+            renderedTerminalPayloads?.some(
+              (payload) => "isError" in payload && payload.isError === true,
+            ) === true;
+          const assistantTextPayloadsArePlanningOnlyText = areTerminalPayloadsPlanningOnlyText(
+            assistantTextTerminalPayloads,
+          );
+          const finalAssistantHasVisibleText = Boolean(finalAssistantVisibleText?.trim());
+          const successfulToolTerminalFallback =
+            (!renderedTerminalPayloads ||
+              renderedPayloadsArePlanningOnlyText ||
+              (!finalAssistantHasVisibleText &&
+                !renderedPayloadsHaveMedia &&
+                currentAttemptToolLoopObservations.length > 0)) &&
+            !asyncTaskTerminalPayloads &&
+            (!assistantTextTerminalPayloads || assistantTextPayloadsArePlanningOnlyText) &&
+            !emptyAssistantReplyIsSilent &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.heartbeatToolResponse &&
+            !attempt.lastToolError &&
+            !attempt.clientToolCalls?.length &&
+            !attempt.yieldDetected &&
+            !hasAsyncStartedTerminalProgress(attempt) &&
+            !renderedPayloadsHaveError &&
+            !hasVisibleOutboundDeliveryEvidence(attempt)
+              ? resolveAttemptSuccessfulToolTerminalFallback({
+                  attempt,
+                  observations: currentAttemptToolLoopObservations,
+                })?.payload
+              : undefined;
+          const shouldPreferToolFallbackOverPlanningText =
+            Boolean(successfulToolTerminalFallback) &&
+            (renderedPayloadsArePlanningOnlyText || assistantTextPayloadsArePlanningOnlyText);
+          const planningOnlyTerminalText =
+            !asyncTaskTerminalPayloads &&
+            !successfulToolTerminalFallback &&
+            !emptyAssistantReplyIsSilent &&
+            (renderedPayloadsArePlanningOnlyText || assistantTextPayloadsArePlanningOnlyText)
+              ? resolvePlanningOnlyTerminalPayloadText({
+                  provider: activeErrorContext.provider,
+                  modelId: activeErrorContext.model,
+                  prompt,
+                  aborted,
+                  timedOut,
+                  attempt,
+                })
+              : null;
+          const visibleTerminalPayloads =
+            asyncTaskTerminalPayloads ??
+            (successfulToolTerminalFallback && !finalAssistantHasVisibleText
+              ? [successfulToolTerminalFallback]
+              : undefined) ??
+            (successfulToolTerminalFallback && shouldPreferToolFallbackOverPlanningText
+              ? [successfulToolTerminalFallback]
+              : undefined) ??
+            (planningOnlyTerminalText
+              ? [{ text: planningOnlyTerminalText, isError: true }]
+              : undefined) ??
+            renderedTerminalPayloads ??
+            assistantTextTerminalPayloads ??
+            (successfulToolTerminalFallback ? [successfulToolTerminalFallback] : undefined);
+          const nonDeliverableTerminalReply = shouldSurfaceNonDeliverableTerminalReply({
+            terminalPayloads: visibleTerminalPayloads,
+            emptyAssistantReplyIsSilent,
+            attempt,
+          });
+          const terminalPayloadsForReturn = nonDeliverableTerminalReply
+            ? [{ text: NON_DELIVERABLE_TERMINAL_REPLY_TEXT, isError: true }]
+            : visibleTerminalPayloads;
+          if (nonDeliverableTerminalReply) {
+            replayInvalid = resolveReplayInvalidForAttempt(NON_DELIVERABLE_TERMINAL_REPLY_TEXT);
+            livenessState = resolveRunLivenessState({
+              payloadCount: 0,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText: NON_DELIVERABLE_TERMINAL_REPLY_TEXT,
+            });
+            log.warn(
+              `non-deliverable terminal turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} stopReason=${stopReason ?? "missing"} — surfacing error to user`,
+            );
+          }
+          if (planningOnlyTerminalText && !nonDeliverableTerminalReply) {
+            replayInvalid = resolveReplayInvalidForAttempt(planningOnlyTerminalText);
+            livenessState = "blocked";
+            log.warn(
+              `planning-only terminal reply suppressed: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} stopReason=${stopReason ?? "missing"} — surfacing blocked state`,
+            );
+          }
           setTerminalLifecycleMeta({
             replayInvalid,
             livenessState,
@@ -3609,7 +4145,7 @@ export async function runEmbeddedAgent(
             yielded: attempt.yieldDetected === true,
           });
           return {
-            payloads: terminalPayloads?.length ? terminalPayloads : undefined,
+            payloads: terminalPayloadsForReturn,
             ...(attempt.diagnosticTrace
               ? { diagnosticTrace: freezeDiagnosticTraceContext(attempt.diagnosticTrace) }
               : {}),

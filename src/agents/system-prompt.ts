@@ -1,8 +1,3 @@
-/**
- * OpenClaw system prompt renderer.
- *
- * Assembles runtime, workspace, tooling, memory, delegation, channel, and cache-boundary prompt sections.
- */
 import { createHmac, createHash } from "node:crypto";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -799,7 +794,9 @@ export function buildAgentSystemPrompt(params: {
     "image_generate",
   ];
 
-  const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
+  const defaultPromptToolNames = toolOrder.filter((tool) => tool !== "sessions_yield");
+  const promptToolNames = params.toolNames ?? defaultPromptToolNames;
+  const rawToolNames = promptToolNames.map((tool) => tool.trim());
   const canonicalToolNames = rawToolNames.filter(Boolean);
   // Preserve caller casing while deduping tool names by lowercase.
   const canonicalByNormalized = new Map<string, string>();
@@ -1016,8 +1013,6 @@ export function buildAgentSystemPrompt(params: {
         ? toolLines.join("\n")
         : buildOpenClawToolFallbackText({
             surface: promptSurface,
-            execToolName,
-            processToolName,
           }),
       "TOOLS.md is usage guidance, not availability.",
       ...(renderOpenClawToolWorkflowHints
@@ -1066,21 +1061,24 @@ export function buildAgentSystemPrompt(params: {
       }),
       ...buildOverridablePromptSection({
         override: providerSectionOverrides.tool_call_style,
-        fallback: [
-          "## Tool Call Style",
-          "Routine low-risk calls: no narration.",
-          "Narrate only for complex, sensitive/destructive, or explicitly requested steps.",
-          "First-class tool exists: use it; do not ask user to run equivalent CLI/slash command.",
-          buildExecApprovalPromptGuidance({
-            runtimeChannel: params.runtimeInfo?.channel,
-            inlineButtonsEnabled,
-            runtimeCapabilities,
-          }),
-          "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
-          "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
-          "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run, but keep command/script previews separate from the /approve command and never substitute the shell command/script for the approval id or slug.",
-          "",
-        ],
+        fallback:
+          toolLines.length > 0
+            ? [
+                "## Tool Call Style",
+                "Routine low-risk calls: no narration.",
+                "Narrate only for complex, sensitive/destructive, or explicitly requested steps.",
+                "First-class tool exists: use it; do not ask user to run equivalent CLI/slash command.",
+                buildExecApprovalPromptGuidance({
+                  runtimeChannel: params.runtimeInfo?.channel,
+                  inlineButtonsEnabled,
+                  runtimeCapabilities,
+                }),
+                "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
+                "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
+                "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run, but keep command/script previews separate from the /approve command and never substitute the shell command/script for the approval id or slug.",
+                "",
+              ]
+            : [],
       }),
       ...buildOverridablePromptSection({
         override: providerSectionOverrides.execution_bias,
@@ -1123,7 +1121,7 @@ export function buildAgentSystemPrompt(params: {
         ? params.modelAliasLines.join("\n")
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-      userTimezone
+      userTimezone && availableTools.has("session_status")
         ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
         : "",
       "## Workspace",

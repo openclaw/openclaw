@@ -1,6 +1,3 @@
-/**
- * Orchestrates one embedded-agent attempt from prompt setup through stream result.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
@@ -2429,16 +2426,13 @@ export async function runEmbeddedAttempt(
           sessionFile: params.sessionFile,
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
-          ...(transcriptPolicy.repairToolUseResultPairing
-            ? {
-                repairAssembledMessages: (messages) =>
-                  repairAttemptToolUseResultPairing(messages, isOpenAIResponsesApi),
-              }
-            : {}),
           getPrePromptMessageCount: () => prePromptMessageCount,
           onAfterTurnCheckpoint: (messageCount) => {
             contextEngineAfterTurnCheckpoint = messageCount;
           },
+          repairAssembledMessages: transcriptPolicy.repairToolUseResultPairing
+            ? (messages) => repairAttemptToolUseResultPairing(messages, isOpenAIResponsesApi)
+            : undefined,
           getRuntimeContext: ({ messages, prePromptMessageCount: loopPrePromptMessageCount }) =>
             buildAfterTurnRuntimeContext({
               attempt: params,
@@ -3268,6 +3262,7 @@ export async function runEmbeddedAttempt(
         : undefined;
 
       let toolMetasForTerminal: readonly AsyncStartedToolMeta[] = [];
+      let asyncTaskTerminalResults: EmbeddedRunAttemptResult["asyncTaskTerminalResults"];
       const subscription = subscribeEmbeddedAgentSession(
         buildEmbeddedSubscriptionParams({
           session: activeSession,
@@ -3294,6 +3289,7 @@ export async function runEmbeddedAttempt(
           onAssistantMessageStart: params.onAssistantMessageStart,
           onExecutionPhase: params.onExecutionPhase,
           onAgentEvent: params.onAgentEvent,
+          onToolOutcome: params.onToolOutcome,
           terminalLifecyclePhase: params.deferTerminalLifecycleEnd ? "finishing" : "end",
           isTerminalAborted: () => aborted,
           onBeforeLifecycleTerminal: () => {
@@ -3361,6 +3357,7 @@ export async function runEmbeddedAttempt(
             toolName: toolParams.toolName,
             toolCallId: toolParams.toolCallId,
             args: toolParams.input,
+            terminalResultFallback: toolParams.tool.terminalResultFallback,
             execute: async () =>
               await toolParams.tool.execute(
                 toolParams.toolCallId,
@@ -4589,6 +4586,30 @@ export async function runEmbeddedAttempt(
             );
             promptErrorSource = "prompt";
           } else if (asyncTaskWait.waitedRunIds.length > 0) {
+            asyncTaskTerminalResults = asyncTaskWait.terminalTasks.map((task) => {
+              const terminalTask: NonNullable<
+                EmbeddedRunAttemptResult["asyncTaskTerminalResults"]
+              >[number] = { taskId: task.taskId };
+              if (task.runId) {
+                terminalTask.runId = task.runId;
+              }
+              if (task.status) {
+                terminalTask.status = task.status;
+              }
+              if (task.taskKind) {
+                terminalTask.taskKind = task.taskKind;
+              }
+              if (task.terminalSummary) {
+                terminalTask.terminalSummary = task.terminalSummary;
+              }
+              if (task.terminalOutcome) {
+                terminalTask.terminalOutcome = task.terminalOutcome;
+              }
+              if (task.progressSummary) {
+                terminalTask.progressSummary = task.progressSummary;
+              }
+              return terminalTask;
+            });
             await sessionLockController.waitForSessionEvents(activeSession);
           }
         }
@@ -4788,6 +4809,7 @@ export async function runEmbeddedAttempt(
             prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
             tokenBudget: params.contextTokenBudget,
             runtimeContext: afterTurnRuntimeContext,
+            isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
             runMaintenance: async (contextParams) =>
               await runContextEngineMaintenance({
                 contextEngine: contextParams.contextEngine as never,
@@ -4805,7 +4827,6 @@ export async function runEmbeddedAttempt(
             sessionManager: activeSessionManager,
             config: params.config,
             warn: (message) => log.warn(message),
-            isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
           });
         }
 
@@ -4935,6 +4956,7 @@ export async function runEmbeddedAttempt(
           ): entry is {
             toolName: string;
             meta?: string;
+            mutatingAction?: boolean;
             asyncStarted?: boolean;
             asyncTaskRunId?: string;
             asyncTaskId?: string;
@@ -4944,6 +4966,7 @@ export async function runEmbeddedAttempt(
           const normalized: {
             toolName: string;
             meta?: string;
+            mutatingAction?: boolean;
             asyncStarted?: true;
             asyncTaskRunId?: string;
             asyncTaskId?: string;
@@ -4951,6 +4974,9 @@ export async function runEmbeddedAttempt(
             toolName: entry.toolName,
             meta: entry.meta,
           };
+          if (typeof entry.mutatingAction === "boolean") {
+            normalized.mutatingAction = entry.mutatingAction;
+          }
           if (entry.asyncStarted === true) {
             normalized.asyncStarted = true;
           }
@@ -5061,11 +5087,14 @@ export async function runEmbeddedAttempt(
       }
 
       const acceptedSessionSpawns = getAcceptedSessionSpawns();
+      const messagingToolSourceReplyPayloads = getMessagingToolSourceReplyPayloads();
       const observedReplayMetadata = buildAttemptReplayMetadata({
         toolMetas: toolMetasNormalized,
         didSendViaMessagingTool: didSendViaMessagingTool(),
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+        messagingToolSentTargets: getMessagingToolSentTargets(),
+        messagingToolSourceReplyPayloads,
         acceptedSessionSpawns,
         successfulCronAdds: getSuccessfulCronAdds(),
       });
@@ -5088,7 +5117,6 @@ export async function runEmbeddedAttempt(
       const didSendDeterministicApprovalPromptNow = didSendDeterministicApprovalPrompt();
       const lastToolError = getLastToolError?.();
       const heartbeatToolResponse = getHeartbeatToolResponse();
-      const messagingToolSourceReplyPayloads = getMessagingToolSourceReplyPayloads();
       const pendingToolMediaPayloadCount = hasVisiblePendingToolMediaReply(pendingToolMediaReply)
         ? 1
         : 0;
@@ -5247,6 +5275,7 @@ export async function runEmbeddedAttempt(
         ...(beforeAgentFinalizeRevisionReason ? { beforeAgentFinalizeRevisionReason } : {}),
         assistantTexts,
         toolMetas: toolMetasNormalized,
+        ...(asyncTaskTerminalResults?.length ? { asyncTaskTerminalResults } : {}),
         acceptedSessionSpawns,
         lastAssistant,
         currentAttemptAssistant,

@@ -2527,6 +2527,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
       "context engine loop hook params",
     );
     expect(loopHookParams.midTurnPrecheck).toBeUndefined();
+    expect(typeof loopHookParams.repairAssembledMessages).toBe("function");
   });
 
   it("recovers when the runtime persists the mid-turn precheck as an assistant error", async () => {

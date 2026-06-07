@@ -1,6 +1,3 @@
-/**
- * Subscribes to embedded-agent sessions and streams formatted replies/events.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
@@ -55,7 +52,7 @@ import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subsc
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
-import type { AgentMessage } from "./runtime/index.js";
+import type { AgentMessage, AgentToolTerminalResultFallback } from "./runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
@@ -695,6 +692,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         messagingToolSentTexts,
         messagingToolSentMediaUrls,
         messagingToolSentTargets,
+        messagingToolSourceReplyPayloads,
       })
     ) {
       return;
@@ -1023,9 +1021,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         ));
     if (isMessagingDuplicate) {
       log.debug(`Skipping block reply - already sent via messaging tool: ${chunk.slice(0, 50)}...`);
-      if (prefixReplayCandidate) {
-        markBlockReplyTextHandled();
-      }
+      markBlockReplyTextHandled();
       return;
     }
 
@@ -1178,6 +1174,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         messagingToolSentTexts,
         messagingToolSentMediaUrls,
         messagingToolSentTargets,
+        messagingToolSourceReplyPayloads,
       }) ||
       state.successfulCronAdds > 0 ||
       state.acceptedSessionSpawns.length > 0 ||
@@ -1309,6 +1306,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       toolName: string;
       toolCallId: string;
       args: unknown;
+      terminalResultFallback?: AgentToolTerminalResultFallback;
       execute: () => Promise<T>;
     }): Promise<T> => {
       await handleToolExecutionStart(ctx, {
@@ -1316,6 +1314,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
         args: toolParams.args,
+        ...(toolParams.terminalResultFallback
+          ? { terminalResultFallback: toolParams.terminalResultFallback }
+          : {}),
       } as never);
       try {
         const result = await toolParams.execute();
@@ -1390,6 +1391,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         messagingToolSentTexts,
         messagingToolSentMediaUrls,
         messagingToolSentTargets,
+        messagingToolSourceReplyPayloads,
       }),
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),

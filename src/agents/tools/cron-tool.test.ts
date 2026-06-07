@@ -1,5 +1,3 @@
-// Cron tool tests cover schedule guidance, scoped job operations, delivery
-// context inheritance, session routing, and agent id ownership.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { callGatewayMock, extractDeliveryInfoMock } = vi.hoisted(() => ({
@@ -80,6 +78,12 @@ describe("cron tool", () => {
     expect(tool.description).toContain('For "at", ISO timestamps without timezone are UTC.');
     expect(tool.description).toContain('"expr": "0 18 * * *"');
     expect(tool.description).toContain('"tz": "Asia/Shanghai"');
+  });
+
+  it("does not declare a tool-wide terminal fallback for mixed cron actions", () => {
+    const tool = createTestCronTool();
+
+    expect(tool.terminalResultFallback).toBeUndefined();
   });
 
   function buildReminderAgentTurnJob(overrides: Record<string, unknown> = {}): {
@@ -179,8 +183,6 @@ describe("cron tool", () => {
   });
 
   it("allows scoped isolated cron runs to remove the current job", async () => {
-    // Self-removal scope lets a cron-triggered run clean up its own schedule
-    // without granting broad cron mutation access.
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
 
     await tool.execute("call-self-remove", {
@@ -263,6 +265,30 @@ describe("cron tool", () => {
     const params = expectSingleGatewayCallMethod("cron.status");
     expect(params).toStrictEqual({});
     expect(result.details).toEqual({ enabled: true });
+    expect(result.terminalSummary).toEqual({
+      privacy: "public",
+      text: "Scheduler enabled: true\nJobs: unknown\nNext wake: unknown",
+    });
+  });
+
+  it("summarizes numeric cron status job counts for terminal fallback", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      enabled: true,
+      jobs: 37,
+      nextWakeAtMs: 1_234,
+    });
+    const tool = createTestCronTool();
+
+    const result = await tool.execute("call-status", {
+      action: "status",
+      timeoutMs: 10_000,
+    });
+
+    expectSingleGatewayCallMethod("cron.status");
+    expect(result.terminalSummary).toEqual({
+      privacy: "public",
+      text: "Scheduler enabled: true\nJobs: 37\nNext wake: 1234",
+    });
   });
 
   it("passes parsed string timeoutMs values through to gateway calls", async () => {
@@ -344,6 +370,10 @@ describe("cron tool", () => {
       deliveryPreviews: {
         "job-current": { label: "current", detail: "self" },
       },
+    });
+    expect(result.terminalSummary).toEqual({
+      privacy: "public",
+      text: "Scheduler enabled: unknown\nJobs: 1\nNext wake: none",
     });
   });
 
@@ -532,10 +562,11 @@ describe("cron tool", () => {
     ["runs", { action: "runs", id: "job-2" }, { id: "job-2" }],
   ])("%s sends id to gateway", async (action, args, expectedParams) => {
     const tool = createTestCronTool();
-    await tool.execute("call1", args);
+    const result = await tool.execute("call1", args);
 
     const params = expectSingleGatewayCallMethod(`cron.${action}`);
     expect(params).toEqual(expectedParams);
+    expect(result.terminalSummary).toBeUndefined();
   });
 
   it("prefers jobId over id when both are provided", async () => {

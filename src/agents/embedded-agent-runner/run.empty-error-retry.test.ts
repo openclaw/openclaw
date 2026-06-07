@@ -68,7 +68,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.payloads).toBeUndefined();
+    expect(result.payloads).toEqual([{ text: "Done." }]);
   });
 
   it("caps retries at MAX_EMPTY_ERROR_RETRIES and surfaces incomplete-turn error", async () => {
@@ -105,10 +105,9 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry when stopReason=stop and output=0 (out of scope)", async () => {
-    // Clean stop with no output is a legitimate silent reply (e.g. NO_REPLY
-    // token path), not a crash. Use a plain provider/model so this test stays
-    // scoped to the silent-error retry instead of the empty-response retry.
+  it("routes stopReason=stop and output=0 through the empty-response retry", async () => {
+    // Clean stop + zero usage is handled by the visible-answer continuation
+    // path, not the silent-error same-prompt retry path.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -121,15 +120,17 @@ describe("runEmbeddedAgent silent-error retry", () => {
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("plain-provider", "plain-model"));
 
-    await runEmbeddedAgent({
+    const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "plain-provider",
       model: "plain-model",
       runId: "run-empty-error-retry-skip-clean-stop",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toEqual([{ text: "Done." }]);
   });
 
   it("retries for frontier models too — the fix is model-agnostic", async () => {
@@ -146,7 +147,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.payloads).toBeUndefined();
+    expect(result.payloads).toEqual([{ text: "Done." }]);
   });
 
   it("does not retry when the failed attempt recorded side effects", async () => {

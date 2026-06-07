@@ -1,8 +1,3 @@
-/**
- * before_tool_call policy runtime for agent tools.
- * Runs plugin hooks, trusted tool policies, approvals, diagnostics, loop
- * detection, skill-use telemetry, and adjusted parameter tracking.
- */
 import os from "node:os";
 import path from "node:path";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
@@ -33,6 +28,7 @@ import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
 } from "../infra/plugin-approvals.js";
+import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -58,7 +54,11 @@ import {
 import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
 import { isPlainObject } from "../utils.js";
-import { adjustedParamsByToolCallId } from "./agent-tools.before-tool-call.state.js";
+import {
+  adjustedParamsByToolCallId,
+  buildAdjustedParamsKey,
+} from "./agent-tools.before-tool-call.state.js";
+export { consumeAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
 import {
   getCodeModeExecBeforeHookMetadata,
@@ -67,6 +67,10 @@ import {
   normalizeCodeModeExecBeforeHookParamsForToolKind,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
+import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
+import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
+import { hasCommittedMessagingToolResultDetails } from "./embedded-agent-runner/delivery-evidence.js";
+import type { AgentToolTerminalResultFallback, AgentToolTerminalSummary } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -76,11 +80,20 @@ export type ToolOutcomeObservation = {
   toolName: string;
   argsHash: string;
   resultHash: string;
+  resultText?: string;
+  terminalSummary?: AgentToolTerminalSummary;
+  terminalResultFallback?: AgentToolTerminalResultFallback;
+  didSendViaMessagingTool?: boolean;
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: MessagingToolSend[];
+  failed?: boolean;
+  blockedReason?: string;
+  blockedMessage?: string;
 };
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
 
-/** Detect abort-related errors produced by the supplied signal. */
 export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
   if (!signal?.aborted) {
     return false;
@@ -185,7 +198,6 @@ export type BeforeToolCallPolicyDiagnosticState = {
   }>;
 };
 
-/** Return whether before_tool_call hooks or trusted policies are active. */
 export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDiagnosticState {
   return {
     hasBeforeToolCallHook: getGlobalHookRunner()?.hasHooks("before_tool_call") === true,
@@ -193,7 +205,6 @@ export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDi
   };
 }
 
-/** Return true when any before_tool_call policy could affect tool execution. */
 export function hasBeforeToolCallPolicy(): boolean {
   const state = getBeforeToolCallPolicyDiagnosticState();
   return state.hasBeforeToolCallHook || state.trustedToolPolicies.length > 0;
@@ -220,7 +231,6 @@ export class BeforeToolCallBlockedError extends Error {
   }
 }
 
-/** Remember hook-adjusted params for later adapter-side execution. */
 export function recordAdjustedParamsForToolCall(
   toolCallId: string | undefined,
   params: unknown,
@@ -250,13 +260,6 @@ const loadBeforeToolCallRuntime = createLazyRuntimeSurface(
   () => import("./agent-tools.before-tool-call.runtime.js"),
   ({ beforeToolCallRuntime }) => beforeToolCallRuntime,
 );
-
-function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
-  if (params.runId && params.runId.trim()) {
-    return `${params.runId}:${params.toolCallId}`;
-  }
-  return params.toolCallId;
-}
 
 function mergeParamsWithApprovalOverrides(
   originalParams: unknown,
@@ -596,7 +599,6 @@ async function requestPluginToolApproval(params: {
   }
 }
 
-/** Resolve a deferred plugin approval request at the later execution boundary. */
 export async function requestDeferredPluginToolApproval(params: {
   deferredApproval: DeferredPluginToolApproval;
   signal?: AbortSignal;
@@ -613,7 +615,6 @@ export async function requestDeferredPluginToolApproval(params: {
   });
 }
 
-/** Notify plugin approval callbacks that a deferred approval was cancelled. */
 export function cancelDeferredPluginToolApproval(
   deferredApproval: DeferredPluginToolApproval,
 ): void {
@@ -692,7 +693,6 @@ async function resolveSkillWorkshopApprovalForFinalParams(params: {
   });
 }
 
-/** Build the standard terminal result for vetoed tool calls. */
 export function buildBlockedToolResult(params: {
   reason: string;
   deniedReason?: HookBlockedReason;
@@ -725,6 +725,170 @@ function buildToolContentPrivateData(
     toolContent.toolOutput = cloneDiagnosticContentValue(args.output);
   }
   return Object.keys(toolContent).length > 0 ? { toolContent } : undefined;
+}
+
+function readToolResultText(result: unknown): string | undefined {
+  if (typeof result === "string") {
+    const text = result.trim();
+    return text || undefined;
+  }
+  if (!isPlainObject(result)) {
+    return undefined;
+  }
+  const content = Array.isArray(result.content) ? result.content : [];
+  const text = content
+    .map((block) => {
+      if (!isPlainObject(block) || block.type !== "text" || typeof block.text !== "string") {
+        return undefined;
+      }
+      return block.text.trim();
+    })
+    .filter((item): item is string => Boolean(item))
+    .join("\n\n")
+    .trim();
+  return text || undefined;
+}
+
+function readToolTerminalSummary(result: unknown): AgentToolTerminalSummary | undefined {
+  if (!isPlainObject(result) || !isPlainObject(result.terminalSummary)) {
+    return undefined;
+  }
+  const summary = result.terminalSummary;
+  if (summary.privacy !== "public" || typeof summary.text !== "string") {
+    return undefined;
+  }
+  const text = summary.text.trim();
+  if (!text) {
+    return undefined;
+  }
+  const maxChars =
+    typeof summary.maxChars === "number" && Number.isFinite(summary.maxChars)
+      ? Math.max(0, summary.maxChars)
+      : undefined;
+  return {
+    text,
+    privacy: "public",
+    ...(maxChars !== undefined ? { maxChars } : {}),
+  };
+}
+
+function readToolErrorText(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    return message || undefined;
+  }
+  if (typeof error === "string") {
+    const message = error.trim();
+    return message || undefined;
+  }
+  return undefined;
+}
+
+function readResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
+  return isPlainObject(result) && isPlainObject(result.details) ? result.details : undefined;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function collectMessagingToolMediaUrls(toolParams: Record<string, unknown>): string[] {
+  const urls = new Set<string>();
+  const mediaUrl = readNonEmptyString(toolParams.mediaUrl);
+  if (mediaUrl) {
+    urls.add(mediaUrl);
+  }
+  for (const url of readStringArray(toolParams.mediaUrls)) {
+    urls.add(url);
+  }
+  return Array.from(urls);
+}
+
+function copyRecord(value: unknown): Record<string, unknown> | undefined {
+  return isPlainObject(value) ? { ...value } : undefined;
+}
+
+function buildMessagingToolSentTarget(params: {
+  toolName: string;
+  toolParams: Record<string, unknown>;
+  text?: string;
+  mediaUrls: readonly string[];
+}): MessagingToolSend | undefined {
+  const to =
+    readNonEmptyString(params.toolParams.to) ?? readNonEmptyString(params.toolParams.target);
+  if (!to) {
+    return undefined;
+  }
+  const provider =
+    readNonEmptyString(params.toolParams.provider) ??
+    readNonEmptyString(params.toolParams.channel) ??
+    params.toolName;
+  const accountId = readNonEmptyString(params.toolParams.accountId);
+  const threadId = readNonEmptyString(params.toolParams.threadId);
+  const presentation = normalizeMessagePresentation(params.toolParams.presentation);
+  const interactive = normalizeInteractiveReply(params.toolParams.interactive);
+  const channelData = copyRecord(params.toolParams.channelData);
+  const mediaUrl = params.mediaUrls[0];
+  return {
+    tool: params.toolName,
+    provider,
+    ...(accountId ? { accountId } : {}),
+    to,
+    ...(threadId ? { threadId } : {}),
+    ...(params.text ? { text: params.text } : {}),
+    ...(mediaUrl ? { mediaUrl } : {}),
+    ...(params.mediaUrls.length > 0 ? { mediaUrls: [...params.mediaUrls] } : {}),
+    ...(presentation ? { presentation } : {}),
+    ...(interactive ? { interactive } : {}),
+    ...(channelData ? { channelData } : {}),
+  };
+}
+
+function hasCommittedMessagingToolSendOutcome(params: {
+  toolName: string;
+  toolParams: unknown;
+  result: unknown;
+  failed: boolean;
+}): boolean {
+  if (params.failed || !isMessagingTool(params.toolName) || !isPlainObject(params.toolParams)) {
+    return false;
+  }
+  if (!isMessagingToolSendAction(params.toolName, params.toolParams)) {
+    return false;
+  }
+  const details = readResultDetailsRecord(params.result);
+  if (!details || details.dryRun === true) {
+    return false;
+  }
+  if (hasCommittedMessagingToolResultDetails(details)) {
+    return true;
+  }
+  const deliveryStatus =
+    typeof details.deliveryStatus === "string" ? details.deliveryStatus.trim().toLowerCase() : "";
+  if (deliveryStatus) {
+    return false;
+  }
+  const status = typeof details.status === "string" ? details.status.trim().toLowerCase() : "";
+  if (
+    status === "failed" ||
+    status === "partial_failed" ||
+    status === "suppressed" ||
+    status === "dry_run" ||
+    status === "cancelled" ||
+    status === "canceled" ||
+    status === "cancelled_by_message_sending_hook" ||
+    status === "cancelled-by-message-sending-hook"
+  ) {
+    return false;
+  }
+  return details.ok === true || details.success === true || status === "ok";
 }
 
 function summarizeToolParams(params: unknown): DiagnosticToolParamsSummary {
@@ -771,13 +935,14 @@ function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: n
   return true;
 }
 
-async function recordLoopOutcome(args: {
+export async function recordToolLoopOutcome(args: {
   ctx?: HookContext;
   toolName: string;
   toolParams: unknown;
   toolCallId?: string;
   result?: unknown;
   error?: unknown;
+  terminalResultFallback?: AgentToolTerminalResultFallback;
 }): Promise<void> {
   if (!args.ctx?.sessionKey && !args.ctx?.sessionId) {
     return;
@@ -799,10 +964,67 @@ async function recordLoopOutcome(args: {
       ...(args.ctx.runId && { runId: args.ctx.runId }),
     });
     if (record?.resultHash && args.ctx.onToolOutcome) {
+      const details =
+        isPlainObject(args.result) && isPlainObject(args.result.details)
+          ? args.result.details
+          : undefined;
+      const deniedReason =
+        typeof details?.deniedReason === "string" ? details.deniedReason : undefined;
+      const blockedReason = deniedReason || undefined;
+      const blockedMessage = typeof details?.reason === "string" ? details.reason : undefined;
+      const failed = Boolean(args.error);
+      const resultText = blockedReason
+        ? undefined
+        : (readToolResultText(args.result) ?? readToolErrorText(args.error));
+      const terminalSummary =
+        blockedReason || failed ? undefined : readToolTerminalSummary(args.result);
+      const didSendViaMessagingTool = hasCommittedMessagingToolSendOutcome({
+        toolName: record.toolName,
+        toolParams: args.toolParams,
+        result: args.result,
+        failed,
+      });
+      const messagingText =
+        didSendViaMessagingTool && isPlainObject(args.toolParams)
+          ? typeof args.toolParams.content === "string"
+            ? args.toolParams.content
+            : typeof args.toolParams.message === "string"
+              ? args.toolParams.message
+              : typeof args.toolParams.text === "string"
+                ? args.toolParams.text
+                : undefined
+          : undefined;
+      const messagingMediaUrls =
+        didSendViaMessagingTool && isPlainObject(args.toolParams)
+          ? collectMessagingToolMediaUrls(args.toolParams)
+          : [];
+      const messagingTarget =
+        didSendViaMessagingTool && isPlainObject(args.toolParams)
+          ? buildMessagingToolSentTarget({
+              toolName: record.toolName,
+              toolParams: args.toolParams,
+              text: messagingText,
+              mediaUrls: messagingMediaUrls,
+            })
+          : undefined;
       recordedOutcome = {
         toolName: record.toolName,
         argsHash: record.argsHash,
         resultHash: record.resultHash,
+        ...(resultText ? { resultText } : {}),
+        ...(terminalSummary ? { terminalSummary } : {}),
+        ...(didSendViaMessagingTool ? { didSendViaMessagingTool } : {}),
+        ...(messagingText ? { messagingToolSentTexts: [messagingText] } : {}),
+        ...(messagingMediaUrls.length > 0
+          ? { messagingToolSentMediaUrls: messagingMediaUrls }
+          : {}),
+        ...(messagingTarget ? { messagingToolSentTargets: [messagingTarget] } : {}),
+        ...(failed ? { failed } : {}),
+        ...(args.terminalResultFallback
+          ? { terminalResultFallback: args.terminalResultFallback }
+          : {}),
+        ...(blockedReason ? { blockedReason } : {}),
+        ...(blockedMessage ? { blockedMessage } : {}),
       };
     }
   } catch (err) {
@@ -813,7 +1035,6 @@ async function recordLoopOutcome(args: {
   }
 }
 
-/** Run the full before_tool_call policy chain for a pending tool call. */
 export async function runBeforeToolCallHook(args: {
   toolName: string;
   params: unknown;
@@ -1128,7 +1349,6 @@ export async function runBeforeToolCallHook(args: {
   }
 }
 
-/** Wrap a tool execute function with before_tool_call hooks and diagnostics. */
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
@@ -1199,12 +1419,13 @@ export function wrapToolWithBeforeToolCallHook(
           reason: outcome.reason,
           deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
         });
-        await recordLoopOutcome({
+        await recordToolLoopOutcome({
           ctx,
           toolName: normalizedToolName,
           toolParams: outcome.params ?? hookParams,
           toolCallId,
           result: blockedResult,
+          terminalResultFallback: tool.terminalResultFallback,
         });
         return blockedResult;
       }
@@ -1244,12 +1465,13 @@ export function wrapToolWithBeforeToolCallHook(
       try {
         const result = await execute(toolCallId, executeParams, signal, onUpdate);
         const durationMs = Date.now() - startedAt;
-        await recordLoopOutcome({
+        await recordToolLoopOutcome({
           ctx,
           toolName: normalizedToolName,
           toolParams: executeParams,
           toolCallId,
           result,
+          terminalResultFallback: tool.terminalResultFallback,
         });
         const skillMatch = findSkillUsageMatch({
           toolName: normalizedToolName,
@@ -1297,12 +1519,13 @@ export function wrapToolWithBeforeToolCallHook(
             }),
           );
         }
-        await recordLoopOutcome({
+        await recordToolLoopOutcome({
           ctx,
           toolName: normalizedToolName,
           toolParams: executeParams,
           toolCallId,
           error: err,
+          terminalResultFallback: tool.terminalResultFallback,
         });
         throw err;
       }
@@ -1329,13 +1552,11 @@ export function wrapToolWithBeforeToolCallHook(
   return wrappedTool;
 }
 
-/** Return true when a tool already carries the before_tool_call wrapper marker. */
 export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean {
   const taggedTool = tool as unknown as Record<symbol, unknown>;
   return taggedTool[BEFORE_TOOL_CALL_WRAPPED] === true;
 }
 
-/** Toggle diagnostic event emission on an existing before_tool_call wrapper. */
 export function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled: boolean): void {
   const taggedTool = tool as unknown as Record<symbol, unknown>;
   const options = taggedTool[BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS];
@@ -1344,7 +1565,6 @@ export function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled:
   }
 }
 
-/** Rebuild a before_tool_call wrapper while preserving the original source tool. */
 export function rewrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
@@ -1364,7 +1584,6 @@ export function rewrapToolWithBeforeToolCallHook(
   );
 }
 
-/** Copy before_tool_call marker metadata when another wrapper replaces a tool. */
 export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAgentTool): void {
   if (!isToolWrappedWithBeforeToolCallHook(source)) {
     return;
@@ -1388,15 +1607,6 @@ export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAg
   });
 }
 
-/** Consume and remove hook-adjusted params for a completed tool call. */
-export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
-  const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
-  const params = adjustedParamsByToolCallId.get(adjustedParamsKey);
-  adjustedParamsByToolCallId.delete(adjustedParamsKey);
-  return params;
-}
-
-/** Test-only access to before_tool_call internals. */
 export const testing = {
   BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
   BEFORE_TOOL_CALL_HOOK_CONTEXT,

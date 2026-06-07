@@ -78,7 +78,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       emit,
       toolCallId: "tool-message-1",
       message: messageText,
-      result: "ok",
+      result: { details: { deliveryStatus: "sent", resultCount: 1 } },
     });
     emitAssistantMessageEnd(emit, messageText);
     await Promise.resolve();
@@ -94,7 +94,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolCallId: "tool-message-media",
       message: "",
       media: "file:///tmp/render.mp4",
-      result: "ok",
+      result: { details: { deliveryStatus: "sent", resultCount: 1 } },
     });
     await Promise.resolve();
 
@@ -125,6 +125,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.getMessagingToolSourceReplyPayloads()).toEqual([
       { text: "Visible terminal answer." },
     ]);
+    expect(subscription.didSendViaMessagingTool()).toBe(true);
   });
 
   it("suppresses text-only tool summaries after message-tool-only delivery", async () => {
@@ -140,7 +141,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       emit,
       toolCallId: "tool-message-final",
       message: "Final answer sent through the message tool.",
-      result: "ok",
+      result: { details: { deliveryStatus: "sent", resultCount: 1 } },
     });
     onToolResult.mockClear();
 

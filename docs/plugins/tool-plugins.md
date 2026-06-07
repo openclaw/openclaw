@@ -159,6 +159,9 @@ format:
 - Return a string when the model should see that exact text.
 - Return a JSON-compatible value when you want the model to see formatted JSON
   and OpenClaw to keep the original value in `details`.
+- Return a full `AgentToolResult` when you need result metadata such as
+  `terminalSummary`, progress, or termination hints, or when you need non-text
+  content blocks such as images.
 
 ```typescript
 tool({
@@ -182,10 +185,61 @@ tool({
 });
 ```
 
-Use a factory tool when you need to return a custom `AgentToolResult` or reuse
-an existing `api.registerTool` implementation. Use `definePluginEntry` instead
-of `defineToolPlugin` when you need fully dynamic tools or mixed plugin
+Use a factory tool when you need context-dependent tool creation or want to
+reuse an existing `api.registerTool` implementation. Use `definePluginEntry`
+instead of `defineToolPlugin` when you need fully dynamic tools or mixed plugin
 capabilities.
+
+### Terminal result fallbacks
+
+Tools that complete useful work but can also trigger repeated tool-call loops
+may provide explicit terminal fallback metadata. OpenClaw uses this metadata
+only after the agent run is otherwise terminal and has no better user-visible
+answer to deliver.
+
+There are two supported surfaces:
+
+- Return an `AgentToolResult` with `terminalSummary` when the executed result
+  already has a short, public, user-facing summary.
+- Set `terminalResultFallback` on the tool definition when OpenClaw should
+  derive a bounded fallback from a successful tool result.
+
+```typescript
+tool({
+  name: "job_status",
+  description: "Read scheduler status.",
+  parameters: Type.Object({}),
+  terminalResultFallback: {
+    mode: "structured_summary",
+    fields: [
+      { label: "Enabled", paths: [["enabled"]] },
+      { label: "Jobs", paths: [["jobCount"]] },
+      { label: "Next wake", paths: [["nextWake"]], missingText: "none" },
+    ],
+  },
+  execute: () => ({
+    enabled: true,
+    jobCount: 1,
+    nextWake: "2026-06-06T21:00:00Z",
+  }),
+});
+```
+
+`terminalResultFallback` supports:
+
+- `mode: "safe_text"`: use the successful tool result text, optionally with a
+  short prefix. Use this only when the whole text is already safe to show to the
+  requester.
+- `mode: "structured_summary"`: read selected fields from the JSON text in the
+  successful tool result and render labeled lines. This is usually the best fit
+  for plain JSON-compatible returns because the tool chooses exactly which
+  fields can be exposed.
+- `mode: "none"`: explicitly opt out of terminal fallback delivery for a tool.
+
+`terminalSummary` must be public. Use `{ text, privacy: "public" }` for
+summaries OpenClaw may send to the requester. Do not include credentials,
+internal paths, raw command output, private diagnostics, or unbounded result
+text in either `terminalSummary` or `terminalResultFallback` fields.
 
 ## Configuration
 

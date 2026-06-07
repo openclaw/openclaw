@@ -1,6 +1,3 @@
-/**
- * Shared result and attempt types for embedded-agent run internals.
- */
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
@@ -167,9 +164,19 @@ export type EmbeddedRunAttemptResult = {
   toolMetas: Array<{
     toolName: string;
     meta?: string;
+    mutatingAction?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+  }>;
+  asyncTaskTerminalResults?: Array<{
+    taskId: string;
+    runId?: string;
+    status?: string;
+    taskKind?: string;
+    terminalSummary?: string;
+    terminalOutcome?: string;
+    progressSummary?: string;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;

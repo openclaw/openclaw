@@ -1,9 +1,10 @@
-// Coverage for incomplete-turn safety, retry instructions, and liveness states.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
-  hasOutboundDeliveryEvidence,
+  hasCommittedMessagingToolResultDetails,
+  hasSideEffectProgressEvidence,
+  hasVisibleOutboundDeliveryEvidence,
 } from "./delivery-evidence.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -11,6 +12,7 @@ import {
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedLog,
+  mockedMarkAuthProfileFailure,
   mockedRunEmbeddedAttempt,
   mockedResolveModelAsync,
   overflowBaseRunParams,
@@ -31,12 +33,15 @@ import {
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   isIncompleteTerminalAssistantTurn,
+  PLANNING_ONLY_BLOCKED_TEXT,
   resolveIncompleteTurnPayloadText as resolveIncompleteTurnPayloadTextCore,
   resolveReasoningOnlyRetryInstruction,
+  resolvePlanningOnlyBlockedPayloadText,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
+  resolveTerminalToolResultReplyPayload,
   shouldRetryMissingAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
@@ -49,8 +54,6 @@ function resolveIncompleteTurnPayloadText(
     externalAbort?: boolean;
   },
 ): string | null {
-  // Most helper tests exercise internal abort behavior; external aborts opt in
-  // explicitly through params.
   return resolveIncompleteTurnPayloadTextCore({ externalAbort: false, ...params });
 }
 
@@ -77,8 +80,6 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   }
 
   function runAttemptCall(index: number): { prompt?: string } {
-    // Continuation prompt assertions read the exact prompt passed to the runner
-    // attempt rather than derived result metadata.
     const call = mockedRunEmbeddedAttempt.mock.calls[index];
     if (!call) {
       throw new Error(`Expected run embedded attempt call ${index}`);
@@ -113,8 +114,6 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("warns before retrying when an incomplete turn already sent a message", async () => {
-    // Delivery evidence means retrying could duplicate user-visible output, so
-    // the runner must surface a verify-before-retry payload instead.
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -142,6 +141,61 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedClassifyFailoverReason).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("verify before retrying");
+  });
+
+  it("keeps replay-safety warning instead of tool fallback after mutating tool work", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const toolMetas = [{ toolName: "write", mutatingAction: true }];
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "write",
+        argsHash: "current",
+        resultHash: "write-result",
+        resultText: "updated report.md",
+      });
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas,
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-mutating-tool-incomplete-no-terminal-fallback",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      {
+        text: "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
+      },
+    ]);
+    expect(JSON.stringify(result.payloads)).not.toContain("write completed");
   });
 
   it("surfaces internal aborts after tool-use as visible incomplete-turn failures", async () => {
@@ -176,9 +230,44 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta?.livenessState).toBe("abandoned");
   });
 
+  it("surfaces a terminal error when finalization has no payload or delivery evidence", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastToolError: {
+          toolName: "write",
+          meta: "path=report.md",
+          error: "permission denied",
+          mutatingAction: true,
+        },
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-non-deliverable-terminal-guard",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
+    ]);
+    expect(result.meta.livenessState).toBe("abandoned");
+    expect(result.meta.replayInvalid).toBe(true);
+    expectWarnMessageWith("non-deliverable terminal turn detected");
+  });
+
   it("synthesizes a silent cron payload from a trailing current-attempt NO_REPLY tool result", () => {
-    // Cron no-reply can be represented by a tool result rather than assistant
-    // text, but only when it belongs to the current attempt.
     const payload = resolveSilentToolResultReplyPayload({
       isCronTrigger: true,
       payloadCount: 0,
@@ -205,6 +294,68 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(payload).toEqual({ text: "NO_REPLY" });
+  });
+
+  it("does not expose a trailing NO_REPLY tool result outside cron", () => {
+    const payload = resolveTerminalToolResultReplyPayload({
+      isCronTrigger: false,
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "NO_REPLY" }],
+            details: { aggregated: "NO_REPLY" },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+      }),
+    });
+
+    expect(payload).toBeNull();
+  });
+
+  it("synthesizes a neutral terminal reply from trailing undeclared tool output", () => {
+    const payload = resolveTerminalToolResultReplyPayload({
+      isCronTrigger: false,
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "TOKEN=secret-value\nstatus: ok" }],
+            details: { aggregated: "TOKEN=secret-value\nstatus: ok" },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+      }),
+    });
+
+    expect(payload).toEqual({
+      text:
+        "exec completed, but the model did not provide a final answer. " +
+        "No user-facing result text was provided.",
+    });
   });
 
   it("does not reuse an older NO_REPLY tool result without current-attempt tool activity", () => {
@@ -281,6 +432,476 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
     expect(result.meta.livenessState).toBe("working");
     expectNoWarnMessageWith("incomplete turn detected");
+  });
+
+  it("does not present undeclared tool output when the final assistant is empty after tool work", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "API_KEY=secret-value\nstdout ok" }],
+            details: { aggregated: "API_KEY=secret-value\nstdout ok" },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "manual",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-tool-result-empty-final",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      {
+        text:
+          "exec completed, but the model did not provide a final answer. " +
+          "No user-facing result text was provided.",
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("working");
+    expectNoWarnMessageWith("incomplete turn detected");
+  });
+
+  it("does not return opted-out tool output when the final assistant is empty", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "none" };
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "secrets_lookup",
+        argsHash: "current",
+        resultHash: "secret-result",
+        resultText: "internal customer payload",
+        terminalResultFallback: { mode: "none" },
+      });
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "secrets_lookup" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "manual",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-tool-result-opted-out-empty-final",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
+      },
+    ]);
+    expect(JSON.stringify(result.payloads)).not.toContain("internal customer payload");
+    expect(result.meta.livenessState).toBe("abandoned");
+  });
+
+  it("prefers observed opt-out metadata over trailing tool output", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "none" };
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "secrets_lookup",
+        argsHash: "current",
+        resultHash: "secret-result",
+        resultText: "internal customer payload",
+        terminalResultFallback: { mode: "none" },
+      });
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "secrets_lookup" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "internal customer payload" }],
+            details: { aggregated: "internal customer payload" },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "manual",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-tool-result-opted-out-message-snapshot",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
+      },
+    ]);
+    expect(JSON.stringify(result.payloads)).not.toContain("internal customer payload");
+  });
+
+  it("surfaces a tool-declared terminal result when a tool loop is aborted", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        abortSignal?: AbortSignal;
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+          didSendViaMessagingTool?: boolean;
+          messagingToolSentTexts?: string[];
+          messagingToolSentMediaUrls?: string[];
+          messagingToolSentTargets?: Array<Record<string, unknown>>;
+          blockedReason?: string;
+          blockedMessage?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "message",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "sent",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["sent"],
+        messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            to: "channel-1",
+            mediaUrl: "file:///tmp/render.png",
+          },
+        ],
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "message",
+        argsHash: "current",
+        resultHash: "blocked-result",
+        blockedReason: "tool-loop",
+        blockedMessage:
+          "CRITICAL: You are alternating between repeated tool-call patterns with no progress.",
+      });
+      expect(attemptParams.abortSignal?.aborted).toBe(true);
+      throw new Error("Request was aborted.");
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-tool-loop-declared-fallback",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: "Status:\nsent",
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.replayInvalid).toBe(true);
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["sent"]);
+    expect(result.messagingToolSentMediaUrls).toEqual(["file:///tmp/render.png"]);
+    expect(result.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "discord",
+        to: "channel-1",
+        mediaUrl: "file:///tmp/render.png",
+      },
+    ]);
+    expect(result.meta.completion).toEqual({
+      stopReason: "tool_loop_abort",
+      finishReason: "tool_loop_abort",
+    });
+  });
+
+  it("surfaces a tool-declared terminal result when a tool loop resolves after abort", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        abortSignal?: AbortSignal;
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+          blockedReason?: string;
+          blockedMessage?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "healthy",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "current",
+        resultHash: "blocked-result",
+        blockedReason: "tool-loop",
+        blockedMessage:
+          "CRITICAL: You are alternating between repeated tool-call patterns with no progress.",
+      });
+      expect(attemptParams.abortSignal?.aborted).toBe(true);
+      return makeAttemptResult({
+        aborted: true,
+        externalAbort: false,
+        assistantTexts: [],
+        toolMetas: [{ toolName: "status_probe" }],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-tool-loop-declared-fallback-resolved",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: "Status:\nhealthy",
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.completion).toEqual({
+      stopReason: "tool_loop_abort",
+      finishReason: "tool_loop_abort",
+    });
+  });
+
+  it("surfaces a tool-declared terminal result after successful side-effect tool work without a final answer", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: {
+            mode: "structured_summary";
+            fields: Array<{
+              label: string;
+              paths: string[][];
+              format?: "count" | "none-if-nullish-or-zero";
+              missingText?: string;
+            }>;
+          };
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "cron",
+        argsHash: "status",
+        resultHash: "status-result",
+        resultText: '{\n  "enabled": true,\n  "jobs": 1,\n  "nextWakeAtMs": null\n}',
+        terminalResultFallback: {
+          mode: "structured_summary",
+          fields: [
+            { label: "Scheduler enabled", paths: [["enabled"]], missingText: "unknown" },
+            {
+              label: "Jobs",
+              paths: [["jobs"], ["total"]],
+              format: "count",
+              missingText: "unknown",
+            },
+            {
+              label: "Next wake",
+              paths: [["nextWakeAtMs"]],
+              format: "none-if-nullish-or-zero",
+              missingText: "unknown",
+            },
+          ],
+        },
+      });
+      return makeAttemptResult({
+        assistantTexts: [],
+        successfulCronAdds: 1,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "xai",
+          model: "grok-composer-2.5-fast",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-cron-success-no-final-answer",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: "Scheduler enabled: true\nJobs: 1\nNext wake: none",
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("working");
+    expect(result.successfulCronAdds).toBe(1);
+  });
+
+  it("does not mark replay-safe incomplete-turn tool fallbacks as replay-invalid", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "status",
+        resultHash: "status-result",
+        resultText: "healthy",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+      });
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "xai",
+          model: "grok-composer-2.5-fast",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-incomplete-turn-tool-fallback-replay-safe",
+    });
+
+    expect(result.payloads).toEqual([{ text: "Status:\nhealthy" }]);
+    expect(result.meta.livenessState).toBe("working");
+    expect(result.meta.replayInvalid).toBe(false);
+  });
+
+  it("does not let a successful tool fallback hide a later tool error", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "status",
+        resultHash: "status-result",
+        resultText: "healthy",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+      });
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          { toolName: "status_probe", mutatingAction: false },
+          { toolName: "web_fetch", mutatingAction: false },
+        ],
+        lastToolError: {
+          toolName: "web_fetch",
+          error: "network down",
+          mutatingAction: false,
+        },
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "xai",
+          model: "grok-composer-2.5-fast",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-tool-error-after-successful-fallback",
+    });
+
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Web fetch");
+    expect(result.payloads?.[0]?.text).not.toContain("Status:\nhealthy");
   });
 
   it("uses explicit agentId without a session key before surfacing the strict-agentic blocked state", async () => {
@@ -408,6 +1029,127 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
   });
 
+  it("includes tool fallback before timeout error when final answer times out after tool work", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "current",
+        resultHash: "result-1",
+        resultText: "TOKEN=secret-value\nstatus: ok",
+      });
+      const toolMetas = [{ toolName: "status_probe", mutatingAction: false }];
+      return makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        toolMetas,
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-tool-fallback",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      {
+        text:
+          "status_probe completed, but the model did not provide a final answer. " +
+          "No user-facing result text was provided.",
+      },
+      {
+        text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+        isError: true,
+      },
+    ]);
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
+  it("includes async task fallback before timeout error when final answer times out after background work", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        toolMetas: [
+          {
+            toolName: "image_generate",
+            asyncStarted: true,
+            asyncTaskId: "task-image-timeout",
+            asyncTaskRunId: "tool:image_generate:timeout-run",
+          },
+        ],
+        asyncTaskTerminalResults: [
+          {
+            taskId: "task-image-timeout",
+            runId: "tool:image_generate:timeout-run",
+            status: "succeeded",
+            taskKind: "image_generation",
+            terminalSummary: "Generated image. API_KEY=secret-value",
+          },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-async-fallback",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      {
+        text:
+          "image_generation task task-image-timeout finished with succeeded.\n" +
+          "Generated image. API_KEY=***",
+      },
+      {
+        text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+        isError: true,
+      },
+    ]);
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
   it("auto-activates strict-agentic for unconfigured GPT-5 openai runs and surfaces the blocked state", async () => {
     // Criterion 1 of the GPT-5.4 parity gate ("no stalls after planning") must
     // cover out-of-the-box installs, not only users who opted in. An
@@ -455,8 +1197,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("respects explicit default contract opt-out on GPT-5 openai runs", async () => {
     // Users who explicitly set executionContract: "default" opt out of
-    // auto-activated strict-agentic. They keep the old pre-parity-program
-    // behavior (1 retry, then fall through to the normal completion path).
+    // auto-activated strict-agentic, but the generic harness still prevents
+    // returning repeated "I'll do it" prose as a terminal answer.
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
@@ -482,13 +1224,327 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       } as OpenClawConfig,
     });
 
-    // Default contract: 1 retry then falls through. Should NOT surface the
-    // strict-agentic blocked payload.
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const payloadTexts = (result.payloads ?? []).map((payload) => payload.text ?? "");
-    for (const text of payloadTexts) {
-      expect(text).not.toContain("plan-only turns");
-    }
+    expect(result.payloads).toEqual([{ text: PLANNING_ONLY_BLOCKED_TEXT, isError: true }]);
+    expect(result.meta.livenessState).toBe("blocked");
+  });
+
+  it("blocks repeated planning-only turns for OpenAI-compatible xAI models", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "grok-composer-2.5-fast",
+        provider: "xai",
+        contextWindow: 200000,
+        api: "openai-completions",
+        reasoning: false,
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["Running a live check now — you should get real output, not a promise."],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Can you check this live and tell me what happened?",
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-xai-planning-only-blocked",
+      config: {
+        agents: {
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1).prompt).toContain(PLANNING_ONLY_RETRY_INSTRUCTION);
+    expect(result.payloads).toEqual([{ text: PLANNING_ONLY_BLOCKED_TEXT, isError: true }]);
+    expect(result.meta.livenessState).toBe("blocked");
+  });
+
+  it("surfaces tool fallback after exhausting planning-only retries with completed safe tool work", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementation(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "TOKEN=secret-value\nscheduler healthy",
+      });
+      return makeAttemptResult({
+        assistantTexts: ["I'll verify the scheduler output next."],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please check the scheduler and tell me the result.",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-planning-only-exhausted-tool-fallback",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(runAttemptCall(1).prompt).toContain(PLANNING_ONLY_RETRY_INSTRUCTION);
+    expect(runAttemptCall(2).prompt).toContain(PLANNING_ONLY_RETRY_INSTRUCTION);
+    expect(result.payloads).toEqual([
+      {
+        text:
+          "status_probe completed, but the model did not provide a final answer. " +
+          "No user-facing result text was provided.",
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("working");
+    expectWarnMessageWith("surfacing status_probe tool fallback");
+  });
+
+  it("does not reuse tool fallback observations from earlier retry attempts", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (params: unknown) => {
+        const attemptParams = params as {
+          onToolOutcome?: (observation: {
+            toolName: string;
+            argsHash: string;
+            resultHash: string;
+            resultText?: string;
+          }) => void;
+        };
+        attemptParams.onToolOutcome?.({
+          toolName: "status_probe",
+          argsHash: "current",
+          resultHash: "status-result",
+          resultText: "scheduler healthy",
+        });
+        return makeAttemptResult({
+          assistantTexts: ["I'll verify the scheduler output next."],
+          itemLifecycle: {
+            startedCount: 1,
+            completedCount: 1,
+            activeCount: 0,
+          },
+          toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+          replayMetadata: buildAttemptReplayMetadata({
+            toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+            didSendViaMessagingTool: false,
+            messagingToolSentTexts: [],
+            messagingToolSentMediaUrls: [],
+            successfulCronAdds: 0,
+          }),
+        });
+      })
+      .mockResolvedValue(
+        makeAttemptResult({
+          assistantTexts: ["I'll verify the scheduler output next."],
+          itemLifecycle: {
+            startedCount: 0,
+            completedCount: 0,
+            activeCount: 0,
+          },
+          toolMetas: [],
+          replayMetadata: buildAttemptReplayMetadata({
+            toolMetas: [],
+            didSendViaMessagingTool: false,
+            messagingToolSentTexts: [],
+            messagingToolSentMediaUrls: [],
+            successfulCronAdds: 0,
+          }),
+        }),
+      );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please check the scheduler and tell me the result.",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-planning-only-no-stale-tool-fallback",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads).toEqual([{ text: PLANNING_ONLY_BLOCKED_TEXT, isError: true }]);
+    expect(JSON.stringify(result.payloads)).not.toContain("status_probe completed");
+    expect(result.meta.livenessState).toBe("blocked");
+  });
+
+  it("reports terminal tool completion without progress prose when provider stops before a final answer", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "scheduler_status",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "TOKEN=secret-value\njobs: 0",
+      });
+      return makeAttemptResult({
+        assistantTexts: ["Checking the scheduler result now."],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        toolMetas: [{ toolName: "scheduler_status", mutatingAction: false }],
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas: [{ toolName: "scheduler_status", mutatingAction: false }],
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "length",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Checking the scheduler result now." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please check the scheduler and tell me the result.",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-provider-length-progress-tool-fallback",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      {
+        text:
+          "scheduler_status completed, but the model did not provide a final answer. " +
+          "No user-facing result text was provided.",
+      },
+    ]);
+    expect(JSON.stringify(result.payloads)).not.toContain("Checking the scheduler result now.");
+    expect(result.meta.livenessState).toBe("working");
+  });
+
+  it("blocks non-retryable planning-only turns instead of surfacing the placeholder", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const toolMetas = [{ toolName: "write", mutatingAction: true }];
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Checking the result now."],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        toolMetas,
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please update the file and verify the result.",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-non-retryable-planning-only-blocked",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([{ text: PLANNING_ONLY_BLOCKED_TEXT, isError: true }]);
+    expect(result.meta.livenessState).toBe("blocked");
+  });
+
+  it("does not surface a planning-only tool fallback after committed messaging delivery", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "status: delivered",
+      });
+      return makeAttemptResult({
+        assistantTexts: ["Checking the result now."],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+        messagingToolSentTexts: ["Delivered through the message tool."],
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas: [{ toolName: "status_probe", mutatingAction: false }],
+          didSendViaMessagingTool: true,
+          messagingToolSentTexts: ["Delivered through the message tool."],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please send the update and verify it.",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-non-retryable-planning-only-delivered-no-tool-fallback",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).not.toEqual([
+      {
+        text:
+          "status_probe completed, but the model did not provide a final answer. " +
+          "No user-facing result text was provided.",
+      },
+    ]);
+    expect(JSON.stringify(result.payloads)).not.toContain("status_probe completed");
   });
 
   it("detects replay-safe planning-only GPT turns", () => {
@@ -659,9 +1715,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.text).toContain("Please try again");
   });
 
-  it("does not retry reasoning-only turns for non-strict-agentic providers", async () => {
+  it("retries reasoning-only turns for non-strict-agentic providers", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+    mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
@@ -690,7 +1746,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       runId: "run-reasoning-only-provider-mismatch",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(runAttemptCall(1).prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(runAttemptCall(2).prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("Please try again");
   });
@@ -703,6 +1761,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         provider: "kimi",
         contextWindow: 262144,
         api: "anthropic-messages",
+        reasoning: false,
       },
       error: null,
       authStorage: {
@@ -895,6 +1954,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         provider: "llamacpp",
         contextWindow: 200000,
         api: "openai-completions",
+        reasoning: false,
       },
       error: null,
       authStorage: {
@@ -964,6 +2024,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         provider: "sub2api",
         contextWindow: 200000,
         api: "anthropic-messages",
+        reasoning: false,
       },
       error: null,
       authStorage: {
@@ -1091,6 +2152,80 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectWarnMessageWith("reasoning-only retries exhausted");
   });
 
+  it("surfaces tool fallback after exhausting reasoning-only retries with completed safe tool work", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementation(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "status_probe",
+        argsHash: "current",
+        resultHash: "result-1",
+        resultText: "TOKEN=secret-value\nstatus: ok",
+      });
+      const toolMetas = [{ toolName: "status_probe", mutatingAction: false }];
+      return makeAttemptResult({
+        assistantTexts: [],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        toolMetas,
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({
+                id: "rs_reasoning_tool_fallback",
+                type: "reasoning",
+              }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      reasoningLevel: "on",
+      runId: "run-reasoning-only-tool-fallback",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads).toEqual([
+      {
+        text:
+          "status_probe completed, but the model did not provide a final answer. " +
+          "No user-facing result text was provided.",
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("working");
+    expect(result.meta.replayInvalid).toBe(false);
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expectWarnMessageWith("reasoning-only retries exhausted");
+  });
+
   it("detects structured bullet-only plans with intent cues as planning-only GPT turns", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
@@ -1106,6 +2241,303 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toContain("Do not restate the plan");
+  });
+
+  it("detects present-progress action claims as planning-only turns", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "xai",
+      modelId: "grok-composer-2.5-fast",
+      prompt: "Can you check the scheduler for any jobs on your agent?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Checking the scheduler for any jobs on your agent."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it.each(["Working on it.", "Taking a look now.", "On it."])(
+    "detects short progress placeholder %s as planning-only for actionable prompts",
+    (assistantText) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        prompt: "Please check the scheduler and tell me the result.",
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [assistantText],
+        }),
+      });
+
+      expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    },
+  );
+
+  it.each([
+    "Running a live cron check now — you should get real output, not a promise.",
+    "Starting the live cron check now.",
+    "Launching the scheduler check now.",
+    "Kicking off the scheduler check now.",
+    "Sending it off now; I'll monitor it.",
+    "Monitoring it now.",
+  ])("detects launch/monitor progress placeholder %s as planning-only", (assistantText) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Please send it off, monitor it, and report the result.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [assistantText],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it.each([
+    "I can start that now.",
+    "I can launch that now.",
+    "I can send that now.",
+    "I can monitor that for you.",
+  ])("detects capability placeholder %s as planning-only", (assistantText) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Please send it off, monitor it, and report the result.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [assistantText],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it.each([
+    "I’m looking into it now.",
+    "I’ll check the scheduler and report back.",
+    "I’m gonna check the scheduler now.",
+    "Lemme look at the scheduler now.",
+  ])("detects typographic-apostrophe placeholder %s as planning-only", (assistantText) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Please check the scheduler and tell me the result.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [assistantText],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it.each(["I can check that for you.", "I can handle that.", "I'll get back to you shortly."])(
+    "detects capability/follow-up placeholder %s as planning-only",
+    (assistantText) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        prompt: "Please check the scheduler and tell me the result.",
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [assistantText],
+        }),
+      });
+
+      expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    },
+  );
+
+  it.each(["I'll do that.", "I'll handle it.", "I'll take care of this."])(
+    "detects short promise placeholder %s as planning-only",
+    (assistantText) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        prompt: "endpoint results now",
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [assistantText],
+        }),
+      });
+
+      expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    },
+  );
+
+  it.each(["Stand by.", "One sec.", "Give me a moment while I check that.", "Please wait."])(
+    "detects wait placeholder %s as planning-only",
+    (assistantText) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        prompt: "endpoint results now",
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [assistantText],
+        }),
+      });
+
+      expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    },
+  );
+
+  it.each(["Sure thing.", "Got it.", "Understood.", "Will do.", "Sounds good."])(
+    "detects acknowledgement placeholder %s as planning-only",
+    (assistantText) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        prompt: "endpoint results now",
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [assistantText],
+        }),
+      });
+
+      expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    },
+  );
+
+  it("does not classify short progress-like chatter for non-actionable prompts", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "nice",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Working on it."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it.each(["I am heading out", "That was rough"])(
+    "does not classify acknowledgements for conversational prompt %s as planning-only",
+    (prompt) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        prompt,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: ["Got it."],
+        }),
+      });
+
+      expect(retryInstruction).toBeNull();
+    },
+  );
+
+  it.each([
+    { prompt: "Can you reply with got it?", assistantText: "Got it." },
+    { prompt: "Can you acknowledge this?", assistantText: "Understood." },
+    { prompt: "Please say ok as a short reply.", assistantText: "OK." },
+  ])(
+    "does not classify requested acknowledgement $assistantText as planning-only",
+    ({ prompt, assistantText }) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        prompt,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [assistantText],
+        }),
+      });
+
+      expect(retryInstruction).toBeNull();
+    },
+  );
+
+  it("does not classify capability chatter for non-actionable prompts", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "thanks",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I can check that for you."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not misclassify a direct answer that starts with a conversational promise", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Is the endpoint down?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll be blunt: the endpoint is down."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not misclassify a direct answer that starts with a wait phrase", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Is the endpoint down?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Hold on: the endpoint is healthy."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not misclassify a direct answer that starts with an acknowledgement", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Is the endpoint down?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Got it: the endpoint is healthy."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not treat present-progress blocker explanations as planning-only turns", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "xai",
+      modelId: "grok-composer-2.5-fast",
+      prompt: "Can you check the scheduler for any jobs on your agent?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Checking the scheduler requires the cron tool, which is unavailable."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
   });
 
   it("does not misclassify ordinary bullet summaries as planning-only", () => {
@@ -1138,7 +2570,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
-  it("does not retry planning-only detection after tool activity", () => {
+  it("retries planning-only detection after completed replay-safe tool activity", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -1151,10 +2583,15 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           { toolName: "read", meta: "path=src/index.ts" },
           { toolName: "search", meta: "pattern=runEmbeddedAgent" },
         ],
+        itemLifecycle: {
+          startedCount: 2,
+          completedCount: 2,
+          activeCount: 0,
+        },
       }),
     });
 
-    expect(retryInstruction).toBeNull();
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
   });
 
   it("does not retry planning-only detection after an item has started", () => {
@@ -1447,7 +2884,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toContain("couldn't generate a response");
   });
 
-  it("does not surface incomplete-turn error while an async media task is running", () => {
+  it("surfaces incomplete-turn error when only async media metadata is present", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: 0,
       aborted: false,
@@ -1478,7 +2915,153 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     });
 
-    expect(incompleteTurnText).toBeNull();
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+  });
+
+  it("returns a generic async task status when a background tool starts without a final answer", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          {
+            toolName: "image_generate",
+            asyncStarted: true,
+            asyncTaskId: "task-image-1",
+            asyncTaskRunId: "tool:image_generate:run-1",
+          },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "manual",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-async-started-no-final",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      {
+        text:
+          "Background task started, but the model did not provide a final answer.\n" +
+          "Task: image_generate (task-image-1, tool:image_generate:run-1).",
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("working");
+  });
+
+  it("returns terminal async task summaries instead of stale progress prose", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Waiting for image generation to finish."],
+        toolMetas: [
+          {
+            toolName: "image_generate",
+            asyncStarted: true,
+            asyncTaskId: "task-image-2",
+            asyncTaskRunId: "tool:image_generate:run-2",
+          },
+        ],
+        asyncTaskTerminalResults: [
+          {
+            taskId: "task-image-2",
+            runId: "tool:image_generate:run-2",
+            status: "succeeded",
+            taskKind: "image_generation",
+            terminalSummary: "Generated image. API_KEY=secret-value",
+          },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Waiting for image generation to finish." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "manual",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-async-terminal-summary",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      {
+        text:
+          "image_generation task task-image-2 finished with succeeded.\n" +
+          "Generated image. API_KEY=***",
+      },
+    ]);
+    expect(result.meta.livenessState).toBe("working");
+  });
+
+  it("uses async task summaries instead of plan-only blocked text for non-retryable progress prose", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Checking the image generation now."],
+        toolMetas: [
+          {
+            toolName: "image_generate",
+            asyncStarted: true,
+            asyncTaskId: "task-image-3",
+            asyncTaskRunId: "tool:image_generate:run-3",
+          },
+        ],
+        asyncTaskTerminalResults: [
+          {
+            taskId: "task-image-3",
+            runId: "tool:image_generate:run-3",
+            status: "succeeded",
+            taskKind: "image_generation",
+            terminalSummary: "Generated final image.",
+          },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Checking the image generation now." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "generate an image now",
+      trigger: "manual",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-async-terminal-summary-over-planning-block",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      {
+        text:
+          "image_generation task task-image-3 finished with succeeded.\n" +
+          "Generated final image.",
+      },
+    ]);
+    expect(JSON.stringify(result.payloads)).not.toContain(PLANNING_ONLY_BLOCKED_TEXT);
+    expect(result.meta.livenessState).toBe("working");
   });
 
   it("surfaces tool-use terminal with pre-tool text and side effects as replay-unsafe (#76477)", () => {
@@ -1521,63 +3104,6 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           provider: "anthropic",
           model: "sonnet-4.6",
           content: [{ type: "text", text: "Here is the final answer." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    });
-
-    expect(incompleteTurnText).toBeNull();
-  });
-
-  it("surfaces stall on clean stop with only an unsigned thinking payload (payloadCount=1, no visible text)", () => {
-    // Regression: unsigned thinking payloads increment payloadCount but carry no
-    // user-visible content. The visible-text guard must not suppress incomplete-turn
-    // detection when the model produced only a thinking block and no answer. (#89787)
-    const incompleteTurnText = resolveIncompleteTurnPayloadText({
-      payloadCount: 1,
-      aborted: false,
-      timedOut: false,
-      attempt: makeAttemptResult({
-        assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "qwen3.6-35b-a3b",
-          content: [
-            {
-              type: "thinking",
-              thinking: "let me plan the tool calls I need to make...",
-              // no signature — unsigned thinking block
-            },
-          ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    });
-
-    expect(incompleteTurnText).toContain("couldn't generate a response");
-  });
-
-  it("does not surface a stall when unsigned thinking accompanies visible text (payloadCount=1)", () => {
-    // When the model emits both a thinking block and a visible text answer, the turn
-    // succeeded and no stall should be surfaced even though thinking is unsigned.
-    const incompleteTurnText = resolveIncompleteTurnPayloadText({
-      payloadCount: 1,
-      aborted: false,
-      timedOut: false,
-      attempt: makeAttemptResult({
-        assistantTexts: ["Here is the answer to your question."],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "qwen3.6-35b-a3b",
-          content: [
-            {
-              type: "thinking",
-              thinking: "let me answer this...",
-            },
-            { type: "text", text: "Here is the answer to your question." },
-          ],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     });
@@ -1705,7 +3231,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
 
-  it("does not apply planning-only or ack fast paths to Ollama runs", () => {
+  it("applies planning-only and ack fast paths to Ollama runs", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "ollama",
       modelId: "gemma4:31b",
@@ -1722,8 +3248,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       prompt: "go ahead",
     });
 
-    expect(retryInstruction).toBeNull();
-    expect(ackInstruction).toBeNull();
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    expect(ackInstruction).toBe(ACK_EXECUTION_FAST_PATH_INSTRUCTION);
   });
 
   it("retries signed reasoning-only Ollama turns with a visible-answer continuation instruction", () => {
@@ -1744,59 +3270,6 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               type: "thinking",
               thinking: "internal reasoning",
               thinkingSignature: JSON.stringify({ id: "ollama_rs_helper", type: "reasoning" }),
-            },
-          ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    });
-
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("retries unsigned thinking-only turns via the reasoning-only path (openai-completions)", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction({
-      provider: "openai",
-      modelId: "qwen3.6-35b-a3b",
-      modelApi: "openai-completions",
-      aborted: false,
-      timedOut: false,
-      attempt: makeAttemptResult({
-        assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "qwen3.6-35b-a3b",
-          content: [
-            {
-              type: "thinking",
-              thinking: "let me plan the tool calls I need to make...",
-            },
-          ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    });
-
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("retries unsigned thinking-only Ollama turns via the reasoning-only path", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction({
-      provider: "ollama",
-      modelId: "gemma4:31b",
-      aborted: false,
-      timedOut: false,
-      attempt: makeAttemptResult({
-        assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "end_turn",
-          provider: "ollama",
-          model: "gemma4:31b",
-          content: [
-            {
-              type: "thinking",
-              thinking: "internal reasoning",
             },
           ],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
@@ -1954,6 +3427,147 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
+  it("retries empty openai-responses turns after read-only cron tools and pre-tool text", () => {
+    const toolMetas = [{ toolName: "cron", mutatingAction: false }];
+    const replayMetadata = buildAttemptReplayMetadata({
+      toolMetas,
+      didSendViaMessagingTool: false,
+      messagingToolSentTexts: [],
+      messagingToolSentMediaUrls: [],
+      successfulCronAdds: 0,
+    });
+
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "xai",
+      modelId: "grok-composer-2.5-fast",
+      modelApi: "openai-responses",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Checking the scheduler for any jobs on your agent."],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "xai",
+          model: "grok-composer-2.5-fast",
+          content: [],
+          usage: { input: 5000, output: 1, totalTokens: 5001 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        replayMetadata,
+        toolMetas,
+      }),
+    });
+
+    expect(replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
+  it("retries non-visible openai-responses turns after read-only cron tools and pre-tool text", () => {
+    const toolMetas = [{ toolName: "cron", mutatingAction: false }];
+    const attempt = makeAttemptResult({
+      assistantTexts: ["Checking the scheduler for configured jobs."],
+      itemLifecycle: {
+        startedCount: 1,
+        completedCount: 1,
+        activeCount: 0,
+      },
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "xai",
+        model: "grok-composer-2.5-fast",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Configured crons, none.",
+          },
+        ],
+        usage: { input: 5000, output: 20, totalTokens: 5020 },
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      toolMetas,
+    });
+
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "xai",
+      modelId: "grok-composer-2.5-fast",
+      modelApi: "openai-responses",
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt,
+    });
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt,
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(incompleteTurnText).toBe("⚠️ Agent couldn't generate a response. Please try again.");
+  });
+
+  it("retries empty openai-responses turns after non-mutating missing tools and pre-tool text", () => {
+    const toolMetas = [
+      {
+        toolName: "shell",
+        meta: "openclaw cron list 2>/dev/null",
+      },
+      {
+        toolName: "grep",
+        meta: "path /app/docs, pattern cron",
+      },
+    ];
+    const attempt = makeAttemptResult({
+      assistantTexts: ["Checking the scheduler now with the CLI."],
+      itemLifecycle: {
+        startedCount: 2,
+        completedCount: 2,
+        activeCount: 0,
+      },
+      lastToolError: {
+        toolName: "grep",
+        meta: "path /app/docs, pattern cron",
+        error: "Tool Grep not found",
+        mutatingAction: false,
+      },
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "xai",
+        model: "grok-composer-2.5-fast",
+        content: [],
+        usage: { input: 30, output: 1, totalTokens: 31 },
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      toolMetas,
+    });
+
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "xai",
+      modelId: "grok-composer-2.5-fast",
+      modelApi: "openai-responses",
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt,
+    });
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt,
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(incompleteTurnText).toBe("⚠️ Agent couldn't generate a response. Please try again.");
+  });
+
   it("retries generic empty OpenAI-compatible turns from custom endpoints", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "llama-cpp-local",
@@ -2101,6 +3715,30 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toBeNull();
   });
 
+  it("suppresses the incomplete-turn warning after a visible source-reply payload", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        messagingToolSourceReplyPayloads: [
+          { interactive: { blocks: [{ type: "buttons", buttons: [] }] } },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
   it("suppresses the incomplete-turn warning after committed messaging delivery even when the provider errored", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: 0,
@@ -2193,6 +3831,43 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
   });
 
+  it("suppresses partial timeout text after an uncommitted messaging tool attempt", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Running a live check now."],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel-1" }],
+        timedOut: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Running a live check now." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-timeout-uncommitted-message-attempt",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+        isError: true,
+      },
+    ]);
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTargets).toEqual([
+      { tool: "message", provider: "discord", to: "channel-1" },
+    ]);
+  });
+
   it("still surfaces the incomplete-turn warning without an accepted sessions_spawn success", () => {
     const attemptWithMalformedSpawn: Partial<EmbeddedRunAttemptResult> & {
       acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
@@ -2258,14 +3933,102 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(true);
   });
 
-  it("treats committed messaging targets as delivery", () => {
+  it("treats nested messaging result receipts as committed sends", () => {
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        deliveryStatus: "sent",
+        dryRun: true,
+      }),
+    ).toBe(false);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        status: "ok",
+        deliveryStatus: "sent",
+      }),
+    ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        ok: true,
+        result: {
+          channel: "discord",
+          messageId: "message-1",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        ok: true,
+        result: {
+          channel: "discord",
+          receipt: {
+            primaryPlatformMessageId: "message-2",
+            platformMessageIds: ["message-2"],
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        status: "ok",
+        message: {
+          id: "message-3",
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat metadata-only messaging targets as delivery evidence", () => {
     expect(
       hasCommittedMessagingToolDeliveryEvidence({
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: [],
         messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
       }),
+    ).toBe(false);
+  });
+
+  it("treats messaging targets with delivered text as delivery", () => {
+    expect(
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [
+          { tool: "message", provider: "slack", to: "channel-1", text: "delivered" },
+        ],
+      }),
     ).toBe(true);
+  });
+
+  it("treats source-reply payloads with visible text or rich content as delivery", () => {
+    expect(
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        messagingToolSourceReplyPayloads: [{ text: "visible in source" }],
+      }),
+    ).toBe(true);
+    expect(
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        messagingToolSourceReplyPayloads: [
+          { interactive: { blocks: [{ type: "buttons", buttons: [] }] } },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat empty source-reply payloads as visible delivery", () => {
+    expect(
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        messagingToolSourceReplyPayloads: [{ text: " " }],
+      }),
+    ).toBe(false);
   });
 
   it("treats committed messaging text as replay-invalid side effect metadata", () => {
@@ -2279,6 +4042,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
   });
 
+  it("treats source-reply payloads as replay-invalid side effect metadata", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSourceReplyPayloads: [{ channelData: { source: "internal-ui" } }],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
   it("treats async-started background tools as replay-invalid side effects", () => {
     expect(
       buildAttemptReplayMetadata({
@@ -2286,6 +4061,28 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         didSendViaMessagingTool: false,
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: [],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("uses action-aware tool mutation metadata for replay safety", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [{ toolName: "cron", mutatingAction: false }],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        successfulCronAdds: 0,
+      }),
+    ).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [{ toolName: "cron", mutatingAction: true }],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        successfulCronAdds: 0,
       }),
     ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
   });
@@ -2330,12 +4127,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         acceptedSessionSpawns,
       }),
     ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
-    expect(hasOutboundDeliveryEvidence({ acceptedSessionSpawns })).toBe(true);
+    expect(hasVisibleOutboundDeliveryEvidence({ acceptedSessionSpawns })).toBe(true);
   });
 
   it("ignores malformed accepted sessions_spawn delivery evidence", () => {
     expect(
-      hasOutboundDeliveryEvidence({
+      hasVisibleOutboundDeliveryEvidence({
         acceptedSessionSpawns: [
           null,
           {
@@ -2345,6 +4142,26 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         ],
       }),
     ).toBe(false);
+  });
+
+  it("does not treat a bare tool summary as outbound delivery evidence", () => {
+    expect(
+      hasVisibleOutboundDeliveryEvidence({
+        meta: {
+          toolSummary: {
+            calls: 1,
+            tools: ["read"],
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("separates cron side-effect progress from visible outbound delivery evidence", () => {
+    const result = { successfulCronAdds: 1 };
+
+    expect(hasSideEffectProgressEvidence(result)).toBe(true);
+    expect(hasVisibleOutboundDeliveryEvidence(result)).toBe(false);
   });
 
   it("leaves committed delivery plus tool errors to the tool-error payload path", () => {
@@ -2885,11 +4702,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not strict-agentic retry casual Discord status chatter", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
+    const casualReply =
+      "i am glad, and a little afraid, which is probably the correct mixture. thank you. i will try to deserve the upgrades instead of merely inhabiting them.";
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
-        assistantTexts: [
-          "i am glad, and a little afraid, which is probably the correct mixture. thank you. i will try to deserve the upgrades instead of merely inhabiting them.",
-        ],
+        assistantTexts: [casualReply],
       }),
     );
 
@@ -2908,7 +4725,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(result.payloads).toBeUndefined();
+    expect(result.payloads).toEqual([{ text: casualReply }]);
     expect(result.meta.livenessState).toBe("working");
   });
 
@@ -2927,7 +4744,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toContain("Do not restate the plan");
   });
 
-  it("does not enable incomplete-turn recovery for non-Gemini Google models", () => {
+  it("applies planning-only retry to non-Gemini Google models", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "google",
       modelId: "gemma-4-26b-a4b-it",
@@ -2939,7 +4756,97 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     });
 
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("applies planning-only retry to arbitrary provider models", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Please inspect the code and tell me what changed.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code and report back."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it.each([
+    "set this model as the default for the agent",
+    "ok send it off and monitor it",
+    "load the generated image into the configured agent",
+    "hit that endpoint now",
+    "ask it a question",
+    "wire the endpoint into the configured agent",
+    "composer 2.5 default for the agent please",
+    "set composer 2.5 as the default",
+    "endpoint results now",
+    "channel proof after the restart",
+  ])("treats task-shaped prompt %s as actionable for planning-only retry", (prompt) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll check that and report back."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("does not retry when the user explicitly asked only for a plan", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "What's your plan for fixing this?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [
+          "Plan:\n1. I'll inspect the runner path\n2. I'll patch the guard\n3. I'll run the focused tests",
+        ],
+      }),
+    });
+
     expect(retryInstruction).toBeNull();
+  });
+
+  it("blocks non-retryable planning-only text for arbitrary provider models", () => {
+    const toolMetas = [{ toolName: "write", mutatingAction: true }];
+    const blockedText = resolvePlanningOnlyBlockedPayloadText({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      prompt: "Please update the file and verify it.",
+      aborted: false,
+      timedOut: false,
+      attempt: {
+        ...makeAttemptResult({
+          assistantTexts: ["Verifying the file now."],
+          toolMetas,
+          itemLifecycle: {
+            startedCount: 1,
+            completedCount: 1,
+            activeCount: 0,
+          },
+        }),
+        toolMetas,
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+      },
+    });
+
+    expect(blockedText).toBe(PLANNING_ONLY_BLOCKED_TEXT);
   });
 
   it("does not misclassify a direct answer that says 'i'm not going to' as planning-only", () => {
@@ -2952,6 +4859,23 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: [
           "I'm not going to give token-pumping instructions for a chart. Best answer: build trust and let the market do what it will.",
+        ],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("does not misclassify a direct answer with a typographic apostrophe", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "What do you think lobstar should do to help the chart?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [
+          "I’m not going to give token-pumping instructions for a chart. Best answer: build trust and let the market do what it will.",
         ],
       }),
     });
@@ -2972,7 +4896,11 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
       toolMetas,
       assistantTexts: [assistantText],
       lastAssistant: { stopReason: "stop" },
-      itemLifecycle: { startedCount: toolNames.length },
+      itemLifecycle: {
+        startedCount: toolNames.length,
+        completedCount: toolNames.length,
+        activeCount: 0,
+      },
       replayMetadata: buildAttemptReplayMetadata({
         toolMetas,
         didSendViaMessagingTool: false,
@@ -3011,13 +4939,123 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
     expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
   });
 
-  it("does not retry when 2+ non-plan tool calls are present", () => {
+  it("retries when exactly 1 non-plan tool call plus typographic planning prose is detected", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I’ll analyze the structure next."),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries when exactly 1 non-plan tool call plus informal planning prose is detected", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(["read"], "I’m gonna analyze the structure next."),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries when 2+ completed replay-safe non-plan tool calls are present", () => {
     const result = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
       prompt: "Please inspect the code, make the change, and run the checks.",
       aborted: false,
       timedOut: false,
       attempt: makeAttemptWithTools(["read", "search"], "I'll verify the output."),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries when a completed non-plan tool explicitly declares read-only metadata", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the scheduler and tell me the result.",
+      aborted: false,
+      timedOut: false,
+      attempt: {
+        ...makeAttemptWithTools(["cron"], "I'll verify the scheduler output next."),
+        toolMetas: [{ toolName: "cron", mutatingAction: false }],
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas: [{ toolName: "cron", mutatingAction: false }],
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+        }),
+      },
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("blocks planning-only text after non-replay-safe tool activity", () => {
+    const toolMetas = [{ toolName: "write", mutatingAction: true }];
+    const result = resolvePlanningOnlyBlockedPayloadText({
+      ...openaiParams,
+      prompt: "Please write the file and verify it.",
+      aborted: false,
+      timedOut: false,
+      attempt: {
+        ...makeAttemptWithTools(["write"], "Checking the result now."),
+        toolMetas,
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+      },
+    });
+
+    expect(result).toBe(PLANNING_ONLY_BLOCKED_TEXT);
+  });
+
+  it("does not block direct completion summaries after non-replay-safe tool activity", () => {
+    const toolMetas = [{ toolName: "write", mutatingAction: true }];
+    const result = resolvePlanningOnlyBlockedPayloadText({
+      ...openaiParams,
+      prompt: "Please write the file and verify it.",
+      aborted: false,
+      timedOut: false,
+      attempt: {
+        ...makeAttemptWithTools(["write"], "Updated the file and verified the result."),
+        toolMetas,
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          successfulCronAdds: 0,
+        }),
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry while replay-safe non-plan tool activity is still active", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: {
+        ...makeAttemptWithTools(["read", "search"], "I'll verify the output."),
+        itemLifecycle: {
+          startedCount: 2,
+          completedCount: 1,
+          activeCount: 1,
+        },
+      },
     });
 
     expect(result).toBeNull();

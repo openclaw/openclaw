@@ -12,7 +12,11 @@ export type MessagingToolSend = {
   threadImplicit?: boolean;
   threadSuppressed?: boolean;
   text?: string;
+  mediaUrl?: string;
   mediaUrls?: string[];
+  presentation?: ReplyPayload["presentation"];
+  interactive?: ReplyPayload["interactive"];
+  channelData?: ReplyPayload["channelData"];
 };
 
 export type MessagingToolSourceReplyPayload = Pick<

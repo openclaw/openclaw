@@ -1,20 +1,15 @@
-/**
- * Classifies embedded-agent run results for model fallback decisions.
- */
-import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
-import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
 import type { ModelFallbackResultClassification } from "../model-fallback.js";
-import { hasOutboundDeliveryEvidence, hasVisibleAgentPayload } from "./delivery-evidence.js";
+import { hasDeliberateSilentTerminalReply } from "../terminal-reply.js";
+import {
+  hasCompletedToolActivityEvidence,
+  hasErrorAgentPayload,
+  hasSideEffectProgressEvidence,
+  hasVisibleAgentPayload,
+} from "./delivery-evidence.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
-/**
- * Classifies embedded-agent terminal results for model fallback decisions.
- *
- * The classifier only flags failed invisible outcomes; delivered messages, deliberate silent
- * replies, hook blocks, and aborts must not trigger another model attempt.
- */
 const EMPTY_TERMINAL_REPLY_RE = /Agent couldn't generate a response/i;
 const PLAN_ONLY_TERMINAL_REPLY_RE = /Agent stopped after repeated plan-only turns/i;
 
@@ -25,15 +20,6 @@ function isEmbeddedAgentRunResult(value: unknown): value is EmbeddedAgentRunResu
     "meta" in value &&
     (value as { meta?: unknown }).meta &&
     typeof (value as { meta?: unknown }).meta === "object",
-  );
-}
-
-function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boolean {
-  if (result.meta.error?.kind === "hook_block") {
-    return true;
-  }
-  return [result.meta.finalAssistantRawText, result.meta.finalAssistantVisibleText].some(
-    (text) => typeof text === "string" && isSilentReplyPayloadText(text),
   );
 }
 
@@ -66,7 +52,6 @@ function classifyHarnessResult(params: {
   }
 }
 
-/** Maps provider error payloads to fallback-safe business reasons. */
 function classifyBusinessDenialErrorPayloadReason(
   errorText: string,
   provider: string,
@@ -85,7 +70,6 @@ function classifyBusinessDenialErrorPayloadReason(
   }
 }
 
-/** Returns a fallback classification when an embedded run failed without user-visible output. */
 export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   provider: string;
   model: string;
@@ -96,10 +80,12 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (!isEmbeddedAgentRunResult(params.result)) {
     return null;
   }
+  const blockReplyCanSuppressFallback =
+    (params.hasDirectlySentBlockReply === true || params.hasBlockReplyPipelineOutput === true) &&
+    !hasCompletedToolActivityEvidence(params.result) &&
+    !hasErrorAgentPayload(params.result);
   if (
     params.result.meta.aborted ||
-    params.hasDirectlySentBlockReply === true ||
-    params.hasBlockReplyPipelineOutput === true ||
     hasVisibleAgentPayload(params.result, {
       includeErrorPayloads: false,
       includeReasoningPayloads: false,
@@ -107,12 +93,10 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   ) {
     return null;
   }
-  if (hasOutboundDeliveryEvidence(params.result)) {
+  if (hasSideEffectProgressEvidence(params.result)) {
     return null;
   }
   if (params.result.meta.error?.kind === "hook_block") {
-    // Hook blocks intentionally suppress normal agent output. Retrying on another model would
-    // bypass a policy decision rather than recover a malformed model result.
     return null;
   }
 
@@ -121,8 +105,16 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     model: params.model,
     result: params.result,
   });
-  if (harnessClassification) {
+  const harnessClassificationCode =
+    harnessClassification && "code" in harnessClassification ? harnessClassification.code : null;
+  if (
+    harnessClassification &&
+    !(blockReplyCanSuppressFallback && harnessClassificationCode === "empty_result")
+  ) {
     return harnessClassification;
+  }
+  if (blockReplyCanSuppressFallback) {
+    return null;
   }
 
   const payloads = params.result.payloads ?? [];
@@ -131,6 +123,12 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
     .join("\n");
   if (EMPTY_TERMINAL_REPLY_RE.test(errorText)) {
+    if (
+      params.result.meta.replayInvalid === true &&
+      hasCompletedToolActivityEvidence(params.result)
+    ) {
+      return null;
+    }
     return {
       message: `${params.provider}/${params.model} ended with an incomplete terminal response`,
       reason: "format",
@@ -147,11 +145,10 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     };
   }
 
-  if (!isGpt5ModelId(params.model)) {
+  if (payloads.length === 0 && hasDeliberateSilentTerminalReply(params.result)) {
     return null;
   }
-
-  if (payloads.length === 0 && hasDeliberateSilentTerminalReply(params.result)) {
+  if (payloads.length === 0 && hasCompletedToolActivityEvidence(params.result)) {
     return null;
   }
   if (payloads.length === 0) {

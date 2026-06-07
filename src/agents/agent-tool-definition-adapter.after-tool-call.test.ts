@@ -24,6 +24,7 @@ const hookMocks = vi.hoisted(() => ({
   },
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
   consumeAdjustedParamsForToolCall: vi.fn((_: string) => undefined as unknown),
+  recordToolLoopOutcome: vi.fn(async () => {}),
   recordAdjustedParamsForToolCall: vi.fn(),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
@@ -42,6 +43,7 @@ vi.mock("./agent-tools.before-tool-call.js", () => ({
     details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
   }),
   consumeAdjustedParamsForToolCall: hookMocks.consumeAdjustedParamsForToolCall,
+  recordToolLoopOutcome: hookMocks.recordToolLoopOutcome,
   recordAdjustedParamsForToolCall: hookMocks.recordAdjustedParamsForToolCall,
   isBeforeToolCallBlockedError: (error: unknown) =>
     error instanceof hookMocks.BeforeToolCallBlockedError,
@@ -71,6 +73,7 @@ describe("agent tool definition adapter after_tool_call", () => {
     hookMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(false);
     hookMocks.consumeAdjustedParamsForToolCall.mockClear();
     hookMocks.consumeAdjustedParamsForToolCall.mockReturnValue(undefined);
+    hookMocks.recordToolLoopOutcome.mockClear();
     hookMocks.recordAdjustedParamsForToolCall.mockClear();
     hookMocks.runBeforeToolCallHook.mockClear();
     hookMocks.runBeforeToolCallHook.mockImplementation(async ({ params }) => ({

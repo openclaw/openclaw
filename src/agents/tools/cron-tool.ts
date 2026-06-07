@@ -1,8 +1,3 @@
-/**
- * cron built-in tool.
- *
- * Manages scheduled jobs, wake/run actions, delivery context, and reminder-style payload normalization.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Type, type TSchema } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -39,8 +34,8 @@ import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
-// Spell out job/patch properties for model-facing schema; runtime validation
-// still happens in normalizeCronJob* to avoid nested union schemas.
+// We spell out job/patch properties so that LLMs know what fields to send.
+// Nested unions are avoided; runtime validation happens in normalizeCronJob*.
 
 const CRON_ACTIONS = [
   "status",
@@ -426,6 +421,61 @@ function filterCronStatusResultForSelfScope(result: unknown): unknown {
   return { enabled: isRecord(result) && result.enabled === true };
 }
 
+function readCronIntrospectionJobCount(result: unknown): string {
+  if (!isRecord(result)) {
+    return "unknown";
+  }
+  if (Array.isArray(result.jobs)) {
+    return String(result.jobs.length);
+  }
+  if (typeof result.jobs === "number" && Number.isFinite(result.jobs)) {
+    return String(result.jobs);
+  }
+  return typeof result.total === "number" && Number.isFinite(result.total)
+    ? String(result.total)
+    : "unknown";
+}
+
+function readCronIntrospectionNextWake(
+  result: unknown,
+  opts: { missingText?: string } = {},
+): string {
+  if (!isRecord(result)) {
+    return "unknown";
+  }
+  const nextWakeAtMs = result.nextWakeAtMs;
+  if (nextWakeAtMs === null || nextWakeAtMs === 0) {
+    return "none";
+  }
+  if (nextWakeAtMs === undefined) {
+    return opts.missingText ?? "none";
+  }
+  return typeof nextWakeAtMs === "number" && Number.isFinite(nextWakeAtMs)
+    ? String(nextWakeAtMs)
+    : "unknown";
+}
+
+function cronIntrospectionResult(result: unknown, opts: { missingNextWakeText?: string } = {}) {
+  const payload = jsonResult(result);
+  return {
+    ...payload,
+    terminalSummary: {
+      privacy: "public" as const,
+      text: [
+        `Scheduler enabled: ${
+          isRecord(result) && typeof result.enabled === "boolean"
+            ? String(result.enabled)
+            : "unknown"
+        }`,
+        `Jobs: ${readCronIntrospectionJobCount(result)}`,
+        `Next wake: ${readCronIntrospectionNextWake(result, {
+          missingText: opts.missingNextWakeText,
+        })}`,
+      ].join("\n"),
+    },
+  };
+}
+
 function cronListResultHasJob(result: unknown, jobId: string): boolean {
   return (
     isRecord(result) &&
@@ -603,8 +653,9 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
       switch (action) {
         case "status": {
           const result = await callGateway("cron.status", gatewayOpts, {});
-          return jsonResult(
+          return cronIntrospectionResult(
             readCronSelfRemoveOnlyJobId(opts) ? filterCronStatusResultForSelfScope(result) : result,
+            { missingNextWakeText: "unknown" },
           );
         }
         case "list": {
@@ -640,7 +691,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
               }
             }
           }
-          return jsonResult(
+          return cronIntrospectionResult(
             selfRemoveOnlyJobId ? filterCronListResultToJobId(result, selfRemoveOnlyJobId) : result,
           );
         }

@@ -1,4 +1,5 @@
 // Agent Core tests cover agent loop behavior.
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { agentLoop, agentLoopContinue } from "./agent-loop.js";
 import { createAssistantMessageEventStream } from "./llm.js";
@@ -140,5 +141,89 @@ describe("agentLoop streaming updates", () => {
     for (const update of deltaUpdates) {
       expect(update.assistantMessageEvent).not.toHaveProperty("partial");
     }
+  });
+});
+
+describe("agentLoop tool metadata", () => {
+  it("emits terminal fallback metadata on tool execution start", async () => {
+    const assistantMessage = {
+      role: "assistant",
+      api: "test-api",
+      provider: "test-provider",
+      model: "test-model",
+      content: [
+        {
+          type: "toolCall",
+          id: "tool-call-1",
+          name: "status_probe",
+          arguments: {},
+        },
+      ],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: 1,
+    } satisfies Extract<AgentMessage, { role: "assistant" }>;
+    const finalMessage = {
+      ...assistantMessage,
+      content: [{ type: "text", text: "Status: healthy" }],
+      stopReason: "stop",
+    } satisfies Extract<AgentMessage, { role: "assistant" }>;
+    let callCount = 0;
+    const streamFn: StreamFn = async () => {
+      const stream = createAssistantMessageEventStream();
+      callCount += 1;
+      queueMicrotask(() => {
+        const message = callCount === 1 ? assistantMessage : finalMessage;
+        const reason = callCount === 1 ? "toolUse" : "stop";
+        stream.push({ type: "start", partial: message });
+        stream.push({ type: "done", reason, message });
+      });
+      return stream;
+    };
+    const context: AgentContext = {
+      systemPrompt: "",
+      messages: [],
+      tools: [
+        {
+          name: "status_probe",
+          label: "Status Probe",
+          description: "Read status.",
+          parameters: Type.Object({}),
+          terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+          execute: async () => ({
+            content: [{ type: "text", text: "healthy" }],
+            details: { status: "ok" },
+          }),
+        },
+      ],
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "check status", timestamp: 1 }],
+      context,
+      config,
+      undefined,
+      streamFn,
+    );
+
+    const events = await collectEvents(stream);
+
+    expect(
+      events.find(
+        (event): event is Extract<AgentEvent, { type: "tool_execution_start" }> =>
+          event.type === "tool_execution_start",
+      ),
+    ).toMatchObject({
+      toolCallId: "tool-call-1",
+      toolName: "status_probe",
+      terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+    });
   });
 });

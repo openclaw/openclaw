@@ -739,6 +739,9 @@ export class AgentSession {
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         args: event.args,
+        ...(event.terminalResultFallback
+          ? { terminalResultFallback: event.terminalResultFallback }
+          : {}),
       };
       await this.currentExtensionRunner.emit(extensionEvent);
     } else if (event.type === "tool_execution_update") {

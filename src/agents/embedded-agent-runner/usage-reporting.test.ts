@@ -208,6 +208,7 @@ describe("runEmbeddedAgent usage reporting", () => {
         provider: "openrouter",
         contextWindow: 200000,
         api: "openai-completions",
+        reasoning: false,
       },
       error: null,
       authStorage: {

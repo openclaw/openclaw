@@ -1,4 +1,3 @@
-// Coverage for terminal attempt trajectory status classification.
 import { describe, expect, it } from "vitest";
 import {
   NON_DELIVERABLE_TERMINAL_TURN_REASON,
@@ -10,8 +9,6 @@ import {
 function baseParams(
   overrides: Partial<ResolveAttemptTrajectoryTerminalParams> = {},
 ): ResolveAttemptTrajectoryTerminalParams {
-  // Default to a completed but non-deliverable attempt; tests opt in to each
-  // kind of terminal progress.
   return {
     aborted: false,
     externalAbort: false,
@@ -48,7 +45,7 @@ describe("attempt trajectory status", () => {
       resolveAttemptTrajectoryTerminal(
         baseParams({
           didSendViaMessagingTool: true,
-          messagingToolSentTargets: [{ channel: "telegram" }],
+          messagingToolSentTargets: [{ channel: "telegram", text: "sent" }],
         }),
       ),
     ).toEqual({ status: "success" });
@@ -77,6 +74,20 @@ describe("attempt trajectory status", () => {
           didSendViaMessagingTool: true,
           messagingToolSentTexts: ["   "],
           messagingToolSentMediaUrls: ["   "],
+        }),
+      ),
+    ).toEqual({
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+  });
+
+  it("does not treat a bare messaging target as committed delivery", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          didSendViaMessagingTool: true,
+          messagingToolSentTargets: [{ channel: "telegram" }],
         }),
       ),
     ).toEqual({
@@ -157,8 +168,6 @@ describe("attempt trajectory status", () => {
   });
 
   it("marks terminal tool-use attempts as non-deliverable without explicit delivery", () => {
-    // Visible planning text before tool_use is not final delivery; the attempt
-    // only succeeds if a committed delivery or async handoff occurred.
     expect(
       resolveAttemptTrajectoryTerminal(
         baseParams({
@@ -198,11 +207,26 @@ describe("attempt trajectory status", () => {
     });
   });
 
-  it("keeps async-started media tool-use attempts as terminal progress", () => {
+  it("does not treat async-started media metadata as terminal delivery by itself", () => {
     expect(
       resolveAttemptTrajectoryTerminal(
         baseParams({
           toolMetas: [{ toolName: "image_generate", asyncStarted: true }],
+          lastAssistantStopReason: "toolUse",
+        }),
+      ),
+    ).toEqual({
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+  });
+
+  it("keeps synthesized async-started media payloads as terminal progress", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          toolMetas: [{ toolName: "image_generate", asyncStarted: true }],
+          synthesizedPayloadCount: 1,
           lastAssistantStopReason: "toolUse",
         }),
       ),

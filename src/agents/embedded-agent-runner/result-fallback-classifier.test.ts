@@ -1,11 +1,8 @@
-// Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   it("does not fallback when sessions_spawn accepted a child session", () => {
-    // Accepted child sessions mean the turn made progress even if the parent did
-    // not emit a normal assistant reply.
     expect(
       classifyEmbeddedAgentRunResultForModelFallback({
         provider: "mock-openai",
@@ -18,6 +15,42 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
               childSessionKey: "agent:qa:subagent:child",
             },
           ],
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not fallback after cron side-effect progress without a visible payload", () => {
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "xai",
+        model: "grok-composer-2.5-fast",
+        result: {
+          meta: { durationMs: 1 },
+          successfulCronAdds: 1,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not fallback after message-tool side-effect progress without visible delivery", () => {
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "xai",
+        model: "grok-composer-2.5-fast",
+        result: {
+          meta: { durationMs: 1 },
+          didSendViaMessagingTool: true,
+        },
+      }),
+    ).toBeNull();
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "xai",
+        model: "grok-composer-2.5-fast",
+        result: {
+          meta: { durationMs: 1 },
+          messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel-1" }],
         },
       }),
     ).toBeNull();
@@ -50,8 +83,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   });
 
   it("preserves hook block results with auth-like error payload text", () => {
-    // Hook policy blocks are intentional local decisions, not provider failures
-    // that should rotate models.
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
       model: "gpt-5.5",
@@ -113,6 +144,139 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
         ],
         meta: {
           durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("classifies unclassified non-GPT empty terminal results", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      result: {
+        payloads: [],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      reason: "format",
+      code: "empty_result",
+    });
+  });
+
+  it("classifies incomplete terminal results after replay-safe completed tool activity", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: "⚠️ Agent couldn't generate a response. Please try again.",
+          },
+        ],
+        meta: {
+          durationMs: 42,
+          toolSummary: {
+            tools: ["status_probe"],
+            calls: 1,
+            hadFailure: false,
+          },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      reason: "format",
+      code: "incomplete_result",
+    });
+  });
+
+  it("does not classify incomplete terminal results after replay-invalid completed tool activity", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+          },
+        ],
+        meta: {
+          durationMs: 42,
+          replayInvalid: true,
+          toolSummary: {
+            tools: ["write"],
+            calls: 1,
+            hadFailure: false,
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("classifies unclassified non-GPT reasoning-only terminal results", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      result: {
+        payloads: [
+          {
+            isReasoning: true,
+            text: "thinking only",
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      reason: "format",
+      code: "reasoning_only_result",
+    });
+  });
+
+  it("does not let block replies suppress planning-only harness classifications", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      hasDirectlySentBlockReply: true,
+      hasBlockReplyPipelineOutput: true,
+      result: {
+        payloads: [],
+        meta: {
+          durationMs: 42,
+          agentHarnessResultClassification: "planning-only",
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      reason: "format",
+      code: "planning_only_result",
+    });
+  });
+
+  it("lets delivered block replies suppress empty harness classifications", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      hasDirectlySentBlockReply: true,
+      result: {
+        payloads: [],
+        meta: {
+          durationMs: 42,
+          agentHarnessResultClassification: "empty",
         },
       },
     });

@@ -1,6 +1,3 @@
-/**
- * Classifies incomplete terminal assistant turns and retry instructions.
- */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -12,15 +9,12 @@ import {
 import type { EmbeddedAgentExecutionContract } from "../../../config/types.agent-defaults.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
-import {
-  isStrictAgenticSupportedProviderModel,
-  stripProviderPrefix,
-} from "../../execution-contract.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
+  hasMessagingToolSideEffectEvidence,
 } from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
 import { assessLastAssistantMessage } from "../thinking.js";
@@ -35,7 +29,12 @@ type ReplayMetadataAttempt = Pick<
   | "messagingToolSentMediaUrls"
   | "successfulCronAdds"
 > &
-  Partial<Pick<EmbeddedRunAttemptResult, "messagingToolSentTargets" | "acceptedSessionSpawns">>;
+  Partial<
+    Pick<
+      EmbeddedRunAttemptResult,
+      "messagingToolSentTargets" | "messagingToolSourceReplyPayloads" | "acceptedSessionSpawns"
+    >
+  >;
 
 type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
@@ -48,6 +47,7 @@ type IncompleteTurnAttempt = Pick<
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
+  | "messagingToolSourceReplyPayloads"
   | "lastToolError"
   | "lastAssistant"
   | "itemLifecycle"
@@ -72,8 +72,10 @@ type PlanningOnlyAttempt = Pick<
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
+  | "messagingToolSourceReplyPayloads"
   | "toolMetas"
 >;
+type PlanningOnlyToolMeta = NonNullable<PlanningOnlyAttempt["toolMetas"]>[number];
 
 function hasPositiveOutputTokenUsage(message: AgentMessage | null): boolean {
   if (!message || typeof message !== "object") {
@@ -96,6 +98,11 @@ type SilentToolResultAttempt = Pick<
   | "messagesSnapshot"
   | "toolMetas"
 >;
+
+type TerminalToolResultReplyPayload = {
+  text: string;
+  isError?: boolean;
+};
 
 type RunLivenessAttempt = Pick<
   EmbeddedRunAttemptResult,
@@ -120,16 +127,28 @@ export function isIncompleteTerminalAssistantTurn(params: {
 }
 
 const PLANNING_ONLY_PROMISE_RE =
-  /\b(?:i(?:'ll| will)|let me|i(?:'m| am)\s+going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that)\b/i;
+  /\b(?:i(?:'ll| will)|let me|lemme|i(?:'m| am)\s+(?:going to|gonna|about to)|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can (?:do that|check|look|inspect|investigate|verify|review|search|run|test|handle|take|start|launch|send|monitor))\b/i;
+const PLANNING_ONLY_PROGRESS_CLAIM_RE =
+  /^(?:i(?:'m| am)\s+)?(?:checking|running|working(?:\s+on\s+it)?|on\s+it|taking\s+a\s+look|inspecting|reading|searching|looking(?:\s+into|\s+at)?|debugging|testing|verifying|investigating|reviewing|fetching|probing|starting|launching|sending(?:\s+(?:it|this|that|the\s+\w+))?\s+off|kicking\s+(?:it|this|that|the\s+\w+\s+)?off|monitoring\s+(?:it|this|that|now|for\b))\b/i;
 const PLANNING_ONLY_COMPLETION_RE =
-  /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is)\b/i;
+  /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is|requires?|unavailable|not available|can't|cannot)\b/i;
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
 const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
 const PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
 const PLANNING_ONLY_ACTION_VERB_RE =
-  /\b(?:inspect|investigate|check|look(?:\s+into|\s+at)?|read|search|find|debug|fix|patch|update|change|edit|write|implement|run|test|verify|review|analy(?:s|z)e|summari(?:s|z)e|explain|answer|show|share|report|prepare|capture|take|refactor|restart|deploy|ship)\b/i;
+  /\b(?:inspect(?:ing)?|investigat(?:e|ing)|check(?:ing)?|look(?:ing)?(?:\s+into|\s+at)?|read(?:ing)?|search(?:ing)?|find(?:ing)?|debug(?:ging)?|fix(?:ing)?|patch(?:ing)?|updat(?:e|ing)|chang(?:e|ing)|edit(?:ing)?|writ(?:e|ing)|implement(?:ing)?|runn?ing|run|test(?:ing)?|verify|verifying|review(?:ing)?|analy(?:s|z)(?:e|ing)|summari(?:s|z)(?:e|ing)|explain(?:ing)?|answer(?:ing)?|show(?:ing)?|shar(?:e|ing)|report(?:ing)?|prepar(?:e|ing)|captur(?:e|ing)|tak(?:e|ing)|handl(?:e|ing)|sort(?:ing|ed)?|follow(?:ing)?\s+up|get(?:ting)?\s+back|start(?:ing)?|launch(?:ing)?|send(?:ing)?|monitor(?:ing)?|refactor(?:ing)?|restart(?:ing)?|deploy(?:ing)?|ship(?:ping)?)\b/i;
+const ACTIONABLE_TASK_NOUN_RE =
+  /\b(?:endpoint|results?|proof|restart|model|default|question|image|pull request|pr|cron|scheduler|jobs?|status|logs?|build|tests?|deploy|bug|error|fix|patch|config|settings?|reply|delivery|runtime|gateway|container|docker|discord)\b/i;
+const PLANNING_ONLY_SHORT_PLACEHOLDER_RE =
+  /\bi(?:'ll| will)\s+(?:do|handle|take care of|work on)\s+(?:it|that|this)\b/i;
+const PLANNING_ONLY_WAIT_PLACEHOLDER_RE =
+  /^(?:stand by|one sec(?:ond)?|give me (?:a )?(?:moment|minute|sec(?:ond)?)|hang on|hold on|bear with me|just a moment|please wait)(?:\s+(?:while|and)\b.{0,100})?[.!…]*$/i;
+const PLANNING_ONLY_ACK_PLACEHOLDER_RE =
+  /^(?:sure(?: thing)?|got it|understood|absolutely|will do|roger(?: that)?|copy(?: that)?|sounds good|okay|ok)(?:[.!…]*)$/i;
+const ACKNOWLEDGEMENT_REQUEST_PROMPT_RE =
+  /\b(?:acknowledg(?:e|ement)|confirm|reply|respond|say|answer)\b.{0,80}\b(?:ok(?:ay)?|got it|understood|roger(?: that)?|copy(?: that)?|will do|sounds good|acknowledg(?:e|ed|ement)|confirm(?:ed|ation)?|short reply|brief reply)\b|\b(?:acknowledg(?:e|ement)|confirm)\s+(?:this|that|it|receipt)\b/i;
 const SINGLE_ACTION_EXPLICIT_CONTINUATION_RE =
-  /\b(?:going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|then[, ]+i(?:'ll| will)|i can do that next|let me (?!know\b)\w+(?:\s+\w+){0,3}\s+(?:next|then|first)\b)/i;
+  /\b(?:going to|gonna|about to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|then[, ]+i(?:'ll| will)|i can do that next|let me (?!know\b)\w+(?:\s+\w+){0,3}\s+(?:next|then|first)\b|lemme \w+(?:\s+\w+){0,3}\s+(?:next|then|first)\b)/i;
 const SINGLE_ACTION_MULTI_STEP_PROMISE_RE =
   /\bi(?:'ll| will)\b(?=[^.!?]{0,160}\b(?:next|then|after(?:wards)?|once)\b)/i;
 const SINGLE_ACTION_RESULT_STYLE_RE =
@@ -142,15 +161,8 @@ const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "glob",
   "ls",
 ]);
-const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
-  "google",
-  "google-vertex",
-  "google-antigravity",
-  "google-gemini-cli",
-]);
-const GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN = /^gemini(?:[.-]|$)/;
 // Ollama native `/api/chat` can finish with only thinking/internal blocks when
-// constrained, but it should not inherit the stricter planning-only/ack prompts.
+// constrained; keep a direct non-visible retry gate for those local-model turns.
 const OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN = /^ollama(?:-|$)/;
 // Model APIs eligible for the non-visible turn retry guard.  OpenAI Responses
 // family can produce reasoning-only turns where usage.output > 0 but no visible
@@ -212,10 +224,26 @@ const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "진행해",
   "계속해",
 ]);
-const ACTIONABLE_PROMPT_DIRECTIVE_RE =
-  /^\s*(?:please\s+)?(?:check|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare)\b/i;
-const ACTIONABLE_PROMPT_REQUEST_RE =
-  /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through)\b/i;
+const EXPLICIT_PLANNING_REQUEST_RE =
+  /\b(?:what(?:'s| is) (?:(?:the|your|our|my) )?(?:plan|approach)|give me (?:a )?(?:plan|approach|outline)|outline (?:the )?(?:plan|approach|steps)|(?:only|just) (?:plan|outline)|how would you\b|propose (?:a )?(?:plan|approach))\b/i;
+const NON_ACTIONABLE_CONTEXT_UPDATE_RE =
+  /^\s*(?:i|we)\b(?!.{0,120}\b(?:need|want|would like)\s+you\b).{0,180}\b(?:haven't|have not|am not|ain't|haven’t)\b.{0,120}\b(?:yet|though|fyi|heads up)\b/i;
+const NON_ACTIONABLE_PROMPT_NORMALIZED_SET = new Set([
+  "cool",
+  "great",
+  "haha",
+  "lol",
+  "nice",
+  "nice work",
+  "ok",
+  "okay",
+  "perfect",
+  "thanks",
+  "thank you",
+  "ty",
+  "yep",
+  "yes",
+]);
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
@@ -225,28 +253,26 @@ export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
   "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
-export const STRICT_AGENTIC_BLOCKED_TEXT =
+export const PLANNING_ONLY_BLOCKED_TEXT =
   "Agent stopped after repeated plan-only turns without taking a concrete action. No concrete tool action or external side effect advanced the task.";
+export const STRICT_AGENTIC_BLOCKED_TEXT = PLANNING_ONLY_BLOCKED_TEXT;
 
 export type PlanningOnlyPlanDetails = {
   explanation: string;
   steps: string[];
 };
 
-/**
- * Marks whether retrying the attempt can safely replay the prompt. Mutating
- * tools, async work, committed delivery, spawned sessions, and cron writes all
- * count as side effects that make blind replay unsafe.
- */
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
-  const hadMutatingTools = params.toolMetas.some((t) => isLikelyMutatingToolName(t.toolName));
+  const hadMutatingTools = params.toolMetas.some(
+    (t) => t.mutatingAction ?? isLikelyMutatingToolName(t.toolName),
+  );
   const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
     hadMutatingTools ||
     hadAsyncStartedTool ||
-    hasMessagingToolDeliveryEvidence(params) ||
+    hasMessagingToolSideEffectEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     (params.successfulCronAdds ?? 0) > 0;
   return {
@@ -255,18 +281,12 @@ export function buildAttemptReplayMetadata(
   };
 }
 
-/** Falls back to replay-unsafe metadata when older attempt records lack replay details. */
 export function resolveAttemptReplayMetadata(attempt: {
   replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
 }): EmbeddedRunAttemptResult["replayMetadata"] {
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
-/**
- * Builds the user-visible incomplete-turn warning when a terminal attempt did
- * not produce a safe final assistant response and no committed delivery/progress
- * already completed the task.
- */
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -280,23 +300,24 @@ export function resolveIncompleteTurnPayloadText(params: {
   // turn check in that case — the final post-tool response was never
   // produced. (#76477)
   const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
-  // Unsigned thinking payloads count toward payloadCount but carry no user-visible
-  // content; bypass the visible-text guard when unsigned thinking was the only output
-  // so that incomplete-turn stall detection fires below. (#89787)
-  const unsignedThinkingOnlyTerminal =
-    params.payloadCount !== 0 &&
-    !joinAssistantTexts(params.attempt.assistantTexts).length &&
-    isUnsignedThinkingOnlyAssistantTurn(assistant);
+  const emptyResponseAssistant = isEmptyResponseAssistantTurn({
+    payloadCount: params.payloadCount,
+    attempt: params.attempt,
+  });
+  const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(
+    params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
+  );
+  const nonVisiblePostToolAssistant =
+    emptyResponseAssistant || (reasoningOnlyAssistant && hasCompletedToolActivity(params.attempt));
 
   if (
-    (params.payloadCount !== 0 && !toolUseTerminal && !unsignedThinkingOnlyTerminal) ||
+    (params.payloadCount !== 0 && !toolUseTerminal && !nonVisiblePostToolAssistant) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError
+    hasReplayBlockingToolError(params.attempt)
   ) {
     return null;
   }
@@ -313,24 +334,14 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasAsyncStartedToolActivity(params.attempt.toolMetas)) {
-    return null;
-  }
-
   const stopReason = params.attempt.lastAssistant?.stopReason;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
     lastAssistant: params.attempt.lastAssistant,
   });
-  const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(assistant);
-  const emptyResponseAssistant = isEmptyResponseAssistantTurn({
-    payloadCount: params.payloadCount,
-    attempt: params.attempt,
-  });
   if (
     !incompleteTerminalAssistant &&
     !reasoningOnlyAssistant &&
-    !unsignedThinkingOnlyTerminal &&
     !emptyResponseAssistant &&
     stopReason !== "error"
   ) {
@@ -342,11 +353,6 @@ export function resolveIncompleteTurnPayloadText(params: {
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
-/**
- * Allows one retry when the provider returned no assistant turn at all and the
- * attempt has no side effects, active lifecycle items, delivery, or terminal
- * assistant/tool state.
- */
 export function shouldRetryMissingAssistantTurn(params: {
   payloadCount: number;
   aborted: boolean;
@@ -441,7 +447,7 @@ function readToolResultAggregatedText(message: AgentMessage): string | undefined
   return trimmed || undefined;
 }
 
-function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean {
+function resolveTrailingToolResultText(messages: readonly AgentMessage[]): string | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (!message) {
@@ -450,29 +456,37 @@ function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean
     const role = normalizeLowercaseStringOrEmpty(message?.role);
     if (isToolResultRole(role)) {
       if ((message as { isError?: boolean }).isError === true) {
-        return false;
+        return null;
       }
       const text = readMessageTextContent(message) ?? readToolResultAggregatedText(message);
-      return isSilentReplyText(text, SILENT_REPLY_TOKEN);
+      return text ?? null;
     }
     if (role === "assistant" && !readMessageTextContent(message)) {
       continue;
     }
-    return false;
+    return null;
   }
-  return false;
+  return null;
 }
 
-/** Emits the silent-reply token for cron turns whose last successful tool result is silent. */
-export function resolveSilentToolResultReplyPayload(params: {
+function resolveSingleToolName(toolMetas?: readonly { toolName?: string }[]): string | undefined {
+  const names = new Set(
+    (toolMetas ?? [])
+      .map((entry) => entry.toolName?.trim())
+      .filter((name): name is string => Boolean(name)),
+  );
+  return names.size === 1 ? names.values().next().value : undefined;
+}
+
+export function resolveTerminalToolResultReplyPayload(params: {
   isCronTrigger: boolean;
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
   attempt: SilentToolResultAttempt;
-}): { text: typeof SILENT_REPLY_TOKEN } | null {
+  suppressGenericToolResultFallback?: boolean;
+}): TerminalToolResultReplyPayload | null {
   if (
-    !params.isCronTrigger ||
     params.payloadCount !== 0 ||
     params.aborted ||
     params.timedOut ||
@@ -486,16 +500,28 @@ export function resolveSilentToolResultReplyPayload(params: {
     return null;
   }
 
-  return hasTrailingSilentToolResult(params.attempt.messagesSnapshot)
-    ? { text: SILENT_REPLY_TOKEN }
-    : null;
+  const trailingToolResultText = resolveTrailingToolResultText(params.attempt.messagesSnapshot);
+  if (isSilentReplyText(trailingToolResultText ?? undefined, SILENT_REPLY_TOKEN)) {
+    return params.isCronTrigger ? { text: SILENT_REPLY_TOKEN } : null;
+  }
+
+  if (trailingToolResultText === null) {
+    return null;
+  }
+  if (params.suppressGenericToolResultFallback) {
+    return null;
+  }
+  const toolName = resolveSingleToolName(params.attempt.toolMetas);
+  const subject = toolName ? `${toolName} completed` : "Tool work completed";
+  return {
+    text:
+      `${subject}, but the model did not provide a final answer. ` +
+      "No user-facing result text was provided.",
+  };
 }
 
-/**
- * Marks replay invalid whenever the recorded attempt might not be safe to
- * replay or the current run ended in a compaction/incomplete-turn state that
- * needs a fresh prompt boundary.
- */
+export const resolveSilentToolResultReplyPayload = resolveTerminalToolResultReplyPayload;
+
 export function resolveReplayInvalidFlag(params: {
   attempt: RunLivenessAttempt;
   incompleteTurnText?: string | null;
@@ -508,7 +534,6 @@ export function resolveReplayInvalidFlag(params: {
   );
 }
 
-/** Classifies the persisted run state used by session recovery and resume logic. */
 export function resolveRunLivenessState(params: {
   payloadCount: number;
   aborted: boolean;
@@ -541,31 +566,20 @@ function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
 }
 
-// Unsigned thinking blocks have no cryptographic signature; assessLastAssistantMessage
-// returns "incomplete-thinking" for them. Empty content also returns "incomplete-thinking",
-// so the content.length > 0 guard is required to distinguish the two cases.
-function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
-  if (message == null || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content) || content.length === 0) {
-    return false;
-  }
-  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
-}
-
 function isEmptyResponseAssistantTurn(params: {
   payloadCount: number;
   attempt: Pick<
     IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
+    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant" | "itemLifecycle" | "toolMetas"
   >;
 }): boolean {
-  if (params.payloadCount !== 0) {
+  if (params.payloadCount !== 0 && !hasCompletedToolActivity(params.attempt)) {
     return false;
   }
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+  if (
+    joinAssistantTexts(params.attempt.assistantTexts).length > 0 &&
+    !hasCompletedToolActivity(params.attempt)
+  ) {
     return false;
   }
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
@@ -587,11 +601,17 @@ function isEmptyResponseAssistantTurn(params: {
   return true;
 }
 
+function hasCompletedToolActivity(
+  attempt: Pick<IncompleteTurnAttempt, "itemLifecycle" | "toolMetas">,
+): boolean {
+  return (attempt.itemLifecycle?.completedCount ?? 0) > 0 && attempt.toolMetas.length > 0;
+}
+
 function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
   payloadCount: number;
   attempt: Pick<
     IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
+    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant" | "itemLifecycle" | "toolMetas"
   >;
 }): boolean {
   if (isEmptyResponseAssistantTurn(params)) {
@@ -629,13 +649,22 @@ function shouldSkipPlanningOnlyRetry(params: {
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
+    hasReplayBlockingToolError(params.attempt) ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
     resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects,
   );
 }
 
-/** Allows configured silent handling for replay-safe empty or reasoning-only assistant turns. */
+function hasReplayBlockingToolError(
+  attempt: Pick<IncompleteTurnAttempt, "lastToolError">,
+): boolean {
+  const error = attempt.lastToolError;
+  if (!error) {
+    return false;
+  }
+  return error.mutatingAction ?? isLikelyMutatingToolName(error.toolName);
+}
+
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   payloadCount: number;
@@ -666,10 +695,6 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   });
 }
 
-/**
- * Builds the retry instruction for reasoning-only turns that consumed provider
- * output budget but produced no visible assistant text.
- */
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -695,23 +720,22 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   }
 
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+  if (
+    joinAssistantTexts(params.attempt.assistantTexts).length > 0 &&
+    !hasCompletedToolActivity(params.attempt)
+  ) {
     return null;
   }
   if (assistant?.stopReason === "error") {
     return null;
   }
-  if (!isReasoningOnlyAssistantTurn(assistant) && !isUnsignedThinkingOnlyAssistantTurn(assistant)) {
+  if (!isReasoningOnlyAssistantTurn(assistant)) {
     return null;
   }
 
   return REASONING_ONLY_RETRY_INSTRUCTION;
 }
 
-/**
- * Builds the retry instruction for empty assistant turns when the provider/model
- * is eligible for non-visible turn recovery.
- */
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -769,13 +793,8 @@ function shouldApplyPlanningOnlyRetryGuard(params: {
   modelId?: string;
   executionContract?: string;
 }): boolean {
-  if (params.executionContract === "strict-agentic") {
-    return true;
-  }
-  return isIncompleteTurnRecoverySupportedProviderModel({
-    provider: params.provider,
-    modelId: params.modelId,
-  });
+  void params;
+  return true;
 }
 
 function shouldApplyNonVisibleTurnRetryGuard(params: {
@@ -791,32 +810,10 @@ function shouldApplyNonVisibleTurnRetryGuard(params: {
     return true;
   }
   // Non-visible final turns are narrower than planning-only turns: there is no
-  // user text to classify, just a replay-safe empty/thinking-only result. Ollama
-  // gets this continuation guard without getting the planning-only or ack
-  // fast-path wording, which would be too opinionated for local models.
+  // user text to classify, just a replay-safe empty/thinking-only result.
   return OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
     normalizeLowercaseStringOrEmpty(params.provider ?? ""),
   );
-}
-
-function isIncompleteTurnRecoverySupportedProviderModel(params: {
-  provider?: string;
-  modelId?: string;
-}): boolean {
-  if (
-    isStrictAgenticSupportedProviderModel({
-      provider: params.provider,
-      modelId: params.modelId,
-    })
-  ) {
-    return true;
-  }
-  const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
-  if (!GEMINI_INCOMPLETE_TURN_PROVIDER_IDS.has(provider)) {
-    return false;
-  }
-  const modelId = typeof params.modelId === "string" ? params.modelId : "";
-  return GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(modelId));
 }
 
 function normalizeAckPrompt(text: string): string {
@@ -829,7 +826,6 @@ function normalizeAckPrompt(text: string): string {
   return normalizeLowercaseStringOrEmpty(normalized);
 }
 
-/** Detects short multilingual approval prompts that should continue execution immediately. */
 export function isLikelyExecutionAckPrompt(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length > 80 || trimmed.includes("\n") || trimmed.includes("?")) {
@@ -838,30 +834,51 @@ export function isLikelyExecutionAckPrompt(text: string): boolean {
   return ACK_EXECUTION_NORMALIZED_SET.has(normalizeAckPrompt(trimmed));
 }
 
+function isLikelyNonActionableUserPrompt(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.includes("?") || trimmed.includes("\n")) {
+    return false;
+  }
+  if (
+    trimmed.length <= 80 &&
+    NON_ACTIONABLE_PROMPT_NORMALIZED_SET.has(normalizeAckPrompt(trimmed))
+  ) {
+    return true;
+  }
+  return NON_ACTIONABLE_CONTEXT_UPDATE_RE.test(trimmed);
+}
+
+function isExplicitPlanningOnlyUserPrompt(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.length > 0 && EXPLICIT_PLANNING_REQUEST_RE.test(trimmed);
+}
+
+function isExplicitAcknowledgementRequestPrompt(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.length > 0 && ACKNOWLEDGEMENT_REQUEST_PROMPT_RE.test(trimmed);
+}
+
 function isLikelyActionableUserPrompt(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
     return false;
   }
-  if (isLikelyExecutionAckPrompt(trimmed) || trimmed.includes("?")) {
-    return true;
+  if (isLikelyNonActionableUserPrompt(trimmed) || isExplicitPlanningOnlyUserPrompt(trimmed)) {
+    return false;
   }
-  return ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) || ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed);
+  return (
+    trimmed.includes("?") ||
+    PLANNING_ONLY_ACTION_VERB_RE.test(trimmed) ||
+    ACTIONABLE_TASK_NOUN_RE.test(trimmed)
+  );
 }
 
-/** Builds the fast-path execution instruction for short approval prompts like "go ahead". */
 export function resolveAckExecutionFastPathInstruction(params: {
   provider?: string;
   modelId?: string;
   prompt: string;
 }): string | null {
-  if (
-    !shouldApplyPlanningOnlyRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-    }) ||
-    !isLikelyExecutionAckPrompt(params.prompt)
-  ) {
+  if (!isLikelyExecutionAckPrompt(params.prompt)) {
     return null;
   }
   return ACK_EXECUTION_FAST_PATH_INSTRUCTION;
@@ -884,12 +901,17 @@ function hasStructuredPlanningOnlyFormat(text: string): boolean {
     return false;
   }
   const bulletLineCount = lines.filter((line) => PLANNING_ONLY_BULLET_RE.test(line)).length;
-  const hasPlanningCueLine = lines.some((line) => PLANNING_ONLY_PROMISE_RE.test(line));
+  const hasPlanningCueLine = lines.some(
+    (line) => PLANNING_ONLY_PROMISE_RE.test(line) || PLANNING_ONLY_PROGRESS_CLAIM_RE.test(line),
+  );
   const hasPlanningHeading = PLANNING_ONLY_HEADING_RE.test(lines[0] ?? "");
   return (hasPlanningHeading && hasPlanningCueLine) || (bulletLineCount >= 2 && hasPlanningCueLine);
 }
 
-/** Extracts the visible plan text and normalized step list from a plan-only reply. */
+function normalizePlanningOnlyClassifierText(text: string): string {
+  return text.replace(/[\u2018\u2019\u02bc]/gu, "'");
+}
+
 export function extractPlanningOnlyPlanDetails(text: string): PlanningOnlyPlanDetails | null {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -923,13 +945,47 @@ function hasNonPlanToolActivity(toolMetas?: PlanningOnlyAttempt["toolMetas"]): b
 }
 
 function hasSingleRetrySafeNonPlanTool(toolMetas?: PlanningOnlyAttempt["toolMetas"]): boolean {
-  const nonPlanToolNames = normalizePlanningToolMetas(toolMetas)
-    .map((entry) => normalizeLowercaseStringOrEmpty(entry.toolName))
-    .filter((toolName) => toolName && toolName !== "update_plan");
+  let nonPlanTool: PlanningOnlyToolMeta | undefined;
+  for (const entry of normalizePlanningToolMetas(toolMetas)) {
+    if (normalizeLowercaseStringOrEmpty(entry.toolName) === "update_plan") {
+      continue;
+    }
+    if (nonPlanTool) {
+      return false;
+    }
+    nonPlanTool = entry;
+  }
+  if (!nonPlanTool) {
+    return false;
+  }
+  const nonPlanToolName = normalizeLowercaseStringOrEmpty(nonPlanTool.toolName);
   return (
-    nonPlanToolNames.length === 1 &&
-    SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES.has(nonPlanToolNames[0] ?? "")
+    SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES.has(nonPlanToolName) ||
+    isPlanningRetrySafeToolMeta(nonPlanTool)
   );
+}
+
+function isPlanningRetrySafeToolMeta(toolMeta: PlanningOnlyToolMeta): boolean {
+  return (
+    toolMeta.mutatingAction === false ||
+    SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES.has(normalizeLowercaseStringOrEmpty(toolMeta.toolName))
+  );
+}
+
+function hasCompletedRetrySafeNonPlanToolActivity(
+  attempt: Pick<PlanningOnlyAttempt, "itemLifecycle" | "toolMetas">,
+): boolean {
+  const nonPlanTools = normalizePlanningToolMetas(attempt.toolMetas).filter(
+    (entry) => entry.toolName !== "update_plan",
+  );
+  if (nonPlanTools.length < 2 || (attempt.itemLifecycle?.activeCount ?? 0) > 0) {
+    return false;
+  }
+  const completedCount = attempt.itemLifecycle?.completedCount ?? 0;
+  if (completedCount < nonPlanTools.length) {
+    return false;
+  }
+  return nonPlanTools.every(isPlanningRetrySafeToolMeta);
 }
 
 /**
@@ -950,63 +1006,70 @@ function isSingleActionThenNarrativePattern(params: {
   if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT) {
     return false;
   }
-  if (SINGLE_ACTION_RESULT_STYLE_RE.test(text)) {
+  const classifierText = normalizePlanningOnlyClassifierText(text);
+  if (SINGLE_ACTION_RESULT_STYLE_RE.test(classifierText)) {
     return false;
   }
   return (
-    SINGLE_ACTION_EXPLICIT_CONTINUATION_RE.test(text) ||
-    SINGLE_ACTION_MULTI_STEP_PROMISE_RE.test(text)
+    SINGLE_ACTION_EXPLICIT_CONTINUATION_RE.test(classifierText) ||
+    SINGLE_ACTION_MULTI_STEP_PROMISE_RE.test(classifierText)
   );
 }
 
-/** Retry budget for plan-only recovery, higher for strict-agentic models. */
-export function resolvePlanningOnlyRetryLimit(
-  executionContract?: EmbeddedAgentExecutionContract,
-): number {
-  return executionContract === "strict-agentic"
-    ? STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT
-    : DEFAULT_PLANNING_ONLY_RETRY_LIMIT;
+export function isPlanningOnlyAssistantText(
+  assistantTexts?: readonly string[],
+  options: { singleActionNarrative?: boolean } = {},
+): boolean {
+  const text = (assistantTexts ?? []).join("\n\n").trim();
+  if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT || text.includes("```")) {
+    return false;
+  }
+  const classifierText = normalizePlanningOnlyClassifierText(text);
+  const hasStructuredPlanningFormat = hasStructuredPlanningOnlyFormat(classifierText);
+  const hasProgressClaim = PLANNING_ONLY_PROGRESS_CLAIM_RE.test(classifierText);
+  const hasShortPlaceholder = PLANNING_ONLY_SHORT_PLACEHOLDER_RE.test(classifierText);
+  const hasWaitPlaceholder = PLANNING_ONLY_WAIT_PLACEHOLDER_RE.test(classifierText);
+  const hasAckPlaceholder = PLANNING_ONLY_ACK_PLACEHOLDER_RE.test(classifierText);
+  const hasPlanningCue =
+    PLANNING_ONLY_PROMISE_RE.test(classifierText) ||
+    hasProgressClaim ||
+    hasWaitPlaceholder ||
+    hasAckPlaceholder;
+  if (!hasPlanningCue && !hasStructuredPlanningFormat) {
+    return false;
+  }
+  if (
+    !hasStructuredPlanningFormat &&
+    !options.singleActionNarrative &&
+    !hasProgressClaim &&
+    !hasShortPlaceholder &&
+    !hasWaitPlaceholder &&
+    !hasAckPlaceholder &&
+    !PLANNING_ONLY_ACTION_VERB_RE.test(classifierText)
+  ) {
+    return false;
+  }
+  return !PLANNING_ONLY_COMPLETION_RE.test(classifierText);
 }
 
-/**
- * Builds the retry instruction for assistant turns that only promised a plan
- * instead of taking concrete action. The guard excludes real side effects,
- * non-actionable prompts, explicit completions, and multi-tool progress.
- */
-export function resolvePlanningOnlyRetryInstruction(params: {
-  provider?: string;
-  modelId?: string;
-  executionContract?: string;
+function resolvePlanningOnlyTurnClassification(params: {
   prompt?: string;
   aborted: boolean;
   timedOut: boolean;
   attempt: PlanningOnlyAttempt;
-}): string | null {
-  const planOnlyToolMetaCount = countPlanOnlyToolMetas(params.attempt.toolMetas);
+}): { singleActionNarrative: boolean; allowSingleActionRetryBypass: boolean } | null {
   const singleActionNarrative = isSingleActionThenNarrativePattern({
     toolMetas: params.attempt.toolMetas,
     assistantTexts: params.attempt.assistantTexts,
   });
-  const allowSingleActionRetryBypass =
-    singleActionNarrative && hasSingleRetrySafeNonPlanTool(params.attempt.toolMetas);
   if (
-    !shouldApplyPlanningOnlyRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-      executionContract: params.executionContract,
-    }) ||
     (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
     params.aborted ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    hasMessagingToolDeliveryEvidence(params.attempt) ||
-    params.attempt.lastToolError ||
-    (hasNonPlanToolActivity(params.attempt.toolMetas) && !allowSingleActionRetryBypass) ||
-    ((params.attempt.itemLifecycle?.startedCount ?? 0) > planOnlyToolMetaCount &&
-      !allowSingleActionRetryBypass) ||
-    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
+    hasMessagingToolDeliveryEvidence(params.attempt)
   ) {
     return null;
   }
@@ -1020,19 +1083,130 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT || text.includes("```")) {
     return null;
   }
-  const hasStructuredPlanningFormat = hasStructuredPlanningOnlyFormat(text);
-  if (!PLANNING_ONLY_PROMISE_RE.test(text) && !hasStructuredPlanningFormat) {
+  const classifierText = normalizePlanningOnlyClassifierText(text);
+  const hasStructuredPlanningFormat = hasStructuredPlanningOnlyFormat(classifierText);
+  const hasProgressClaim = PLANNING_ONLY_PROGRESS_CLAIM_RE.test(classifierText);
+  const hasShortPlaceholder = PLANNING_ONLY_SHORT_PLACEHOLDER_RE.test(classifierText);
+  const hasWaitPlaceholder = PLANNING_ONLY_WAIT_PLACEHOLDER_RE.test(classifierText);
+  const hasAckPlaceholder = PLANNING_ONLY_ACK_PLACEHOLDER_RE.test(classifierText);
+  if (
+    hasAckPlaceholder &&
+    typeof params.prompt === "string" &&
+    isExplicitAcknowledgementRequestPrompt(params.prompt)
+  ) {
+    return null;
+  }
+  if (
+    !isPlanningOnlyAssistantText(params.attempt.assistantTexts, {
+      singleActionNarrative,
+    })
+  ) {
     return null;
   }
   if (
     !hasStructuredPlanningFormat &&
     !singleActionNarrative &&
-    !PLANNING_ONLY_ACTION_VERB_RE.test(text)
+    !hasProgressClaim &&
+    !hasShortPlaceholder &&
+    !hasWaitPlaceholder &&
+    !hasAckPlaceholder &&
+    !PLANNING_ONLY_ACTION_VERB_RE.test(classifierText)
   ) {
     return null;
   }
-  if (PLANNING_ONLY_COMPLETION_RE.test(text)) {
+  if (PLANNING_ONLY_COMPLETION_RE.test(classifierText)) {
     return null;
   }
+
+  return {
+    singleActionNarrative,
+    allowSingleActionRetryBypass:
+      singleActionNarrative && hasSingleRetrySafeNonPlanTool(params.attempt.toolMetas),
+  };
+}
+
+export function resolvePlanningOnlyRetryLimit(
+  executionContract?: EmbeddedAgentExecutionContract,
+): number {
+  return executionContract === "strict-agentic"
+    ? STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT
+    : DEFAULT_PLANNING_ONLY_RETRY_LIMIT;
+}
+
+export function resolvePlanningOnlyRetryInstruction(params: {
+  provider?: string;
+  modelId?: string;
+  executionContract?: string;
+  prompt?: string;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: PlanningOnlyAttempt;
+}): string | null {
+  const planOnlyToolMetaCount = countPlanOnlyToolMetas(params.attempt.toolMetas);
+  const planningOnly = resolvePlanningOnlyTurnClassification(params);
+  if (!planningOnly) {
+    return null;
+  }
+  const allowRetrySafeToolActivity = hasCompletedRetrySafeNonPlanToolActivity(params.attempt);
+  if (
+    !shouldApplyPlanningOnlyRetryGuard({
+      provider: params.provider,
+      modelId: params.modelId,
+      executionContract: params.executionContract,
+    }) ||
+    hasReplayBlockingToolError(params.attempt) ||
+    (hasNonPlanToolActivity(params.attempt.toolMetas) &&
+      !planningOnly.allowSingleActionRetryBypass &&
+      !allowRetrySafeToolActivity) ||
+    ((params.attempt.itemLifecycle?.startedCount ?? 0) > planOnlyToolMetaCount &&
+      !planningOnly.allowSingleActionRetryBypass &&
+      !allowRetrySafeToolActivity) ||
+    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
+  ) {
+    return null;
+  }
+
   return PLANNING_ONLY_RETRY_INSTRUCTION;
+}
+
+export function resolvePlanningOnlyBlockedPayloadText(params: {
+  provider?: string;
+  modelId?: string;
+  prompt?: string;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: PlanningOnlyAttempt;
+}): string | null {
+  const planOnlyToolMetaCount = countPlanOnlyToolMetas(params.attempt.toolMetas);
+  const planningOnly = resolvePlanningOnlyTurnClassification(params);
+  if (!planningOnly) {
+    return null;
+  }
+  const allowRetrySafeToolActivity = hasCompletedRetrySafeNonPlanToolActivity(params.attempt);
+  const retryBlockedByToolActivity =
+    hasReplayBlockingToolError(params.attempt) ||
+    (hasNonPlanToolActivity(params.attempt.toolMetas) &&
+      !planningOnly.allowSingleActionRetryBypass &&
+      !allowRetrySafeToolActivity) ||
+    ((params.attempt.itemLifecycle?.startedCount ?? 0) > planOnlyToolMetaCount &&
+      !planningOnly.allowSingleActionRetryBypass &&
+      !allowRetrySafeToolActivity);
+  if (
+    retryBlockedByToolActivity ||
+    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
+  ) {
+    return PLANNING_ONLY_BLOCKED_TEXT;
+  }
+  return null;
+}
+
+export function resolvePlanningOnlyTerminalPayloadText(params: {
+  provider?: string;
+  modelId?: string;
+  prompt?: string;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: PlanningOnlyAttempt;
+}): string | null {
+  return resolvePlanningOnlyTurnClassification(params) ? PLANNING_ONLY_BLOCKED_TEXT : null;
 }

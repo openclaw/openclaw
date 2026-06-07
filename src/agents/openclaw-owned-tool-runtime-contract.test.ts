@@ -234,7 +234,9 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
 
   it("commits successful embedded agent messaging text, media, and target telemetry", async () => {
     const hooks = installOpenClawOwnedToolHooks();
-    const execute = vi.fn(async () => textToolResult("sent"));
+    const execute = vi.fn(async () =>
+      textToolResult("sent", { deliveryStatus: "sent", resultCount: 1 }),
+    );
     const tool = wrapToolWithBeforeToolCallHook(createContractTool("message", execute), {
       agentId: "agent-1",
       sessionId: "session-1",

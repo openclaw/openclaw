@@ -1,8 +1,3 @@
-/**
- * Handles embedded-agent tool execution events and turns them into channel UI,
- * replay state, hook calls, approval prompts, media queues, and agent-event
- * telemetry.
- */
 import {
   asOptionalObjectRecord,
   asOptionalRecord as readRecordField,
@@ -33,6 +28,7 @@ import { normalizeInteractiveReply, normalizeMessagePresentation } from "../inte
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
+import { consumeAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -41,6 +37,7 @@ import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
+import { hasCommittedMessagingToolResultDetails } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type {
   ToolCallSummary,
@@ -67,7 +64,6 @@ import { normalizeToolName } from "./tool-policy.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
-type BeforeToolCallModule = typeof import("./agent-tools.before-tool-call.js");
 type ChannelToolProgress = {
   text: string;
 };
@@ -77,9 +73,6 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 );
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
-);
-const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
-  () => import("./agent-tools.before-tool-call.js"),
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
@@ -108,10 +101,6 @@ function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
 
 function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
   return hookRunnerGlobalModuleLoader.load();
-}
-
-function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
-  return beforeToolCallModuleLoader.load();
 }
 
 function getRequiredParamGroupsForTool(
@@ -205,7 +194,6 @@ function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
 }
 
-/** Returns the number of active tool executions tracked for one embedded run. */
 export function countActiveToolExecutions(runId: string): number {
   const prefix = `${runId}:`;
   let count = 0;
@@ -225,10 +213,18 @@ function isCronAddAction(args: unknown): boolean {
   return normalizeOptionalLowercaseString(action) === "add";
 }
 
-function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
-  const mutation = buildToolMutationState(toolName, args, meta);
+function buildToolCallSummary(params: {
+  toolName: string;
+  args: unknown;
+  meta?: string;
+  terminalResultFallback?: ToolCallSummary["terminalResultFallback"];
+}): ToolCallSummary {
+  const mutation = buildToolMutationState(params.toolName, params.args, params.meta);
   return {
-    meta,
+    meta: params.meta,
+    ...(params.terminalResultFallback
+      ? { terminalResultFallback: params.terminalResultFallback }
+      : {}),
     mutatingAction: mutation.mutatingAction,
     actionFingerprint: mutation.actionFingerprint,
     fileTarget: mutation.fileTarget,
@@ -626,6 +622,37 @@ function extractMessagingToolSourceReplyPayload(
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
 
+function hasCommittedMessagingToolSendResult(result: unknown): boolean {
+  const details = readToolResultDetailsRecord(result);
+  if (!details) {
+    return false;
+  }
+  if (details.dryRun === true) {
+    return false;
+  }
+  if (hasCommittedMessagingToolResultDetails(details)) {
+    return true;
+  }
+  const deliveryStatus = normalizeOptionalLowercaseString(details?.deliveryStatus);
+  const status = normalizeOptionalLowercaseString(details?.status);
+  if (deliveryStatus) {
+    return false;
+  }
+  if (
+    status === "failed" ||
+    status === "partial_failed" ||
+    status === "suppressed" ||
+    status === "dry_run" ||
+    status === "cancelled" ||
+    status === "canceled" ||
+    status === "cancelled_by_message_sending_hook" ||
+    status === "cancelled-by-message-sending-hook"
+  ) {
+    return false;
+  }
+  return details.ok === true || details.success === true || status === "ok";
+}
+
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
@@ -852,10 +879,9 @@ async function emitToolResultOutput(params: {
   });
 }
 
-/** Handles a tool-execution start event and emits UI/telemetry start state. */
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
-  evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
+  evt: Extract<AgentEvent, { type: "tool_execution_start" }>,
 ): void | Promise<void> {
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
@@ -951,7 +977,15 @@ export function handleToolExecutionStart(
         detailMode: ctx.params.toolProgressDetail ?? "explain",
       }),
     );
-    ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
+    ctx.state.toolMetaById.set(
+      toolCallId,
+      buildToolCallSummary({
+        toolName,
+        args,
+        meta,
+        terminalResultFallback: evt.terminalResultFallback,
+      }),
+    );
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
     );
@@ -1057,7 +1091,6 @@ export function handleToolExecutionStart(
   return continueAfterBlockReplyFlush();
 }
 
-/** Handles partial tool output and emits throttled live UI updates. */
 export function handleToolExecutionUpdate(
   ctx: ToolHandlerContext,
   evt: AgentEvent & {
@@ -1149,7 +1182,6 @@ export function handleToolExecutionUpdate(
   }
 }
 
-/** Handles a tool-execution result and commits replay, media, hook, and error state. */
 export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: AgentEvent & {
@@ -1175,13 +1207,32 @@ export async function handleToolExecutionEnd(
   toolStartData.delete(toolStartKey);
   ctx.state.execLiveUpdateStateById?.delete(toolCallId);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
-  const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
+  const startArgs =
+    startData?.args && typeof startData.args === "object"
+      ? (startData.args as Record<string, unknown>)
+      : {};
+  let afterToolCallArgs: Record<string, unknown> | undefined;
+  const resolveAfterToolCallArgs = (): Record<string, unknown> => {
+    if (afterToolCallArgs) {
+      return afterToolCallArgs;
+    }
+    const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
+    afterToolCallArgs =
+      adjustedArgs && typeof adjustedArgs === "object"
+        ? (adjustedArgs as Record<string, unknown>)
+        : startArgs;
+    return afterToolCallArgs;
+  };
+  const executedArgs = resolveAfterToolCallArgs();
+  const completedMutation = buildToolMutationState(toolName, executedArgs, meta);
+  const completedMutatingAction = !isToolError && completedMutation.mutatingAction;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
   ctx.state.toolMetas.push({
     toolName,
     meta,
+    mutatingAction: completedMutation.mutatingAction,
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
@@ -1203,9 +1254,9 @@ export async function handleToolExecutionEnd(
       error: errorMessage,
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
       middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
-      mutatingAction: callSummary?.mutatingAction,
-      actionFingerprint: callSummary?.actionFingerprint,
-      fileTarget: callSummary?.fileTarget,
+      mutatingAction: completedMutation.mutatingAction,
+      actionFingerprint: completedMutation.actionFingerprint,
+      fileTarget: completedMutation.fileTarget,
     };
   } else if (ctx.state.lastToolError) {
     // Keep unresolved mutating failures until the same action succeeds.
@@ -1214,8 +1265,8 @@ export async function handleToolExecutionEnd(
         isSameToolMutationAction(ctx.state.lastToolError, {
           toolName,
           meta,
-          actionFingerprint: callSummary?.actionFingerprint,
-          fileTarget: callSummary?.fileTarget,
+          actionFingerprint: completedMutation.actionFingerprint,
+          fileTarget: completedMutation.fileTarget,
         })
       ) {
         ctx.state.lastToolError = undefined;
@@ -1238,39 +1289,80 @@ export async function handleToolExecutionEnd(
   const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
   const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
   const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
-  const startArgs =
-    startData?.args && typeof startData.args === "object"
-      ? (startData.args as Record<string, unknown>)
-      : {};
+  const executedMessagingSend =
+    isMessagingTool(toolName) && isMessagingToolSendAction(toolName, executedArgs);
+  const executedMessagingTarget = executedMessagingSend
+    ? extractMessagingToolSend(toolName, executedArgs)
+    : undefined;
+  const executedMessagingText =
+    typeof executedArgs.content === "string"
+      ? executedArgs.content
+      : typeof executedArgs.message === "string"
+        ? executedArgs.message
+        : typeof executedArgs.text === "string"
+          ? executedArgs.text
+          : undefined;
+  const executedMessagingMediaUrl =
+    typeof executedArgs.mediaUrl === "string" ? executedArgs.mediaUrl : undefined;
+  const executedMessagingPresentation = normalizeMessagePresentation(executedArgs.presentation);
+  const executedMessagingInteractive = normalizeInteractiveReply(executedArgs.interactive);
+  const executedMessagingChannelData = copyRecordField(executedArgs, "channelData");
+  const hasExecutedRichMessagingPayload = Boolean(
+    executedMessagingPresentation || executedMessagingInteractive || executedMessagingChannelData,
+  );
+  const executedMessagingMediaUrls = executedMessagingSend
+    ? collectMessagingMediaUrlsFromRecord(executedArgs)
+    : [];
   const isMessagingSend =
-    pendingMediaUrls.length > 0 ||
-    (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
-  const committedMediaUrls =
-    !isToolError && isMessagingSend
-      ? [...pendingMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
-      : [];
+    executedMessagingSend &&
+    (Boolean(executedMessagingTarget) ||
+      Boolean(executedMessagingText) ||
+      Boolean(executedMessagingMediaUrl) ||
+      executedMessagingMediaUrls.length > 0 ||
+      hasExecutedRichMessagingPayload ||
+      pendingMediaUrls.length > 0);
+  const hasCommittedMessagingSend =
+    !isToolError && isMessagingSend && hasCommittedMessagingToolSendResult(result);
+  const committedMediaUrls = hasCommittedMessagingSend
+    ? [
+        ...new Set([
+          ...executedMessagingMediaUrls,
+          ...pendingMediaUrls,
+          ...collectMessagingMediaUrlsFromToolResult(result),
+        ]),
+      ]
+    : [];
   if (pendingText) {
     ctx.state.pendingMessagingTexts.delete(toolCallId);
-    if (!isToolError) {
-      ctx.state.messagingToolSentTexts.push(pendingText);
-      ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(pendingText));
-      ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
-      ctx.trimMessagingToolSent();
-    }
+  }
+  if (hasCommittedMessagingSend && executedMessagingText) {
+    ctx.state.messagingToolSentTexts.push(executedMessagingText);
+    ctx.state.messagingToolSentTextsNormalized.push(
+      normalizeTextForComparison(executedMessagingText),
+    );
+    ctx.log.debug(`Committed messaging text: tool=${toolName} len=${executedMessagingText.length}`);
+    ctx.trimMessagingToolSent();
   }
   if (pendingTarget) {
     ctx.state.pendingMessagingTargets.delete(toolCallId);
-    if (!isToolError) {
+  }
+  if (hasCommittedMessagingSend) {
+    const committedTarget = executedMessagingTarget ?? pendingTarget;
+    if (committedTarget) {
       ctx.state.messagingToolSentTargets.push({
-        ...pendingTarget,
-        ...(pendingText ? { text: pendingText } : {}),
+        ...committedTarget,
+        ...(executedMessagingText ? { text: executedMessagingText } : {}),
+        ...(executedMessagingMediaUrl ? { mediaUrl: executedMessagingMediaUrl } : {}),
         ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
+        ...(executedMessagingPresentation ? { presentation: executedMessagingPresentation } : {}),
+        ...(executedMessagingInteractive ? { interactive: executedMessagingInteractive } : {}),
+        ...(executedMessagingChannelData ? { channelData: executedMessagingChannelData } : {}),
       });
       ctx.trimMessagingToolSent();
     }
   }
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
-  if (!isToolError && isMessagingSend) {
+  if (hasCommittedMessagingSend) {
     if (committedMediaUrls.length > 0) {
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();
@@ -1283,7 +1375,7 @@ export async function handleToolExecutionEnd(
   }
 
   // Track committed reminders only when cron.add completed successfully.
-  if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
+  if (!isToolError && toolName === "cron" && isCronAddAction(executedArgs)) {
     ctx.state.successfulCronAdds += 1;
   }
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
@@ -1538,16 +1630,10 @@ export async function handleToolExecutionEnd(
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const { consumeAdjustedParamsForToolCall } = await loadBeforeToolCall();
-    const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
-    const afterToolCallArgs =
-      adjustedArgs && typeof adjustedArgs === "object"
-        ? (adjustedArgs as Record<string, unknown>)
-        : startArgs;
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
-      params: afterToolCallArgs,
+      params: resolveAfterToolCallArgs(),
       runId,
       toolCallId,
       result: sanitizedResult,

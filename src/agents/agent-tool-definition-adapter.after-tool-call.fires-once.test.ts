@@ -10,6 +10,10 @@ import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBaseToolHandlerState } from "./agent-tool-handler-state.test-helpers.js";
+import {
+  adjustedParamsByToolCallId,
+  buildAdjustedParamsKey,
+} from "./agent-tools.before-tool-call.state.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -30,6 +34,7 @@ const beforeToolCallMocks = vi.hoisted(() => ({
     }
   },
   consumeAdjustedParamsForToolCall: vi.fn((_: string): unknown => undefined),
+  recordToolLoopOutcome: vi.fn(async () => {}),
   recordAdjustedParamsForToolCall: vi.fn(),
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
@@ -104,6 +109,7 @@ async function loadFreshAfterToolCallModulesForTest() {
       details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
     }),
     consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,
+    recordToolLoopOutcome: beforeToolCallMocks.recordToolLoopOutcome,
     recordAdjustedParamsForToolCall: beforeToolCallMocks.recordAdjustedParamsForToolCall,
     isBeforeToolCallBlockedError: (error: unknown) =>
       error instanceof beforeToolCallMocks.BeforeToolCallBlockedError,
@@ -125,8 +131,10 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
     hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
     hookMocks.runner.runBeforeToolCall.mockClear();
     hookMocks.runner.runBeforeToolCall.mockResolvedValue(undefined);
+    adjustedParamsByToolCallId.clear();
     beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockClear();
     beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockReturnValue(undefined);
+    beforeToolCallMocks.recordToolLoopOutcome.mockClear();
     beforeToolCallMocks.recordAdjustedParamsForToolCall.mockClear();
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockClear();
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(false);
@@ -243,8 +251,9 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
     const ctx = createToolHandlerCtx();
 
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(true);
-    beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockImplementation((id: string) =>
-      id === toolCallId ? adjusted : undefined,
+    adjustedParamsByToolCallId.set(
+      buildAdjustedParamsKey({ runId: "integration-test", toolCallId }),
+      adjusted,
     );
 
     await emitToolExecutionStartEvent({ ctx, toolName: "read", toolCallId, args });
@@ -257,10 +266,11 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
       result: { content: [{ type: "text", text: "ok" }] },
     });
 
-    expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).toHaveBeenCalledWith(
-      toolCallId,
-      "integration-test",
-    );
+    expect(
+      adjustedParamsByToolCallId.has(
+        buildAdjustedParamsKey({ runId: "integration-test", toolCallId }),
+      ),
+    ).toBe(false);
     const event = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as { params?: unknown } | undefined;
     expect(event?.params).toEqual(adjusted);
