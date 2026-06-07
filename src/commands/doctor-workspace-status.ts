@@ -56,8 +56,17 @@ function noteFlowRecoveryHints() {
   );
 }
 
+type NoteWorkspaceStatusOptions = {
+  /** Env for resolving plugin install record paths (defaults to process.env). */
+  env?: Record<string, string | undefined>;
+  /** Running gateway version from a health probe, if available. Falls back to VERSION. */
+  gatewayVersion?: string;
+};
+
 /** Emits workspace, skills, plugin, and TaskFlow recovery status notes for doctor. */
-export async function noteWorkspaceStatus(cfg: OpenClawConfig) {
+export async function noteWorkspaceStatus(cfg: OpenClawConfig, opts?: NoteWorkspaceStatusOptions) {
+  const env = opts?.env ?? (process.env as Record<string, string | undefined>);
+  const driftGatewayVersion = opts?.gatewayVersion ?? VERSION;
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const legacyWorkspace = detectLegacyWorkspaceDirs({ workspaceDir });
   if (legacyWorkspace.legacyDirs.length > 0) {
@@ -120,12 +129,14 @@ export async function noteWorkspaceStatus(cfg: OpenClawConfig) {
   }
   // Check official managed plugin version drift against the running gateway.
   // Best-effort: don't let a plugin-index read failure block the rest of doctor.
+  // Uses the same env/version inputs as gateway status --deep: env for resolving
+  // managed install paths, and probed gateway version falling back to CLI VERSION.
   try {
     const installRecords = await loadInstalledPluginIndexInstallRecords({
-      env: process.env,
+      env: env as NodeJS.ProcessEnv,
     });
     const driftReport = detectPluginVersionDrift({
-      gatewayVersion: VERSION,
+      gatewayVersion: driftGatewayVersion,
       installRecords,
       config: cfg,
     });
