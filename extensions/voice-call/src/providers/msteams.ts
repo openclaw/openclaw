@@ -29,7 +29,7 @@ import {
   type MsteamsRealtimeDeps,
 } from "../msteams-realtime.js";
 import type { MsteamsTtsProvider } from "../msteams-tts.js";
-import type { MsteamsVideoFrame } from "../msteams-video-frame.js";
+import { describeMsteamsVideoFrameOwner, type MsteamsVideoFrame } from "../msteams-video-frame.js";
 import { generateVoiceResponse } from "../response-generator.js";
 import { chunkAudio } from "../telephony-audio.js";
 import type {
@@ -812,9 +812,9 @@ export class MsteamsProvider implements VoiceCallProvider {
       state.lastVisionFrame = frame.dataBase64;
       // Tell the model whose tile it is (group calls): without attribution the agent can't reason
       // about "who is saying what". Best-effort — omitted for anonymous/guest/1:1 frames.
-      if (frame.participantName) {
-        const kind = frame.source === "screenshare" ? "shared screen" : "camera";
-        userMessageForModel = `[Attached image is ${frame.participantName}'s ${kind}]\n${userMessage}`;
+      const owner = describeMsteamsVideoFrameOwner(frame);
+      if (owner) {
+        userMessageForModel = `[Attached image is ${owner}]\n${userMessage}`;
       }
     }
 
