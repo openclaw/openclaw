@@ -12,6 +12,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { sanitizeHostExecEnvWithDiagnostics } from "openclaw/plugin-sdk/host-env-security";
 import {
   CLAUDE_BRIDGE_BIN_ENV,
   DEFAULT_CLAUDE_BRIDGE_COMMAND,
@@ -26,26 +27,47 @@ import {
 
 export { MIN_CLAUDE_BRIDGE_VERSION } from "./version.js";
 
-// Keys that must never be forwarded to a child process — prevents prototype
-// pollution and injection via env. Mirrors codex transport-stdio pattern.
-const UNSAFE_ENV_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-
-function resolveBridgeSpawnEnv(
+/**
+ * Builds the spawn env for the local bridge binary. The inherited host env and
+ * the config-derived overrides (`appServer.env` from workspace config) are both
+ * routed through OpenClaw's canonical {@link sanitizeHostExecEnvWithDiagnostics}
+ * boundary — the same one `bash-tools.exec` and the agent-bundle LSP runtime use
+ * — rather than a local prototype-pollution-only denylist. This strips dangerous
+ * inherited keys (LD_PRELOAD, DYLD_*, NODE_OPTIONS, …) and rejects config-derived
+ * overrides that try to inject those keys or replace PATH, so a workspace config
+ * cannot escalate into host code execution via the spawned child. Rejected
+ * override keys are logged (never the values) for operator diagnostics.
+ *
+ * Resolves GHSA-VFW7-6RHC-6XXG (unsanitized env merge passed to child-process
+ * spawn).
+ */
+export function resolveBridgeSpawnEnv(
   baseEnv: NodeJS.ProcessEnv,
   overrides: Record<string, string | undefined> | undefined,
 ): NodeJS.ProcessEnv {
-  const env = Object.create(null) as NodeJS.ProcessEnv;
-  for (const [k, v] of Object.entries(baseEnv)) {
-    if (!UNSAFE_ENV_KEYS.has(k)) {
-      env[k] = v;
-    }
-  }
+  // sanitizeHostExecEnv only accepts string-valued overrides; drop unset entries
+  // before handing the config-derived map across the boundary.
+  const stringOverrides: Record<string, string> = {};
   for (const [k, v] of Object.entries(overrides ?? {})) {
-    if (!UNSAFE_ENV_KEYS.has(k)) {
-      env[k] = v;
+    if (typeof v === "string") {
+      stringOverrides[k] = v;
     }
   }
-  return env;
+  const result = sanitizeHostExecEnvWithDiagnostics({
+    baseEnv,
+    overrides: stringOverrides,
+    blockPathOverrides: true,
+  });
+  const rejected = [
+    ...result.rejectedOverrideBlockedKeys,
+    ...result.rejectedOverrideInvalidKeys,
+  ];
+  if (rejected.length > 0) {
+    embeddedAgentLog.warn("claude-bridge: rejected unsafe appServer.env overrides", {
+      keys: rejected,
+    });
+  }
+  return result.env;
 }
 
 export type ClaudeAppServerStartOptions = {
@@ -233,6 +255,14 @@ export class ClaudeAppServerClient {
     if (!child) {
       return;
     }
+    // Graceful first: closing stdin signals the bridge's JSON-RPC reader to
+    // drain and exit on its own. Only if it has not exited after
+    // FORCE_KILL_DELAY_MS do we escalate to SIGKILL — and the timer is cleared
+    // the moment the child's "exit" fires, so a clean shutdown never reaches
+    // the force path. The signal targets the process group we ourselves spawned
+    // (negative pid; the child was started `detached` on Unix), so this only
+    // reaps our own descendant tree, never an unrelated process. SIGKILL is the
+    // last-resort reap, not the primary stop mechanism.
     child.stdin?.end();
     child.stdin?.destroy();
     const forceKill = setTimeout(() => {

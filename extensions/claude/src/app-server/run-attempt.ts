@@ -1256,6 +1256,7 @@ export const NATIVE_TOOLS_FULL_SET = [
   "BashOutput",
   "KillBash",
   "KillShell",
+  "REPL",
   // File mutation
   "Write",
   "Edit",
@@ -1284,6 +1285,15 @@ export const NATIVE_TOOLS_FULL_SET = [
   "ExitWorktree",
   "TodoWrite",
   "AskUserQuestion",
+  "ScheduleWakeup",
+  "Workflow",
+  // Automation / scheduling
+  "CronCreate",
+  "CronDelete",
+  "CronList",
+  "Monitor",
+  "PushNotification",
+  "RemoteTrigger",
   // MCP introspection
   "ListMcpResources",
   "ReadMcpResource",
