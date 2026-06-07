@@ -3114,7 +3114,7 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("hides raw command text in Matrix progress previews by default", async () => {
+  it("keeps raw command text but removes false failed status in Matrix progress previews", async () => {
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3140,25 +3140,16 @@ describe("matrix monitor handler draft streaming", () => {
     await vi.waitFor(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
-    expect(singleTextMessageBody()).toContain("🛠️ Command finished");
-    expect(singleTextMessageBody()).not.toContain("gh pr edit");
-    expect(singleTextMessageBody()).not.toContain("private-details");
+    expect(singleTextMessageBody()).toContain("gh pr edit");
+    expect(singleTextMessageBody()).toContain("private-details");
     expect(singleTextMessageBody()).not.toContain("failed");
     await finish();
   });
 
-  it("allows Matrix progress previews to opt into raw command text", async () => {
+  it("renders status-only failed command progress as finished in Matrix progress previews", async () => {
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
-      accountConfig: {
-        streaming: {
-          mode: "progress",
-          progress: {
-            commandText: "raw",
-          },
-        },
-      } as never,
     });
     const { opts, finish } = await dispatch();
 
@@ -3167,20 +3158,20 @@ describe("matrix monitor handler draft streaming", () => {
       itemId: "cmd-1",
       kind: "command",
       name: "exec",
-      progressText: "gh pr edit 89920 --body explicit-raw-command",
+      status: "failed",
     });
     await opts.onItemEvent?.({
       itemId: "cmd-1",
       kind: "command",
       name: "exec",
-      progressText: "gh pr edit 89920 --body explicit-raw-command",
+      status: "failed",
     });
 
     await vi.waitFor(() => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     });
-    expect(singleTextMessageBody()).toContain("gh pr edit 89920");
-    expect(singleTextMessageBody()).toContain("explicit-raw-command");
+    expect(singleTextMessageBody()).toContain("finished");
+    expect(singleTextMessageBody()).not.toContain("failed");
     await finish();
   });
 

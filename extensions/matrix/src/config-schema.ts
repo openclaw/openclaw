@@ -89,14 +89,12 @@ const matrixStreamingSchema = z
         maxLines: z.number().int().positive().optional(),
         maxLineChars: z.number().int().positive().optional(),
         toolProgress: z.boolean().optional(),
-        commandText: z.enum(["raw", "status"]).optional(),
       })
       .strict()
       .optional(),
     preview: z
       .object({
         toolProgress: z.boolean().optional(),
-        commandText: z.enum(["raw", "status"]).optional(),
       })
       .strict()
       .optional(),

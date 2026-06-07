@@ -501,7 +501,38 @@ describe("channel-streaming", () => {
         },
         { detailMode: "raw", commandText: "status" },
       ),
-    ).toBe("🛠️ Exec");
+    ).toBe("🛠️ Running command");
+    {
+      const failedCommand = buildChannelProgressDraftLine({
+        event: "item",
+        itemKind: "command",
+        name: "exec",
+        status: "failed",
+      });
+      expect(failedCommand).toMatchObject({ label: "Command finished" });
+      expect(
+        formatChannelProgressDraftText({
+          lines: failedCommand ? [failedCommand] : [],
+          entry: { streaming: { progress: { label: false } } },
+        }),
+      ).toBe("🛠️ Command finished");
+    }
+    {
+      const failedCommandWithDetail = buildChannelProgressDraftLine({
+        event: "item",
+        itemKind: "command",
+        name: "exec",
+        status: "failed",
+        progressText: "gh pr edit 91203 --body updated",
+      });
+      expect(failedCommandWithDetail).toMatchObject({ status: "finished" });
+      expect(
+        formatChannelProgressDraftText({
+          lines: failedCommandWithDetail ? [failedCommandWithDetail] : [],
+          entry: { streaming: { progress: { label: false } } },
+        }),
+      ).toBe("🛠️ gh pr edit 91203 --body updated");
+    }
     expect(
       formatChannelProgressDraftLineForEntry(
         { streaming: { preview: { commandText: "status" } } },

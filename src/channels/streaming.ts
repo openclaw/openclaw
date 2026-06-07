@@ -399,6 +399,20 @@ function commandProgressStatusLabel(status: string | undefined): string {
   }
 }
 
+function commandProgressDisplayStatus(status: string | undefined): string | undefined {
+  const normalized = normalizeOptionalLowercaseString(status);
+  switch (normalized) {
+    case "failed":
+    case "error":
+    case "cancelled":
+    case "canceled":
+    case "stopped":
+      return "finished";
+    default:
+      return status;
+  }
+}
+
 function isEmptyReasoningProgressItem(
   input: Extract<ChannelProgressDraftLineInput, { event: "item" }>,
   meta: string | undefined,
@@ -473,6 +487,17 @@ export function buildChannelProgressDraftLine(
 ): ChannelProgressDraftLine | undefined {
   switch (input.event) {
     case "tool": {
+      if (options?.commandText === "status" && isCommandToolName(input.name)) {
+        const label = commandProgressStatusLabel(input.phase);
+        return {
+          ...((input.itemId ?? input.toolCallId) ? { id: input.itemId ?? input.toolCallId } : {}),
+          kind: input.event,
+          text: `🛠️ ${label}`,
+          label,
+          icon: "🛠️",
+          toolName: "exec",
+        };
+      }
       return buildNamedProgressLine(
         input.event,
         input.name,
@@ -488,6 +513,7 @@ export function buildChannelProgressDraftLine(
     }
     case "item": {
       const name = input.name ?? itemKindToToolName(input.itemKind);
+      const commandProgressItem = isCommandProgressItem(input);
       if (options?.commandText === "status" && isCommandProgressItem(input)) {
         const label = commandProgressStatusLabel(input.status);
         return {
@@ -508,10 +534,21 @@ export function buildChannelProgressDraftLine(
       if (isEmptyReasoningProgressItem(input, meta)) {
         return undefined;
       }
+      if (commandProgressItem && !meta && input.status) {
+        const label = commandProgressStatusLabel(input.status);
+        return {
+          ...(input.itemId ? { id: input.itemId } : {}),
+          kind: input.event,
+          text: `🛠️ ${label}`,
+          label,
+          icon: "🛠️",
+          toolName: "exec",
+        };
+      }
       if (name) {
         return buildNamedProgressLine(input.event, name, [meta], options, {
           id: input.itemId,
-          status: input.status,
+          status: commandProgressItem ? commandProgressDisplayStatus(input.status) : input.status,
         });
       }
       const text = compactStrings([meta, input.title]).at(0);
@@ -557,7 +594,7 @@ export function buildChannelProgressDraftLine(
           ? "completed"
           : input.exitCode != null
             ? `exit ${input.exitCode}`
-            : input.status;
+            : commandProgressDisplayStatus(input.status);
       return buildNamedProgressLine(
         input.event,
         input.name ?? "exec",

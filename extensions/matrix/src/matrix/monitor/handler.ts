@@ -13,7 +13,6 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildChannelProgressDraftLineForEntry,
-  type ChannelProgressLineOptions,
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
   formatChannelProgressDraftLine,
@@ -23,7 +22,6 @@ import {
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
   resolveChannelProgressDraftMaxLines,
-  resolveChannelStreamingPreviewCommandText,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   evaluateSupplementalContextVisibility,
@@ -1830,12 +1828,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       let previewToolProgressSuppressed = false;
       let previewToolProgressLines: Array<string | ChannelProgressDraftLine> = [];
       const progressConfigEntry = params.accountConfig ?? cfg.channels?.matrix;
-      const progressLineOptions = (
-        options?: Pick<ChannelProgressLineOptions, "detailMode">,
-      ): ChannelProgressLineOptions => ({
-        commandText: resolveChannelStreamingPreviewCommandText(progressConfigEntry, "status"),
-        ...options,
-      });
       const progressSeed = `${_route.accountId}:${roomId}`;
       // Set after the first final payload consumes or discards the draft event
       // so subsequent finals go through normal delivery.
@@ -1949,31 +1941,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   phase: payload.phase,
                   args: payload.args,
                 },
-                progressLineOptions(
-                  payload.detailMode ? { detailMode: payload.detailMode } : undefined,
-                ),
+                payload.detailMode ? { detailMode: payload.detailMode } : undefined,
               ),
               { toolName },
             );
           },
           onItemEvent: async (payload) => {
             await pushPreviewToolProgress(
-              buildChannelProgressDraftLineForEntry(
-                progressConfigEntry,
-                {
-                  event: "item",
-                  itemId: payload.itemId,
-                  itemKind: payload.kind,
-                  title: payload.title,
-                  name: payload.name,
-                  phase: payload.phase,
-                  status: payload.status,
-                  summary: payload.summary,
-                  progressText: payload.progressText,
-                  meta: payload.meta,
-                },
-                progressLineOptions(),
-              ),
+              buildChannelProgressDraftLineForEntry(progressConfigEntry, {
+                event: "item",
+                itemId: payload.itemId,
+                itemKind: payload.kind,
+                title: payload.title,
+                name: payload.name,
+                phase: payload.phase,
+                status: payload.status,
+                summary: payload.summary,
+                progressText: payload.progressText,
+                meta: payload.meta,
+              }),
             );
           },
           onPlanUpdate: async (payload) => {
