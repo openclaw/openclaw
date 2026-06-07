@@ -255,6 +255,7 @@ export function closeChatSessionPicker(state: AppViewState) {
   state.chatSessionPickerSurface = null;
   state.chatSessionPickerRenameKey = null;
   state.chatSessionPickerRenameDraft = "";
+  state.chatSessionPickerRenameRequestId = (state.chatSessionPickerRenameRequestId ?? 0) + 1;
   requestHostUpdate(state);
 }
 
@@ -270,6 +271,8 @@ export function resetChatSessionPickerState(state: AppViewState) {
   state.chatSessionPickerResult = null;
   state.chatSessionPickerRenameKey = null;
   state.chatSessionPickerRenameDraft = "";
+  state.chatSessionPickerRenamePendingKey = null;
+  state.chatSessionPickerRenameRequestId = (state.chatSessionPickerRenameRequestId ?? 0) + 1;
 }
 
 function toggleChatSessionPicker(state: AppViewState, surface: ChatSessionSelectSurface) {
@@ -604,6 +607,7 @@ function focusChatSessionRenameInput(state: AppViewState) {
 }
 
 function beginChatSessionRename(state: AppViewState, key: string, label: string) {
+  state.chatSessionPickerRenameRequestId = (state.chatSessionPickerRenameRequestId ?? 0) + 1;
   state.chatSessionPickerRenameKey = key;
   state.chatSessionPickerRenameDraft = label;
   focusChatSessionRenameInput(state);
@@ -616,21 +620,33 @@ function updateChatSessionRenameDraft(state: AppViewState, value: string) {
 function cancelChatSessionRename(state: AppViewState) {
   state.chatSessionPickerRenameKey = null;
   state.chatSessionPickerRenameDraft = "";
+  state.chatSessionPickerRenameRequestId = (state.chatSessionPickerRenameRequestId ?? 0) + 1;
 }
 
 async function commitChatSessionRename(state: AppViewState, key: string) {
+  if (state.chatSessionPickerRenamePendingKey === key) {
+    return;
+  }
+  const requestId = (state.chatSessionPickerRenameRequestId ?? 0) + 1;
+  state.chatSessionPickerRenameRequestId = requestId;
   const label = normalizeOptionalString(state.chatSessionPickerRenameDraft) ?? null;
   const draft = state.chatSessionPickerRenameDraft;
+  state.chatSessionPickerRenamePendingKey = key;
   state.chatSessionPickerRenameKey = null;
   state.chatSessionPickerRenameDraft = "";
   state.chatSessionPickerError = null;
   const ok = await patchSession(state as unknown as Parameters<typeof patchSession>[0], key, {
     label,
   });
+  const requestIsCurrent = state.chatSessionPickerRenameRequestId === requestId;
+  if (state.chatSessionPickerRenamePendingKey === key) {
+    state.chatSessionPickerRenamePendingKey = null;
+  }
   if (!ok) {
-    // Surface the failure on the chat picker surface. Only restore the inline
-    // editor when the picker is still open and no newer rename has started, so a
-    // late failure cannot resurrect stale edit state after a close or another edit.
+    if (!requestIsCurrent) {
+      requestHostUpdate(state);
+      return;
+    }
     if (state.chatSessionPickerOpen && state.chatSessionPickerRenameKey === null) {
       state.chatSessionPickerRenameKey = key;
       state.chatSessionPickerRenameDraft = draft;
@@ -749,7 +765,8 @@ function renderChatSessionPickerPopover(
             const meta = formatChatSessionPickerMeta(row);
             const selected = row.key === state.sessionKey;
             const renaming = state.chatSessionPickerRenameKey === row.key;
-            const renameDisabled = !state.connected || !state.client;
+            const renamePending = state.chatSessionPickerRenamePendingKey === row.key;
+            const renameDisabled = !state.connected || !state.client || renamePending;
             if (renaming) {
               return html`
                 <div
