@@ -234,6 +234,25 @@ function shouldBlockGatewayBindWithoutExplicitAuth(params: {
   );
 }
 
+function shouldLogUnauthenticatedGatewayWarning(params: {
+  bindHost: string;
+  cfg: OpenClawConfig;
+  resolvedAuthMode: GatewayAuthMode;
+  tailscaleMode: GatewayTailscaleMode;
+}): boolean {
+  if (params.resolvedAuthMode !== "none") {
+    return false;
+  }
+  if (!isLoopbackHost(params.bindHost) || params.tailscaleMode !== "off") {
+    return true;
+  }
+  return (
+    (params.cfg.gateway?.trustedProxies?.length ?? 0) > 0 ||
+    (params.cfg.gateway?.controlUi?.allowedOrigins?.length ?? 0) > 0 ||
+    params.cfg.gateway?.auth?.trustedProxy !== undefined
+  );
+}
+
 async function maybeLogPendingControlUiBuild(cfg: OpenClawConfig): Promise<void> {
   if (cfg.gateway?.controlUi?.enabled === false) {
     return;
@@ -772,12 +791,19 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
-  if (resolvedAuthMode === "none") {
+  const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
+  if (
+    shouldLogUnauthenticatedGatewayWarning({
+      bindHost: healthHost,
+      cfg,
+      resolvedAuthMode,
+      tailscaleMode: effectiveTailscaleMode,
+    })
+  ) {
     gatewayLog.warn(
       "Gateway auth mode=none explicitly configured; all gateway connections are unauthenticated.",
     );
   }
-  const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
   if (
     shouldBlockGatewayBindWithoutExplicitAuth({
       bindHost: healthHost,

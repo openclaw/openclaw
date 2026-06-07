@@ -266,6 +266,12 @@ describe("gateway run option collisions", () => {
     };
   }
 
+  function hasNoAuthStartupWarning() {
+    return gatewayLogMessages.includes(
+      "Gateway auth mode=none explicitly configured; all gateway connections are unauthenticated.",
+    );
+  }
+
   function expectAuthOverrideMode(mode: string) {
     expect(gatewayStartOptions().auth?.mode).toBe(mode);
   }
@@ -392,6 +398,67 @@ describe("gateway run option collisions", () => {
     expect(options.bind).toBe("auto");
   });
 
+  it("suppresses the no-auth startup warning for strictly local loopback gateway binds", async () => {
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: {
+        gateway: {
+          bind: "loopback",
+          auth: { mode: "none" },
+        },
+      },
+    };
+
+    await withEnvAsync(withoutGatewayAuthEnv, async () => {
+      await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+    });
+
+    expect(gatewayStartOptions().bind).toBe("loopback");
+    expect(hasNoAuthStartupWarning()).toBe(false);
+  });
+
+  it("keeps the no-auth startup warning when a loopback bind is exposed through Tailscale", async () => {
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: {
+        gateway: {
+          bind: "loopback",
+          auth: { mode: "none" },
+        },
+      },
+    };
+
+    await withEnvAsync(withoutGatewayAuthEnv, async () => {
+      await runGatewayCli(["gateway", "run", "--tailscale", "serve", "--allow-unconfigured"]);
+    });
+
+    expect(gatewayStartOptions().bind).toBe("loopback");
+    expect(hasNoAuthStartupWarning()).toBe(true);
+  });
+
+  it("keeps the no-auth startup warning when a loopback bind has configured proxy exposure", async () => {
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: {
+        gateway: {
+          bind: "loopback",
+          trustedProxies: ["10.0.0.2"],
+          auth: { mode: "none" },
+        },
+      },
+    };
+
+    await withEnvAsync(withoutGatewayAuthEnv, async () => {
+      await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+    });
+
+    expect(gatewayStartOptions().bind).toBe("loopback");
+    expect(hasNoAuthStartupWarning()).toBe(true);
+  });
+
   it("blocks container auto startup without explicit gateway auth", async () => {
     netState.autoBindHost = "0.0.0.0";
     netState.container = true;
@@ -407,12 +474,23 @@ describe("gateway run option collisions", () => {
   });
 
   it("blocks non-loopback startup without explicit gateway auth", async () => {
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: {
+        gateway: {
+          auth: { mode: "none" },
+        },
+      },
+    };
+
     await withEnvAsync(withoutGatewayAuthEnv, async () => {
       await expect(
         runGatewayCli(["gateway", "run", "--bind", "lan", "--allow-unconfigured"]),
       ).rejects.toThrow("__exit__:78");
     });
 
+    expect(hasNoAuthStartupWarning()).toBe(true);
     expect(runtimeErrors.join("\n")).toContain("Refusing to bind gateway to lan without auth.");
     expect(startGatewayServer).not.toHaveBeenCalled();
   });
