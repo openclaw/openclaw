@@ -1613,7 +1613,7 @@ describe("host-hook fixture plugin contract", () => {
         expect(
           projectPluginSessionExtensionsSync({
             sessionKey: "agent:main:main",
-            entry: entry!,
+            entry,
           }),
         ).toEqual([
           {
