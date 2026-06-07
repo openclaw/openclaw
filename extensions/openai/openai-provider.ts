@@ -18,7 +18,10 @@ import {
   type ModelProviderConfig,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENAI_ACCOUNT_WIZARD_GROUP, OPENAI_API_KEY_LABEL } from "./auth-choice-copy.js";
 import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
@@ -116,20 +119,45 @@ const OPENAI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 
 type BuildOpenAILiveProviderConfigParams = {
   apiKey: string;
+  baseUrl?: string;
   discoveryApiKey?: string;
+  env?: Record<string, string | undefined>;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 };
 
+function shouldFetchOpenAILiveModels(baseUrl: string): boolean {
+  return /^https:/i.test(baseUrl) && isOpenAIApiBaseUrl(baseUrl);
+}
+
+function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionConfig[] {
+  return OPENAI_MANIFEST_PROVIDER.models.map((model) =>
+    model.api === "openai-chatgpt-responses" || isOpenAICodexBaseUrl(model.baseUrl)
+      ? { ...model }
+      : { ...model, baseUrl },
+  );
+}
+
 export async function buildOpenAILiveProviderConfig(params: BuildOpenAILiveProviderConfigParams) {
+  const baseUrl =
+    normalizeOptionalString(params.baseUrl) ?? resolveOpenAIDefaultBaseUrl(params.env);
+  const models = buildOpenAIManifestModelsForBaseUrl(baseUrl);
+  if (!shouldFetchOpenAILiveModels(baseUrl)) {
+    return {
+      baseUrl,
+      api: "openai-responses",
+      apiKey: params.apiKey,
+      models,
+    };
+  }
   return await buildLiveModelProviderConfig({
     providerId: PROVIDER_ID,
     endpoint: OPENAI_MODELS_ENDPOINT,
     providerConfig: {
-      baseUrl: resolveOpenAIDefaultBaseUrl(),
+      baseUrl,
       api: "openai-responses",
     },
-    models: OPENAI_MANIFEST_PROVIDER.models,
+    models,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,
@@ -362,6 +390,19 @@ export async function buildOpenAICodexLiveProviderConfig(params: {
 
 function isCodexCatalogAuthMode(mode: string): boolean {
   return mode === "oauth" || mode === "token";
+}
+
+function resolveOpenAICatalogBaseUrl(ctx: {
+  config?: { models?: { providers?: Record<string, { baseUrl?: string } | undefined> } };
+  env?: Record<string, string | undefined>;
+}): string {
+  const configuredProvider = Object.entries(ctx.config?.models?.providers ?? {}).find(
+    ([providerId]) => normalizeProviderId(providerId) === PROVIDER_ID,
+  )?.[1];
+  return (
+    normalizeOptionalString(configuredProvider?.baseUrl) ??
+    resolveOpenAIDefaultBaseUrl(ctx.env ?? process.env)
+  );
 }
 
 function shouldUseOpenAIResponsesTransport(params: {
@@ -664,6 +705,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
             providers: {
               [PROVIDER_ID]: await buildOpenAILiveProviderConfig({
                 apiKey: auth.apiKey,
+                baseUrl: resolveOpenAICatalogBaseUrl(ctx),
                 discoveryApiKey: auth.discoveryApiKey,
               }),
             },
@@ -677,6 +719,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
           providers: {
             [PROVIDER_ID]: await buildOpenAILiveProviderConfig({
               apiKey: apiKey.apiKey,
+              baseUrl: resolveOpenAICatalogBaseUrl(ctx),
               discoveryApiKey: apiKey.discoveryApiKey,
             }),
           },

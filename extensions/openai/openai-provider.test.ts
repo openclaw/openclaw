@@ -297,6 +297,27 @@ describe("buildOpenAIProvider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("skips OpenAI live discovery for custom OpenAI-compatible base URLs", async () => {
+    const customBaseUrl = "https://example-proxy.invalid/v1";
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => {
+      throw new Error("unexpected OpenAI live discovery request");
+    });
+
+    const provider = await buildOpenAILiveProviderConfig({
+      apiKey: "sk-custom-openai-compatible",
+      baseUrl: customBaseUrl,
+      fetchGuard,
+    });
+
+    expect(fetchGuard).not.toHaveBeenCalled();
+    expect(provider.baseUrl).toBe(customBaseUrl);
+    expect(provider.apiKey).toBe("sk-custom-openai-compatible");
+    const apiModel = provider.models.find((model) => model.api !== "openai-chatgpt-responses");
+    expect(apiModel?.baseUrl).toBe(customBaseUrl);
+    const codexModel = provider.models.find((model) => model.api === "openai-chatgpt-responses");
+    expect(codexModel?.baseUrl).toBe("https://chatgpt.com/backend-api");
+  });
+
   it("uses the Codex backend catalog for OpenAI OAuth discovery", async () => {
     mocks.resolveApiKeyForProvider.mockResolvedValue({
       mode: "oauth",
