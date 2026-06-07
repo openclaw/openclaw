@@ -28,7 +28,7 @@ import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
-import { listAgentIds } from "../agent-scope.js";
+import { listAgentIds, resolveAgentConfig } from "../agent-scope.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedAgentQueueMessageOutcome,
@@ -71,6 +71,19 @@ const SessionsSendToolSchema = Type.Object({
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
 const SESSIONS_SEND_MESSAGE_ALIASES = ["SendMessage", "content", "text"] as const;
+
+function resolveRequesterIdentityName(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey?: string;
+}): string | undefined {
+  const requesterAgentId = params.requesterSessionKey
+    ? resolveAgentIdFromSessionKey(params.requesterSessionKey)
+    : undefined;
+  const name = requesterAgentId
+    ? resolveAgentConfig(params.cfg, requesterAgentId)?.identity?.name?.trim()
+    : undefined;
+  return name || undefined;
+}
 
 function normalizeSessionsSendArguments(args: unknown): Record<string, unknown> {
   const params =
@@ -554,6 +567,10 @@ export function createSessionsSendTool(opts?: {
 
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
+      const requesterName = resolveRequesterIdentityName({
+        cfg,
+        requesterSessionKey,
+      });
       const sameSessionA2A = requesterSessionKey === resolvedKey;
 
       // Capture the pre-run assistant snapshot before starting the nested run.
@@ -578,6 +595,7 @@ export function createSessionsSendTool(opts?: {
             : undefined;
 
       const agentMessageContext = buildAgentToAgentMessageContext({
+        requesterName,
         requesterSessionKey: opts?.agentSessionKey,
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
@@ -659,6 +677,7 @@ export function createSessionsSendTool(opts?: {
           message,
           announceTimeoutMs,
           maxPingPongTurns,
+          requesterName,
           requesterSessionKey,
           requesterChannel,
           baseline: baselineReply,
