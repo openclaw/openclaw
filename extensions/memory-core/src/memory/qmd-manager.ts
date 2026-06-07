@@ -157,6 +157,11 @@ type ConfiguredMcporterServer =
   | { mode: "generated"; server: Record<string, unknown> }
   | { mode: "external" };
 
+type RawMcporterEntry = {
+  lifecycle?: unknown;
+  logging?: unknown;
+};
+
 const MCPORTER_REMOTE_AUTH_KEYS = new Set(
   [
     "auth",
@@ -384,6 +389,92 @@ function extractFirstJsonValue(raw: string): JsonExtractionResult {
     }
   }
   return { found: false };
+}
+
+function expandMcporterHome(input: string): string {
+  if (!input.startsWith("~")) {
+    return input;
+  }
+  const home = os.homedir();
+  if (input === "~") {
+    return home;
+  }
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    return path.join(home, input.slice(2));
+  }
+  return input;
+}
+
+function resolveMcporterConfigCandidates(env: NodeJS.ProcessEnv): string[] {
+  const candidates: string[] = [];
+  const explicitConfig = env.MCPORTER_CONFIG;
+  if (explicitConfig && explicitConfig.trim().length > 0) {
+    candidates.push(path.resolve(expandMcporterHome(explicitConfig.trim())));
+  }
+
+  const xdgConfigHome = env.XDG_CONFIG_HOME;
+  let baseDir: string;
+  if (xdgConfigHome && xdgConfigHome.trim().length > 0) {
+    const resolved = expandMcporterHome(xdgConfigHome.trim());
+    if (path.isAbsolute(resolved)) {
+      baseDir = path.join(resolved, "mcporter");
+    } else {
+      baseDir = path.join(os.homedir(), ".mcporter");
+    }
+  } else {
+    baseDir = path.join(os.homedir(), ".mcporter");
+  }
+  candidates.push(path.join(baseDir, "mcporter.json"));
+  candidates.push(path.join(baseDir, "mcporter.jsonc"));
+  return candidates;
+}
+
+async function readRawMcporterEntry(
+  serverName: string,
+  env: NodeJS.ProcessEnv,
+): Promise<RawMcporterEntry | null> {
+  for (const candidate of resolveMcporterConfigCandidates(env)) {
+    let text: string;
+    try {
+      text = await fs.readFile(candidate, "utf8");
+    } catch (err) {
+      if (isFileMissingError(err)) {
+        continue;
+      }
+      throw err;
+    }
+    // Strip trailing commas and comments for JSONC files; mcporter accepts
+    // both JSON and JSONC. A minimal cleanup is enough for our read-only
+    // lifecycle/logging probe.
+    const cleaned = candidate.endsWith(".jsonc")
+      ? text
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .replace(/\/\/.*$/gm, "")
+          .replace(/,(\s*[}\]])/g, "$1")
+      : text;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cleaned) as unknown;
+    } catch {
+      continue;
+    }
+    const record = asRecord(parsed);
+    const servers = record ? asRecord(record.mcpServers) : null;
+    const entry = servers ? asRecord(servers[serverName]) : null;
+    if (entry) {
+      return entry as RawMcporterEntry;
+    }
+  }
+  return null;
+}
+
+function hasMcporterStdioLifecycleOrLogging(server: RawMcporterEntry): boolean {
+  return (
+    server.lifecycle !== undefined ||
+    (typeof server.logging === "object" &&
+      server.logging !== null &&
+      (server.logging as Record<string, unknown>).enabled === true)
+  );
 }
 
 function getQmdEmbedQueueState(): QmdEmbedQueueState {
@@ -2620,7 +2711,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       throw new Error(`mcporter server "${serverName}" returned an invalid JSON definition`);
     }
 
-    const server = this.toMcporterRawServerEntry(serialized);
+    const rawEntry = await readRawMcporterEntry(serverName, this.mcporterEnv);
+    const server = this.toMcporterRawServerEntry(serialized, rawEntry);
     if (!server) {
       if (serverName === "qmd") {
         return null;
@@ -2632,6 +2724,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private toMcporterRawServerEntry(
     serialized: Record<string, unknown>,
+    rawEntry: RawMcporterEntry | null,
   ): ConfiguredMcporterServer | null {
     const server: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(serialized)) {
@@ -2642,7 +2735,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     if (typeof server.command === "string" && server.command.length > 0) {
-      if (!isGeneratedMcporterQmdStdioServer(server) || hasMcporterStdioUserOwnedMaterial(server)) {
+      if (
+        !isGeneratedMcporterQmdStdioServer(server) ||
+        hasMcporterStdioUserOwnedMaterial(server) ||
+        (rawEntry !== null && hasMcporterStdioLifecycleOrLogging(rawEntry))
+      ) {
         return { mode: "external" };
       }
       return { mode: "generated", server: this.toGeneratedMcporterStdioServer(server) };
@@ -2656,7 +2753,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       // The generated per-agent config is persisted under OpenClaw state. Do not
       // copy remote auth material from a user's mcporter config into that file;
       // keep using the original mcporter config for authenticated remotes.
-      if (hasMcporterRemoteAuthMaterial(server)) {
+      if (
+        hasMcporterRemoteAuthMaterial(server) ||
+        (rawEntry !== null && hasMcporterStdioLifecycleOrLogging(rawEntry))
+      ) {
         return { mode: "external" };
       }
       return { mode: "generated", server };
