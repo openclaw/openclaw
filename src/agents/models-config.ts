@@ -27,10 +27,7 @@ import {
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
-import {
-  openAuthProfileDatabase,
-  readPersistedAuthProfileStoreRaw,
-} from "./auth-profiles/sqlite.js";
+import { readPersistedAuthProfileStoreRaw } from "./auth-profiles/sqlite.js";
 import { MODELS_JSON_STATE, type ContentHashOutcome } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 import { normalizeProviderSpecificConfig } from "./models-config.providers.policy.js";
@@ -292,7 +289,16 @@ async function safeReadFileOutcome(pathname: string, maxBytes: number): Promise<
 function readAuthProfilesStableOutcome(agentDir: string): ContentHashOutcome {
   let parsed: unknown;
   try {
-    parsed = readPersistedAuthProfileStoreRaw(agentDir, openAuthProfileDatabase(agentDir));
+    // Use the read-only, no-create path: call without an explicit DB handle so
+    // `readPersistedAuthProfileStoreRaw` checks `fs.existsSync` first (returning
+    // `null` for an absent store) and otherwise opens the SQLite file with
+    // `{ readOnly: true }`.  Passing `openAuthProfileDatabase(agentDir)` here
+    // would route through `openOpenClawAgentDatabase`, which `mkdirSync`s the
+    // agent dir, creates the schema, and registers the database in the shared
+    // pool — turning a fingerprint-only cache-key read into a write-side effect
+    // that materializes agent SQLite state for no-auth / skip / noop calls
+    // (Codex P2 on PR #90741, models-config.ts:295).
+    parsed = readPersistedAuthProfileStoreRaw(agentDir);
   } catch {
     // DB open/read failure — fail closed rather than masquerade as absent.
     return { kind: "uncacheable" };
@@ -382,6 +388,72 @@ async function readModelsJsonContentOutcome(pathname: string): Promise<ContentHa
     return { kind: "hashed", hash: outcome.hash };
   }
   return { kind: "uncacheable" };
+}
+
+/**
+ * Content outcome for the generated plugin model catalog sidecars that
+ * `ensureOpenClawModelsJson` owns (`plugins/<plugin>/catalog.json`, written by
+ * `writePluginCatalogsForModelsJson`).  Captured at write/validation time and
+ * re-checked on every warm cache hit alongside `modelsJsonOutcome`.
+ *
+ * Why this exists (Codex P1 on PR #90741, models-config.ts:1501-1504): current
+ * `main` folded generated plugin catalog sidecar mtimes into
+ * `buildModelsJsonFingerprint`, so any sidecar edit/deletion busted the ready
+ * cache.  This branch moved drift detection to a content outcome on the cache
+ * entry, but only captured root `models.json` — leaving plugin catalog
+ * sidecars unvalidated.  Because `planOpenClawModelsJson` owns those sidecars
+ * (`pluginCatalogWrites`) and `ModelRegistry.loadCustomModels` consumes them
+ * during provider/model resolution, a sidecar deleted or tampered AFTER a warm
+ * entry was cached would still hit the cache and skip the reconciliation that
+ * should rewrite/remove it — a provider-routing integrity hole.
+ *
+ * This is strictly stronger than `main`'s mtime fingerprint: it hashes the
+ * sidecar CONTENTS (catching tampering that preserves mtime) and folds the
+ * sorted set of sidecar relative paths into the digest (catching additions and
+ * deletions), all under the same fail-closed `ContentHashOutcome` contract.
+ *
+ * Returns:
+ *  - `{ kind: "absent" }` when no generated plugin catalog sidecars exist.
+ *    Two `absent` reads compare equal — a valid steady-state hit.
+ *  - `{ kind: "hashed", hash }` deterministically derived from the sorted
+ *    `(relativePath, per-file content hash)` pairs.
+ *  - `{ kind: "uncacheable" }` if ANY sidecar is unhashable (oversize,
+ *    symlink, non-regular, I/O error).  Per the `modelsContentOutcomesMatch`
+ *    contract, an `uncacheable` outcome never compares equal, so a single
+ *    bad sidecar fails the whole cache hit closed and forces a re-plan.
+ */
+async function readPluginCatalogsContentOutcome(agentDir: string): Promise<ContentHashOutcome> {
+  const relativePaths = listPluginModelCatalogRelativePaths(agentDir).toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+  const entries: Array<[string, string]> = [];
+  for (const relativePath of relativePaths) {
+    const outcome = await safeReadFileOutcome(
+      path.join(agentDir, relativePath),
+      MAX_MODELS_JSON_BYTES,
+    );
+    if (outcome.kind === "absent") {
+      // The path lister enumerates on-disk catalog files, so an `absent`
+      // read here means the file was removed between listing and reading.
+      // Skip it — its absence is reflected by its exclusion from the
+      // digest's path set, which differs from any entry that included it.
+      continue;
+    }
+    if (outcome.kind === "uncacheable") {
+      // Fail closed: a single unhashable sidecar poisons the whole outcome
+      // so the cache hit can never ride a partial read to a stale entry.
+      return { kind: "uncacheable" };
+    }
+    entries.push([path.normalize(relativePath), outcome.hash]);
+  }
+  if (entries.length === 0) {
+    return { kind: "absent" };
+  }
+  // Sort again on the normalized paths so the digest is independent of
+  // enumeration order, then hash the canonical (path, content-hash) pairs.
+  entries.sort(([left], [right]) => left.localeCompare(right));
+  const canonical = stableStringify(entries);
+  return { kind: "hashed", hash: createHash("sha256").update(canonical).digest("hex") };
 }
 
 /**
@@ -1368,6 +1440,7 @@ export async function ensureOpenClawModelsJson(
   ): Promise<{
     fingerprint: string;
     modelsJsonOutcome: ContentHashOutcome;
+    pluginCatalogsOutcome: ContentHashOutcome;
     result: { agentDir: string; wrote: boolean };
   }> =>
     withModelsJsonWriteLock(targetPath, async () => {
@@ -1410,9 +1483,11 @@ export async function ensureOpenClawModelsJson(
           pluginCatalogWrites: plan.pluginCatalogWrites,
         });
         const modelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
+        const pluginCatalogsOutcome = await readPluginCatalogsContentOutcome(agentDir);
         return {
           fingerprint: fingerprintForEntry,
           modelsJsonOutcome,
+          pluginCatalogsOutcome,
           result: { agentDir, wrote: wrotePluginCatalog },
         };
       }
@@ -1424,9 +1499,11 @@ export async function ensureOpenClawModelsJson(
         });
         await ensureModelsFileModeForModelsJson(targetPath);
         const modelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
+        const pluginCatalogsOutcome = await readPluginCatalogsContentOutcome(agentDir);
         return {
           fingerprint: fingerprintForEntry,
           modelsJsonOutcome,
+          pluginCatalogsOutcome,
           result: { agentDir, wrote: wrotePluginCatalog },
         };
       }
@@ -1440,11 +1517,14 @@ export async function ensureOpenClawModelsJson(
       });
       // Capture the post-write outcome so subsequent cache checks can
       // detect any external edit / corruption that happens after this
-      // point.
+      // point — for both root models.json and the generated plugin
+      // catalog sidecars the planner owns.
       const modelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
+      const pluginCatalogsOutcome = await readPluginCatalogsContentOutcome(agentDir);
       return {
         fingerprint: fingerprintForEntry,
         modelsJsonOutcome,
+        pluginCatalogsOutcome,
         result: { agentDir, wrote: true },
       };
     });
@@ -1499,7 +1579,15 @@ export async function ensureOpenClawModelsJson(
     // `null === null` compare to a stale hit (Codex P1 follow-up on
     // PR #73260).
     const currentModelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
-    if (modelsContentOutcomesMatch(currentModelsJsonOutcome, settled.modelsJsonOutcome)) {
+    // Two-factor hit also requires the generated plugin catalog sidecars to
+    // be unchanged since write time: a deleted/tampered sidecar must force a
+    // re-plan so the planner can rewrite/remove it before `ModelRegistry`
+    // consumes stale provider rows (Codex P1 on PR #90741).
+    const currentPluginCatalogsOutcome = await readPluginCatalogsContentOutcome(agentDir);
+    if (
+      modelsContentOutcomesMatch(currentModelsJsonOutcome, settled.modelsJsonOutcome) &&
+      modelsContentOutcomesMatch(currentPluginCatalogsOutcome, settled.pluginCatalogsOutcome)
+    ) {
       await ensureModelsFileModeForModelsJson(targetPath);
       return settled.result;
     }
@@ -1550,7 +1638,11 @@ export async function ensureOpenClawModelsJson(
       // match (fail-closed contract), so any drift invalidates the
       // scoped entry and falls through to a fresh check.
       const currentModelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
-      if (modelsContentOutcomesMatch(currentModelsJsonOutcome, settled.modelsJsonOutcome)) {
+      const currentPluginCatalogsOutcome = await readPluginCatalogsContentOutcome(agentDir);
+      if (
+        modelsContentOutcomesMatch(currentModelsJsonOutcome, settled.modelsJsonOutcome) &&
+        modelsContentOutcomesMatch(currentPluginCatalogsOutcome, settled.pluginCatalogsOutcome)
+      ) {
         await ensureModelsFileModeForModelsJson(targetPath);
         return settled.result;
       }
@@ -1603,10 +1695,20 @@ export async function ensureOpenClawModelsJson(
         // belt-and-suspenders against future shape drift in
         // `ContentHashOutcome`.
         const modelsJsonOutcome = matchOutcome.validatedModelsJsonOutcome;
-        if (modelsJsonOutcome.kind !== "uncacheable") {
+        // The short-circuit path does not re-run the planner, so it neither
+        // writes nor reconciles the generated plugin catalog sidecars. Capture
+        // their current on-disk outcome so a later sidecar drift still
+        // invalidates this scoped entry on the next hit (Codex P1 on PR #90741).
+        // Fail closed if the sidecars are unhashable: an `uncacheable` outcome
+        // would poison every future hit anyway, so skip caching entirely.
+        const pluginCatalogsOutcome = await readPluginCatalogsContentOutcome(agentDir);
+        if (
+          modelsJsonOutcome.kind !== "uncacheable" &&
+          pluginCatalogsOutcome.kind !== "uncacheable"
+        ) {
           MODELS_JSON_STATE.readyCache.set(
             scopedKey,
-            Promise.resolve({ fingerprint, modelsJsonOutcome, result }),
+            Promise.resolve({ fingerprint, modelsJsonOutcome, pluginCatalogsOutcome, result }),
           );
         }
         return result;
@@ -1655,6 +1757,7 @@ export async function ensureOpenClawModelsJson(
         Promise.resolve({
           fingerprint: refreshedFingerprint,
           modelsJsonOutcome: settled.modelsJsonOutcome,
+          pluginCatalogsOutcome: settled.pluginCatalogsOutcome,
           result: settled.result,
         }),
       );

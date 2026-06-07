@@ -40,17 +40,25 @@ export type ContentHashOutcome =
  * follow-up on PR #73260: `uncacheable` outcomes never match, so
  * unhashable models.json — oversize, symlinked, I/O error — fail closed
  * to a re-plan instead of treating null-equality as a stable hit).
+ *
+ * `pluginCatalogsOutcome` does the same for the generated plugin model
+ * catalog sidecars (`plugins/<plugin>/catalog.json`) that the planner owns
+ * and `ModelRegistry` later consumes. It is validated on every warm hit
+ * alongside `modelsJsonOutcome`, so a sidecar deleted/tampered after the
+ * entry was cached forces a re-plan instead of riding a stale hit (Codex P1
+ * on PR #90741). Same fail-closed contract: an `uncacheable` sidecar outcome
+ * never compares equal.
  */
+type ModelsJsonReadyCacheEntry = {
+  fingerprint: string;
+  modelsJsonOutcome: ContentHashOutcome;
+  pluginCatalogsOutcome: ContentHashOutcome;
+  result: { agentDir: string; wrote: boolean };
+};
+
 type ModelsJsonState = {
   writeLocks: Map<string, Promise<void>>;
-  readyCache: Map<
-    string,
-    Promise<{
-      fingerprint: string;
-      modelsJsonOutcome: ContentHashOutcome;
-      result: { agentDir: string; wrote: boolean };
-    }>
-  >;
+  readyCache: Map<string, Promise<ModelsJsonReadyCacheEntry>>;
 };
 
 export const MODELS_JSON_STATE = (() => {
@@ -60,14 +68,7 @@ export const MODELS_JSON_STATE = (() => {
   if (!globalState[MODELS_JSON_STATE_KEY]) {
     globalState[MODELS_JSON_STATE_KEY] = {
       writeLocks: new Map<string, Promise<void>>(),
-      readyCache: new Map<
-        string,
-        Promise<{
-          fingerprint: string;
-          modelsJsonOutcome: ContentHashOutcome;
-          result: { agentDir: string; wrote: boolean };
-        }>
-      >(),
+      readyCache: new Map<string, Promise<ModelsJsonReadyCacheEntry>>(),
     };
   }
   return globalState[MODELS_JSON_STATE_KEY];

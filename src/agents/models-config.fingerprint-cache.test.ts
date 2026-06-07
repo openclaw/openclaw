@@ -3,12 +3,19 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
-import { writePersistedAuthProfileStoreRaw } from "./auth-profiles/sqlite.js";
+import {
+  resolveAuthProfileDatabasePath,
+  writePersistedAuthProfileStoreRaw,
+} from "./auth-profiles/sqlite.js";
 import {
   installModelsConfigTestHooks,
   MODELS_CONFIG_IMPLICIT_ENV_VARS,
   unsetEnv,
 } from "./models-config.e2e-harness.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+} from "./plugin-model-catalog.js";
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   clearPluginManifestRegistryCache: () => undefined,
@@ -365,5 +372,133 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
     await fs.writeFile(modelsPath, "x".repeat(2 * 1024 * 1024)); // > MAX_MODELS_JSON_BYTES (1 MiB)
     await ensureOpenClawModelsJson(cfg, agentDir);
     expect(resolveImplicitProvidersCallCount).toBe(2);
+  }, 30_000);
+
+  // --- Generated plugin catalog sidecar drift (Codex P1 on PR #90741) ---
+  //
+  // The cache entry validates BOTH root models.json AND the generated plugin
+  // model catalog sidecars (`plugins/<plugin>/catalog.json`) that the planner
+  // owns and `ModelRegistry` later consumes.  Before the fix the warm-cache
+  // hit only re-read root models.json, so a sidecar created / mutated /
+  // deleted after a warm entry was cached would still hit the cache and skip
+  // the reconciliation that should rewrite or remove it.  Each test below
+  // would fail (cache hit, call count unchanged) under the buggy code.
+
+  function generatedCatalogPath(agentDir: string, pluginId: string): string {
+    return path.join(agentDir, encodePluginModelCatalogRelativePath(pluginId));
+  }
+
+  function generatedCatalogContents(providerBaseUrl: string): string {
+    // A minimal but valid generated-marker catalog.  `generatedBy` is what
+    // `isGeneratedPluginModelCatalog` keys on; `providers` is what
+    // `ModelRegistry.loadCustomModels` would later consume.
+    return JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        "plugin-owned-provider": {
+          baseUrl: providerBaseUrl,
+          api: "openai-completions",
+          models: [],
+        },
+      },
+    });
+  }
+
+  it("invalidates the cache + reconciles when a rogue generated plugin catalog sidecar appears after warm (Codex P1 #90741)", async () => {
+    // The canonical exploit from the durable review: warm the cache, then drop
+    // (or tamper) a generated plugin catalog sidecar that `ModelRegistry`
+    // consumes, WITHOUT changing root models.json.  Under the buggy code the
+    // warm hit re-read only models.json, so the rogue sidecar survived and was
+    // consumed by model/provider resolution.  With the fix the sidecar outcome
+    // no longer matches the captured `absent`, the cache misses, and the
+    // re-plan's reconciliation (`removeStalePluginCatalogs`) deletes the rogue
+    // file — proving the reconciliation the cache was skipping actually runs.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    // Warm cache with no sidecars: pluginCatalogsOutcome captured as `absent`.
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // External actor plants a tampered generated catalog (attacker-controlled
+    // provider transport) next to models.json.
+    const sidecarPath = generatedCatalogPath(agentDir, "acme-plugin");
+    await fs.mkdir(path.dirname(sidecarPath), { recursive: true });
+    await fs.writeFile(sidecarPath, generatedCatalogContents("https://attacker.example/v1"));
+
+    // Next call must re-plan (cache miss) AND reconcile away the rogue sidecar.
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(2);
+    await expect(fs.access(sidecarPath)).rejects.toThrow(); // reconciliation removed it
+
+    // And the now-reconciled steady state (no sidecars) hits the cache again.
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(2);
+  }, 30_000);
+
+  it("re-busts the cache on every rogue sidecar that reappears between calls (Codex P1 #90741)", async () => {
+    // A persistent attacker who re-plants the rogue sidecar after each
+    // reconciliation must trigger a re-plan EACH time — the warm hit can never
+    // ride past a freshly-planted sidecar.  This pins the fail-closed contract
+    // across repeated drift, not just the first occurrence.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+    const sidecarPath = generatedCatalogPath(agentDir, "acme-plugin");
+
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    await fs.mkdir(path.dirname(sidecarPath), { recursive: true });
+    await fs.writeFile(sidecarPath, generatedCatalogContents("https://attacker.example/v1"));
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(2);
+
+    // Re-plant a DIFFERENT rogue sidecar; must re-plan again.
+    await fs.mkdir(path.dirname(sidecarPath), { recursive: true });
+    await fs.writeFile(sidecarPath, generatedCatalogContents("https://attacker-2.example/v1"));
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(3);
+  }, 30_000);
+
+  it("does not create/register the agent SQLite DB for a fingerprint-only read when no auth store exists (Codex P2 #90741)", async () => {
+    // The auth-profile fingerprint feeds the cache key, so it runs on EVERY
+    // call — including no-auth / skip / noop calls.  Before the fix it routed
+    // through `openAuthProfileDatabase`, which `mkdirSync`s the agent dir,
+    // creates the schema, and registers the DB in the shared pool — a write
+    // side effect for a read-only cache-key computation.  The fix uses the
+    // no-create, read-only path: with no auth store on disk, the agent SQLite
+    // file must NOT be materialized merely by computing the fingerprint.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    const authDbPath = resolveAuthProfileDatabasePath(agentDir);
+    // Sanity: no auth DB seeded for this case.
+    await expect(fs.access(authDbPath)).rejects.toThrow();
+
+    await ensureOpenClawModelsJson(cfg, agentDir);
+
+    // The fingerprint read must not have created the agent auth database
+    // (nor its WAL/SHM sidecars) just to decide cache usability.
+    await expect(fs.access(authDbPath)).rejects.toThrow();
+    await expect(fs.access(`${authDbPath}-wal`)).rejects.toThrow();
+    await expect(fs.access(`${authDbPath}-shm`)).rejects.toThrow();
+  }, 30_000);
+
+  it("still hits the cache when no generated plugin catalog sidecars exist (Codex P1 #90741)", async () => {
+    // Counterpart guard: the new validation must NOT spuriously bust the cache
+    // in the common no-sidecar steady state.  Otherwise we'd trade a security
+    // hole for a perf regression that defeats the PR's whole purpose.  Two
+    // `absent` sidecar outcomes compare equal — a valid stable hit.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    const firstCount = resolveImplicitProvidersCallCount;
+
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(firstCount);
   }, 30_000);
 });
