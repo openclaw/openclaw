@@ -332,6 +332,61 @@ export function createMsteamsRealtimeCall(params: {
     ...(visionEnabled ? [MSTEAMS_LOOK_TOOL] : []),
   ];
 
+  /**
+   * Shared consult invocation for the consult / look_at_screen / background-task handlers: resolves
+   * the agent model + thinking level and calls consultRealtimeVoiceAgent with the common Teams
+   * params. Each handler supplies only what differs (run id, args, surface, prompt, tool policy, and
+   * optional images / fastMode / timeout). agentId + sessionKey are passed in because the consult
+   * handler also uses them for its fast-context path.
+   */
+  const runMsteamsConsult = (opts: {
+    agentRuntime: CoreAgentDeps;
+    voiceConfig: VoiceCallConfig;
+    cfg: OpenClawConfig;
+    agentId: string;
+    sessionKey: string;
+    runIdPrefix: string;
+    args: unknown;
+    surface: string;
+    extraSystemPrompt: string;
+    toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
+    images?: Array<{ type: "image"; data: string; mimeType: string }>;
+    fastMode?: boolean;
+    timeoutMs?: number;
+  }) => {
+    const { provider: agentProvider, model } = resolveVoiceResponseModel({
+      voiceConfig: opts.voiceConfig,
+      agentRuntime: opts.agentRuntime,
+    });
+    const thinkLevel =
+      opts.voiceConfig.realtime.consultThinkingLevel ??
+      opts.agentRuntime.resolveThinkingDefault({ cfg: opts.cfg, provider: agentProvider, model });
+    return consultRealtimeVoiceAgent({
+      cfg: opts.cfg,
+      agentRuntime: opts.agentRuntime,
+      logger: { warn: (message) => logger?.warn(message) },
+      agentId: opts.agentId,
+      sessionKey: opts.sessionKey,
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: opts.runIdPrefix,
+      args: opts.args,
+      ...(opts.images ? { images: opts.images } : {}),
+      transcript: [...transcript],
+      surface: opts.surface,
+      userLabel: "Caller",
+      assistantLabel: "Agent",
+      questionSourceLabel: "caller",
+      provider: agentProvider,
+      model,
+      thinkLevel,
+      fastMode: opts.fastMode ?? opts.voiceConfig.realtime.consultFastMode,
+      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(opts.toolPolicy),
+      extraSystemPrompt: opts.extraSystemPrompt,
+    });
+  };
+
   const realtime = createRealtimeVoiceBridgeSession({
     provider: deps.provider,
     cfg: deps.cfg,
@@ -444,36 +499,18 @@ export function createMsteamsRealtimeCall(params: {
         );
       }
 
-      const { provider: agentProvider, model } = resolveVoiceResponseModel({
+      const result = await runMsteamsConsult({
+        agentRuntime,
         voiceConfig,
-        agentRuntime,
-      });
-      const thinkLevel =
-        voiceConfig.realtime.consultThinkingLevel ??
-        agentRuntime.resolveThinkingDefault({ cfg, provider: agentProvider, model });
-
-      const result = await consultRealtimeVoiceAgent({
         cfg,
-        agentRuntime,
-        logger: { warn: (message) => logger?.warn(message) },
         agentId,
         sessionKey,
-        messageProvider: "voice",
-        lane: "voice",
         runIdPrefix: `voice-realtime-consult:${callId}`,
         args: event.args,
-        transcript: [...transcript],
         surface: "a live Microsoft Teams call",
-        userLabel: "Caller",
-        assistantLabel: "Agent",
-        questionSourceLabel: "caller",
-        provider: agentProvider,
-        model,
-        thinkLevel,
-        fastMode: voiceConfig.realtime.consultFastMode,
-        timeoutMs: voiceConfig.responseTimeoutMs,
-        toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(toolPolicy),
         extraSystemPrompt: MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT,
+        toolPolicy,
+        timeoutMs: voiceConfig.responseTimeoutMs,
       });
       rtSession.submitToolResult(event.callId, result);
     } catch (err) {
@@ -534,41 +571,23 @@ export function createMsteamsRealtimeCall(params: {
         );
       }
 
-      const { provider: agentProvider, model } = resolveVoiceResponseModel({
+      const result = await runMsteamsConsult({
+        agentRuntime,
         voiceConfig,
-        agentRuntime,
-      });
-      const thinkLevel =
-        voiceConfig.realtime.consultThinkingLevel ??
-        agentRuntime.resolveThinkingDefault({ cfg, provider: agentProvider, model });
-
-      const result = await consultRealtimeVoiceAgent({
         cfg,
-        agentRuntime,
-        logger: { warn: (message) => logger?.warn(message) },
         agentId,
         sessionKey,
-        messageProvider: "voice",
-        lane: "voice",
         runIdPrefix: `voice-realtime-look:${callId}`,
         args: event.args,
         images: [{ type: "image", data: frame.dataBase64, mimeType: frame.mime }],
-        transcript: [...transcript],
         surface: frame.participantName
           ? `a live Microsoft Teams call — the attached image is ${frame.participantName}'s ${
               frame.source === "screenshare" ? "shared screen" : "camera"
             }`
           : "a live Microsoft Teams call (a participant is sharing video)",
-        userLabel: "Caller",
-        assistantLabel: "Agent",
-        questionSourceLabel: "caller",
-        provider: agentProvider,
-        model,
-        thinkLevel,
-        fastMode: voiceConfig.realtime.consultFastMode,
-        timeoutMs: voiceConfig.responseTimeoutMs,
-        toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(toolPolicy),
         extraSystemPrompt: MSTEAMS_REALTIME_LOOK_SYSTEM_PROMPT,
+        toolPolicy,
+        timeoutMs: voiceConfig.responseTimeoutMs,
       });
       lastLookData = frame.dataBase64;
       lastLookText = result.text;
@@ -638,35 +657,18 @@ export function createMsteamsRealtimeCall(params: {
         : `This task was delegated from a live Microsoft Teams voice call and now runs in the background; the caller is no longer waiting on the line. Complete the task, then deliver the final result to the caller by calling the message tool exactly once with action "send", channel "msteams", target "${deliveryTarget}". Keep the delivered message concise.`;
 
     try {
-      const { provider: agentProvider, model } = resolveVoiceResponseModel({
+      await runMsteamsConsult({
+        agentRuntime,
         voiceConfig,
-        agentRuntime,
-      });
-      const thinkLevel =
-        voiceConfig.realtime.consultThinkingLevel ??
-        agentRuntime.resolveThinkingDefault({ cfg, provider: agentProvider, model });
-
-      await consultRealtimeVoiceAgent({
         cfg,
-        agentRuntime,
-        logger: { warn: (message) => logger?.warn(message) },
         agentId,
         sessionKey,
-        messageProvider: "voice",
-        lane: "voice",
         runIdPrefix: `voice-realtime-task:${callId}`,
         args: { question: task },
-        transcript: [...transcript],
         surface: "a Microsoft Teams voice call (background task)",
-        userLabel: "Caller",
-        assistantLabel: "Agent",
-        questionSourceLabel: "caller",
-        provider: agentProvider,
-        model,
-        thinkLevel,
-        fastMode: false,
-        toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(consultToolPolicy),
         extraSystemPrompt: `${MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT} ${deliveryInstruction}`,
+        toolPolicy: consultToolPolicy,
+        fastMode: false,
       });
       logger?.debug?.(`MsteamsRealtime: background task complete for ${callId}`);
     } catch (err) {
