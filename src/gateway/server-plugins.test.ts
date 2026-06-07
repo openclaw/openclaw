@@ -815,7 +815,9 @@ describe("loadGatewayPlugins", () => {
         setTimeout(() => {
           opts.respond(true, { status: "ok", runId: "run-deadline" });
         }, 13);
-        await new Promise((resolve) => setTimeout(resolve, 13));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 13);
+        });
       });
 
       const result = expect(
@@ -840,7 +842,9 @@ describe("loadGatewayPlugins", () => {
       serverPluginsModule.setFallbackGatewayContext(createTestContext("accepted-then-error"));
       handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
         opts.respond(true, { status: "accepted", runId: "run-error-after-accepted" });
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5);
+        });
         throw new Error("handler failed after accepted");
       });
 
