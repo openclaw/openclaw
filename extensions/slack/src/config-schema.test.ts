@@ -122,6 +122,65 @@ describe("slack config schema", () => {
     );
   });
 
+  it("accepts trusted-upstream mode with defaults", () => {
+    const res = SlackConfigSchema.safeParse({
+      mode: "trusted-upstream",
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.mode).toBe("trusted-upstream");
+      expect(res.data.trustedUpstream).toEqual({
+        requireHeader: {
+          name: "X-OpenClaw-Trusted-Upstream-Verified",
+          value: "true",
+        },
+        maxEventAge: 300,
+      });
+    }
+  });
+
+  it("accepts trusted-upstream overrides", () => {
+    const res = SlackConfigSchema.safeParse({
+      mode: "trusted-upstream",
+      botToken: "xoxb-any",
+      slackApiUrl: "http://slack-proxy.internal:8080/slack/api/",
+      trustedUpstream: {
+        requireHeader: {
+          name: "X-Edge-Verified",
+          value: "yes",
+        },
+        maxEventAge: 0,
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.slackApiUrl).toBe("http://slack-proxy.internal:8080/slack/api/");
+      expect(res.data.trustedUpstream?.requireHeader).toEqual({
+        name: "X-Edge-Verified",
+        value: "yes",
+      });
+      expect(res.data.trustedUpstream?.maxEventAge).toBe(0);
+    }
+  });
+
+  it("rejects trusted-upstream mode without a bot token", () => {
+    expectSlackConfigIssue({ mode: "trusted-upstream" }, "botToken");
+  });
+
+  it("accepts account trusted-upstream mode when base bot token is set", () => {
+    expectSlackConfigValid({
+      botToken: "xoxb-any",
+      accounts: {
+        ops: {
+          mode: "trusted-upstream",
+        },
+      },
+    });
+  });
+
   it("accepts account-level user token config", () => {
     expectSlackConfigValid({
       accounts: {

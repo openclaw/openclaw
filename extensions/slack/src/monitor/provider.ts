@@ -13,7 +13,7 @@ import type { SessionScope } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import { warn } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
   computeBackoff,
   createNonExitingRuntime,
@@ -22,7 +22,10 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
+import {
+  installRequestBodyLimitGuard,
+  readJsonWebhookBodyOrReject,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import {
   resolveSlackAccount,
   resolveSlackAccountAllowFrom,
@@ -85,6 +88,143 @@ async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const TRUSTED_UPSTREAM_ENVELOPE_TYPES = new Set(["events_api", "slash_commands", "interactive"]);
+
+type TrustedSlackEnvelope = {
+  type: "events_api" | "slash_commands" | "interactive";
+  envelope_id?: string;
+  payload: Record<string, unknown>;
+};
+
+function isTrustedSlackEnvelope(value: unknown): value is TrustedSlackEnvelope {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.type === "string" &&
+    TRUSTED_UPSTREAM_ENVELOPE_TYPES.has(record.type) &&
+    Boolean(record.payload) &&
+    typeof record.payload === "object" &&
+    !Array.isArray(record.payload)
+  );
+}
+
+function getHeaderValue(req: IncomingMessage, name: string): string | undefined {
+  const raw = req.headers[name.toLowerCase()];
+  return Array.isArray(raw) ? raw[0] : raw;
+}
+
+function parseSlackEventTime(value: unknown): number | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function isTrustedSlackEnvelopeStale(params: {
+  envelope: TrustedSlackEnvelope;
+  maxEventAgeSeconds: number;
+  nowSeconds?: number;
+}): boolean | "invalid" {
+  if (params.maxEventAgeSeconds <= 0) {
+    return false;
+  }
+  const eventTime = parseSlackEventTime(params.envelope.payload.event_time);
+  if (eventTime === undefined) {
+    return false;
+  }
+  if (eventTime === null) {
+    return "invalid";
+  }
+  const nowSeconds = params.nowSeconds ?? Math.floor(Date.now() / 1000);
+  return nowSeconds - eventTime > params.maxEventAgeSeconds;
+}
+
+function createSlackTrustedUpstreamHttpHandler(params: {
+  app: { processEvent: (event: unknown) => Promise<void> };
+  requireHeader: { name?: string; value?: string };
+  maxEventAgeSeconds?: number;
+}) {
+  const requireHeaderName = params.requireHeader.name ?? "X-OpenClaw-Trusted-Upstream-Verified";
+  const requireHeaderValue = params.requireHeader.value ?? "true";
+  const maxEventAgeSeconds = params.maxEventAgeSeconds ?? 300;
+  return async (req: IncomingMessage, res: ServerResponse) => {
+    if (req.method !== "POST") {
+      res.statusCode = 405;
+      res.setHeader("Allow", "POST");
+      res.end("Method Not Allowed");
+      return;
+    }
+    if (getHeaderValue(req, requireHeaderName) !== requireHeaderValue) {
+      logVerbose(
+        `slack trusted-upstream: rejected request missing/invalid ${requireHeaderName} verification header`,
+      );
+      res.statusCode = 401;
+      res.end("Unauthorized");
+      return;
+    }
+
+    const body = await readJsonWebhookBodyOrReject({
+      req,
+      res,
+      maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
+      timeoutMs: SLACK_WEBHOOK_BODY_TIMEOUT_MS,
+      invalidJsonMessage: "Malformed JSON",
+    });
+    if (!body.ok) {
+      return;
+    }
+    if (!isTrustedSlackEnvelope(body.value)) {
+      logVerbose(
+        "slack trusted-upstream: rejected verified request with malformed Socket Mode envelope",
+      );
+      res.statusCode = 400;
+      res.end("Invalid Slack Socket Mode envelope");
+      return;
+    }
+    const stale = isTrustedSlackEnvelopeStale({
+      envelope: body.value,
+      maxEventAgeSeconds,
+    });
+    if (stale === "invalid") {
+      res.statusCode = 400;
+      res.end("Invalid event_time");
+      return;
+    }
+    if (stale) {
+      logVerbose(
+        `slack trusted-upstream: rejected stale envelope (maxEventAge=${maxEventAgeSeconds}s)`,
+      );
+      res.statusCode = 422;
+      res.end("event_time stale");
+      return;
+    }
+
+    // Unwrap the Socket Mode envelope before handing it to Bolt:
+    // upstream Bolt's `processEvent` expects the inner Slack body
+    // (event_callback / interactive / slash_commands) under `body`, not
+    // the outer `{type, envelope_id, payload}` envelope. Forwarding the
+    // whole envelope short-circuits Bolt's listener dispatch and the
+    // app never sees the event. We keep the outer envelope around for
+    // routing/metrics on the way in but only the payload is for Bolt.
+    logVerbose(`slack trusted-upstream: accepted verified envelope (type=${body.value.type})`);
+    await params.app.processEvent({
+      body: body.value.payload,
+      ack: async () => {},
+      customProperties: {},
+    });
+    res.statusCode = 200;
+    res.end();
+  };
+}
 
 function resolveStableSlackUserIdEntry(raw: string): string | undefined {
   const trimmed = raw.trim();
@@ -192,9 +332,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
   const botToken = resolveSlackBotToken(opts.botToken ?? account.botToken);
   const appToken = resolveSlackAppToken(opts.appToken ?? account.appToken);
-  if (!botToken || (slackMode !== "http" && !appToken)) {
+  if (!botToken || (slackMode === "socket" && !appToken)) {
     const missing =
-      slackMode === "http"
+      slackMode !== "socket"
         ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
         : `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`;
     throw new Error(missing);
@@ -203,6 +343,22 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     throw new Error(
       `Slack signing secret missing for account "${account.accountId}" (set channels.slack.signingSecret or channels.slack.accounts.${account.accountId}.signingSecret).`,
     );
+  }
+  if (slackMode === "trusted-upstream") {
+    if (appToken) {
+      runtime.log?.(
+        warn(
+          `Slack app token configured for account "${account.accountId}" but ignored in trusted-upstream mode.`,
+        ),
+      );
+    }
+    if (signingSecret) {
+      runtime.log?.(
+        warn(
+          `Slack signing secret configured for account "${account.accountId}" but ignored in trusted-upstream mode.`,
+        ),
+      );
+    }
   }
 
   const slackCfg = account.config;
@@ -245,7 +401,22 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
-  const clientOptions = resolveSlackWebClientOptions();
+  const clientOptions = resolveSlackWebClientOptions(
+    slackCfg.slackApiUrl ? { slackApiUrl: slackCfg.slackApiUrl } : {},
+  );
+  const trustedUpstreamBotUserId = slackCfg.trustedUpstream?.botUserId?.trim();
+  const trustedUpstreamBotId = slackCfg.trustedUpstream?.botId?.trim();
+  if (slackMode === "trusted-upstream" && (!trustedUpstreamBotUserId || !trustedUpstreamBotId)) {
+    runtime.log?.(
+      warn(
+        `Slack trusted-upstream mode active for account "${account.accountId}" without ` +
+          `channels.slack.trustedUpstream.botUserId/botId. Bolt will fall back to its ` +
+          `lazy auth.test call against Slack, which fails with invalid_auth when the ` +
+          `gateway runs with a placeholder/proxied bot token. Set both fields to the ` +
+          `Slack workspace's actual bot identity to skip auth.test.`,
+      ),
+    );
+  }
   const { app, receiver, socketModeLogger } = createSlackBoltApp({
     interop: await getSlackBoltInterop(),
     slackMode,
@@ -255,6 +426,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     slackWebhookPath,
     clientOptions: clientOptions as Record<string, unknown>,
     ...(slackCfg.socketMode ? { socketMode: slackCfg.socketMode } : {}),
+    ...(slackMode === "trusted-upstream" && trustedUpstreamBotUserId && trustedUpstreamBotId
+      ? {
+          trustedUpstreamBotIdentity: {
+            botUserId: trustedUpstreamBotUserId,
+            botId: trustedUpstreamBotId,
+          },
+        }
+      : {}),
   });
 
   // Pre-set shuttingDown on the SocketModeClient before app.stop() to prevent
@@ -290,6 +469,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           }
         }
       : null;
+  const slackTrustedUpstreamHandler =
+    slackMode === "trusted-upstream"
+      ? createSlackTrustedUpstreamHttpHandler({
+          app: app as { processEvent: (event: unknown) => Promise<void> },
+          requireHeader: slackCfg.trustedUpstream?.requireHeader ?? {},
+          maxEventAgeSeconds: slackCfg.trustedUpstream?.maxEventAge,
+        })
+      : null;
   let unregisterHttpHandler: (() => void) | null = null;
 
   let botUserId = "";
@@ -299,27 +486,36 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const expectedApiAppIdFromAppToken = parseApiAppIdFromAppToken(appToken);
   let authTestFailed = false;
   let authTestError: string | undefined;
-  try {
-    const auth = await app.client.auth.test({ token: botToken });
-    botUserId = auth.user_id ?? "";
-    botId = (auth as { bot_id?: string }).bot_id ?? "";
-    teamId = auth.team_id ?? "";
-    apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
-    if (!botUserId) {
+  if (slackMode === "trusted-upstream" && trustedUpstreamBotUserId && trustedUpstreamBotId) {
+    // Trusted-upstream runs with a placeholder/proxied bot token, so Slack's
+    // auth.test would fail with invalid_auth. Use the operator-configured trusted
+    // identity as the authoritative bot identity for the monitor context so
+    // explicit-mention and self-detection keep working without a live auth.test.
+    botUserId = trustedUpstreamBotUserId;
+    botId = trustedUpstreamBotId;
+  } else {
+    try {
+      const auth = await app.client.auth.test({ token: botToken });
+      botUserId = auth.user_id ?? "";
+      botId = (auth as { bot_id?: string }).bot_id ?? "";
+      teamId = auth.team_id ?? "";
+      apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
+      if (!botUserId) {
+        authTestFailed = true;
+        authTestError = "auth.test returned no user_id";
+      }
+    } catch (err) {
       authTestFailed = true;
-      authTestError = "auth.test returned no user_id";
+      authTestError = err instanceof Error ? err.message : String(err);
     }
-  } catch (err) {
-    authTestFailed = true;
-    authTestError = err instanceof Error ? err.message : String(err);
-  }
-  if (authTestFailed) {
-    runtime.log?.(
-      warn(
-        `[${account.accountId}] slack auth.test failed at boot (${authTestError ?? "unknown error"}); ` +
-          "explicit bot-mention detection will be disabled until restart with a valid bot token",
-      ),
-    );
+    if (authTestFailed) {
+      runtime.log?.(
+        warn(
+          `[${account.accountId}] slack auth.test failed at boot (${authTestError ?? "unknown error"}); ` +
+            "explicit bot-mention detection will be disabled until restart with a valid bot token",
+        ),
+      );
+    }
   }
 
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
@@ -404,6 +600,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       accountId: account.accountId,
     });
   }
+  if (slackMode === "trusted-upstream" && slackTrustedUpstreamHandler) {
+    unregisterHttpHandler = registerSlackHttpHandler({
+      path: slackWebhookPath,
+      handler: slackTrustedUpstreamHandler,
+      log: runtime.log,
+      accountId: account.accountId,
+    });
+  }
 
   if (resolveToken) {
     void (async () => {
@@ -418,6 +622,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             const resolved = await resolveSlackChannelAllowlist({
               token: resolveToken,
               entries,
+              client: ctx.app.client,
             });
             const nextChannels = { ...channelsConfig };
             const mapping: string[] = [];
@@ -463,6 +668,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             const resolvedUsers = await resolveSlackUserAllowlist({
               token: resolveToken,
               entries: allowEntries,
+              client: ctx.app.client,
             });
             const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(
               resolvedUsers,
@@ -509,6 +715,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
               const resolvedUsers = await resolveSlackUserAllowlist({
                 token: resolveToken,
                 entries: Array.from(userEntries),
+                client: ctx.app.client,
               });
               const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(
                 resolvedUsers,
@@ -641,7 +848,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         }
       }
     } else {
-      runtime.log?.(`slack http mode listening at ${slackWebhookPath}`);
+      runtime.log?.(
+        slackMode === "trusted-upstream"
+          ? `slack trusted-upstream mode listening at ${slackWebhookPath}`
+          : `slack http mode listening at ${slackWebhookPath}`,
+      );
       if (!opts.abortSignal?.aborted) {
         await new Promise<void>((resolve) => {
           opts.abortSignal?.addEventListener("abort", () => resolve(), {
@@ -672,6 +883,7 @@ export const testing = {
   resolveDefaultGroupPolicy,
   resolveSlackBoltInterop,
   createSlackBoltApp,
+  createSlackTrustedUpstreamHttpHandler,
   createSlackSocketDisconnectWaiter,
   startSlackSocketAndWaitForDisconnect,
   getSocketEmitter,

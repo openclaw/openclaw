@@ -294,15 +294,34 @@ export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boo
   );
 }
 
+export type SlackTrustedUpstreamBotIdentity = {
+  /** Slack bot user id (e.g. "U0123ABC"). */
+  botUserId: string;
+  /** Slack bot id (e.g. "B0123ABC"). */
+  botId: string;
+};
+
 export function createSlackBoltApp(params: {
   interop: SlackBoltResolvedExports;
-  slackMode: "socket" | "http";
+  slackMode: "socket" | "http" | "trusted-upstream";
   botToken: string;
   appToken?: string;
   signingSecret?: string;
   slackWebhookPath: string;
   clientOptions: Record<string, unknown>;
   socketMode?: SlackSocketModeConfig;
+  /**
+   * Optional bot identity used to short-circuit Bolt's lazy `auth.test` call
+   * in trusted-upstream mode. When provided alongside `slackMode === "trusted-upstream"`,
+   * OpenClaw passes Bolt an `authorize` callback that returns this identity
+   * directly so Bolt never calls `auth.test` against Slack with the configured
+   * `botToken`. This is required when the gateway runs trusted-upstream with a
+   * placeholder token (the canonical zero-credentials shape, where the real
+   * token lives in an upstream proxy such as a trusted reverse proxy or sidecar).
+   *
+   * Ignored unless `slackMode === "trusted-upstream"`.
+   */
+  trustedUpstreamBotIdentity?: SlackTrustedUpstreamBotIdentity;
 }) {
   const socketModeLogger = createSlackSocketModeLogger();
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
@@ -328,20 +347,53 @@ export function createSlackBoltApp(params: {
       : new params.interop.HTTPReceiver({
           signingSecret: params.signingSecret ?? "",
           endpoints: params.slackWebhookPath,
+          // In trusted-upstream mode the Slack request is verified by a trusted
+          // local proxy/sidecar (and gated again by our own verification-header
+          // check before dispatch), so Bolt's built-in Slack signature
+          // verification is intentionally disabled for this mode only. This lets
+          // the gateway run with no Slack signing secret; without it Bolt's
+          // HTTPReceiver throws at construction when `signingSecret` is empty.
+          // Normal "http" mode keeps signature verification enabled.
+          ...(params.slackMode === "trusted-upstream" ? { signatureVerification: false } : {}),
         });
   if (params.slackMode === "socket") {
     installSlackNativeReconnectFailureObserver(receiver);
   }
-  const app = new params.interop.App({
-    token: params.botToken,
-    receiver,
-    clientOptions: params.clientOptions,
-    ignoreSelf: false,
-    // Bolt eagerly starts an auth.test promise in the constructor when token
-    // verification is enabled. Invalid tokens can reject before any listener
-    // consumes that promise, tripping OpenClaw's fatal unhandled-rejection path.
-    tokenVerificationEnabled: false,
-  });
+
+  const trustedUpstreamAuthorize =
+    params.slackMode === "trusted-upstream" && params.trustedUpstreamBotIdentity
+      ? async () => ({
+          botToken: params.botToken,
+          botUserId: params.trustedUpstreamBotIdentity!.botUserId,
+          botId: params.trustedUpstreamBotIdentity!.botId,
+        })
+      : undefined;
+
+  // Bolt's App accepts EITHER `token` (with optional eager/lazy auth.test) OR
+  // `authorize` (the callback returns identity directly and Bolt never calls
+  // auth.test). For trusted-upstream + configured identity we use authorize so
+  // the gateway can run with a placeholder bot token without `invalid_auth`
+  // failures on the lazy auth.test path. All other modes keep the existing
+  // token + tokenVerificationEnabled=false shape (eager auth.test is the
+  // OpenClaw upstream default which we already disabled, and the Socket Mode
+  // receiver bootstraps identity through the websocket handshake).
+  const app = trustedUpstreamAuthorize
+    ? new params.interop.App({
+        receiver,
+        clientOptions: params.clientOptions,
+        ignoreSelf: false,
+        authorize: trustedUpstreamAuthorize,
+      })
+    : new params.interop.App({
+        token: params.botToken,
+        receiver,
+        clientOptions: params.clientOptions,
+        ignoreSelf: false,
+        // Bolt eagerly starts an auth.test promise in the constructor when token
+        // verification is enabled. Invalid tokens can reject before any listener
+        // consumes that promise, tripping OpenClaw's fatal unhandled-rejection path.
+        tokenVerificationEnabled: false,
+      });
   app.use(async (args) => {
     if (shouldSkipOpenClawSlackSelfEvent(args)) {
       return;

@@ -1,7 +1,36 @@
 // Slack tests cover shared plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { createSlackPluginBase, setSlackChannelAllowlist, slackConfigAdapter } from "./shared.js";
+import type { ResolvedSlackAccount } from "./accounts.js";
+import {
+  createSlackPluginBase,
+  isSlackPluginAccountConfigured,
+  setSlackChannelAllowlist,
+  slackConfigAdapter,
+} from "./shared.js";
+
+function createAccount(
+  overrides: Partial<ResolvedSlackAccount> & {
+    config?: Partial<ResolvedSlackAccount["config"]>;
+  } = {},
+): ResolvedSlackAccount {
+  const { config: configOverrides, ...accountOverrides } = overrides;
+  return {
+    accountId: "default",
+    enabled: true,
+    botToken: "xoxb-test",
+    appToken: undefined,
+    userToken: undefined,
+    botTokenSource: "config",
+    appTokenSource: "none",
+    userTokenSource: "none",
+    config: {
+      mode: "socket",
+      ...configOverrides,
+    } as ResolvedSlackAccount["config"],
+    ...accountOverrides,
+  };
+}
 
 describe("createSlackPluginBase", () => {
   it("owns Slack native command name overrides", () => {
@@ -88,5 +117,81 @@ describe("slackConfigAdapter", () => {
 
     expect(slackConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["U123"]);
     expect(slackConfigAdapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("C123");
+  });
+});
+
+describe("isSlackPluginAccountConfigured", () => {
+  it("treats trusted-upstream as configured with only a bot token", () => {
+    expect(
+      isSlackPluginAccountConfigured(
+        createAccount({
+          botToken: "xoxb-placeholder-proxied",
+          appToken: undefined,
+          config: {
+            mode: "trusted-upstream",
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("treats trusted-upstream as unconfigured without a bot token", () => {
+    expect(
+      isSlackPluginAccountConfigured(
+        createAccount({
+          botToken: undefined,
+          appToken: undefined,
+          config: {
+            mode: "trusted-upstream",
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("still requires an app token for socket mode", () => {
+    expect(
+      isSlackPluginAccountConfigured(
+        createAccount({
+          config: {
+            mode: "socket",
+          },
+        }),
+      ),
+    ).toBe(false);
+
+    expect(
+      isSlackPluginAccountConfigured(
+        createAccount({
+          appToken: "xapp-test",
+          config: {
+            mode: "socket",
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("still requires a signing secret for http mode", () => {
+    expect(
+      isSlackPluginAccountConfigured(
+        createAccount({
+          config: {
+            mode: "http",
+          },
+        }),
+      ),
+    ).toBe(false);
+
+    expect(
+      isSlackPluginAccountConfigured(
+        createAccount({
+          config: {
+            mode: "http",
+            signingSecret: "secret",
+          },
+        }),
+      ),
+    ).toBe(true);
   });
 });

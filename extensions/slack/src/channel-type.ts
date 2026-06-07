@@ -76,7 +76,10 @@ export async function resolveSlackConversationInfo(params: {
   }
 
   try {
-    const client = createSlackWebClient(token);
+    const client = createSlackWebClient(
+      token,
+      account.config.slackApiUrl ? { slackApiUrl: account.config.slackApiUrl } : {},
+    );
     if (isNativeImChannel) {
       const opened = await client.conversations.open({
         channel: channelId,

@@ -97,6 +97,47 @@ function loadSlashSkillCommandsRuntime() {
   return slashSkillCommandsRuntimePromise;
 }
 
+function createSyntheticSlashRespondFallback({
+  ctx,
+  command,
+}: {
+  ctx: SlackMonitorContext;
+  command: SlackCommandMiddlewareArgs["command"];
+}): SlackCommandMiddlewareArgs["respond"] {
+  return async (message) => {
+    const channelId = command.channel_id;
+    const userId = command.user_id;
+    if (!channelId || !userId) {
+      return;
+    }
+    const payload =
+      typeof message === "string"
+        ? ({ text: message } as { text?: string; blocks?: SlackBlock[]; response_type?: string })
+        : (message as { text?: string; blocks?: SlackBlock[]; response_type?: string });
+    const isEphemeral = payload.response_type !== "in_channel";
+    if (isEphemeral) {
+      await ctx.app.client.chat.postEphemeral({
+        token: ctx.botToken,
+        channel: channelId,
+        user: userId,
+        text: payload.text ?? "",
+        blocks: payload.blocks,
+      });
+      return;
+    }
+    // Bind the Slack Web API method to a local before calling so the lint rule
+    // that targets DOM `postMessage(targetOrigin)` does not false-positive on
+    // the Slack client's `chat.postMessage` (mirrors send.ts).
+    const postChatMessage = ctx.app.client.chat.postMessage.bind(ctx.app.client.chat);
+    await postChatMessage({
+      token: ctx.botToken,
+      channel: channelId,
+      text: payload.text ?? "",
+      blocks: payload.blocks,
+    });
+  };
+}
+
 function resolveSlackCommandMenuModelContext(params: {
   cfg: SlackMonitorContext["cfg"];
   agentId: string;
@@ -388,13 +429,17 @@ export async function registerSlackMonitorSlashCommands(params: {
   const handleSlashCommand = async (p: {
     command: SlackCommandMiddlewareArgs["command"];
     ack: SlackCommandMiddlewareArgs["ack"];
-    respond: SlackCommandMiddlewareArgs["respond"];
+    respond?: SlackCommandMiddlewareArgs["respond"];
     body?: unknown;
     prompt: string;
     commandArgs?: CommandArgs;
     commandDefinition?: ChatCommandDefinition;
   }) => {
     const { command, ack, respond, body, prompt, commandArgs, commandDefinition } = p;
+    const respondFn =
+      typeof respond === "function"
+        ? respond
+        : createSyntheticSlashRespondFallback({ ctx, command });
     try {
       if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
         await ack();
@@ -434,7 +479,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           channelType,
         })
       ) {
-        await respond({
+        await respondFn({
           text: "This channel is not allowed.",
           response_type: "ephemeral",
         });
@@ -457,13 +502,13 @@ export async function registerSlackMonitorSlashCommands(params: {
           allowFromLower: effectiveAllowFromLower,
           resolveSenderName: ctx.resolveUserName,
           sendPairingReply: async (text) => {
-            await respond({
+            await respondFn({
               text,
               response_type: "ephemeral",
             });
           },
           onDisabled: async () => {
-            await respond({
+            await respondFn({
               text: "Slack DMs are disabled.",
               response_type: "ephemeral",
             });
@@ -472,7 +517,7 @@ export async function registerSlackMonitorSlashCommands(params: {
             logVerbose(
               `slack: blocked slash sender ${command.user_id} (dmPolicy=${ctx.dmPolicy}, ${allowMatchMeta})`,
             );
-            await respond({
+            await respondFn({
               text: "You are not authorized to use this command.",
               response_type: "ephemeral",
             });
@@ -503,7 +548,7 @@ export async function registerSlackMonitorSlashCommands(params: {
               channelAllowed,
             })
           ) {
-            await respond({
+            await respondFn({
               text: "This channel is not allowed.",
               response_type: "ephemeral",
             });
@@ -514,7 +559,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           // config (matchSource undefined) should be allowed under open policy.
           const hasExplicitConfig = Boolean(channelConfig?.matchSource);
           if (!channelAllowed && (ctx.groupPolicy !== "open" || hasExplicitConfig)) {
-            await respond({
+            await respondFn({
               text: "This channel is not allowed.",
               response_type: "ephemeral",
             });
@@ -540,7 +585,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       });
       const senderGate = slashIngress.senderAccess.gate;
       if (isRoom && senderGate?.allowed === false) {
-        await respond({
+        await respondFn({
           text: "You are not authorized to use this command here.",
           response_type: "ephemeral",
         });
@@ -552,7 +597,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       commandAuthorized = slashIngress.commandAccess.authorized;
       if (isRoomish) {
         if (ctx.useAccessGroups && !commandAuthorized) {
-          await respond({
+          await respondFn({
             text: "You are not authorized to use this command.",
             response_type: "ephemeral",
           });
@@ -613,7 +658,7 @@ export async function registerSlackMonitorSlashCommands(params: {
             createExternalMenuToken: (choices) =>
               storeSlackExternalArgMenu({ choices, userId: command.user_id }),
           });
-          await respond({
+          await respondFn({
             text: title,
             blocks,
             response_type: "ephemeral",
@@ -734,7 +779,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       const deliverSlashPayloads = async (replies: ReplyPayload[]) => {
         await deliverSlackSlashReplies({
           replies,
-          respond,
+          respond: respondFn,
           ephemeral: slashCommand.ephemeral,
           textLimit: ctx.textLimit,
           chunkMode: resolveChunkMode(cfg, "slack", route.accountId),
@@ -768,7 +813,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       }
     } catch (err) {
       runtime.error?.(danger(`slack slash handler failed: ${formatErrorMessage(err)}`));
-      await respond({
+      await respondFn({
         text: "Sorry, something went wrong handling that command.",
         response_type: "ephemeral",
       });

@@ -43,8 +43,39 @@ function resolveSlackProxyAgent(): Agent | undefined {
   }
 }
 
+/**
+ * Env var that overrides the Slack Web API base URL for **every** WebClient
+ * instance OpenClaw constructs through `resolveSlackWebClientOptions` and
+ * `resolveSlackWriteClientOptions`. Useful in trusted-upstream / proxied
+ * deployments where outbound Slack Web API calls must route through an
+ * upstream proxy (e.g. a trusted reverse proxy or sidecar) that holds the real bot token, so
+ * the gateway runs with a placeholder token.
+ *
+ * Per-account `channels.slack.slackApiUrl` (passed in `options.slackApiUrl`)
+ * still wins over this env override; the env is only applied when the
+ * caller did not pass an explicit `slackApiUrl` option. This preserves the
+ * existing per-account override that `actions.ts` / `channel-type.ts` /
+ * `directory-live.ts` already plumb through, while also covering the call
+ * sites (e.g. the trusted-upstream Bolt app's internal `WebClient`) that do
+ * not thread `account.config.slackApiUrl` through.
+ */
+const SLACK_API_URL_ENV = "SLACK_API_URL_OVERRIDE";
+
+function resolveSlackApiUrlFromEnv(): string | undefined {
+  const raw = process.env[SLACK_API_URL_ENV];
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 export function resolveSlackWebClientOptions(options: WebClientOptions = {}): WebClientOptions {
+  const envSlackApiUrl = resolveSlackApiUrlFromEnv();
   return {
+    // Apply the env override first so the caller can still win by passing an
+    // explicit `slackApiUrl` (per-account config or a direct override).
+    ...(envSlackApiUrl ? { slackApiUrl: envSlackApiUrl } : {}),
     ...options,
     agent: options.agent ?? resolveSlackProxyAgent(),
     retryConfig: options.retryConfig ?? SLACK_DEFAULT_RETRY_OPTIONS,
@@ -52,7 +83,9 @@ export function resolveSlackWebClientOptions(options: WebClientOptions = {}): We
 }
 
 export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): WebClientOptions {
+  const envSlackApiUrl = resolveSlackApiUrlFromEnv();
   return {
+    ...(envSlackApiUrl ? { slackApiUrl: envSlackApiUrl } : {}),
     ...options,
     agent: options.agent ?? resolveSlackProxyAgent(),
     retryConfig: options.retryConfig ?? SLACK_WRITE_RETRY_OPTIONS,

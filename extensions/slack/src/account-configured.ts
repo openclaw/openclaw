@@ -11,5 +11,11 @@ export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): b
   if (mode === "http") {
     return hasConfiguredAccountValue(account.config.signingSecret);
   }
+  if (mode === "trusted-upstream") {
+    // Trusted-upstream ingress is verified and forwarded by a trusted local
+    // proxy/sidecar; the gateway holds only a placeholder bot token and no
+    // signing/app token, so a configured bot token is sufficient.
+    return true;
+  }
   return Boolean(account.appToken?.trim());
 }
