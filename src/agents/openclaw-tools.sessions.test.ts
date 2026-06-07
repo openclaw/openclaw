@@ -844,7 +844,10 @@ describe("sessions tools", () => {
       return request.method === "chat.history";
     });
     expect(historyCall).toBeDefined();
-    expect((historyCall?.[0] as { params?: { limit?: number } }).params?.limit).toBe(10);
+    if (!historyCall) {
+      throw new Error("missing chat.history call");
+    }
+    expect((historyCall[0] as { params?: { limit?: number } }).params?.limit).toBe(10);
   });
 
   it("sessions_history honors explicit smaller limits", async () => {
@@ -860,7 +863,10 @@ describe("sessions tools", () => {
       return request.method === "chat.history";
     });
     expect(historyCall).toBeDefined();
-    expect((historyCall?.[0] as { params?: { limit?: number } }).params?.limit).toBe(3);
+    if (!historyCall) {
+      throw new Error("missing chat.history call");
+    }
+    expect((historyCall[0] as { params?: { limit?: number } }).params?.limit).toBe(3);
   });
 
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {

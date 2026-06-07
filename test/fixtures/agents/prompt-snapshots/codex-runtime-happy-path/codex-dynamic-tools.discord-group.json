@@ -1041,7 +1041,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Fetch sanitized history for visible session. Use before replying, debugging, resuming; supports limits/tool messages.",
+    "description": "Fetch the last 10 sanitized turns for a visible session. `includeTools` is supported for bounded recovery/debug replay; omit for non-tool recall. Use only after session reset/recovery when required context is missing.",
     "inputSchema": {
       "properties": {
         "includeTools": {
