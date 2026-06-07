@@ -72,8 +72,9 @@ const MSTEAMS_AGENT_TASK_TOOL: RealtimeVoiceTool = {
   description:
     "Hand a long-running task to the OpenClaw agent to complete in the background. " +
     "Use this for work that may take more than a few seconds (multi-step actions, lengthy research). " +
-    "After calling it, tell the caller you are on it and will message them on Microsoft Teams when it is done. " +
-    "Do NOT use this for quick questions or lookups — use openclaw_agent_consult and answer in-line for those.",
+    "After calling it, tell the caller you are on it and will reach them on Microsoft Teams when it is done. " +
+    "Do NOT use this for quick questions or lookups — use openclaw_agent_consult and answer in-line for those. " +
+    'Set deliverVia to "call" when the caller asked to be CALLED back when done; otherwise it defaults to a Teams chat message.',
   parameters: {
     type: "object",
     properties: {
@@ -81,6 +82,12 @@ const MSTEAMS_AGENT_TASK_TOOL: RealtimeVoiceTool = {
         type: "string",
         description:
           "The task to perform, described in full so the background agent can complete it unattended.",
+      },
+      deliverVia: {
+        type: "string",
+        enum: ["message", "call"],
+        description:
+          'How to deliver the result: "message" (default) sends a Teams chat message; "call" places a Teams call back to the caller and speaks the result.',
       },
     },
     required: ["task"],
@@ -122,6 +129,11 @@ const MSTEAMS_LOOK_NO_FRAME = {
 /** Spoken acknowledgement returned to the model when a background task is accepted. */
 const MSTEAMS_ASYNC_TASK_ACK = {
   text: "Got it — I'm on it and I'll message you on Microsoft Teams when it's done.",
+};
+
+/** Acknowledgement when the caller asked to be called back (deliverVia: "call"). */
+const MSTEAMS_ASYNC_TASK_ACK_CALL = {
+  text: "Got it — I'm on it and I'll call you back on Microsoft Teams when it's done.",
 };
 
 /**
@@ -565,17 +577,21 @@ export function createMsteamsRealtimeCall(params: {
       return;
     }
     const task = readArgString(event.args, "task") ?? readArgString(event.args, "question");
-    // Ack immediately so the model speaks the "I'll message you" line and the
-    // call is free to continue or hang up.
-    rtSession.submitToolResult(event.callId, MSTEAMS_ASYNC_TASK_ACK);
+    const deliverVia = readArgString(event.args, "deliverVia") === "call" ? "call" : "message";
+    // Ack immediately so the model speaks the "I'll reach you" line and the call
+    // is free to continue or hang up.
+    rtSession.submitToolResult(
+      event.callId,
+      deliverVia === "call" ? MSTEAMS_ASYNC_TASK_ACK_CALL : MSTEAMS_ASYNC_TASK_ACK,
+    );
     if (!task) {
       return;
     }
     // Detached: not awaited and not cancelled on call teardown.
-    void runAsyncTask(task);
+    void runAsyncTask(task, deliverVia);
   }
 
-  async function runAsyncTask(task: string): Promise<void> {
+  async function runAsyncTask(task: string, deliverVia: "message" | "call"): Promise<void> {
     const { agentRuntime, voiceConfig, cfg } = deps;
     if (!agentRuntime || !voiceConfig || !cfg) {
       return;
@@ -585,9 +601,11 @@ export function createMsteamsRealtimeCall(params: {
     const agentId = voiceConfig.agentId ?? "main";
     const sessionKey = `agent:${agentId}:subagent:msteams:${callId}`;
 
-    const deliveryInstruction = deliveryTarget
-      ? `This task was delegated from a live Microsoft Teams voice call and now runs in the background; the caller is no longer waiting on the line. Complete the task, then deliver the final result to the caller by calling the message tool exactly once with action "send", channel "msteams", target "${deliveryTarget}". Keep the delivered message concise.`
-      : "This task was delegated from a Microsoft Teams voice call and runs in the background; deliver the final result to the caller when complete.";
+    const deliveryInstruction = !deliveryTarget
+      ? "This task was delegated from a Microsoft Teams voice call and runs in the background; deliver the final result to the caller when complete."
+      : deliverVia === "call"
+        ? `This task was delegated from a live Microsoft Teams voice call and now runs in the background; the caller is no longer on the line. Complete the task, then CALL the caller back by invoking the voice_call tool exactly once with action "initiate_call", to "${deliveryTarget}", mode "notify", and message set to a concise, speakable summary of the result.`
+        : `This task was delegated from a live Microsoft Teams voice call and now runs in the background; the caller is no longer waiting on the line. Complete the task, then deliver the final result to the caller by calling the message tool exactly once with action "send", channel "msteams", target "${deliveryTarget}". Keep the delivered message concise.`;
 
     try {
       const { provider: agentProvider, model } = resolveVoiceResponseModel({
