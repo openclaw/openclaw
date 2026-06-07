@@ -1,0 +1,186 @@
+// Resume post-core plugin convergence after a gateway control-plane git/source
+// update.
+//
+// `runGatewayUpdate` (git mode) runs `openclaw doctor --fix` with
+// `OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1`, which makes the doctor
+// pass DEFER configured-plugin repair to a later convergence step (see
+// `shouldDeferConfiguredPluginInstallRepair`). The `openclaw update` CLI resumes
+// that deferred work in a fresh post-core process; the gateway `update.run` RPC
+// did not, so a git/source core update would restart on the new core with stale
+// official plugins still pinned to versions built against removed core APIs.
+//
+// This helper closes that CLI/RPC asymmetry by spawning the freshly-built
+// binary's hidden `openclaw update finalize` entrypoint — the designed
+// "external core runtime change" finalizer that runs doctor plus
+// `updatePluginsAfterCoreUpdate` (which calls
+// `updateNpmInstalledPlugins({ syncOfficialPluginInstalls: true, disableOnFailure: true })`
+// and `runPostCorePluginConvergence`). Finalization never restarts, so the RPC
+// handler keeps ownership of the gateway restart.
+import path from "node:path";
+import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { resolveStableNodePath } from "./stable-node-path.js";
+import type { UpdateChannel } from "./update-channels.js";
+import type { UpdateRunResult } from "./update-runner.js";
+
+const DEFAULT_FINALIZE_TIMEOUT_MS = 30 * 60_000;
+
+export type PostCoreFinalizeOutcome =
+  | { status: "skipped"; reason: "not-git-update" | "entrypoint-missing" }
+  | { status: "ok"; entrypoint: string }
+  | {
+      status: "error";
+      reason: "nonzero-exit" | "spawn-failed";
+      entrypoint: string;
+      exitCode?: number;
+      message?: string;
+    };
+
+type FinalizeSpawnResult = { code: number | null; stderr?: string };
+
+export type PostCoreFinalizeSpawner = (params: {
+  argv: string[];
+  cwd: string;
+  timeoutMs: number;
+  env: NodeJS.ProcessEnv;
+}) => Promise<FinalizeSpawnResult>;
+
+const defaultFinalizeSpawner: PostCoreFinalizeSpawner = async ({ argv, cwd, timeoutMs, env }) => {
+  const res = await runCommandWithTimeout(argv, { cwd, timeoutMs, env });
+  return { code: res.code, ...(res.stderr ? { stderr: res.stderr } : {}) };
+};
+
+// Only git/source updates routed through `runGatewayUpdate` defer-and-drop
+// plugin convergence. Package-manager/global installs already converge because
+// the RPC routes them through `startManagedServiceUpdateHandoff`, which
+// re-enters the full `openclaw update` CLI.
+function isGitUpdateNeedingFinalize(
+  result: UpdateRunResult,
+): result is UpdateRunResult & { root: string } {
+  return (
+    result.status === "ok" &&
+    result.mode === "git" &&
+    typeof result.root === "string" &&
+    result.root.length > 0
+  );
+}
+
+function buildFinalizeArgv(params: {
+  nodePath: string;
+  entrypoint: string;
+  channel?: UpdateChannel;
+  timeoutMs?: number;
+}): string[] {
+  const argv = [
+    params.nodePath,
+    params.entrypoint,
+    "update",
+    "finalize",
+    "--json",
+    "--yes",
+    "--no-restart",
+  ];
+  if (params.channel) {
+    argv.push("--channel", params.channel);
+  }
+  if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
+    // `update finalize --timeout` is per-step seconds.
+    argv.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
+  }
+  return argv;
+}
+
+export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
+  result: UpdateRunResult;
+  channel?: UpdateChannel;
+  timeoutMs?: number;
+  resolveEntrypoint?: (root: string) => Promise<string | undefined>;
+  spawnFinalize?: PostCoreFinalizeSpawner;
+  env?: NodeJS.ProcessEnv;
+}): Promise<PostCoreFinalizeOutcome> {
+  const { result } = params;
+  if (!isGitUpdateNeedingFinalize(result)) {
+    return { status: "skipped", reason: "not-git-update" };
+  }
+  const resolveEntrypoint = params.resolveEntrypoint ?? resolveGatewayInstallEntrypoint;
+  const entrypoint = await resolveEntrypoint(result.root);
+  if (!entrypoint) {
+    return { status: "skipped", reason: "entrypoint-missing" };
+  }
+
+  const spawnFinalize = params.spawnFinalize ?? defaultFinalizeSpawner;
+  const timeoutMs =
+    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+      ? params.timeoutMs
+      : undefined;
+  const nodePath = await resolveStableNodePath(process.execPath);
+  const argv = buildFinalizeArgv({
+    nodePath,
+    entrypoint,
+    ...(params.channel ? { channel: params.channel } : {}),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  });
+  // Pin the finalizer's host-compat resolution to the just-installed core
+  // version so plugins reconcile against the new core, not the running process.
+  const compatHostVersion = result.after?.version ?? undefined;
+  const baseEnv = params.env ?? process.env;
+  const env: NodeJS.ProcessEnv = compatHostVersion
+    ? { ...baseEnv, OPENCLAW_COMPATIBILITY_HOST_VERSION: compatHostVersion }
+    : { ...baseEnv };
+
+  try {
+    const spawnResult = await spawnFinalize({
+      argv,
+      cwd: path.dirname(entrypoint),
+      timeoutMs: timeoutMs ?? DEFAULT_FINALIZE_TIMEOUT_MS,
+      env,
+    });
+    if (spawnResult.code === 0) {
+      return { status: "ok", entrypoint };
+    }
+    return {
+      status: "error",
+      reason: "nonzero-exit",
+      entrypoint,
+      ...(typeof spawnResult.code === "number" ? { exitCode: spawnResult.code } : {}),
+      ...(spawnResult.stderr ? { message: spawnResult.stderr } : {}),
+    };
+  } catch (err) {
+    return {
+      status: "error",
+      reason: "spawn-failed",
+      entrypoint,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+// Fold a finalize failure into the update result so the RPC handler's existing
+// `result.status === "ok"` restart gate skips the restart: restarting on the new
+// core after convergence failed would load the stale plugins we just failed to
+// reconcile. Mirrors the CLI, which exits non-zero before restarting on
+// post-core convergence failure.
+export function foldPostCoreFinalizeIntoResult(
+  result: UpdateRunResult,
+  outcome: PostCoreFinalizeOutcome,
+): UpdateRunResult {
+  if (outcome.status !== "error") {
+    return result;
+  }
+  return {
+    ...result,
+    status: "error",
+    reason: "post-core-plugin-finalize-failed",
+    steps: [
+      ...result.steps,
+      {
+        name: "post-core plugin finalize",
+        command: "openclaw update finalize",
+        cwd: result.root ?? process.cwd(),
+        durationMs: 0,
+        exitCode: outcome.reason === "nonzero-exit" ? (outcome.exitCode ?? 1) : 1,
+        ...(outcome.message ? { stderrTail: outcome.message } : {}),
+      },
+    ],
+  };
+}
