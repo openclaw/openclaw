@@ -31,11 +31,57 @@ describe("markdownToTelegramHtml", () => {
       ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
       ["renders lists without block HTML", "- one\n- two", "• one\n• two"],
       ["renders ordered lists with numbering", "2. two\n3. three", "2. two\n3. three"],
-      ["flattens headings", "# Title", "Title"],
+      ["renders headings as bold Telegram sections", "# Title", "<b>Title</b>"],
     ] as const;
     for (const [name, input, expected] of cases) {
       expect(markdownToTelegramHtml(input), name).toBe(expected);
     }
+  });
+
+  it("adds breathing room around Telegram section headings", () => {
+    const input = [
+      "Construct validity: moderate",
+      "SPS is plausible but may not be an adequate dose.",
+      "",
+      "Less certain for:",
+      "- Early intervention",
+      "- Younger people newly presenting",
+    ].join("\n");
+
+    expect(markdownToTelegramHtml(input, { wrapFileRefs: false })).toBe(
+      [
+        "<b>Construct validity: moderate</b>",
+        "",
+        "SPS is plausible but may not be an adequate dose.",
+        "",
+        "<b>Less certain for:</b>",
+        "",
+        "• Early intervention",
+        "• Younger people newly presenting",
+      ].join("\n"),
+    );
+  });
+
+  it("spaces styled heading lines before body text", () => {
+    const input = ["**Policy significance: high**", "The effect is small."].join("\n");
+
+    expect(markdownToTelegramHtml(input, { wrapFileRefs: false })).toBe(
+      ["<b>Policy significance: high</b>", "", "The effect is small."].join("\n"),
+    );
+  });
+
+  it("does not treat list items with bold lead-ins as section headings", () => {
+    const input = [
+      "1. **Direct clinical contact:** AP roles and supervised client-facing work.",
+      "2. **Research:** trials and implementation work.",
+    ].join("\n");
+
+    expect(markdownToTelegramHtml(input, { wrapFileRefs: false })).toBe(
+      [
+        "1. <b>Direct clinical contact:</b> AP roles and supervised client-facing work.",
+        "2. <b>Research:</b> trials and implementation work.",
+      ].join("\n"),
+    );
   });
 
   it("preserves supported Telegram HTML in stream markdown rendering", () => {
@@ -190,6 +236,14 @@ describe("markdownToTelegramHtml", () => {
     const res = markdownToTelegramHtml(input, { wrapFileRefs: false });
 
     expect(res).toBe("<pre><code>  • literal bullet\n3. literal number\n</code></pre>");
+  });
+
+  it("does not promote Telegram section headings inside fenced code", () => {
+    const input = ["```", "Clinical significance: weak", "body", "```"].join("\n");
+
+    const res = markdownToTelegramHtml(input, { wrapFileRefs: false });
+
+    expect(res).toBe("<pre><code>Clinical significance: weak\nbody\n</code></pre>");
   });
 
   it("does not insert Telegram list boundary spacing inside indented code", () => {
