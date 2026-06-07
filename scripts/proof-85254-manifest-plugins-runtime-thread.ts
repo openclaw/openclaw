@@ -28,12 +28,18 @@
  * observe — `resolveMetadataSnapshotForPolicies` — has exactly two
  * disk-side effects: it calls `getCurrentPluginMetadataSnapshot` and
  * (on miss) `resolvePluginMetadataSnapshot`, both of which probe the
- * installed-plugin-index ledger at `<stateDir>/plugins/installs.json`
- * via `resolveInstalledPluginIndexStorePath` → `fs.statSync` /
- * `fs.readFileSync`.  We point the state dir at a fresh empty temp
- * dir (so any access is observable, not cached), then wrap the
- * synchronous `fs` entry points to count touches against any path
- * inside `<stateDir>/plugins/`.
+ * installed-plugin-index store.  On current main that store is
+ * SQLite-backed: `resolveInstalledPluginIndexStorePath` returns
+ * `resolveOpenClawStateSqlitePath(...)` →
+ * `<stateDir>/state/openclaw.sqlite`, and
+ * `readPersistedInstalledPluginIndexFromSqlite` guards on
+ * `existsSync(resolveInstalledPluginIndexStorePath(...))` before
+ * opening the state DB.  (The legacy `<stateDir>/plugins/installs.json`
+ * JSON ledger is no longer the live read path; instrumenting it would
+ * observe nothing.)  We point the state dir at a fresh empty temp dir
+ * (so any access is observable, not cached), then wrap the synchronous
+ * `fs` entry points to count touches against the exact SQLite store
+ * path returned by `resolveInstalledPluginIndexStorePath`.
  *
  * NOTE: the same `normalizeModelRef` chain also calls
  * `resolveProviderHookPlugin` (in `provider-runtime.ts`) BEFORE the
@@ -85,10 +91,18 @@ async function main(): Promise<void> {
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_TEST_FAST = "1";
 
-  // Sentinel: anything inside `<stateDir>/plugins/` is a tell that the
-  // snapshot-resolution machinery (the only consumer of
-  // resolveInstalledPluginIndexStorePath in this chain) touched disk.
-  const sentinelDir = path.join(stateDir, "plugins");
+  // Sentinel: the EXACT SQLite installed-plugin-index store path that the
+  // snapshot-resolution machinery probes.  We resolve it through the real
+  // production resolver (`resolveInstalledPluginIndexStorePath`) rather
+  // than hardcoding `<stateDir>/state/openclaw.sqlite`, so the proof
+  // stays anchored to wherever production currently resolves the store —
+  // if that path ever moves again, this sentinel tracks it instead of
+  // silently observing a dead path.  A touch on this exact path is the
+  // tell that `resolveMetadataSnapshotForPolicies` reached the
+  // installed-plugin-index store on disk.
+  const { resolveInstalledPluginIndexStorePath } =
+    await import("../src/plugins/installed-plugin-index-store-path.js");
+  const sentinelPath = resolveInstalledPluginIndexStorePath({ stateDir });
 
   // ----- 2. Wrap synchronous fs functions to count sentinel touches ---
   let sentinelTouches = 0;
@@ -97,7 +111,7 @@ async function main(): Promise<void> {
     if (typeof p !== "string") {
       return;
     }
-    if (p.startsWith(sentinelDir)) {
+    if (p === sentinelPath) {
       sentinelTouches += 1;
       touchedPaths.add(p);
     }
@@ -197,7 +211,7 @@ async function main(): Promise<void> {
   console.log(
     `    normalizeModelRef result: provider=${refWithout.provider} model=${refWithout.model}`,
   );
-  console.log(`    sentinel disk touches under ${sentinelDir}: ${withoutTouches.count}`);
+  console.log(`    sentinel disk touches on ${sentinelPath}: ${withoutTouches.count}`);
   if (withoutTouches.paths.length > 0) {
     console.log(`    touched paths: ${withoutTouches.paths.join(", ")}`);
   }
@@ -213,7 +227,7 @@ async function main(): Promise<void> {
   const refWith = normalizeModelRef("openai", "gpt-5", { manifestPlugins });
   const withTouches = snapshotCounts();
   console.log(`    normalizeModelRef result: provider=${refWith.provider} model=${refWith.model}`);
-  console.log(`    sentinel disk touches under ${sentinelDir}: ${withTouches.count}`);
+  console.log(`    sentinel disk touches on ${sentinelPath}: ${withTouches.count}`);
   if (withTouches.paths.length > 0) {
     console.log(`    touched paths: ${withTouches.paths.join(", ")}`);
   }
