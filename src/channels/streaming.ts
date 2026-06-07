@@ -1000,9 +1000,14 @@ export function formatChannelProgressDraftText(params: {
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
   const bullet = params.bullet ?? "•";
-  const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = resolvedLabel
-    ? [{ draftLabel: resolvedLabel }, ...params.lines]
-    : params.lines;
+  const labelLines: Array<{ draftLabel: string }> = resolvedLabel
+    ? [{ draftLabel: resolvedLabel }]
+    : [];
+  const progressLineLimit = resolvedLabel ? Math.max(1, maxLines - 1) : maxLines;
+  const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = [
+    ...labelLines,
+    ...params.lines.slice(-progressLineLimit),
+  ];
   const lines = rawLines
     .map((line) => {
       const isLabelLine = typeof line === "object" && line !== null && "draftLabel" in line;
@@ -1019,7 +1024,7 @@ export function formatChannelProgressDraftText(params: {
     .filter((line): line is { text: string; isLabelLine: boolean; prefix: boolean } =>
       Boolean(line),
     )
-    .slice(-maxLines)
+    .slice(0, maxLines)
     .map(({ text, isLabelLine, prefix }) => {
       const formatted = isLabelLine ? text : formatLine(text);
       return {

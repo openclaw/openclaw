@@ -472,6 +472,9 @@ export function createFollowupRunner(params: {
         shouldEmitVerboseProgress() && !shouldSuppressDefaultToolProgressMessages();
       const shouldEmitToolOutputProgress = () =>
         resolveCurrentVerboseLevel() === "full" && !shouldSuppressDefaultToolProgressMessages();
+      const shouldSuppressFollowupToolResultPayload = () =>
+        opts?.suppressDefaultToolProgressMessages === true &&
+        run.sourceReplyDeliveryMode !== "message_tool_only";
       let observedVisibleToolErrorProgress = false;
       const markVisibleToolErrorProgress = () => {
         if (resolveCurrentVerboseLevel() === "on" && shouldEmitToolResultProgress()) {
@@ -954,6 +957,9 @@ export function createFollowupRunner(params: {
                       run.sourceReplyDeliveryMode === "message_tool_only" &&
                       !shouldEmitToolResultProgress()
                     ) {
+                      return;
+                    }
+                    if (shouldSuppressFollowupToolResultPayload()) {
                       return;
                     }
                     await sendFollowupPayloads(

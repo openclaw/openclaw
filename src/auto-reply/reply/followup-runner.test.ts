@@ -2002,6 +2002,67 @@ describe("createFollowupRunner progress forwarding", () => {
     );
   });
 
+  it("suppresses default tool-result payloads while preserving channel-owned progress callbacks", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const onCommandOutput = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "8215203590",
+      originatingAccountId: "default",
+      run: {
+        messageProvider: "telegram",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        onToolResult?: (payload: { text: string }) => Promise<void>;
+        shouldEmitToolResult?: () => boolean;
+        shouldEmitToolOutput?: () => boolean;
+      }) => {
+        expect(args.shouldEmitToolResult?.()).toBe(true);
+        expect(args.shouldEmitToolOutput?.()).toBe(false);
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "exec",
+            args: { command: "echo progress-draft-only" },
+          },
+        });
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: { phase: "end", name: "exec", status: "failed", exitCode: 1 },
+        });
+        await args.onToolResult?.({ text: "⚠️ 🛠️ run tests failed" });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { suppressDefaultToolProgressMessages: true, onToolStart, onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+      toolProgressDetail: "raw",
+    });
+
+    await runner(queued);
+
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo progress-draft-only" },
+      detailMode: "raw",
+    });
+    expect(onCommandOutput).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "end", name: "exec", status: "failed", exitCode: 1 }),
+    );
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
   it("suppresses queued follow-up progress when verbose progress is disabled", async () => {
     const storePath = path.join(
       await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-progress-off-")),
