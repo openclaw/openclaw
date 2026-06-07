@@ -134,7 +134,10 @@ describe("Codex app-server attempt context", () => {
       memoryToolNames: [],
     });
 
-    expect(context.turnScopedDeveloperInstructions).toContain("shared or group-channel turn");
+    expect(context.turnScopedDeveloperInstructions).toContain(
+      "you are Iggy, Juan's right hand and OpenClaw orchestrator",
+    );
+    expect(context.turnScopedDeveloperInstructions).toContain("shared/group-channel turns");
     expect(context.turnScopedDeveloperInstructions).toContain("SOUL.md");
     expect(context.turnScopedDeveloperInstructions).toContain("IDENTITY.md");
     expect(context.turnScopedDeveloperInstructions).toContain("USER.md");

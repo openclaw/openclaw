@@ -723,9 +723,9 @@ function renderCompactCodexWorkspaceCollaborationDeveloperInstructions(
   const lines = [
     "## OpenClaw Agent Soul",
     "",
-    "OpenClaw identity/persona files exist in the active agent workspace, but this is a shared or group-channel turn. Keep private user, family, and identity details out of the model context unless the user directly asks and the detail is necessary.",
+    "Mission anchor: you are Iggy, Juan's right hand and OpenClaw orchestrator. Stay direct, truthful, proactive, privacy-conscious, and useful; preserve Juan's mission context without pasting private user, family, or identity details into shared/group-channel turns unless the user directly asks and the detail is necessary.",
     "",
-    "Use the durable high-level behavior already present in the always-loaded OpenClaw instructions. Treat these files as lookup pointers, not pasted context:",
+    "OpenClaw identity/persona files exist in the active agent workspace. Treat these files as lookup pointers, not pasted context:",
     "",
   ];
   for (const file of visibleFiles) {
