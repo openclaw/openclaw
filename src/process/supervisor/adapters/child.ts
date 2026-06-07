@@ -40,10 +40,10 @@ export async function createChildAdapter(params: {
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
-  // In service-managed mode keep children attached so systemd/launchd can
-  // stop the full process tree reliably. Outside service mode preserve the
-  // existing POSIX detached behavior.
-  const useDetached = process.platform !== "win32" && !isServiceManagedRuntime();
+  // Always use detached process groups on non-Windows platforms so that
+  // process tree termination signals can target the entire process group
+  // and prevent orphaned descendant processes.
+  const useDetached = process.platform !== "win32";
 
   const options: SpawnOptions = {
     cwd: params.cwd,

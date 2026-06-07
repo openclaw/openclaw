@@ -381,4 +381,28 @@ describe("process supervisor", () => {
     expect(exit.stdout.endsWith("stdout-tail")).toBe(true);
     expect(exit.stderr.endsWith("stderr-tail")).toBe(true);
   });
+
+  it("terminates all active runs with SIGKILL when the process exit event is triggered", async () => {
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    await spawnChild(supervisor, {
+      sessionId: "s-exit-test",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 10_000,
+      stdinMode: "pipe-closed",
+    });
+
+    // Manually trigger the process 'exit' event.
+    process.emit("exit", 0);
+
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
+
+    // Clean up the global map to keep tests isolated.
+    const activeRunsGlobal = (globalThis as any)[
+      Symbol.for("openclaw.supervisor.activeRunsGlobal")
+    ];
+    activeRunsGlobal?.clear();
+  });
 });

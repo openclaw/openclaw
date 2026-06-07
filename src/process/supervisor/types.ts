@@ -6,7 +6,8 @@ export type TerminationReason =
   | "no-output-timeout"
   | "spawn-error"
   | "signal"
-  | "exit";
+  | "exit"
+  | "gateway-exit";
 
 export type RunRecord = {
   runId: string;
