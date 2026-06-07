@@ -27,9 +27,9 @@ export async function reparseProgramFromActionArgs(
 ): Promise<void> {
   const actionCommand = actionArgs.at(-1) as Command | undefined;
   // Use the true root program for argv reconstruction and parsing.
-  // For nested lazy commands (e.g. workspaces → audit), `program` is a sub-command
-  // whose rawArgs is cleared by Commander's restoreStateBeforeParse(). Only the
-  // root program retains the rawArgs set by _prepareUserArgs.
+  // For nested lazy commands, `program` can be a sub-command whose Commander-
+  // internal rawArgs is cleared by restoreStateBeforeParse().
+  // If Commander removes rawArgs, buildParseArgv falls back to reconstructed argv.
   const rootProgram = findRootCommand(actionCommand ?? program);
   const rawArgs = (rootProgram as Command & { rawArgs?: string[] }).rawArgs;
   const fallbackArgv = buildFallbackArgv(program, actionCommand);
