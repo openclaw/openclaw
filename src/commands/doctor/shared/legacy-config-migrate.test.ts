@@ -244,6 +244,46 @@ describe("legacy memory search config migrate", () => {
     ]);
   });
 
+  it("merges legacy provider params into model params when merging codex models", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "text-embedding-3-small" }],
+          },
+          "openai-codex": {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            params: { store: false, reasoning: { effort: "medium" } },
+            models: [
+              {
+                id: "gpt-5.5",
+                params: { reasoning: { effort: "high" }, verbosity: "low" },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const openai = res.config?.models?.providers?.openai as Record<string, unknown> | undefined;
+    expect(openai?.models).toEqual([
+      { id: "text-embedding-3-small" },
+      {
+        id: "gpt-5.5",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        params: {
+          store: false,
+          reasoning: { effort: "high" },
+          verbosity: "low",
+        },
+      },
+    ]);
+  });
+
   it("preserves legacy models-add metadata marker when merging codex models", () => {
     const res = migrateLegacyConfigForTest({
       models: {

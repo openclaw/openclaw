@@ -1164,8 +1164,13 @@ function buildMergedLegacyOpenAIModel(
       patch[key] = legacyProvider[key];
     }
   }
-  if (legacyParams && modelRecord.params === undefined) {
-    patch.params = legacyParams;
+  if (legacyParams) {
+    const modelParams = getRecord(modelRecord.params);
+    if (modelParams) {
+      patch.params = { ...legacyParams, ...modelParams };
+    } else if (modelRecord.params === undefined) {
+      patch.params = legacyParams;
+    }
   }
   if (legacyAgentRuntime && modelRecord.agentRuntime === undefined) {
     patch.agentRuntime = legacyAgentRuntime;
