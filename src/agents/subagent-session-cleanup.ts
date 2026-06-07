@@ -14,6 +14,15 @@ export async function deleteSubagentSessionForCleanup(params: {
   spawnMode?: SpawnSubagentMode;
   onError?: (error: unknown) => void;
 }): Promise<void> {
+  const { hasLiveOrRecentlyDispatchedContinuationWork } =
+    await import("../auto-reply/continuation/work-store.js");
+  // A continuation_work TaskFlow is the owner of same-session re-entry. Keep
+  // the child session entry until the durable work wake has had a chance to
+  // route back into that exact session; otherwise continue_delegate children
+  // that call continue_work become ghost wakes.
+  if (hasLiveOrRecentlyDispatchedContinuationWork(params.childSessionKey)) {
+    return;
+  }
   try {
     await params.callGateway({
       method: "sessions.delete",

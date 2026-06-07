@@ -1,3 +1,4 @@
+import { hasLiveOrRecentlyDispatchedContinuationWork } from "../auto-reply/continuation/work-store.js";
 /**
  * Subagent registry coordinator.
  *
@@ -1003,6 +1004,9 @@ async function sweepSubagentRuns() {
         continue;
       }
       if (entry.archiveAtMs > now) {
+        continue;
+      }
+      if (hasLiveOrRecentlyDispatchedContinuationWork(entry.childSessionKey, now)) {
         continue;
       }
       clearPendingLifecycleError(runId);

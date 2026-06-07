@@ -39,8 +39,6 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
   emitContinuationCompactionReleasedSpan,
   emitContinuationDisabledSpan,
-  emitContinuationWorkFireSpan,
-  emitContinuationWorkSpan,
   resolveContinuationTraceparent,
   startContinuationDelegateSpan,
 } from "../../infra/continuation-tracer.js";
@@ -50,7 +48,6 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -77,11 +74,6 @@ import {
 import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
 import { checkContextPressure } from "../continuation/context-pressure.js";
 import { extractContinuationSignal } from "../continuation/signal.js";
-import {
-  registerContinuationTimerHandle,
-  retainContinuationTimerRef,
-  unregisterContinuationTimerHandle,
-} from "../continuation/state.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
 import type { ChainState } from "../continuation/types.js";
 import {
@@ -2857,58 +2849,39 @@ export async function runReplyAgent(replyParams: {
               });
             }
           } else {
-            const { chainId: persistedChainId } = await persistContinuationChainState({
-              count: nextChainCount,
-              startedAt: chainStartedAt,
-              tokens: accumulatedChainTokens,
-            });
-            // WORK: schedule a continuation turn after delay
-            const requestedDelay = effectiveContinuationSignal.delayMs ?? defaultDelayMs;
-            const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, requestedDelay));
-
-            // Emit `continuation.work` at the accept seam (after both
-            // cap-gates pass, after persistContinuationChainState has
-            // minted/stored continuationChainId for this chain).
-            emitContinuationWorkSpan({
-              chainId: persistedChainId,
-              chainStepRemaining: maxChainLength - nextChainCount,
-              delayMs: clampedDelay,
-              reason: continuationWorkReason,
-              traceparent: effectiveContinuationSignal.traceparent,
+            const requestedDelaySeconds =
+              (effectiveContinuationSignal.delayMs ?? defaultDelayMs) / 1000;
+            const workChainId = activeSessionEntry?.continuationChainId ?? generateChainId();
+            const { scheduleContinuationWork } = await import("../continuation/lazy.runtime.js");
+            const scheduleResult = await scheduleContinuationWork({
+              sessionKey,
+              chainState: {
+                currentChainCount,
+                chainStartedAt,
+                accumulatedChainTokens,
+                chainId: workChainId,
+              },
+              request: {
+                delaySeconds: requestedDelaySeconds,
+                reason: continuationWorkReason ?? "",
+                ...(effectiveContinuationSignal.traceparent
+                  ? { traceparent: effectiveContinuationSignal.traceparent }
+                  : {}),
+              },
+              config: resolveLiveContinuationRuntimeConfig(cfg),
+              parentRunId: runId,
               log: (message) => defaultRuntime.log(message),
             });
-
-            retainContinuationTimerRef(sessionKey);
-            const persistedChainIdForWorkTimer = persistedChainId;
-            const workChainStepRemainingAtDispatch = maxChainLength - nextChainCount;
-            const workArmedAt = Date.now();
-            const timerHandle = setTimeout(() => {
-              try {
-                const workFireDeferredMs = Date.now() - workArmedAt;
-                emitContinuationWorkFireSpan({
-                  chainId: persistedChainIdForWorkTimer as string,
-                  chainStepRemainingAtDispatch: workChainStepRemainingAtDispatch,
-                  delayMs: clampedDelay,
-                  fireDeferredMs: workFireDeferredMs,
-                  reason: continuationWorkReason,
-                  log: (message) => defaultRuntime.log(message),
-                });
-                defaultRuntime.log(`WORK timer fired for session ${sessionKey}`);
-                enqueueSystemEvent(
-                  `[continuation:wake] Turn ${nextChainCount}/${maxChainLength}. ` +
-                    `Chain started at ${new Date(chainStartedAt).toISOString()}. ` +
-                    `Accumulated tokens: ${accumulatedChainTokens}. ` +
-                    `The agent elected to continue working.` +
-                    (continuationWorkReason ? ` Reason: ${continuationWorkReason}` : ""),
-                  { sessionKey, trusted: true },
-                );
-                requestHeartbeatNow({ sessionKey, reason: "continuation", parentRunId: runId });
-              } finally {
-                unregisterContinuationTimerHandle(sessionKey, timerHandle);
-              }
-            }, clampedDelay);
-            registerContinuationTimerHandle(sessionKey, timerHandle);
-            timerHandle.unref();
+            if (scheduleResult.scheduled) {
+              await persistContinuationChainState({
+                count: scheduleResult.chainState.currentChainCount,
+                startedAt: scheduleResult.chainState.chainStartedAt,
+                tokens: scheduleResult.chainState.accumulatedChainTokens,
+                ...(scheduleResult.chainState.chainId
+                  ? { chainId: scheduleResult.chainState.chainId }
+                  : {}),
+              });
+            }
           }
         }
       }

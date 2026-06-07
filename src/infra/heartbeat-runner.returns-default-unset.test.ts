@@ -22,6 +22,7 @@ import {
   resolveHeartbeatIntervalMs,
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
+  setHeartbeatsEnabled,
 } from "./heartbeat-runner.js";
 import {
   resolveHeartbeatDeliveryTarget,
@@ -753,6 +754,110 @@ describe("runHeartbeatOnce", () => {
     if (res.status === "skipped") {
       expect(res.reason).toBe("quiet-hours");
     }
+  });
+
+  it("grants continuation turns even when periodic heartbeats are globally disabled", async () => {
+    const tmpDir = await createCaseDir("hb-cont-disabled");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m", target: "none" } } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ [sessionKey]: { sessionId: "sid-cont-disabled", updatedAt: 1 } }),
+    );
+    const replySpy = vi.fn().mockResolvedValue([{ text: "Continuation wake" }]);
+    setHeartbeatsEnabled(false);
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        reason: "continuation",
+        intent: "immediate",
+        continuationTurnGrant: true,
+        deps: createHeartbeatDeps(async () => ({ messageId: "m1", toJid: "jid" }), {
+          getReplyFromConfig: replySpy,
+        }),
+      });
+      expect(res.status).toBe("ran");
+      expectReplyCall(replySpy, 0, { SessionKey: sessionKey });
+    } finally {
+      setHeartbeatsEnabled(true);
+    }
+  });
+
+  it("grants continuation turns when the agent is excluded from heartbeat schedules", async () => {
+    const tmpDir = await createCaseDir("hb-cont-excluded");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: tmpDir, heartbeat: { every: "5m", target: "none" } },
+        list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
+      },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ [sessionKey]: { sessionId: "sid-cont-excluded", updatedAt: 1 } }),
+    );
+    const replySpy = vi.fn().mockResolvedValue([{ text: "Continuation wake" }]);
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      sessionKey,
+      reason: "continuation",
+      intent: "immediate",
+      continuationTurnGrant: true,
+      deps: createHeartbeatDeps(async () => ({ messageId: "m1", toJid: "jid" }), {
+        getReplyFromConfig: replySpy,
+      }),
+    });
+
+    expect(res.status).toBe("ran");
+    expectReplyCall(replySpy, 0, { SessionKey: sessionKey });
+  });
+
+  it("grants continuation turns outside heartbeat active hours", async () => {
+    const tmpDir = await createCaseDir("hb-cont-quiet-hours");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          userTimezone: "UTC",
+          heartbeat: {
+            every: "30m",
+            target: "none",
+            activeHours: { start: "08:00", end: "24:00", timezone: "user" },
+          },
+        },
+      },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ [sessionKey]: { sessionId: "sid-cont-quiet", updatedAt: 1 } }),
+    );
+    const replySpy = vi.fn().mockResolvedValue([{ text: "Continuation wake" }]);
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      sessionKey,
+      reason: "continuation",
+      intent: "immediate",
+      continuationTurnGrant: true,
+      deps: createHeartbeatDeps(async () => ({ messageId: "m1", toJid: "jid" }), {
+        nowMs: Date.UTC(2025, 0, 1, 7, 0, 0),
+        getReplyFromConfig: replySpy,
+      }),
+    });
+
+    expect(res.status).toBe("ran");
+    expectReplyCall(replySpy, 0, { SessionKey: sessionKey });
   });
 
   it("uses the last non-empty payload for delivery", async () => {

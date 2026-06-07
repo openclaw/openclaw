@@ -24,9 +24,14 @@ const continuationTimerRefs = new Map<string, number>();
 // ---------------------------------------------------------------------------
 
 import { pendingDelegateCount, stagedPostCompactionDelegateCount } from "./delegate-store.js";
+import { pendingWorkCount } from "./work-store.js";
 
 export function hasDelegatePending(sessionKey: string): boolean {
-  return pendingDelegateCount(sessionKey) > 0 || stagedPostCompactionDelegateCount(sessionKey) > 0;
+  return (
+    pendingDelegateCount(sessionKey) > 0 ||
+    stagedPostCompactionDelegateCount(sessionKey) > 0 ||
+    pendingWorkCount(sessionKey) > 0
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -25,7 +25,6 @@ import {
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { runWithDiagnosticTraceparent } from "../../infra/diagnostic-trace-context.js";
 import { readErrorName } from "../../infra/errors.js";
-import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -918,11 +917,9 @@ export async function runAgentAttempt(params: {
 }
 
 /**
- * Schedule a continue_work-triggered heartbeat-wake for the spawn-init /
- * turn-1 path. Loads chain state, enforces maxChainLength + delay clamps,
- * persists advancement, and arms the timer that fires requestHeartbeatNow.
- * Behaviour mirrors the followup-runner block for turn-2+ symmetry. Kept here
- * as a local helper so spawn-init scheduling stays single-sourced.
+ * Schedule a continue_work TaskFlow election for the spawn-init / turn-1 path.
+ * Loads chain state, enforces budgets, persists advancement, and lets the
+ * durable work dispatcher arm or replay the same-session wake.
  */
 async function scheduleSpawnInitContinueWorkWake(params: {
   sessionKey: string;
@@ -933,80 +930,37 @@ async function scheduleSpawnInitContinueWorkWake(params: {
   runResult: EmbeddedAgentRunResult;
 }): Promise<void> {
   const [
-    { resolveLiveContinuationRuntimeConfig, clampDelayMs },
-    {
-      loadContinuationChainState,
-      persistContinuationChainState,
-      retainContinuationTimerRef,
-      registerContinuationTimerHandle,
-      unregisterContinuationTimerHandle,
-    },
-    { enqueueSystemEvent },
+    { resolveLiveContinuationRuntimeConfig },
+    { loadContinuationChainState, persistContinuationChainState },
+    { scheduleContinuationWork },
   ] = await Promise.all([
     import("../../auto-reply/continuation/config.js"),
     import("../../auto-reply/continuation/state.js"),
-    import("../../infra/system-events.js"),
+    import("../../auto-reply/continuation/lazy.runtime.js"),
   ]);
 
   const continuationConfig = resolveLiveContinuationRuntimeConfig(params.cfg);
-  const { maxChainLength } = continuationConfig;
-
   const tailUsage = params.runResult.meta?.agentMeta?.usage;
   const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
   const chainState = loadContinuationChainState(params.sessionEntry, turnTokens);
-  const currentChainCount = chainState.currentChainCount;
-
-  if (currentChainCount >= maxChainLength) {
-    log.info(
-      `[attempt-execution] continue_work cap reached for ${sanitizeForLog(params.sessionKey)}: ${currentChainCount}/${maxChainLength}`,
-    );
+  const result = await scheduleContinuationWork({
+    sessionKey: params.sessionKey,
+    chainState,
+    request: params.request,
+    config: continuationConfig,
+    parentRunId: params.runId,
+    log: (message) => log.info(message),
+  });
+  if (!result.scheduled) {
     return;
   }
-
-  const nextChainCount = currentChainCount + 1;
-  // Treat an explicit zero-delay continue_work as a real 0 (clamped up to
-  // `minDelayMs`), matching what the continue_work tool reports via
-  // `clampDelayMs(delaySeconds * 1000, config)`. The prior `|| defaultDelayMs`
-  // expression treated 0 as falsy and substituted `defaultDelayMs` (15s),
-  // making an omitted/zero delay wake at 15s instead of the reported 5s
-  // minimum. Routed through the canonical `clampDelayMs` helper so the
-  // scheduler and the tool result can never drift again.
-  const requestedDelayMs = params.request.delaySeconds * 1000;
-  const clampedDelay = clampDelayMs(requestedDelayMs, continuationConfig);
-
   persistContinuationChainState({
     sessionEntry: params.sessionEntry,
-    count: nextChainCount,
-    startedAt: chainState.chainStartedAt,
-    tokens: chainState.accumulatedChainTokens,
+    count: result.chainState.currentChainCount,
+    startedAt: result.chainState.chainStartedAt,
+    tokens: result.chainState.accumulatedChainTokens,
+    ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
   });
-
-  retainContinuationTimerRef(params.sessionKey);
-  const sessionKey = params.sessionKey;
-  const reason = params.request.reason;
-  const parentRunId = params.runId;
-  const timerHandle = setTimeout(() => {
-    try {
-      log.info(
-        `[attempt-execution] continue_work timer fired for session ${sanitizeForLog(sessionKey)}`,
-      );
-      enqueueSystemEvent(
-        `[continuation:wake] Turn ${nextChainCount}/${maxChainLength}. ` +
-          `The agent elected to continue working.` +
-          (reason ? ` Reason: ${reason}` : ""),
-        { sessionKey, trusted: true },
-      );
-      requestHeartbeatNow({
-        sessionKey,
-        reason: "continuation",
-        parentRunId,
-      });
-    } finally {
-      unregisterContinuationTimerHandle(sessionKey, timerHandle);
-    }
-  }, clampedDelay);
-  registerContinuationTimerHandle(sessionKey, timerHandle);
-  timerHandle.unref();
 }
 
 export function buildAcpResult(params: {

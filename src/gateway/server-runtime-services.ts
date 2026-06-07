@@ -174,6 +174,27 @@ function recoverPendingSessionDeliveries(params: {
   timer.unref?.();
 }
 
+function recoverPendingContinuationWork(params: { log: GatewayRuntimeServiceLogger }): void {
+  // continue_work elections are TaskFlow-backed; restart only needs to re-arm
+  // or mature the same-session wake, not reconstruct volatile timers.
+  const timer = setTimeout(() => {
+    void (async () => {
+      const { recoverPendingContinuationWork: recoverWork } =
+        await import("../auto-reply/continuation/work-dispatch.js");
+      const logRecovery = params.log.child("continuation-work-recovery");
+      const summary = await recoverWork();
+      if (summary.sessions > 0 || summary.dispatched > 0 || summary.failed > 0) {
+        logRecovery.info(
+          `replayed sessions=${summary.sessions} dispatched=${summary.dispatched} failed=${summary.failed}`,
+        );
+      }
+    })().catch((err: unknown) =>
+      params.log.error(`Continuation work recovery failed: ${String(err)}`),
+    );
+  }, 1_400);
+  timer.unref?.();
+}
+
 function recoverPendingContinuationDelegates(params: { log: GatewayRuntimeServiceLogger }): void {
   // Delegate recovery is TaskFlow-backed and idempotent: queued rows are claimed
   // to running before spawn, while running rows derive the child key and reconcile
@@ -263,6 +284,9 @@ export function activateGatewayScheduledServices(params: {
     deps: params.deps,
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
+  });
+  recoverPendingContinuationWork({
+    log: params.log,
   });
   recoverPendingContinuationDelegates({
     log: params.log,
