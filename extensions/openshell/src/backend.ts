@@ -612,10 +612,8 @@ async function removeMaterializedSkillsFromDownloadedWorkspace(tmpDir: string): 
       await fs.rm(next, { recursive: true, force: true });
       return;
     }
-    if (stats.isSymbolicLink()) {
-      return;
-    }
-    if (!stats.isDirectory()) {
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      await fs.rm(next, { recursive: true, force: true });
       return;
     }
     cursor = next;
@@ -650,6 +648,7 @@ async function restoreMaterializedSkillsShadow(params: {
   if (!params.preserved) {
     return;
   }
+  let restored = false;
   try {
     const shadowPath = path.join(params.workspaceDir, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
     const parentPath = path.dirname(shadowPath);
@@ -657,14 +656,20 @@ async function restoreMaterializedSkillsShadow(params: {
     if (parentStats?.isSymbolicLink()) {
       throw new Error(`Refusing to restore sandbox skills through symlink parent: ${parentPath}`);
     }
+    if (parentStats && !parentStats.isDirectory()) {
+      await fs.rm(parentPath, { recursive: true, force: true });
+    }
     await fs.mkdir(parentPath, { recursive: true });
     await fs.rm(shadowPath, { recursive: true, force: true });
     await movePathWithCopyFallback({
       from: params.preserved.preservedPath,
       to: shadowPath,
     });
+    restored = true;
   } finally {
-    await fs.rm(params.preserved.preserveRoot, { recursive: true, force: true });
+    if (restored) {
+      await fs.rm(params.preserved.preserveRoot, { recursive: true, force: true });
+    }
   }
 }
 
