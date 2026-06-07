@@ -76,6 +76,11 @@ type TelegramThreadScopedParams = {
 const InputFileCtor = grammy.InputFile;
 const MAX_TELEGRAM_PHOTO_DIMENSION_SUM = 10_000;
 const MAX_TELEGRAM_PHOTO_ASPECT_RATIO = 20;
+const TELEGRAM_TTS_VOICE_OUTPUT_FILENAME_RE = /^voice-[^-]+---/;
+
+function isTelegramTtsVoiceOutputFileName(fileName: string): boolean {
+  return TELEGRAM_TTS_VOICE_OUTPUT_FILENAME_RE.test(fileName);
+}
 
 type TelegramSendOpts = {
   cfg: OpenClawConfig;
@@ -93,6 +98,8 @@ type TelegramSendOpts = {
   plainText?: string;
   /** Send audio as voice message instead of audio file. Defaults to false. */
   asVoice?: boolean;
+  /** Compatibility alias used by generic OpenClaw reply payload delivery. */
+  audioAsVoice?: boolean;
   /** Send video as video note instead of regular video. Defaults to false. */
   asVideoNote?: boolean;
   /** Send message silently (no notification). Defaults to false. */
@@ -931,7 +938,10 @@ export async function sendMessageTelegram(
       }
       if (kind === "audio") {
         const { useVoice } = resolveTelegramVoiceSend({
-          wantsVoice: opts.asVoice === true, // default false (backward compatible)
+          wantsVoice:
+            opts.asVoice === true ||
+            opts.audioAsVoice === true ||
+            isTelegramTtsVoiceOutputFileName(fileName),
           contentType: media.contentType,
           fileName,
           logFallback: logVerbose,

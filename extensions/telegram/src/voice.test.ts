@@ -80,4 +80,17 @@ describe("resolveTelegramVoiceSend", () => {
     expect(result.useVoice).toBe(true);
     expect(logFallback).not.toHaveBeenCalled();
   });
+
+
+  it("keeps voice for generated TTS MP3 output", () => {
+    const logFallback = vi.fn();
+    const result = resolveTelegramVoiceSend({
+      wantsVoice: true,
+      contentType: "audio/mpeg",
+      fileName: "voice-1779334096572---a1d3761f-337e-4d9c-97bd-3edc67690a9a.mp3",
+      logFallback,
+    });
+    expect(result.useVoice).toBe(true);
+    expect(logFallback).not.toHaveBeenCalled();
+  });
 });
