@@ -88,6 +88,7 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
+import { resolveThinkingDefault } from "../model-thinking-default.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   OPENAI_PROVIDER_ID,
@@ -227,6 +228,31 @@ function isNoRealConversationCompactionNoop(params: {
     params.compacted === false &&
     params.reason === NO_REAL_CONVERSATION_MESSAGES_REASON
   );
+}
+
+function resolveInitialThinkLevel(params: {
+  requested?: ThinkLevel;
+  config?: RunEmbeddedAgentParams["config"];
+  provider: string;
+  modelId: string;
+  model: { reasoning?: boolean };
+}): ThinkLevel {
+  if (params.requested) {
+    return params.requested;
+  }
+  return resolveThinkingDefault({
+    cfg: params.config ?? {},
+    provider: params.provider,
+    model: params.modelId,
+    catalog: [
+      {
+        provider: params.provider,
+        id: params.modelId,
+        name: params.modelId,
+        reasoning: params.model.reasoning,
+      },
+    ],
+  });
 }
 
 async function resetNoRealConversationTokenSnapshot(params: {
@@ -1030,7 +1056,13 @@ export async function runEmbeddedAgent(
       let profileIndex = 0;
       const traceAttempts: TraceAttempt[] = [];
 
-      const initialThinkLevel = params.thinkLevel ?? "off";
+      const initialThinkLevel = resolveInitialThinkLevel({
+        requested: params.thinkLevel,
+        config: params.config,
+        provider,
+        modelId,
+        model: effectiveModel,
+      });
       let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
@@ -1724,9 +1756,9 @@ export async function runEmbeddedAgent(
             lastAssistant: sessionLastAssistant,
             currentAttemptAssistant,
           } = attempt;
-          const setTerminalLifecycleMeta: NonNullable<
-            typeof attempt.setTerminalLifecycleMeta
-          > = (meta) => {
+          const setTerminalLifecycleMeta: NonNullable<typeof attempt.setTerminalLifecycleMeta> = (
+            meta,
+          ) => {
             attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
           };
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;

@@ -70,6 +70,17 @@ function getStopPackagedAppBlock(): string {
   return script.slice(start, end);
 }
 
+function getSwiftCompatibilityBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf('echo "📦 Copying Swift 6.2 compatibility libraries"');
+  const end = script.indexOf('echo "🖼  Copying app icon"');
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
 function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-package-stop-root-"));
   const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-stop-tools-"));
@@ -105,6 +116,31 @@ function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
     }
     ${getStopPackagedAppBlock()}
     stop_packaged_app_if_running
+  `);
+}
+
+function runSwiftCompatibilityHarness(buildConfig: "debug" | "release") {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-root-"));
+  const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-tools-"));
+  const developerDir = path.join(root, "Xcode.app", "Contents", "Developer");
+  const appRoot = path.join(root, "OpenClaw.app");
+  const xcodeSelectPath = path.join(toolsDir, "xcode-select");
+  tempDirs.push(root, toolsDir);
+
+  writeFileSync(
+    xcodeSelectPath,
+    ["#!/usr/bin/env bash", `printf '%s\\n' ${JSON.stringify(developerDir)}`].join("\n"),
+    "utf8",
+  );
+  chmodSync(xcodeSelectPath, 0o755);
+
+  return runHelper(`
+    set -euo pipefail
+    APP_ROOT=${JSON.stringify(appRoot)}
+    BUILD_CONFIG=${JSON.stringify(buildConfig)}
+    PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+    mkdir -p "$APP_ROOT/Contents/Frameworks"
+    ${getSwiftCompatibilityBlock()}
   `);
 }
 
@@ -247,6 +283,20 @@ describe("package-mac-app plist stamping", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("ERROR: Packaged OpenClaw bundle did not exit: 123");
+  });
+
+  it("fails release packaging when the Swift compatibility library is missing", () => {
+    const result = runSwiftCompatibilityHarness("release");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("ERROR: Swift compatibility library not found");
+  });
+
+  it("allows debug packaging to continue without the Swift compatibility library", () => {
+    const result = runSwiftCompatibilityHarness("debug");
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("WARN: Swift compatibility library not found");
   });
 
   it("passes when the packaged app exits after shutdown", () => {

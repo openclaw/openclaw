@@ -17,6 +17,28 @@ async function openSocket(url, timeoutMs = 10_000) {
   return ws;
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function hasGatewayHealthSummaryPayload(response) {
+  if (!isRecord(response) || !isRecord(response.payload)) {
+    return false;
+  }
+  const { payload } = response;
+  return (
+    payload.ok === true &&
+    typeof payload.ts === "number" &&
+    typeof payload.durationMs === "number" &&
+    typeof payload.defaultAgentId === "string" &&
+    payload.defaultAgentId.trim() !== "" &&
+    Array.isArray(payload.agents) &&
+    isRecord(payload.channels) &&
+    Array.isArray(payload.channelOrder) &&
+    isRecord(payload.sessions)
+  );
+}
+
 export function responseError(method, response) {
   const message = response.error?.message ?? "unknown";
   return new Error(`${method} failed: ${message}`);
@@ -92,6 +114,9 @@ export async function runGatewayNetworkClient(
           (frame) => frame?.type === "res" && frame?.id === "h1",
         );
         if (healthRes.ok) {
+          if (!hasGatewayHealthSummaryPayload(healthRes)) {
+            throw new Error("health failed: missing health summary payload");
+          }
           stdout("ok");
           return;
         }

@@ -53,7 +53,6 @@ import {
   createSandboxedWriteTool,
   getToolParamsRecord,
   wrapToolMemoryFlushAppendOnlyWrite,
-  wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamValidation,
 } from "./agent-tools.read.js";

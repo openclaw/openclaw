@@ -22,6 +22,51 @@ import {
 } from "../../scripts/test-group-report.mjs";
 import { withEnv } from "../../src/test-utils/env.js";
 
+function makeTempDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-"));
+}
+
+function writeGroupedReport(filePath: string) {
+  fs.writeFileSync(
+    filePath,
+    `${JSON.stringify({
+      command: "test-group-report",
+      groupBy: "area",
+      totals: { durationMs: 100, fileCount: 1, testCount: 1 },
+      groups: [
+        {
+          configs: ["unit-fast"],
+          durationMs: 100,
+          fileCount: 1,
+          key: "test/scripts",
+          testCount: 1,
+        },
+      ],
+      configs: [
+        {
+          configs: ["unit-fast"],
+          durationMs: 100,
+          fileCount: 1,
+          key: "unit-fast",
+          testCount: 1,
+        },
+      ],
+      topFiles: [
+        {
+          config: "unit-fast",
+          durationMs: 100,
+          file: "test/scripts/test-group-report.test.ts",
+          group: "test/scripts",
+          testCount: 1,
+        },
+      ],
+      slowTests: [],
+      runs: [],
+    })}\n`,
+    "utf8",
+  );
+}
+
 describe("scripts/test-group-report grouping", () => {
   it("groups repo files by stable product area", () => {
     expect(resolveTestArea("extensions/discord/src/send.test.ts")).toBe("extensions/discord");
@@ -97,7 +142,7 @@ describe("scripts/test-group-report aggregation", () => {
   });
 
   it("fails missing report inputs instead of writing an empty green report", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-"));
+    const tempDir = makeTempDir();
     const missingReport = path.join(tempDir, "missing.json");
     const output = path.join(tempDir, "group-report.json");
     try {
@@ -122,7 +167,7 @@ describe("scripts/test-group-report aggregation", () => {
     ["missing testResults array", {}],
     ["empty testResults array", { testResults: [] }],
   ])("fails malformed report inputs with %s", (reason, payload) => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-"));
+    const tempDir = makeTempDir();
     const reportPath = path.join(tempDir, "malformed.json");
     const output = path.join(tempDir, "group-report.json");
     fs.writeFileSync(reportPath, `${JSON.stringify(payload)}\n`, "utf8");
@@ -139,6 +184,38 @@ describe("scripts/test-group-report aggregation", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("[test-group-report] invalid JSON report for malformed");
       expect(result.stderr).toContain(reason);
+      expect(fs.existsSync(output)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails allow-failures runs that produce no JSON report", () => {
+    const tempDir = makeTempDir();
+    const missingConfig = path.join(tempDir, "missing-vitest.config.ts");
+    const output = path.join(tempDir, "group-report.json");
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/test-group-report.mjs",
+          "--config",
+          missingConfig,
+          "--allow-failures",
+          "--no-rss",
+          "--timeout-ms",
+          "5000",
+          "--output",
+          output,
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("[test-group-report] missing JSON report for failed config");
       expect(fs.existsSync(output)).toBe(false);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -286,6 +363,67 @@ describe("scripts/test-group-report comparison", () => {
       "gateway-server-2",
     ]);
   });
+
+  it("fails compare mode for malformed grouped reports", () => {
+    const tempDir = makeTempDir();
+    const beforePath = path.join(tempDir, "before.json");
+    const afterPath = path.join(tempDir, "after.json");
+    const output = path.join(tempDir, "compare.json");
+    fs.writeFileSync(beforePath, "{}\n", "utf8");
+    writeGroupedReport(afterPath);
+    try {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/test-group-report.mjs", "--compare", beforePath, afterPath, "--output", output],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("[test-group-report] invalid grouped report");
+      expect(result.stderr).toContain("command must be test-group-report");
+      expect(fs.existsSync(output)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails compare mode for empty grouped report evidence", () => {
+    const tempDir = makeTempDir();
+    const beforePath = path.join(tempDir, "before.json");
+    const afterPath = path.join(tempDir, "after.json");
+    const output = path.join(tempDir, "compare.json");
+    const emptyReport = {
+      command: "test-group-report",
+      groupBy: "area",
+      totals: { durationMs: 0, fileCount: 0, testCount: 0 },
+      groups: [],
+      configs: [],
+      topFiles: [],
+      slowTests: [],
+      runs: [],
+    };
+    fs.writeFileSync(beforePath, `${JSON.stringify(emptyReport)}\n`, "utf8");
+    writeGroupedReport(afterPath);
+    try {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/test-group-report.mjs", "--compare", beforePath, afterPath, "--output", output],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("no evidence rows");
+      expect(fs.existsSync(output)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("scripts/test-group-report arg parsing", () => {
@@ -389,6 +527,33 @@ describe("scripts/test-group-report arg parsing", () => {
       );
     }
   });
+
+  it("rejects missing report path, config, and numeric option values", () => {
+    for (const flag of ["--config", "--report", "--group-by", "--output"]) {
+      expect(() => parseTestGroupReportArgs([flag, "--limit", "5"])).toThrow(
+        `${flag} requires a value`,
+      );
+    }
+    for (const flag of [
+      "--limit",
+      "--top-files",
+      "--max-test-ms",
+      "--timeout-ms",
+      "--kill-grace-ms",
+      "--concurrency",
+    ]) {
+      expect(() => parseTestGroupReportArgs([flag])).toThrow(`${flag} requires a value`);
+      expect(() => parseTestGroupReportArgs([flag, "--output", "report.json"])).toThrow(
+        `${flag} requires a value`,
+      );
+    }
+    expect(() => parseTestGroupReportArgs(["--compare", "before.json", "--limit"])).toThrow(
+      "--compare requires a value",
+    );
+    expect(() => parseTestGroupReportArgs(["--compare", "--limit", "5"])).toThrow(
+      "--compare requires a value",
+    );
+  });
 });
 
 describe("scripts/test-group-report child process guard", () => {
@@ -464,6 +629,101 @@ describe("scripts/test-group-report child process guard", () => {
       });
       const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
       expect(sizeAfterWait).toBe(sizeAfterReturn);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("streams large child output to a log path without retaining it", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-"));
+    const logPath = path.join(tempDir, "child.log");
+    try {
+      const result = await spawnText(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          [
+            "const chunk = Buffer.alloc(1024 * 1024, 120);",
+            "for (let index = 0; index < 65; index += 1) process.stdout.write(chunk);",
+            'process.stderr.write("Maximum resident set size (kbytes): 12345\\n");',
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          env: process.env,
+          killGraceMs: 50,
+          logPath,
+          outputTailBytes: 4096,
+          timeoutMs: 10_000,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.output.length).toBeLessThan(8 * 1024);
+      expect(result.output).toContain("Maximum resident set size (kbytes): 12345");
+      expect(fs.statSync(logPath).size).toBeGreaterThan(64 * 1024 * 1024);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps no-log child output bounded to a tail", async () => {
+    const result = await spawnText(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        [
+          "const chunk = Buffer.alloc(1024 * 1024, 120);",
+          "for (let index = 0; index < 3; index += 1) process.stdout.write(chunk);",
+        ].join("\n"),
+      ],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        killGraceMs: 50,
+        maxBufferBytes: 1024 * 1024,
+        outputTailBytes: 4096,
+        timeoutMs: 10_000,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.output.length).toBeLessThan(8 * 1024);
+    expect(result.output).toContain("output exceeded 1048576 bytes");
+  });
+
+  it("stops streamed child output after the configured log cap", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-cap-"));
+    const logPath = path.join(tempDir, "child.log");
+    try {
+      const result = await spawnText(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          [
+            "process.on('SIGTERM', () => {});",
+            "const chunk = Buffer.alloc(1024 * 1024, 120);",
+            "setInterval(() => process.stdout.write(chunk), 1);",
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          env: process.env,
+          killGraceMs: 50,
+          logPath,
+          maxLogBytes: 1024 * 1024,
+          outputTailBytes: 4096,
+          timeoutMs: 10_000,
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.signal).toBe("SIGKILL");
+      expect(result.output).toContain("output log exceeded 1048576 bytes");
+      expect(fs.statSync(logPath).size).toBeLessThan(2 * 1024 * 1024);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
