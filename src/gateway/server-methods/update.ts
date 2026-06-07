@@ -18,6 +18,7 @@ import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-
 import {
   buildManagedServiceHandoffUnavailableMessage,
   formatManagedServiceUpdateCommand,
+  resolveManagedServiceHandoffRestartDelayMs,
   startManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
 import {

@@ -289,16 +289,16 @@ function resolveUpdateCliArgv(params: {
   return ["openclaw", ...updateArgs];
 }
 
-export function formatManagedServiceUpdateCommand(
-  timeoutMs?: number,
-  channel?: ManagedServiceUpdateChannel,
-): string {
+export function formatManagedServiceUpdateCommand(params?: {
+  timeoutMs?: number;
+  channel?: ManagedServiceUpdateChannel;
+}): string {
   const args = ["openclaw", "update", "--yes"];
-  if (channel) {
-    args.push("--channel", channel);
+  if (params?.channel) {
+    args.push("--channel", params.channel);
   }
-  if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-    args.push("--timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000))));
+  if (typeof params?.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
+    args.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
   }
   return args.join(" ");
 }
