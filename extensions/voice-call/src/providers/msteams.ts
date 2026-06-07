@@ -166,8 +166,14 @@ export class MsteamsProvider implements VoiceCallProvider {
    */
   private readonly pendingOutbound = new Map<
     string,
-    { internalCallId: string; from: string; to: string }
+    { internalCallId: string; from: string; to: string; message?: string }
   >();
+  /**
+   * Outbound calls bridged via the realtime path (providerCallId -> internal
+   * callId). Realtime calls don't otherwise touch CallManager, so this lets
+   * session.end finalize the CallRecord that manager.initiateCall created.
+   */
+  private readonly outboundRealtimeInternalIds = new Map<string, string>();
 
   constructor(options: MsteamsProviderOptions) {
     const { port, bindAddress, path, sharedSecret, outbound, logger } = options;
@@ -399,9 +405,17 @@ export class MsteamsProvider implements VoiceCallProvider {
    */
   private handleOutboundSessionStart(
     session: MsteamsSession,
-    pending: { internalCallId: string; from: string; to: string },
+    pending: { internalCallId: string; from: string; to: string; message?: string },
   ): void {
     const providerCallId = session.callId;
+
+    // Realtime mode: bridge straight to the speech-to-speech model, opening the
+    // call by speaking the delivered result, then conversing.
+    if (this.realtimeDeps) {
+      this.handleOutboundRealtimeSessionStart(session, pending);
+      return;
+    }
+
     if (!this.manager || !this.transcription) {
       this.logger?.error(
         `MsteamsProvider: outbound session.start for ${providerCallId} before dependencies were wired; closing`,
@@ -462,6 +476,56 @@ export class MsteamsProvider implements VoiceCallProvider {
     );
     this.logger?.info(
       `MsteamsProvider: outbound session.start callId=${providerCallId} attached to internal ${pending.internalCallId}`,
+    );
+  }
+
+  /**
+   * Attach an outbound call on the realtime (speech-to-speech) path. The model
+   * opens the call by speaking the delivered result (via greeting), then converses.
+   * The CallRecord (from manager.initiateCall) is transitioned to answered without
+   * the manager re-speaking; session.end finalizes it.
+   */
+  private handleOutboundRealtimeSessionStart(
+    session: MsteamsSession,
+    pending: { internalCallId: string; from: string; to: string; message?: string },
+  ): void {
+    const providerCallId = session.callId;
+    if (!this.realtimeDeps) {
+      session.close("not-ready");
+      return;
+    }
+    if (this.realtimeCalls.has(providerCallId)) {
+      this.logger?.warn(
+        `MsteamsProvider: duplicate outbound realtime session.start for ${providerCallId}`,
+      );
+      return;
+    }
+
+    const greetingInstructions = pending.message
+      ? `Open the call by clearly telling the caller the following, then offer to help further: ${pending.message}`
+      : this.realtimeDeps.greetingInstructions;
+    const realtimeCall = createMsteamsRealtimeCall({
+      session,
+      deps: { ...this.realtimeDeps, greetingInstructions },
+    });
+    this.realtimeCalls.set(providerCallId, realtimeCall);
+    this.outboundRealtimeInternalIds.set(providerCallId, pending.internalCallId);
+
+    // The realtime model speaks the message itself; clear the queued initial
+    // message so the manager's answered hook does not also try to speak it.
+    const record = this.manager?.getCall(pending.internalCallId);
+    if (record?.metadata) {
+      delete record.metadata.initialMessage;
+    }
+    this.manager?.processEvent(
+      this.buildEvent(providerCallId, {
+        type: "call.answered",
+        from: pending.from,
+        to: pending.to,
+      }),
+    );
+    this.logger?.info(
+      `MsteamsProvider: outbound realtime session.start callId=${providerCallId} attached to internal ${pending.internalCallId}`,
     );
   }
 
@@ -691,6 +755,19 @@ export class MsteamsProvider implements VoiceCallProvider {
     if (realtimeCall) {
       this.realtimeCalls.delete(info.callId);
       realtimeCall.close();
+      // Outbound realtime calls have a CallRecord (manager.initiateCall); finalize it.
+      const internalCallId = this.outboundRealtimeInternalIds.get(info.callId);
+      if (internalCallId && this.manager) {
+        this.outboundRealtimeInternalIds.delete(info.callId);
+        this.manager.processEvent({
+          id: `msteams-ended-${info.callId}-${Date.now()}`,
+          type: "call.ended",
+          callId: internalCallId,
+          providerCallId: info.callId,
+          timestamp: Date.now(),
+          reason: mapEndReason(info.reason),
+        });
+      }
       return;
     }
     const state = this.teardownCall(info.callId, { closeSession: false });
@@ -793,13 +870,6 @@ export class MsteamsProvider implements VoiceCallProvider {
         "MsteamsProvider.initiateCall: outbound calling is disabled (set msteams.outbound.enabled)",
       );
     }
-    // Phase 1: outbound rides the streaming (STT -> agent -> TTS) path. Realtime
-    // outbound is a follow-up (the realtime path bypasses CallManager).
-    if (this.realtimeDeps) {
-      throw new Error(
-        "MsteamsProvider.initiateCall: outbound currently requires the streaming path (realtime outbound not yet supported)",
-      );
-    }
     const workerBaseUrl = this.outbound.workerBaseUrl;
     if (!workerBaseUrl) {
       throw new Error(
@@ -825,7 +895,7 @@ export class MsteamsProvider implements VoiceCallProvider {
       .createHmac("sha256", this.sharedSecret)
       .update(`${timestampMs}.${userObjectId}`)
       .digest("hex");
-    const url = `${workerBaseUrl.replace(/\/+$/, "")}/api/calls/place`;
+    const url = `${workerBaseUrl.replace(/\/+$/, "")}/api/calls`;
 
     let response: Response;
     try {
@@ -860,6 +930,7 @@ export class MsteamsProvider implements VoiceCallProvider {
       internalCallId: input.callId,
       from: input.from,
       to: input.to,
+      message: input.message,
     });
     this.logger?.info(
       `MsteamsProvider: outbound call placed callId=${workerCallId} -> ${userObjectId}`,
