@@ -1164,11 +1164,19 @@ function copyLegacyOpenAICodexContextMetadataToExistingCanonicalRows(params: {
       continue;
     }
     const normalizedId = normalizeOpenAIModelEntryId(existing.model, modelId);
-    const copiedKeys = copyMissingContextMetadata({
+    const copiedModelKeys = copyMissingContextMetadata({
       source: legacyModel,
       target: existing.model,
       blockContextBudget: hasProviderLevelContextBudget(params.canonicalProvider),
     });
+    const copiedProviderKeys = params.skipProviderLevelMetadata
+      ? copyMissingContextMetadata({
+          source: params.legacyProvider,
+          target: existing.model,
+          blockContextBudget: hasProviderLevelContextBudget(params.canonicalProvider),
+        })
+      : [];
+    const copiedKeys = [...copiedModelKeys, ...copiedProviderKeys];
     if (copiedKeys.length === 0 && !normalizedId) {
       continue;
     }
@@ -1180,9 +1188,17 @@ function copyLegacyOpenAICodexContextMetadataToExistingCanonicalRows(params: {
       params.changes.push(
         `Normalized models.providers.${OPENAI_PROVIDER_ID}.models[${existing.index}].id to ${modelId}.`,
       );
+    } else if (copiedModelKeys.length > 0 && copiedProviderKeys.length === 0) {
+      params.changes.push(
+        `Copied models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID}.models[].${modelId} ${copiedModelKeys.join(", ")} metadata to models.providers.${OPENAI_PROVIDER_ID}.models[${existing.index}].`,
+      );
+    } else if (copiedModelKeys.length === 0 && copiedProviderKeys.length > 0) {
+      params.changes.push(
+        `Copied models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} ${copiedProviderKeys.join(", ")} metadata to models.providers.${OPENAI_PROVIDER_ID}.models[${existing.index}].`,
+      );
     } else {
       params.changes.push(
-        `Copied models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID}.models[].${modelId} ${copiedKeys.join(", ")} metadata to models.providers.${OPENAI_PROVIDER_ID}.models[${existing.index}].`,
+        `Copied models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID}.models[].${modelId} ${copiedModelKeys.join(", ")} metadata and models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} ${copiedProviderKeys.join(", ")} metadata to models.providers.${OPENAI_PROVIDER_ID}.models[${existing.index}].`,
       );
     }
     changed = true;

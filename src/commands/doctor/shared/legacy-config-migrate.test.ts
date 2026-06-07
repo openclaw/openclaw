@@ -851,6 +851,69 @@ describe("legacy memory search config migrate", () => {
       "Removed models.providers.openai-codex because models.providers.openai already exists.",
     ]);
   });
+
+  it("preserves legacy provider-level Codex context budgets on matching canonical rows while merging disjoint models", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [
+              {
+                id: "openai/gpt-5.5",
+              },
+            ],
+          },
+          "openai-codex": {
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            contextTokens: 1_050_000,
+            contextWindow: 1_050_000,
+            maxTokens: 16_384,
+            models: [
+              {
+                id: "openai-codex/gpt-5.5",
+              },
+              {
+                id: "gpt-5.6",
+                name: "Legacy Codex GPT-5.6",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.openai).toEqual({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://api.openai.com/v1",
+      models: [
+        {
+          id: "gpt-5.5",
+          contextTokens: 1_050_000,
+          contextWindow: 1_050_000,
+          maxTokens: 16_384,
+        },
+        {
+          id: "gpt-5.6",
+          name: "Legacy Codex GPT-5.6",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          api: "openai-chatgpt-responses",
+          contextWindow: 1_050_000,
+          contextTokens: 1_050_000,
+          maxTokens: 16_384,
+        },
+      ],
+    });
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      'Moved models.providers.openai-codex.api "openai-codex-responses" → "openai-chatgpt-responses".',
+      "Normalized models.providers.openai.models[0].id to gpt-5.5 and copied contextTokens, contextWindow, maxTokens metadata.",
+      "Merged 1 model(s) from models.providers.openai-codex into models.providers.openai: gpt-5.6.",
+    ]);
+  });
+
   it("rewrites top-level legacy auto provider after moving memorySearch into agent defaults", () => {
     const raw = {
       memorySearch: {
