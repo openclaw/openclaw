@@ -191,9 +191,9 @@ plugins.
 
     <Note>
       Like other in-chat session commands (for example `/goal`), `/name` writes
-      the rename directly to the session store, so already-open session lists
-      pick up the new label on their next `sessions.list` reload rather than via
-      a live push.
+      the rename directly to the session store and emits `sessions.changed`, so
+      already-open Control UI/WebChat/TUI session lists can refresh the visible
+      label without a manual reload.
     </Note>
 
   </Accordion>

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getSessionEntry, updateSessionStore, upsertSessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { handleNameCommand, parseNameCommand } from "./commands-name.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -85,6 +86,9 @@ describe("name command", () => {
     expect(result?.reply?.text).toContain("Billing rework");
     expect(getSessionEntry({ storePath, sessionKey })?.label).toBe("Billing rework");
     expect(params.sessionEntry?.label).toBe("Billing rework");
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
+      { sessionKey, reason: "command-metadata" },
+    ]);
   });
 
   it("suggests a name without mutating when no argument is given", async () => {
@@ -102,6 +106,7 @@ describe("name command", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Use /name <title>");
     expect(getSessionEntry({ storePath, sessionKey })?.label).toBeUndefined();
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
   });
 
   it("rejects a label already used by another session", async () => {
@@ -129,6 +134,7 @@ describe("name command", () => {
 
     expect(result?.reply?.text).toContain("label already in use");
     expect(getSessionEntry({ storePath, sessionKey })?.label).toBeUndefined();
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
   });
 
   it("reads the persisted name when params.sessionEntry is absent", async () => {
@@ -170,6 +176,9 @@ describe("name command", () => {
     expect(result?.reply?.text).toContain("First native");
     expect(getSessionEntry({ storePath, sessionKey })?.label).toBe("First native");
     expect(params.sessionEntry?.label).toBe("First native");
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
+      { sessionKey, reason: "command-metadata" },
+    ]);
   });
 
   it("persists the rename under the canonical key when stored under a legacy alias", async () => {

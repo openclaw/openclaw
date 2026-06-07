@@ -10,6 +10,7 @@ import {
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { parseSessionLabel } from "../../sessions/session-label.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
@@ -136,5 +137,6 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
     return nameReply(`Couldn't rename the session: ${result.error}`);
   }
   syncNameSessionEntry(params);
+  markCommandSessionMetadataChanged(params);
   return nameReply(`✅ Session renamed to “${result.label}”.`);
 };
