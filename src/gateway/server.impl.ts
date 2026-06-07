@@ -111,7 +111,6 @@ import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
-import { deliverTalkRealtimeChatRunFinal } from "./talk-realtime-chat-final.js";
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 
@@ -1120,12 +1119,6 @@ export async function startGatewayServer(
     getActiveTaskCount = earlyRuntime.getActiveTaskCount;
     runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
 
-    const onChatRunFinal: GatewayRequestContext["onChatRunFinal"] = (event) => {
-      void deliverTalkRealtimeChatRunFinal(event).catch((err: unknown) => {
-        log.warn(`talk realtime chat final delivery failed: ${String(err)}`);
-      });
-    };
-
     const [{ startGatewayEventSubscriptions }, { startGatewayRuntimeServices }] =
       await startupTrace.measure("runtime.post-early-imports", () =>
         Promise.all([
@@ -1144,7 +1137,6 @@ export async function startGatewayServer(
         sessionEventSubscribers,
         sessionMessageSubscribers,
         chatAbortControllers,
-        onChatRunFinal,
       }),
     );
     Object.assign(runtimeState, runtimeSubscriptions);
@@ -1436,7 +1428,6 @@ export async function startGatewayServer(
           },
           getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
           registerToolEventRecipient: toolEventRecipients.add,
-          onChatRunFinal,
           dedupe,
           wizardSessions,
           findRunningWizard,

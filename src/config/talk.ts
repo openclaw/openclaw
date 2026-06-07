@@ -11,7 +11,6 @@ import type {
   TalkConfigResponse,
   TalkProviderConfig,
   TalkRealtimeConfig,
-  TalkRealtimeFinalHudConfig,
 } from "./types.gateway.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { coerceSecretRef } from "./types.secrets.js";
@@ -92,40 +91,6 @@ function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConf
   return Object.keys(providers).length > 0 ? providers : undefined;
 }
 
-const TALK_REALTIME_FINAL_HUD_CHANNELS = new Set([
-  "system",
-  "brain",
-  "voice",
-  "agent",
-  "chat",
-  "mcp",
-]);
-
-function normalizeTalkRealtimeFinalHudConfig(
-  value: unknown,
-): TalkRealtimeFinalHudConfig | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const normalized: TalkRealtimeFinalHudConfig = {};
-  if (typeof value.enabled === "boolean") {
-    normalized.enabled = value.enabled;
-  }
-  const baseUrl = normalizeOptionalString(value.baseUrl);
-  if (baseUrl) {
-    normalized.baseUrl = baseUrl;
-  }
-  const streamChannel = normalizeOptionalString(value.streamChannel);
-  if (streamChannel && TALK_REALTIME_FINAL_HUD_CHANNELS.has(streamChannel)) {
-    normalized.streamChannel = streamChannel as TalkRealtimeFinalHudConfig["streamChannel"];
-  }
-  const monitorKind = normalizeOptionalString(value.monitorKind);
-  if (monitorKind) {
-    normalized.monitorKind = monitorKind;
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
 function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -184,10 +149,6 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
     source.consultRouting === "force-agent-consult"
   ) {
     normalized.consultRouting = source.consultRouting;
-  }
-  const finalHud = normalizeTalkRealtimeFinalHudConfig(source.finalHud);
-  if (finalHud) {
-    normalized.finalHud = finalHud;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }

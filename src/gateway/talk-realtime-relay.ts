@@ -44,7 +44,6 @@ import {
 } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
-import { mirrorTalkFinalHud, type TalkFinalHudMirrorStatus } from "./talk-final-hud-mirror.js";
 import {
   closeExpiredTalkRelaySessions,
   requireActiveTalkRelaySession,
@@ -59,6 +58,8 @@ const RELAY_EVENT = "talk.event";
 const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
+
+type TalkFinalSpeechStatus = "speaking" | "degraded";
 
 type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
@@ -95,7 +96,7 @@ type TalkRealtimeRelayEventPayload =
       relaySessionId: string;
       type: "finalSpeech";
       text: string;
-      status: TalkFinalHudMirrorStatus;
+      status: TalkFinalSpeechStatus;
       detail?: string;
       source?: string;
       callId?: string;
@@ -251,15 +252,11 @@ function broadcastToolResultToOwner(
   });
 }
 
-function getRelayRuntimeConfig(session: RelaySession): OpenClawConfig | undefined {
-  return (session.context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.();
-}
-
 function reportFinalSpeechStatus(
   session: RelaySession,
   params: {
     text: string;
-    status: TalkFinalHudMirrorStatus;
+    status: TalkFinalSpeechStatus;
     detail?: string;
     source?: string;
     callId?: string;
@@ -288,17 +285,6 @@ function reportFinalSpeechStatus(
       },
       final: params.status === "degraded",
     }),
-  });
-  void mirrorTalkFinalHud({
-    cfg: getRelayRuntimeConfig(session),
-    text: params.text,
-    status: params.status,
-    detail: params.detail,
-    source: params.source,
-    sessionId: session.id,
-    runId: params.runId,
-    callId: params.callId,
-    provider: session.talk.context.provider,
   });
 }
 
@@ -968,60 +954,6 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   if (!session.sessionKey) {
     session.sessionKey = params.sessionKey;
   }
-}
-
-/** Delivers a chat-run final back to the realtime Talk session that owns that run. */
-export function deliverTalkRealtimeRelayAgentRunFinal(params: {
-  runId: string;
-  sessionKey?: string;
-  result: unknown;
-  source?: string;
-}): boolean {
-  for (const session of relaySessions.values()) {
-    const registeredSessionKey = session.activeAgentRuns.get(params.runId);
-    if (!registeredSessionKey) {
-      continue;
-    }
-    if (params.sessionKey && registeredSessionKey !== params.sessionKey) {
-      continue;
-    }
-    const turnId = ensureRelayTurn(session);
-    const text = readSpeakableRealtimeVoiceToolResult(params.result);
-    const callId = [...session.activeAgentToolCalls.entries()].find(
-      ([, runId]) => runId === params.runId,
-    )?.[0];
-    if (callId && !session.completedAgentToolCalls.has(callId)) {
-      const forcedConsult = session.forcedConsults.handles().find((handle) => handle.id === callId);
-      if (forcedConsult) {
-        session.forcedConsults.markDelivered(forcedConsult);
-        for (const nativeCallId of session.forcedConsults.nativeCallIds(forcedConsult)) {
-          submitAlreadyDeliveredToolResult(session, nativeCallId, turnId);
-        }
-      } else {
-        session.bridge.submitToolResult(callId, buildAlreadyDeliveredToolResult(), {
-          suppressResponse: true,
-        });
-      }
-      broadcastToolResultToOwner(session, {
-        callId,
-        turnId,
-        result: params.result,
-        forced: Boolean(forcedConsult),
-        final: true,
-      });
-      session.activeAgentToolCalls.delete(callId);
-      session.completedAgentToolCalls.add(callId);
-    }
-    deliverRelayFinalSpeech(session, {
-      text,
-      source: params.source ?? "agent-final",
-      callId,
-      runId: params.runId,
-    });
-    session.activeAgentRuns.delete(params.runId);
-    return true;
-  }
-  return false;
 }
 
 /** Applies realtime voice-control text to the active agent-consult chat run. */

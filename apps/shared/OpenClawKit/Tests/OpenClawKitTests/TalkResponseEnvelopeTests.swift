@@ -8,7 +8,6 @@ final class TalkResponseEnvelopeTests: XCTestCase {
 
         XCTAssertTrue(result.isEnvelope)
         XCTAssertEqual(result.response, "I will check that.")
-        XCTAssertEqual(result.keys, ["response", "status"])
     }
 
     func testParsesFirstLineObjectResponse() {

@@ -3,12 +3,10 @@ import Foundation
 public struct TalkResponseEnvelopeParseResult: Equatable, Sendable {
     public let response: String?
     public let isEnvelope: Bool
-    public let keys: [String]
 
-    public init(response: String?, isEnvelope: Bool, keys: [String]) {
+    public init(response: String?, isEnvelope: Bool) {
         self.response = response
         self.isEnvelope = isEnvelope
-        self.keys = keys
     }
 }
 
@@ -22,10 +20,9 @@ public enum TalkResponseEnvelopeParser {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return TalkResponseEnvelopeParseResult(
                 response: response?.isEmpty == false ? response : nil,
-                isEnvelope: true,
-                keys: object.keys.sorted())
+                isEnvelope: true)
         }
-        return TalkResponseEnvelopeParseResult(response: nil, isEnvelope: false, keys: [])
+        return TalkResponseEnvelopeParseResult(response: nil, isEnvelope: false)
     }
 
     public static func isEnvelopeKey(_ key: String) -> Bool {

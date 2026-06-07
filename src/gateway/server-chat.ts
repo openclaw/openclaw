@@ -255,20 +255,6 @@ export type AgentEventHandlerOptions = {
     clientRunId: string;
     sessionKey: string;
   }) => void;
-  onChatRunFinal?: (event: ChatRunFinalNotification) => void | Promise<void>;
-};
-
-export type ChatRunFinalNotification = {
-  sessionKey: string;
-  clientRunId: string;
-  sourceRunId: string;
-  state: "done" | "error";
-  text?: string;
-  error?: unknown;
-  stopReason?: string;
-  errorKind?: ErrorKind;
-  agentId?: string;
-  controlUiVisible?: boolean;
 };
 
 export function createAgentEventHandler({
@@ -286,7 +272,6 @@ export function createAgentEventHandler({
   lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
   clearTrackedActiveRun,
-  onChatRunFinal,
 }: AgentEventHandlerOptions) {
   type TerminalLifecycleOptions = { skipChatErrorFinal?: boolean };
   type PendingTerminalLifecycleError = {
@@ -319,17 +304,6 @@ export function createAgentEventHandler({
     }
     clearTimeout(pending.timer);
     pendingTerminalLifecycleErrors.delete(runId);
-  };
-
-  const notifyChatRunFinal = (event: ChatRunFinalNotification) => {
-    if (!onChatRunFinal) {
-      return;
-    }
-    try {
-      void Promise.resolve(onChatRunFinal(event)).catch(() => undefined);
-    } catch {
-      // Chat final notifications are side-channel observers and must not affect UI delivery.
-    }
   };
 
   // Only subagent/acp keys can carry spawnedBy (mirrors supportsSpawnLineage in
@@ -779,7 +753,6 @@ export function createAgentEventHandler({
     chatRunState.clearRun(clientRunId);
     const spawnedBy = resolveSpawnedBy(sessionKey);
     if (jobState === "done") {
-      const speakableText = text && !shouldSuppressSilent ? text : undefined;
       const payload = {
         runId: clientRunId,
         sessionKey,
@@ -788,27 +761,16 @@ export function createAgentEventHandler({
         seq,
         state: "final" as const,
         ...(stopReason && { stopReason }),
-        message: speakableText
-          ? {
-              role: "assistant",
-              content: [{ type: "text", text: speakableText }],
-              timestamp: Date.now(),
-            }
-          : undefined,
+        message:
+          text && !shouldSuppressSilent
+            ? {
+                role: "assistant",
+                content: [{ type: "text", text }],
+                timestamp: Date.now(),
+              }
+            : undefined,
       };
       sendChatPayload(sessionKey, payload, opts);
-      notifyChatRunFinal({
-        sessionKey,
-        clientRunId,
-        sourceRunId,
-        state: "done",
-        ...(speakableText ? { text: speakableText } : {}),
-        ...(stopReason ? { stopReason } : {}),
-        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-        ...(opts?.controlUiVisible !== undefined
-          ? { controlUiVisible: opts.controlUiVisible }
-          : {}),
-      });
       return;
     }
     const payload = {
@@ -823,17 +785,6 @@ export function createAgentEventHandler({
       ...(errorKind && { errorKind }),
     };
     sendChatPayload(sessionKey, payload, opts);
-    notifyChatRunFinal({
-      sessionKey,
-      clientRunId,
-      sourceRunId,
-      state: "error",
-      ...(error !== undefined ? { error } : {}),
-      ...(stopReason ? { stopReason } : {}),
-      ...(errorKind ? { errorKind } : {}),
-      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-      ...(opts?.controlUiVisible !== undefined ? { controlUiVisible: opts.controlUiVisible } : {}),
-    });
   };
 
   const sendAgentPayload = (

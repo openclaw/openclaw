@@ -50,12 +50,6 @@ describe("talk normalization", () => {
         transport: "webrtc",
         brain: "agent-consult",
         consultRouting: "force-agent-consult",
-        finalHud: {
-          enabled: true,
-          baseUrl: " http://127.0.0.1:18802 ",
-          streamChannel: "voice",
-          monitorKind: "talk",
-        },
       },
       interruptOnSpeech: true,
     });
@@ -82,33 +76,8 @@ describe("talk normalization", () => {
         transport: "webrtc",
         brain: "agent-consult",
         consultRouting: "force-agent-consult",
-        finalHud: {
-          enabled: true,
-          baseUrl: "http://127.0.0.1:18802",
-          streamChannel: "voice",
-          monitorKind: "talk",
-        },
       },
       interruptOnSpeech: true,
-    });
-  });
-
-  it("drops invalid realtime final HUD stream channels during normalization", () => {
-    const normalized = normalizeTalkSection({
-      realtime: {
-        finalHud: {
-          enabled: true,
-          baseUrl: " http://127.0.0.1:18802 ",
-          streamChannel: "external",
-          monitorKind: "talk",
-        },
-      },
-    } as unknown as never);
-
-    expect(normalized?.realtime?.finalHud).toEqual({
-      enabled: true,
-      baseUrl: "http://127.0.0.1:18802",
-      monitorKind: "talk",
     });
   });
 

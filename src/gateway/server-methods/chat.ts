@@ -2181,39 +2181,9 @@ function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: strin
   return next;
 }
 
-type ChatRunFinalContext = Partial<Pick<GatewayRequestContext, "onChatRunFinal">>;
-
-type ChatRunFinalEvent = Parameters<NonNullable<GatewayRequestContext["onChatRunFinal"]>>[0];
-
-function notifyChatRunFinal(context: ChatRunFinalContext, event: ChatRunFinalEvent): void {
-  if (!context.onChatRunFinal) {
-    return;
-  }
-  try {
-    void Promise.resolve(context.onChatRunFinal(event)).catch(() => undefined);
-  } catch {
-    // Side-channel final observers must not affect chat delivery.
-  }
-}
-
-function resolveChatFinalNotificationText(
-  message: Record<string, unknown> | undefined,
-): string | undefined {
-  if (!message) {
-    return undefined;
-  }
-  const content = Array.isArray(message.content)
-    ? (message.content as AssistantDisplayContentBlock[])
-    : undefined;
-  return (
-    extractAssistantDisplayTextFromContent(content) ??
-    sanitizeAssistantDisplayText(typeof message.text === "string" ? message.text : undefined)
-  );
-}
-
 function broadcastChatFinal(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
-    Partial<Pick<GatewayRequestContext, "getRuntimeConfig" | "onChatRunFinal">>;
+    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
   runId: string;
   sessionKey: string;
   agentId?: string;
@@ -2221,15 +2191,13 @@ function broadcastChatFinal(params: {
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
   const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
-  const message = projectChatDisplayMessage(params.message);
-  const notificationText = resolveChatFinalNotificationText(message);
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
     ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq,
     state: "final" as const,
-    message,
+    message: projectChatDisplayMessage(params.message),
   };
   params.context.broadcast("chat", payload);
   sendGlobalAwareNodeChatPayload({
@@ -2238,14 +2206,6 @@ function broadcastChatFinal(params: {
     agentId: payloadAgentId,
     event: "chat",
     payload,
-  });
-  notifyChatRunFinal(params.context, {
-    sessionKey: params.sessionKey,
-    clientRunId: params.runId,
-    sourceRunId: params.runId,
-    state: "done",
-    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
-    ...(notificationText ? { text: notificationText } : {}),
   });
   params.context.agentRunSeq.delete(params.runId);
 }
@@ -2287,7 +2247,7 @@ function broadcastSideResult(params: {
 
 function broadcastChatError(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
-    Partial<Pick<GatewayRequestContext, "getRuntimeConfig" | "onChatRunFinal">>;
+    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
   runId: string;
   sessionKey: string;
   agentId?: string;
@@ -2328,14 +2288,6 @@ function broadcastChatError(params: {
     agentId: payloadAgentId,
     event: "chat",
     payload,
-  });
-  notifyChatRunFinal(params.context, {
-    sessionKey: params.sessionKey,
-    clientRunId: params.runId,
-    sourceRunId: params.runId,
-    state: "error",
-    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
-    ...(errorText ? { error: errorText } : {}),
   });
   params.context.agentRunSeq.delete(params.runId);
 }
