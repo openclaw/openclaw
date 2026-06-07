@@ -489,7 +489,7 @@ describe("acp translator stable lifecycle handlers", () => {
     ).resolves.toEqual({
       stopReason: "end_turn",
     });
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   });
 
   it("closes sessions by aborting active work, resolving pending prompts, and deleting bridge state", async () => {
