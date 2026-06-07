@@ -1,0 +1,62 @@
+# Graphiti per-user memory stack for the `life` agent (US host 5.161.84.219).
+# Phase 1 of docs/experiments/plans/life-per-user-memory.md.
+#
+# Two services, isolated compose project ("graphiti-life"):
+#   - falkordb     : graph DB backend (internal only, password-protected)
+#   - graphiti-mcp : Graphiti MCP server over streamable-HTTP on :8000
+#
+# Security: graphiti-mcp is bound to the docker0 bridge IP (172.17.0.1), NOT
+# 0.0.0.0 — it is reachable from the host and from containers, never from the
+# public internet. The life container reaches it via a `docker network connect`
+# in Phase 3 (see README). The Graphiti MCP surface is unauthenticated and
+# exposes destructive tools, so it must never be published on a public iface.
+
+name: graphiti-life
+
+services:
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: graphiti-falkordb
+    restart: unless-stopped
+    environment:
+      # FalkorDB is redis-stack based; REDIS_ARGS sets the redis password.
+      # (The FALKORDB_PASSWORD env alone does NOT enable auth on the server.)
+      - REDIS_ARGS=--requirepass ${FALKORDB_PASSWORD}
+    volumes:
+      - falkordb_data:/var/lib/falkordb/data
+    networks:
+      - graphiti
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${FALKORDB_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  graphiti-mcp:
+    image: zepai/knowledge-graph-mcp:standalone
+    container_name: graphiti-mcp
+    restart: unless-stopped
+    depends_on:
+      falkordb:
+        condition: service_healthy
+    command: ["uv", "run", "main.py", "--transport", "http", "--database-provider", "falkordb"]
+    environment:
+      - FALKORDB_URI=redis://falkordb:6379
+      - FALKORDB_PASSWORD=${FALKORDB_PASSWORD}
+      - FALKORDB_DATABASE=default_db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MODEL_NAME=${MODEL_NAME:-gpt-4o-mini}
+      - SEMAPHORE_LIMIT=${SEMAPHORE_LIMIT:-5}
+      - GRAPHITI_TELEMETRY_ENABLED=false
+    ports:
+      # host-internal only (docker0 bridge), never 0.0.0.0
+      - "172.17.0.1:8000:8000"
+    networks:
+      - graphiti
+
+networks:
+  graphiti:
+    driver: bridge
+
+volumes:
+  falkordb_data:

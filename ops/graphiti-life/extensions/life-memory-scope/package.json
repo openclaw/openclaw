@@ -1,0 +1,12 @@
+{
+  "name": "life-memory-scope",
+  "version": "1.0.0",
+  "description": "Per-user Graphiti memory scope hook for the life agent",
+  "type": "module",
+  "main": "index.js",
+  "openclaw": {
+    "extensions": [
+      "index.js"
+    ]
+  }
+}

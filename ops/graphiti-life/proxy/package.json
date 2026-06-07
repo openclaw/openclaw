@@ -1,0 +1,6 @@
+{
+  "name": "graphiti-proxy",
+  "version": "1.0.0",
+  "description": "Capability-boundary stdio MCP proxy in front of Graphiti for the life agent",
+  "main": "graphiti-proxy.js"
+}

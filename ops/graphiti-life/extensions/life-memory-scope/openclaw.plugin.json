@@ -1,0 +1,7 @@
+{
+  "id": "life-memory-scope",
+  "name": "Life Memory Scope",
+  "description": "Pins per-user Graphiti memory scope (__group_id) on every mcp__graphiti__* tool call.",
+  "version": "1.0.0",
+  "configSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+}
