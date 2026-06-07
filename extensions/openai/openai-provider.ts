@@ -138,7 +138,9 @@ function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionCo
   );
 }
 
-export async function buildOpenAILiveProviderConfig(params: BuildOpenAILiveProviderConfigParams) {
+export async function buildOpenAILiveProviderConfig(
+  params: BuildOpenAILiveProviderConfigParams,
+): Promise<ModelProviderConfig> {
   const baseUrl =
     normalizeOptionalString(params.baseUrl) ?? resolveOpenAIDefaultBaseUrl(params.env);
   const models = buildOpenAIManifestModelsForBaseUrl(baseUrl);
