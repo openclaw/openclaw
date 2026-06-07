@@ -48,7 +48,7 @@ export const telegramChannelConfigUiHints = {
   },
   streaming: {
     label: "Telegram Streaming Mode",
-    help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
+    help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" keeps a single editable progress draft until final delivery; streaming.progress.assistantPreview can opt into a separate temporary assistant preview lane. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
   },
   "streaming.mode": {
     label: "Telegram Streaming Mode",
@@ -109,6 +109,10 @@ export const telegramChannelConfigUiHints = {
   "streaming.progress.commandText": {
     label: "Telegram Progress Command Text",
     help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
+  },
+  "streaming.progress.assistantPreview": {
+    label: "Telegram Progress Assistant Preview",
+    help: "Show assistant answer partials in a separate temporary preview lane while progress mode keeps the status draft. Default false; the final answer is still delivered normally.",
   },
   "streaming.progress.commentary": {
     label: "Telegram Progress Commentary",
