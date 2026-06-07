@@ -1215,6 +1215,41 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     });
+    const resultEvent = onRunAgentEvent.mock.calls
+      .map(([event]) => event)
+      .find(
+        (
+          event,
+        ): event is {
+          data: {
+            phase: "result";
+            result: { content?: unknown; contentItems?: unknown; success?: unknown };
+          };
+          stream: "tool";
+        } => event.stream === "tool" && event.data?.phase === "result",
+      );
+    expect(resultEvent?.data.result).not.toHaveProperty("success");
+    expect(resultEvent?.data.result).not.toHaveProperty("contentItems");
+  });
+
+  it("maps sanitized dynamic tool output into transcript progress content", () => {
+    const rawToolSecret = "sk-abcdefghijklmnopqrstuvwxyz1234567890"; // pragma: allowlist secret
+    const result = testing.toTranscriptToolResultForTests({
+      success: true,
+      contentItems: [
+        { type: "inputText", text: `lookup result: ${rawToolSecret}` },
+        { type: "inputImage", imageUrl: "data:image/png;base64,abc" },
+      ],
+    });
+    const content = result.content as Array<{ text?: string; type?: string; url?: string }>;
+
+    expect(result).not.toHaveProperty("success");
+    expect(result).not.toHaveProperty("contentItems");
+    expect(content[0]).toEqual({ type: "text", text: expect.any(String) });
+    expect(content[0]?.text).toContain("lookup result:");
+    expect(content[0]?.text).not.toContain(rawToolSecret);
+    expect(content[1]).toEqual({ type: "image", url: "data:image/png;base64,abc" });
+    expect(JSON.stringify(result)).not.toContain(rawToolSecret);
   });
 
   it("keeps leading delivery hints out of the Codex current user request", async () => {

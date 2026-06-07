@@ -199,7 +199,6 @@ import type {
   CodexTurnEnvironmentParams,
   CodexServerNotification,
   CodexDynamicToolCallParams,
-  CodexDynamicToolCallOutputContentItem,
   CodexDynamicToolCallResponse,
   CodexTurnStartResponse,
   JsonObject,
@@ -312,22 +311,32 @@ function emitCodexAppServerEvent(
 
 function toTranscriptToolResult(response: CodexDynamicToolCallResponse): Record<string, unknown> {
   const sanitized = sanitizeCodexToolResponse(response);
+  const contentItems = Array.isArray(sanitized.contentItems) ? sanitized.contentItems : [];
   const result: Record<string, unknown> = {
     ...sanitized,
-    content: response.contentItems.map(toTranscriptToolResultContentItem),
+    // Progress events are UI/transcript-facing; map only sanitized content so
+    // event redaction cannot be bypassed by raw dynamic tool output.
+    content: contentItems.map(toTranscriptToolResultContentItem),
   };
   delete result.contentItems;
   delete result.success;
   return result;
 }
 
-function toTranscriptToolResultContentItem(
-  item: CodexDynamicToolCallOutputContentItem,
-): Record<string, unknown> {
-  if (item.type === "inputText") {
-    return { type: "text", text: item.text };
+function toTranscriptToolResultContentItem(item: unknown): Record<string, unknown> {
+  if (!item || typeof item !== "object") {
+    return { type: "text", text: "" };
   }
-  return "imageUrl" in item ? { type: "image", url: item.imageUrl } : { type: "text", text: "" };
+  const record = item as Record<string, unknown>;
+  if (record.type === "inputText") {
+    return { type: "text", text: typeof record.text === "string" ? record.text : "" };
+  }
+  if (record.type === "inputImage" || typeof record.imageUrl === "string") {
+    return typeof record.imageUrl === "string"
+      ? { type: "image", url: record.imageUrl }
+      : { type: "text", text: "" };
+  }
+  return { type: "text", text: "" };
 }
 
 type CodexAgentEndHookParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
@@ -2791,6 +2800,7 @@ export const testing = {
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
   hasPendingDynamicToolTerminalDiagnostic,
+  toTranscriptToolResultForTests: toTranscriptToolResult,
   withCodexStartupTimeout,
   setOpenClawCodingToolsFactoryForTests,
   resetOpenClawCodingToolsFactoryForTests,
