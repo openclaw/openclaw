@@ -655,6 +655,30 @@ export async function runSshSandboxCommand(
   });
 }
 
+export const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
+  "python3 - \"$1\" <<'PY'",
+  "import os, sys",
+  "target = os.path.normpath(sys.argv[1])",
+  "if not target.startswith('/'):",
+  "    raise SystemExit(f'remote directory must be absolute: {target}')",
+  "flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_NOFOLLOW', 0)",
+  "fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)",
+  "try:",
+  "    for part in [p for p in target.split('/') if p]:",
+  "        try:",
+  "            child_fd = os.open(part, flags, dir_fd=fd)",
+  "        except FileNotFoundError:",
+  "            os.mkdir(part, 0o755, dir_fd=fd)",
+  "            child_fd = os.open(part, flags, dir_fd=fd)",
+  "        except OSError as exc:",
+  "            raise SystemExit(f'unsafe remote directory component for {target}: {exc}')",
+  "        os.close(fd)",
+  "        fd = child_fd",
+  "finally:",
+  "    os.close(fd)",
+  "PY",
+].join("\n");
+
 /** Stream a local directory to the remote sandbox with tar over ssh. */
 export async function uploadDirectoryToSshTarget(params: {
   session: SshSandboxSession;
@@ -666,7 +690,7 @@ export async function uploadDirectoryToSshTarget(params: {
   const remoteCommand = buildRemoteCommand([
     "/bin/sh",
     "-c",
-    'mkdir -p -- "$1" && tar -xf - -C "$1"',
+    `${ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT}\ntar -xf - -C "$1"`,
     "openclaw-sandbox-upload",
     params.remoteDir,
   ]);

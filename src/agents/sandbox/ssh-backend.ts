@@ -27,6 +27,7 @@ import {
   buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
+  ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
   runSshSandboxCommand,
   uploadDirectoryToSshTarget,
   type SshSandboxSession,
@@ -274,7 +275,7 @@ class SshSandboxBackendImpl {
       remoteCommand: buildRemoteCommand([
         "/bin/sh",
         "-c",
-        'mkdir -p -- "$1" && find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
+        `${ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT}\nfind "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +`,
         "openclaw-sandbox-clear",
         remoteDir,
       ]),

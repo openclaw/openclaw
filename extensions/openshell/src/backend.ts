@@ -463,10 +463,7 @@ class OpenShellSandboxBackendImpl {
         if (result.code !== 0) {
           throw new Error(result.stderr.trim() || "openshell sandbox download failed");
         }
-        await fs.rm(path.join(tmpDir, ...MATERIALIZED_SKILLS_REMOTE_PARTS), {
-          recursive: true,
-          force: true,
-        });
+        await removeMaterializedSkillsFromDownloadedWorkspace(tmpDir);
         await replaceDirectoryContents({
           sourceDir: tmpDir,
           targetDir: this.params.createParams.workspaceDir,
@@ -549,6 +546,22 @@ export function buildOpenShellSandboxName(scopeKey: string): string {
 function resolveRemoteMaterializedSkillsWorkspaceDir(remoteWorkspaceDir: string): string {
   const root = remoteWorkspaceDir.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
   return path.posix.join(root, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
+}
+
+async function removeMaterializedSkillsFromDownloadedWorkspace(tmpDir: string): Promise<void> {
+  let cursor = tmpDir;
+  for (const part of MATERIALIZED_SKILLS_REMOTE_PARTS) {
+    const next = path.join(cursor, part);
+    const stats = await fs.lstat(next).catch(() => null);
+    if (!stats || stats.isSymbolicLink()) {
+      return;
+    }
+    if (!stats.isDirectory()) {
+      return;
+    }
+    cursor = next;
+  }
+  await fs.rm(cursor, { recursive: true, force: true });
 }
 
 function resolveOpenShellTmpRoot(): string {
