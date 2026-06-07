@@ -5,7 +5,10 @@
  */
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
-import { copyBeforeToolCallHookMarker } from "./agent-tools.before-tool-call.js";
+import {
+  copyAgentToolWithExecute,
+  copyBeforeToolCallHookMarker,
+} from "./agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 
@@ -63,16 +66,16 @@ export function wrapToolWithAbortSignal(
   if (!execute) {
     return tool;
   }
-  const wrappedTool: AnyAgentTool = {
-    ...tool,
-    execute: async (toolCallId, params, signal, onUpdate) => {
+  const wrappedTool = copyAgentToolWithExecute(
+    tool,
+    async (toolCallId, params, signal, onUpdate) => {
       const combined = combineAbortSignals(signal, abortSignal);
       if (combined?.aborted) {
         throwAbortError();
       }
       return await execute(toolCallId, params, combined, onUpdate);
     },
-  };
+  );
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
   copyBeforeToolCallHookMarker(tool, wrappedTool);

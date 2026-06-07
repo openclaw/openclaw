@@ -20,6 +20,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
+import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
@@ -566,6 +567,166 @@ describe("before_tool_call loop detection behavior", () => {
         toolOwner: "bundle-mcp",
       });
     });
+  });
+
+  it("wraps plugin tools without eagerly reading parameter schema getters", async () => {
+    const result = { content: [{ type: "text", text: "ok" }] };
+    const execute = vi.fn().mockResolvedValue(result);
+    const rawTool = {
+      name: "hostile_schema",
+      description: "Hostile schema",
+      execute,
+    } as unknown as AnyAgentTool;
+    Object.defineProperty(rawTool, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("parameters getter exploded");
+      },
+    });
+
+    let tool: AnyAgentTool | undefined;
+    expect(() => {
+      tool = wrapToolWithBeforeToolCallHook(rawTool, {
+        agentId: "main",
+        sessionKey: "session-key",
+        loopDetection: { enabled: false },
+      });
+    }).not.toThrow();
+
+    expect(() => tool?.parameters).toThrow("parameters getter exploded");
+    await expect(tool?.execute("tool-call-hostile-schema", {}, undefined, undefined)).resolves.toBe(
+      result,
+    );
+    expect(execute).toHaveBeenCalledWith("tool-call-hostile-schema", {}, undefined, undefined);
+  });
+
+  it("keeps unreadable schema getters lazy when abort wrapping a hooked tool", async () => {
+    const result = { content: [{ type: "text", text: "ok" }] };
+    const execute = vi.fn().mockResolvedValue(result);
+    const rawTool = {
+      name: "hostile_schema_abort",
+      description: "Hostile schema abort",
+      execute,
+    } as unknown as AnyAgentTool;
+    Object.defineProperty(rawTool, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("parameters getter exploded");
+      },
+    });
+    const hooked = wrapToolWithBeforeToolCallHook(rawTool, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    let tool: AnyAgentTool | undefined;
+    expect(() => {
+      tool = wrapToolWithAbortSignal(hooked, new AbortController().signal);
+    }).not.toThrow();
+
+    await expect(
+      tool?.execute("tool-call-hostile-schema-abort", {}, undefined, undefined),
+    ).resolves.toBe(result);
+  });
+
+  it("preserves source receiver semantics for wrapped tool schema getters", () => {
+    const parameters = { type: "object", properties: { query: { type: "string" } } };
+    const parameterState = new WeakMap<object, typeof parameters>();
+    const execute = vi.fn();
+    const rawTool = {
+      name: "stateful_schema",
+      description: "Stateful schema",
+      execute,
+    } as unknown as AnyAgentTool;
+    Object.defineProperty(rawTool, "parameters", {
+      enumerable: true,
+      get() {
+        const value = parameterState.get(this);
+        if (!value) {
+          throw new Error("missing schema state");
+        }
+        return value;
+      },
+    });
+    parameterState.set(rawTool, parameters);
+
+    const tool = wrapToolWithBeforeToolCallHook(rawTool, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    expect(tool.parameters).toBe(parameters);
+  });
+
+  it("preserves class-backed private schema getters when wrapping tools", () => {
+    const parameters = { type: "object", properties: { query: { type: "string" } } };
+    const executeMock = vi.fn();
+    class PrivateSchemaTool {
+      #name = "private_schema";
+      #parameters = parameters;
+      #executionMode = "sequential" as const;
+      description = "Private schema";
+      execute = executeMock;
+
+      get name() {
+        return this.#name;
+      }
+
+      get parameters() {
+        return this.#parameters;
+      }
+
+      get executionMode() {
+        return this.#executionMode;
+      }
+
+      prepareArguments(args: unknown) {
+        return { [this.#name]: args };
+      }
+    }
+
+    const rawTool = new PrivateSchemaTool() as unknown as AnyAgentTool;
+    const tool = wrapToolWithBeforeToolCallHook(rawTool, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    expect(tool.name).toBe("private_schema");
+    expect(tool.parameters).toBe(parameters);
+    expect(tool.executionMode).toBe("sequential");
+    expect(tool.prepareArguments?.("status")).toEqual({ private_schema: "status" });
+  });
+
+  it("can wrap an already wrapped tool without copying internal wrapper markers", async () => {
+    const result = { content: [{ type: "text", text: "ok" }] };
+    const execute = vi.fn().mockResolvedValue(result);
+    const rawTool = {
+      name: "double_wrapped",
+      description: "Double wrapped",
+      parameters: { type: "object", properties: {} },
+      execute,
+    } as unknown as AnyAgentTool;
+    const first = wrapToolWithBeforeToolCallHook(rawTool, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    let second: AnyAgentTool | undefined;
+    expect(() => {
+      second = wrapToolWithBeforeToolCallHook(first, {
+        agentId: "main",
+        sessionKey: "session-key",
+        loopDetection: { enabled: false },
+      });
+    }).not.toThrow();
+
+    await expect(second?.execute("tool-call-double", {}, undefined, undefined)).resolves.toBe(
+      result,
+    );
   });
 
   it("emits skill usage diagnostics when a run reads a known skill instruction file", async () => {

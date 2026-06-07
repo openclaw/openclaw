@@ -13,12 +13,20 @@ type CallPluginToolParams = {
   arguments?: unknown;
 };
 
-function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
-  const params = tool.parameters;
-  if (params && typeof params === "object" && "type" in params) {
-    return params as Record<string, unknown>;
-  }
+function emptyInputSchema(): Record<string, unknown> {
   return { type: "object", properties: {} };
+}
+
+function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> | undefined {
+  try {
+    const params = Reflect.get(tool, "parameters");
+    if (params && typeof params === "object" && Reflect.has(params, "type")) {
+      return params as Record<string, unknown>;
+    }
+  } catch {
+    return undefined;
+  }
+  return emptyInputSchema();
 }
 
 export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
@@ -30,17 +38,27 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
     // as the agent and HTTP tool execution paths.
     return wrapToolWithBeforeToolCallHook(tool, undefined, { approvalMode: "report" });
   });
-  const toolMap = new Map<string, AnyAgentTool>();
+  const listedTools: Array<{
+    tool: AnyAgentTool;
+    inputSchema: Record<string, unknown>;
+  }> = [];
   for (const tool of wrappedTools) {
+    const inputSchema = resolveJsonSchemaForTool(tool);
+    if (inputSchema) {
+      listedTools.push({ tool, inputSchema });
+    }
+  }
+  const toolMap = new Map<string, AnyAgentTool>();
+  for (const { tool } of listedTools) {
     toolMap.set(tool.name, tool);
   }
 
   return {
     listTools: async () => ({
-      tools: wrappedTools.map((tool) => ({
+      tools: listedTools.map(({ tool, inputSchema }) => ({
         name: tool.name,
         description: tool.description ?? "",
-        inputSchema: resolveJsonSchemaForTool(tool),
+        inputSchema,
       })),
     }),
     callTool: async (params: CallPluginToolParams, signal?: AbortSignal) => {

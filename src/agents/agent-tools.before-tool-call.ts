@@ -199,6 +199,12 @@ const BEFORE_TOOL_CALL_SOURCE_TOOL = Symbol("beforeToolCallSourceTool");
 const BEFORE_TOOL_CALL_HOOK_CONTEXT = Symbol("beforeToolCallHookContext");
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
+const BEFORE_TOOL_CALL_INTERNAL_KEYS = new Set<PropertyKey>([
+  BEFORE_TOOL_CALL_WRAPPED,
+  BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
+  BEFORE_TOOL_CALL_SOURCE_TOOL,
+  BEFORE_TOOL_CALL_HOOK_CONTEXT,
+]);
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
@@ -284,6 +290,21 @@ type ToolDiagnosticIdentity = {
   toolOwner?: string;
 };
 
+const TOOL_FORWARD_KEYS = [
+  "name",
+  "label",
+  "description",
+  "promptSnippet",
+  "promptGuidelines",
+  "parameters",
+  "renderShell",
+  "prepareArguments",
+  "executionMode",
+  "displaySummary",
+  "prepareBeforeToolCallParams",
+  "finalizeBeforeToolCallParams",
+] as const;
+
 function resolveToolDiagnosticIdentity(tool: AnyAgentTool): ToolDiagnosticIdentity {
   const pluginMeta = getPluginToolMeta(tool);
   if (pluginMeta) {
@@ -296,6 +317,94 @@ function resolveToolDiagnosticIdentity(tool: AnyAgentTool): ToolDiagnosticIdenti
     return { toolSource: "channel", toolOwner: channelMeta.channelId };
   }
   return { toolSource: "core" };
+}
+
+function findPropertyDescriptor(source: object, key: PropertyKey): PropertyDescriptor | undefined {
+  let candidate: object | null = source;
+  while (candidate) {
+    const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+    if (descriptor) {
+      return descriptor;
+    }
+    candidate = Object.getPrototypeOf(candidate);
+  }
+  return undefined;
+}
+
+function defineForwardedToolProperty(params: {
+  target: object;
+  source: AnyAgentTool;
+  key: PropertyKey;
+  enumerable: boolean;
+  configurable: boolean;
+}): void {
+  Object.defineProperty(params.target, params.key, {
+    enumerable: params.enumerable,
+    configurable: params.configurable,
+    get: () => {
+      const value = Reflect.get(params.source, params.key, params.source);
+      return typeof value === "function" ? value.bind(params.source) : value;
+    },
+    set: (value: unknown) => {
+      Reflect.set(params.source, params.key, value, params.source);
+    },
+  });
+}
+
+export function copyAgentToolWithExecute(
+  tool: AnyAgentTool,
+  execute: AnyAgentTool["execute"],
+): AnyAgentTool {
+  // Preserve plugin-owned descriptors so schema getters stay lazy until the
+  // caller that needs the schema decides how to handle unreadable input.
+  const wrappedTool = {} as AnyAgentTool;
+  for (const key of Reflect.ownKeys(tool)) {
+    if (key === "execute" || BEFORE_TOOL_CALL_INTERNAL_KEYS.has(key)) {
+      continue;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(tool, key);
+    if (!descriptor) {
+      continue;
+    }
+    if (descriptor.get || descriptor.set) {
+      defineForwardedToolProperty({
+        target: wrappedTool,
+        source: tool,
+        key,
+        enumerable: descriptor.enumerable,
+        configurable: descriptor.configurable,
+      });
+      continue;
+    }
+    Object.defineProperty(wrappedTool, key, descriptor);
+  }
+  for (const key of TOOL_FORWARD_KEYS) {
+    if (Object.hasOwn(wrappedTool, key)) {
+      continue;
+    }
+    try {
+      if (!Reflect.has(tool, key)) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    const descriptor = findPropertyDescriptor(tool, key);
+    defineForwardedToolProperty({
+      target: wrappedTool,
+      source: tool,
+      key,
+      enumerable: descriptor?.enumerable ?? false,
+      configurable: descriptor?.configurable ?? true,
+    });
+  }
+  Object.defineProperty(wrappedTool, "execute", {
+    value: execute,
+    enumerable: Object.getOwnPropertyDescriptor(tool, "execute")?.enumerable ?? true,
+    configurable: true,
+    writable: true,
+  });
+  return wrappedTool;
 }
 
 type SkillUsageMatch = {
@@ -1117,9 +1226,9 @@ export function wrapToolWithBeforeToolCallHook(
     ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
     emitDiagnostics: options.emitDiagnostics !== false,
   };
-  const wrappedTool: AnyAgentTool = {
-    ...tool,
-    execute: async (toolCallId, params, signal, onUpdate) => {
+  const wrappedTool = copyAgentToolWithExecute(
+    tool,
+    async (toolCallId, params, signal, onUpdate) => {
       const prepare = (tool as BeforeToolCallPreparingTool).prepareBeforeToolCallParams;
       const preparedParams = prepare
         ? await prepare(params, {
@@ -1264,7 +1373,7 @@ export function wrapToolWithBeforeToolCallHook(
         throw err;
       }
     },
-  };
+  );
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {

@@ -175,6 +175,32 @@ describe("plugin tools MCP server", () => {
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 
+  it("omits MCP tools with unreadable plugin tool parameters", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: "Stored." });
+    const tool = {
+      name: "hostile_schema",
+      description: "Hostile schema",
+      execute,
+    } as unknown as AnyAgentTool;
+    Object.defineProperty(tool, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("parameters getter exploded");
+      },
+    });
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const listed = await handlers.listTools();
+    const result = await handlers.callTool({ name: "hostile_schema", arguments: {} });
+
+    expect(listed.tools).toEqual([]);
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Unknown tool: hostile_schema" }],
+      isError: true,
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("serializes plugin tool results that do not use the MCP content envelope", async () => {
     const execute = vi.fn().mockResolvedValue({
       provider: "kitchen-sink-search",
