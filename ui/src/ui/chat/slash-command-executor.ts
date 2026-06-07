@@ -746,6 +746,16 @@ function formatTerminalSteerAckContent(status: SteerChatSendAckStatus): string |
   return undefined;
 }
 
+function formatTerminalRedirectAckContent(status: SteerChatSendAckStatus): string | undefined {
+  if (status === "timeout") {
+    return "The active run ended before the redirect message was accepted.";
+  }
+  if (status === "error") {
+    return "Redirect failed before it reached the run; try again.";
+  }
+  return undefined;
+}
+
 /** Soft inject — queues a message into the active run via chat.send (deliver: false). */
 async function executeSteer(
   client: GatewayBrowserClient,
@@ -809,15 +819,20 @@ async function executeRedirect(
         content: resolved.error === "empty" ? "Usage: `/redirect <message>`" : resolved.error,
       };
     }
-    const resp = await client.request<{ runId?: string }>("sessions.steer", {
+    const resp = await client.request<{ runId?: string; status?: unknown }>("sessions.steer", {
       key: resolved.key,
       ...selectedGlobalScope(resolved.key, context),
       message: resolved.message,
     });
+    const ackStatus = normalizeSteerChatSendAckStatus(resp);
+    const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
+    if (terminalAckContent) {
+      return { content: terminalAckContent };
+    }
     const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
     return {
       content: "Redirected.",
-      trackRunId: runId,
+      ...(ackStatus === "started" || ackStatus === "in_flight" ? { trackRunId: runId } : {}),
     };
   } catch (err) {
     return { content: `Failed to redirect: ${String(err)}` };
