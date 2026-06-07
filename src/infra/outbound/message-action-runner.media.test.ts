@@ -312,6 +312,42 @@ describe("runMessageAction media behavior", () => {
     expect(sendArgs.mediaUrls).toEqual([result.sendResult?.mediaUrl]);
   });
 
+  it("does not materialize buffer-only send attachments during dry runs", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "12345678",
+        message: "artifact attached",
+        buffer: Buffer.from("artifact bytes").toString("base64"),
+        filename: "artifact.txt",
+        contentType: "text/plain",
+      },
+    });
+
+    expect(result.kind).toBe("send");
+    if (result.kind !== "send") {
+      throw new Error("expected send result");
+    }
+    expect(result.dryRun).toBe(true);
+    expect(result.sendResult?.mediaUrl).toBeUndefined();
+    expect(channelResolutionMocks.executeSendAction).toHaveBeenCalledTimes(1);
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    expect(sendArgs.mediaUrl).toBeUndefined();
+    expect(sendArgs.mediaUrls).toBeUndefined();
+    expect(sendArgs.ctx).toMatchObject({ dryRun: true });
+  });
+
   it("rejects oversized buffer-only send attachments before channel dispatch", async () => {
     setActivePluginRegistry(
       createTestRegistry([

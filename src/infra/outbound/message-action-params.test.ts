@@ -717,4 +717,46 @@ describe("message action sandbox media hydration", () => {
     expect(typeof args.mediaUrl).toBe("string");
     await expect(fs.readFile(String(args.mediaUrl), "utf8")).resolves.toBe("send path");
   });
+
+  it("skips send buffer materialization during dry runs", async () => {
+    const args: Record<string, unknown> = {
+      buffer: Buffer.from("artifact bytes").toString("base64"),
+      filename: "artifact.txt",
+      contentType: "text/plain",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "workspace",
+      args,
+      action: "send",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.media).toBeUndefined();
+    expect(args.mediaUrl).toBeUndefined();
+    expect(args.mediaUrls).toBeUndefined();
+    expect(args.filename).toBe("artifact.txt");
+  });
+
+  it("rejects oversized buffer-only send params during dry runs", async () => {
+    const args: Record<string, unknown> = {
+      buffer: Buffer.alloc(MEDIA_MAX_BYTES + 1, 1).toString("base64"),
+      contentType: "application/octet-stream",
+    };
+
+    await expect(
+      hydrateAttachmentParamsForAction({
+        cfg,
+        channel: "workspace",
+        args,
+        action: "send",
+        dryRun: true,
+        mediaPolicy: { mode: "host" },
+      }),
+    ).rejects.toThrow(/exceeds|limit/i);
+
+    expect(args.media).toBeUndefined();
+  });
 });

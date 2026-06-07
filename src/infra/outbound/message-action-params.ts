@@ -125,6 +125,12 @@ function decodeAttachmentBuffer(base64: string): Buffer {
   return Buffer.from(base64, "base64");
 }
 
+function assertBufferWithinMaxBytes(buffer: Buffer, maxBytes: number): void {
+  if (buffer.byteLength > maxBytes) {
+    throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
+  }
+}
+
 function resolveSendBufferMaxBytes(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -146,6 +152,7 @@ export async function materializeSendBufferMediaParams(params: {
   accountId?: string | null;
   args: Record<string, unknown>;
   extraParamKeys?: readonly string[];
+  dryRun?: boolean;
 }): Promise<void> {
   if (hasExplicitSendMediaSource(params.args, params.extraParamKeys)) {
     return;
@@ -170,14 +177,22 @@ export async function materializeSendBufferMediaParams(params: {
     inferAttachmentFilename({
       contentType: contentType ?? undefined,
     });
-  const staged = await resolveOutboundAttachmentFromBuffer(
-    decodeAttachmentBuffer(normalized.base64),
-    resolveSendBufferMaxBytes(params),
-    {
-      contentType: contentType ?? undefined,
-      filename,
-    },
-  );
+  const decoded = decodeAttachmentBuffer(normalized.base64);
+  const maxBytes = resolveSendBufferMaxBytes(params);
+  assertBufferWithinMaxBytes(decoded, maxBytes);
+  if (params.dryRun) {
+    if (contentType && !readStringParam(params.args, "contentType")) {
+      params.args.contentType = contentType;
+    }
+    if (filename && !readStringParam(params.args, "filename")) {
+      params.args.filename = filename;
+    }
+    return;
+  }
+  const staged = await resolveOutboundAttachmentFromBuffer(decoded, maxBytes, {
+    contentType: contentType ?? undefined,
+    filename,
+  });
   params.args.media = staged.path;
   params.args.mediaUrl = staged.path;
   params.args.mediaUrls = [staged.path];
@@ -639,6 +654,7 @@ export async function hydrateAttachmentParamsForAction(params: {
       accountId: params.accountId,
       args: params.args,
       extraParamKeys: params.extraParamKeys,
+      dryRun: params.dryRun,
     });
     return;
   }
