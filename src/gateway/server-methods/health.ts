@@ -1,10 +1,11 @@
 // Health gateway methods return cached or refreshed status summaries while
 // detecting stale channel runtime state against live gateway snapshots.
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot, ChannelId } from "../../channels/plugins/types.public.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
 import { listContextEngineQuarantines } from "../../context-engine/registry.js";
+import { getChannelActivity } from "../../infra/channel-activity.js";
 import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
@@ -87,6 +88,80 @@ function cachedHealthDiffersFromRuntime(
   return false;
 }
 
+function mergeCachedActivityTimestamp(params: {
+  account: Record<string, unknown>;
+  key: "lastInboundAt" | "lastOutboundAt";
+  recorded: number | null;
+}) {
+  if (typeof params.recorded !== "number" || !Number.isFinite(params.recorded)) {
+    return;
+  }
+  const existing = params.account[params.key];
+  if (existing == null) {
+    params.account[params.key] = params.recorded;
+    return;
+  }
+  if (typeof existing === "number") {
+    params.account[params.key] = Math.max(existing, params.recorded);
+  }
+}
+
+function mergeCachedAccountActivity(params: {
+  channelId: ChannelId;
+  account: ChannelHealthSummary;
+}): ChannelHealthSummary {
+  const account = { ...params.account };
+  const activity = getChannelActivity({
+    channel: params.channelId,
+    accountId: account.accountId,
+  });
+  mergeCachedActivityTimestamp({
+    account,
+    key: "lastInboundAt",
+    recorded: activity.inboundAt,
+  });
+  mergeCachedActivityTimestamp({
+    account,
+    key: "lastOutboundAt",
+    recorded: activity.outboundAt,
+  });
+  return account;
+}
+
+function mergeCachedChannelActivity(params: {
+  channelId: ChannelId;
+  channel: ChannelHealthSummary;
+}): ChannelHealthSummary {
+  const accounts = params.channel.accounts
+    ? Object.fromEntries(
+        Object.entries(params.channel.accounts).map(([accountId, account]) => [
+          accountId,
+          mergeCachedAccountActivity({
+            channelId: params.channelId,
+            account,
+          }),
+        ]),
+      )
+    : undefined;
+  const channel = mergeCachedAccountActivity({
+    channelId: params.channelId,
+    account: params.channel,
+  });
+  return {
+    ...channel,
+    ...(accounts ? { accounts } : {}),
+  };
+}
+
+function mergeCachedHealthChannelActivity(channels: HealthSummary["channels"]) {
+  return Object.fromEntries(
+    Object.entries(channels).map(([channelId, channel]) => [
+      channelId,
+      mergeCachedChannelActivity({ channelId: channelId as ChannelId, channel }),
+    ]),
+  );
+}
+
 /** Merges cheap live runtime facts into a cached health summary before responding. */
 function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
@@ -108,6 +183,7 @@ function mergeCachedHealthRuntimeState(params: {
   }
   return {
     ...cached,
+    channels: mergeCachedHealthChannelActivity(cached.channels),
     ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(quarantinedContextEngines.length > 0
       ? { contextEngines: { quarantined: quarantinedContextEngines } }

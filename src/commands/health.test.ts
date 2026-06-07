@@ -1,6 +1,7 @@
 // Health command tests cover gateway health probes, JSON output, and status formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { recordChannelActivity, resetChannelActivityForTest } from "../infra/channel-activity.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
@@ -12,6 +13,7 @@ import {
   formatContextEngineHealthLine,
   formatHealthChannelLines,
   formatModelPricingHealthLine,
+  getHealthSnapshot,
   healthCommand,
 } from "./health.js";
 
@@ -80,6 +82,9 @@ const buildGatewayProbeConnectionDetailsMock = vi.fn(() => ({
 }));
 const formatGatewayTransportErrorJsonMock = vi.fn();
 const probeGatewayStatusMock = vi.fn();
+const healthConfigMock = vi.fn(() => ({}));
+const loadSessionStoreMock = vi.fn(() => ({}));
+const listReadOnlyChannelPluginsForConfigMock = vi.fn(() => []);
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
   buildGatewayConnectionDetails: (...args: [unknown, ...unknown[]]) =>
@@ -96,9 +101,26 @@ vi.mock("../cli/daemon-cli/probe.js", () => ({
   probeGatewayStatus: (...args: unknown[]) => probeGatewayStatusMock(...args),
 }));
 
-vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: () => [],
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => healthConfigMock(),
+  readBestEffortConfig: () => healthConfigMock(),
 }));
+
+vi.mock("../config/sessions/store.js", () => ({
+  loadSessionStore: () => loadSessionStoreMock(),
+}));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: (...args: unknown[]) =>
+    listReadOnlyChannelPluginsForConfigMock(...args),
+}));
+
+beforeEach(() => {
+  healthConfigMock.mockReturnValue({});
+  loadSessionStoreMock.mockReturnValue({});
+  listReadOnlyChannelPluginsForConfigMock.mockReturnValue([]);
+  resetChannelActivityForTest();
+});
 
 function requireFirstRuntimeLog(): string {
   const [call] = runtime.log.mock.calls;
@@ -123,6 +145,64 @@ function requireFirstGatewayRequest(): Record<string, unknown> {
   }
   return request as Record<string, unknown>;
 }
+
+describe("getHealthSnapshot", () => {
+  it("projects recorded channel activity onto fresh health snapshots", async () => {
+    healthConfigMock.mockReturnValue({
+      agents: { list: [{ id: "main" }] },
+      channels: { discord: {} },
+    });
+    listReadOnlyChannelPluginsForConfigMock.mockReturnValue([
+      {
+        id: "discord",
+        meta: { label: "Discord" },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ configured: true, enabled: true }),
+          inspectAccount: () => ({ configured: true, enabled: true }),
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+      },
+    ]);
+    recordChannelActivity({
+      channel: "discord",
+      accountId: "default",
+      direction: "inbound",
+      at: 111,
+    });
+    recordChannelActivity({
+      channel: "discord",
+      accountId: "default",
+      direction: "outbound",
+      at: 222,
+    });
+
+    const summary = await getHealthSnapshot({
+      probe: false,
+      runtimeSnapshot: {
+        channels: {},
+        channelAccounts: {
+          discord: {
+            default: {
+              accountId: "default",
+              configured: true,
+              running: true,
+              connected: true,
+              lastInboundAt: 500,
+            },
+          },
+        },
+      },
+    });
+
+    const discord = summary.channels.discord;
+    expect(discord?.lastInboundAt).toBe(500);
+    expect(discord?.lastOutboundAt).toBe(222);
+    expect(discord?.accounts?.default?.lastInboundAt).toBe(500);
+    expect(discord?.accounts?.default?.lastOutboundAt).toBe(222);
+  });
+});
 
 describe("healthCommand", () => {
   beforeEach(() => {

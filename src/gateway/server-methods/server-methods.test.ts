@@ -19,6 +19,7 @@ import {
   resolveContextEngine,
 } from "../../context-engine/registry.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { recordChannelActivity, resetChannelActivityForTest } from "../../infra/channel-activity.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
   buildSystemRunApprovalBinding,
@@ -3590,6 +3591,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
   beforeEach(() => {
     pricingState.clearGatewayModelPricingCacheState();
+    resetChannelActivityForTest();
     registerLegacyContextEngine();
     clearContextEnginesForOwner(contextEngineTestOwner);
     clearContextEngineRuntimeQuarantine();
@@ -3597,6 +3599,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
   afterEach(() => {
     pricingState.clearGatewayModelPricingCacheState();
+    resetChannelActivityForTest();
     clearContextEnginesForOwner(contextEngineTestOwner);
     clearContextEngineRuntimeQuarantine();
   });
@@ -3877,6 +3880,72 @@ describe("gateway healthHandlers.health cache freshness", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("merges recorded channel activity into cached health responses without backdating", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {
+        discord: {
+          accountId: "default",
+          configured: true,
+          lastInboundAt: 500,
+          lastOutboundAt: 100,
+          accounts: {
+            default: {
+              accountId: "default",
+              configured: true,
+              lastInboundAt: 500,
+              lastOutboundAt: 100,
+            },
+          },
+        },
+      },
+      channelOrder: ["discord"],
+      channelLabels: { discord: "Discord" },
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    };
+    recordChannelActivity({
+      channel: "discord",
+      accountId: "default",
+      direction: "inbound",
+      at: 250,
+    });
+    recordChannelActivity({
+      channel: "discord",
+      accountId: "default",
+      direction: "outbound",
+      at: 900,
+    });
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    const payload = mockCallArg(respond, 0, 1) as typeof cached;
+    expect(payload.channels.discord.lastInboundAt).toBe(500);
+    expect(payload.channels.discord.lastOutboundAt).toBe(900);
+    expect(payload.channels.discord.accounts.default.lastInboundAt).toBe(500);
+    expect(payload.channels.discord.accounts.default.lastOutboundAt).toBe(900);
+    expect(cached.channels.discord.lastOutboundAt).toBe(100);
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {
