@@ -736,6 +736,7 @@ export async function runAgentAttempt(params: {
               provider: embeddedAgentProvider,
               model: params.modelOverride,
               authProfileId,
+              customInstructions: request.customInstructions,
               trigger: request.trigger,
               diagId: request.diagId,
               traceparent: request.traceparent,

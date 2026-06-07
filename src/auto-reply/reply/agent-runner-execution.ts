@@ -2605,6 +2605,7 @@ export async function runAgentTurnWithFallback(params: {
                                   provider,
                                   model,
                                   authProfileId: compactionAuthProfileId,
+                                  customInstructions: request.customInstructions,
                                   trigger: request.trigger,
                                   diagId: request.diagId,
                                   traceparent: request.traceparent,
