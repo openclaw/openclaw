@@ -90,10 +90,6 @@ interface MsteamsCallState {
   lastVisionFrame?: string;
 }
 
-// MsteamsVideoFrame now lives in ../msteams-video-frame.ts (shared with msteams-realtime.ts).
-// Re-exported here so existing importers of this module keep working.
-export type { MsteamsVideoFrame };
-
 /** PCM 16 kHz, 16-bit mono — the wire format both directions of the Teams bridge. */
 const MSTEAMS_SAMPLE_RATE_HZ = 16_000;
 const FRAME_DURATION_MS = 20;
@@ -177,6 +173,11 @@ export class MsteamsProvider implements VoiceCallProvider {
 
   /** No-answer timers per placed outbound call; cleared when the media WS attaches. */
   private readonly pendingOutboundTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * CallIds whose outbound placement timed out (CallRecord already finalized as ended). Guards a
+   * late callee answer from being mistaken for a fresh inbound call. Cleared on late-connect or end.
+   */
+  private readonly timedOutOutbound = new Set<string>();
 
   constructor(options: MsteamsProviderOptions) {
     const { port, bindAddress, path, sharedSecret, outbound, logger } = options;
@@ -289,6 +290,16 @@ export class MsteamsProvider implements VoiceCallProvider {
       this.pendingOutbound.delete(providerCallId);
       this.clearOutboundTimer(providerCallId);
       this.handleOutboundSessionStart(session, pending);
+      return;
+    }
+
+    // A placed outbound call whose no-answer timer already fired (CallRecord finalized as ended).
+    // If the callee answers late, don't treat the media WS as a fresh inbound call — close it.
+    if (this.timedOutOutbound.delete(providerCallId)) {
+      this.logger?.warn(
+        `MsteamsProvider: late connect for timed-out outbound call ${providerCallId}; closing (already finalized)`,
+      );
+      session.close("timed-out");
       return;
     }
 
@@ -756,6 +767,7 @@ export class MsteamsProvider implements VoiceCallProvider {
     this.latestVideoFrames.delete(info.callId);
     this.recordingActiveByCall.delete(info.callId);
     this.clearOutboundTimer(info.callId);
+    this.timedOutOutbound.delete(info.callId);
     const realtimeCall = this.realtimeCalls.get(info.callId);
     if (realtimeCall) {
       this.realtimeCalls.delete(info.callId);
@@ -855,6 +867,8 @@ export class MsteamsProvider implements VoiceCallProvider {
       return;
     }
     this.pendingOutbound.delete(providerCallId);
+    // Remember it briefly so a late callee answer isn't mistaken for a fresh inbound call.
+    this.timedOutOutbound.add(providerCallId);
     this.logger?.warn(
       `MsteamsProvider: outbound call ${providerCallId} did not connect within ${OUTBOUND_ANSWER_TIMEOUT_MS}ms; finalizing`,
     );
@@ -1048,12 +1062,13 @@ export class MsteamsProvider implements VoiceCallProvider {
           payloadBase64: frame.toString("base64"),
         });
       } catch (err) {
-        // WS send failed (socket closed mid-playback, e.g. caller hung up). Surface it and stop
-        // streaming rather than silently dropping every remaining frame against a dead socket.
+        // WS send failed (socket closed mid-playback, e.g. caller hung up). Log it AND rethrow so
+        // the caller (playTts/speak) sees the failure and finalizes the turn correctly — swallowing
+        // it would make playback report success on a dead socket.
         this.logger?.warn(
-          `MsteamsProvider: audio.frame send failed for ${state.providerCallId} — ${describeError(err)}; stopping playback`,
+          `MsteamsProvider: audio.frame send failed for ${state.providerCallId} — ${describeError(err)}; aborting playback`,
         );
-        return;
+        throw err;
       }
       state.outboundSeq += 1;
       state.outboundTimestampMs += FRAME_DURATION_MS;
