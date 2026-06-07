@@ -799,7 +799,12 @@ describe("sessions_send gating", () => {
   });
 
   it("returns an error when label resolution fails", async () => {
-    callGatewayMock.mockRejectedValueOnce(new Error("No session found with label: nope"));
+    callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        throw new Error("No session found with label: nope");
+      }
+      throw new Error(`unexpected gateway call: ${request.method ?? "unknown"}`);
+    });
     const tool = createMainSessionsSendTool();
 
     const result = await tool.execute("call-missing-label", {
@@ -813,8 +818,17 @@ describe("sessions_send gating", () => {
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "No session found with label",
     );
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+    expect(callGatewayMock).toHaveBeenCalledTimes(3);
+    expect(requireGatewayRequest(0).method).toBe("sessions.resolve");
+    expect(requireGatewayRequest(0).params).toEqual({ label: "nope" });
+    expect(requireGatewayRequest(1).params).toEqual({
+      label: "nope",
+      hubDelegatedOwner: MAIN_AGENT_SESSION_KEY,
+    });
+    expect(requireGatewayRequest(2).params).toEqual({
+      label: "nope",
+      spawnedBy: MAIN_AGENT_SESSION_KEY,
+    });
   });
 
   it("prefers sessionKey over a redundant label", async () => {
