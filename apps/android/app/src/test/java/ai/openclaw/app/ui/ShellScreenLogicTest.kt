@@ -76,6 +76,9 @@ class ShellScreenLogicTest {
       )
 
     assertEquals(listOf("Approvals", "Channels", "Nodes & Devices", "Providers"), rows.map { it.title })
+    val providersRow = rows.single { it.title == "Providers" }
+    assertEquals(Tab.Settings, providersRow.tab)
+    assertEquals(SettingsRoute.Gateway, providersRow.settingsRoute)
   }
 
   @Test

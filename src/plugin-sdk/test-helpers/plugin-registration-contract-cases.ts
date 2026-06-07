@@ -185,6 +185,10 @@ export const pluginRegistrationContractCases = {
     requireGenerateImage: true,
     requireGenerateVideo: true,
   },
+  parallel: {
+    pluginId: "parallel",
+    webSearchProviderIds: ["parallel", "parallel-free"],
+  },
   perplexity: {
     pluginId: "perplexity",
     webSearchProviderIds: ["perplexity"],
