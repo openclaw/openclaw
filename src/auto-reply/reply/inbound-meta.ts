@@ -59,7 +59,15 @@ function sanitizePromptBody(value: unknown): string | undefined {
 }
 
 function neutralizeMarkdownFences(value: string): string {
-  return value.replaceAll("```", "`\u200b``");
+  // Loop until no raw triple remains. replaceAll is non-overlapping, so for
+  // adversarial input like "``````" the first pass leaves a fresh "```" at the
+  // seam between adjacent replacements. Pure-backtick runs converge in two
+  // passes (the second pass breaks any seam triples into \u22642-char runs).
+  let result = value;
+  while (result.includes("```")) {
+    result = result.replaceAll("```", "`\u200b``");
+  }
+  return result;
 }
 
 function truncateUntrustedJsonString(value: string): string {
@@ -116,19 +124,31 @@ function sanitizeTranscriptBody(value: unknown): string | undefined {
   if (!body) {
     return undefined;
   }
+  let combined: string;
   if (body.length <= MAX_UNTRUSTED_TRANSCRIPT_BODY_CHARS) {
-    return neutralizeMarkdownFences(body).replace(/\s+/g, " ").trim();
+    combined = body;
+  } else {
+    const head = truncateUtf16Safe(body, BODY_HEAD_CHARS).trimEnd();
+    // sliceUtf16Safe (not raw .slice) so an emoji or other surrogate pair that
+    // straddles the tail window boundary cannot leave a lone low surrogate at
+    // the start of the preserved tail.
+    const tail = sliceUtf16Safe(body, -BODY_TAIL_CHARS).trimStart();
+    const omittedChars = body.length - head.length - tail.length;
+    combined = `${head} …[${omittedChars} chars omitted]… ${tail}`;
   }
-  const head = truncateUtf16Safe(body, BODY_HEAD_CHARS).trimEnd();
-  // sliceUtf16Safe (not raw .slice) so an emoji or other surrogate pair that
-  // straddles the tail window boundary cannot leave a lone low surrogate at
-  // the start of the preserved tail.
-  const tail = sliceUtf16Safe(body, -BODY_TAIL_CHARS).trimStart();
-  const omittedChars = body.length - head.length - tail.length;
-  const middle = ` …[${omittedChars} chars omitted]… `;
-  return neutralizeMarkdownFences(head + middle + tail)
-    .replace(/\s+/g, " ")
-    .trim();
+  const rendered = neutralizeMarkdownFences(combined).replace(/\s+/g, " ").trim();
+  // Defensive hard cap. neutralizeMarkdownFences expands every "```" run by 1
+  // char (worst case ratio 4:3), so an adversarial body of mostly-backticks can
+  // push the rendered output above MAX_UNTRUSTED_TRANSCRIPT_BODY_CHARS even when
+  // the pre-neutralization input fits the cap. Truncate the already-neutralized
+  // string at the end so the cap is honored as a hard contract.
+  if (rendered.length <= MAX_UNTRUSTED_TRANSCRIPT_BODY_CHARS) {
+    return rendered;
+  }
+  return `${truncateUtf16Safe(
+    rendered,
+    Math.max(0, MAX_UNTRUSTED_TRANSCRIPT_BODY_CHARS - 14),
+  ).trimEnd()}…[truncated]`;
 }
 
 function formatUntrustedStructuredContextLabel(label: unknown): string {
@@ -187,11 +207,17 @@ function formatChatWindowMessage(
   const replyToId = sanitizeTranscriptField(value["reply_to_id"]);
   const mediaType = sanitizeTranscriptField(value["media_type"]);
   const mediaRef = sanitizeTranscriptField(value["media_ref"]);
-  const body = sanitizeTranscriptBody(value["body"]);
+  // Only the reply-target entry warrants the larger body-aware budget — non-target
+  // history entries stay on the short-field sanitizer so the per-window untrusted
+  // surface (MAX_UNTRUSTED_HISTORY_ENTRIES × cap) does not grow proportionally.
+  const isReplyTarget = value["is_reply_target"] === true;
+  const body = isReplyTarget
+    ? sanitizeTranscriptBody(value["body"])
+    : sanitizeTranscriptField(value["body"]);
   const details = [
     messageId ? `#${messageId}` : undefined,
     timestamp,
-    value["is_reply_target"] === true ? "[reply target]" : undefined,
+    isReplyTarget ? "[reply target]" : undefined,
     replyToId ? `->#${replyToId}` : undefined,
   ].filter(Boolean);
   const media = mediaType ? `[${mediaType}${mediaRef ? ` ${mediaRef}` : ""}]` : undefined;

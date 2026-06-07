@@ -1142,6 +1142,91 @@ describe("sanitizeTranscriptBody — head+tail truncation for reply context", ()
     expect(text).not.toContain("FILLER_ONLY_SENTINEL");
   });
 
+  it("keeps non-reply-target chat_window bodies on the short-field cap", () => {
+    // Per-window untrusted surface: only the reply target gets the larger
+    // body-aware budget. Non-target history entries stay at the 500-char cap
+    // so MAX_UNTRUSTED_HISTORY_ENTRIES × cap does not grow proportionally.
+    const longHead = "EARLY_HEAD_MARKER ".repeat(50); // ~900 chars
+    const longTail = " LATE_TAIL_MARKER".repeat(50); // ~850 chars
+    const nonTargetBody = longHead + " ".repeat(200) + longTail; // > 500
+    expect(nonTargetBody.length).toBeGreaterThan(500);
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "before_current_message",
+            messages: [
+              {
+                message_id: "m-non-target",
+                sender: "bot",
+                body: nonTargetBody,
+                // is_reply_target deliberately omitted
+              },
+              {
+                message_id: "m-target",
+                sender: "bot",
+                body: "short target",
+                is_reply_target: true,
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    // Non-target body is prefix-truncated, not head+tail
+    expect(text).toContain("EARLY_HEAD_MARKER");
+    expect(text).not.toContain("LATE_TAIL_MARKER");
+    expect(text).not.toContain("chars omitted");
+    // Sanity: reply target framing still applies to the second entry
+    expect(text).toContain("[reply target]");
+  });
+
+  it("enforces hard cap even when neutralizing markdown fences expands the body", () => {
+    // neutralizeMarkdownFences replaces every "```" with "`<ZWSP>``" (3 → 4
+    // chars). An adversarial body of pure backticks under the input cap would
+    // otherwise expand past MAX_UNTRUSTED_TRANSCRIPT_BODY_CHARS at render time.
+    const adversarial = "`".repeat(6000); // exactly at the input cap
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "before_current_message",
+            messages: [
+              {
+                message_id: "m1",
+                sender: "bot",
+                body: adversarial,
+                is_reply_target: true,
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    // Locate the rendered body line (carries "bot:" + the backtick run) and
+    // assert the hard cap holds. The ```json delimiters of unrelated metadata
+    // blocks live on their own lines, so they don't pollute this match.
+    const bodyLine = text.split("\n").find((line) => line.includes("bot:") && line.includes("`"));
+    expect(bodyLine).toBeDefined();
+    expect((bodyLine ?? "").length).toBeLessThanOrEqual(6100);
+    // No raw triple-backtick survives in the rendered body content.
+    expect((bodyLine ?? "").includes("```")).toBe(false);
+    expect(bodyLine).toContain("…[truncated]");
+  });
+
   it("does not leave a lone surrogate when an emoji straddles the tail window boundary", () => {
     // Build a body whose surrogate pair straddles the tail-window boundary at
     // body.length - BODY_TAIL_CHARS (3500): the high surrogate sits just
