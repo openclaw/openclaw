@@ -23,6 +23,7 @@ import {
   transformTransportMessages,
   type WritableTransportStream,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -40,6 +41,7 @@ import {
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
 import {
+  clearGoogleVertexAdcTokenCache,
   isGoogleVertexCredentialsMarker,
   resolveGoogleVertexAuthorizedUserHeaders,
 } from "./vertex-adc.js";
@@ -83,6 +85,15 @@ type GoogleGenerateContentRequest = {
 
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
+const GOOGLE_VERTEX_STREAM_MAX_RETRIES_DEFAULT = 2;
+const GOOGLE_VERTEX_STREAM_RETRY_BASE_DELAY_DEFAULT_MS = 250;
+const GOOGLE_VERTEX_STREAM_RETRY_MAX_DELAY_DEFAULT_MS = 2_000;
+const GOOGLE_VERTEX_STREAM_MAX_RETRIES_ENV = "OPENCLAW_GOOGLE_VERTEX_STREAM_MAX_RETRIES";
+const GOOGLE_VERTEX_STREAM_RETRY_BASE_DELAY_ENV =
+  "OPENCLAW_GOOGLE_VERTEX_STREAM_RETRY_BASE_DELAY_MS";
+const GOOGLE_VERTEX_STREAM_RETRY_MAX_DELAY_ENV = "OPENCLAW_GOOGLE_VERTEX_STREAM_RETRY_MAX_DELAY_MS";
+
+const vertexTransportLog = createSubsystemLogger("google-vertex/transport");
 
 type GoogleTransportContentBlock =
   | { type: "text"; text: string; textSignature?: string }
@@ -830,6 +841,114 @@ export function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): num
   return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
 }
 
+function resolveGoogleVertexStreamRetryInteger(params: {
+  env: NodeJS.ProcessEnv;
+  name: string;
+  defaultValue: number;
+}): number {
+  const raw = params.env[params.name];
+  if (raw === undefined || raw.trim() === "") {
+    return params.defaultValue;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return params.defaultValue;
+  }
+  return Math.floor(parsed);
+}
+
+function resolveGoogleVertexStreamRetryConfig(env = process.env): {
+  maxRetries: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+} {
+  const maxRetries = resolveGoogleVertexStreamRetryInteger({
+    env,
+    name: GOOGLE_VERTEX_STREAM_MAX_RETRIES_ENV,
+    defaultValue: GOOGLE_VERTEX_STREAM_MAX_RETRIES_DEFAULT,
+  });
+  const baseDelayMs = resolveGoogleVertexStreamRetryInteger({
+    env,
+    name: GOOGLE_VERTEX_STREAM_RETRY_BASE_DELAY_ENV,
+    defaultValue: GOOGLE_VERTEX_STREAM_RETRY_BASE_DELAY_DEFAULT_MS,
+  });
+  const rawMaxDelayMs = resolveGoogleVertexStreamRetryInteger({
+    env,
+    name: GOOGLE_VERTEX_STREAM_RETRY_MAX_DELAY_ENV,
+    defaultValue: GOOGLE_VERTEX_STREAM_RETRY_MAX_DELAY_DEFAULT_MS,
+  });
+  return {
+    maxRetries,
+    baseDelayMs,
+    maxDelayMs: Math.max(baseDelayMs, rawMaxDelayMs),
+  };
+}
+
+function parseGoogleVertexRetryAfterMs(value: string | null): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (/^\d+$/.test(trimmed)) {
+    return Number.parseInt(trimmed, 10) * 1_000;
+  }
+  const timestampMs = Date.parse(trimmed);
+  if (!Number.isFinite(timestampMs)) {
+    return undefined;
+  }
+  return Math.max(0, timestampMs - Date.now());
+}
+
+function resolveGoogleVertexStreamRetryDelayMs(params: {
+  response: Response;
+  retryIndex: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+}): number {
+  const retryAfterMs = parseGoogleVertexRetryAfterMs(params.response.headers.get("retry-after"));
+  if (retryAfterMs !== undefined) {
+    return retryAfterMs;
+  }
+  const exponentialDelayMs = params.baseDelayMs * 2 ** Math.max(params.retryIndex - 1, 0);
+  const jitterMs = exponentialDelayMs * 0.25 * Math.random();
+  return Math.min(params.maxDelayMs, Math.round(exponentialDelayMs + jitterMs));
+}
+
+function isRetryableGoogleVertexPreStreamResponse(response: Response): boolean {
+  return response.status === 429 || response.status === 503;
+}
+
+async function sleepGoogleVertexStreamRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const abort = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+      signal?.removeEventListener("abort", abort);
+      reject(new Error("aborted", { cause: signal?.reason }));
+    };
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+    timeout = setTimeout(() => {
+      timeout = undefined;
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    timeout.unref?.();
+  });
+}
+
 function shouldRetryGoogleGemini3FirstResponse(params: {
   kind: CanonicalGoogleTransportApi;
   model: GoogleTransportModel;
@@ -1004,6 +1123,67 @@ async function openGoogleSseAttempt(params: {
   }
 }
 
+async function fetchGooglePreStreamResponse(params: {
+  kind: CanonicalGoogleTransportApi;
+  guardedFetch: ReturnType<typeof buildGuardedModelFetch>;
+  url: string;
+  headers: Record<string, string>;
+  request: GoogleGenerateContentRequest;
+  signal?: AbortSignal;
+  errorPrefix: string;
+}): Promise<Response> {
+  const retryConfig =
+    params.kind === "google-vertex" ? resolveGoogleVertexStreamRetryConfig() : undefined;
+  const maxRetries = retryConfig?.maxRetries ?? 0;
+  let retryIndex = 0;
+
+  for (;;) {
+    const response = await params.guardedFetch(params.url, {
+      method: "POST",
+      headers: params.headers,
+      body: JSON.stringify(params.request),
+      signal: params.signal,
+    });
+    if (response.ok) {
+      return response;
+    }
+    if (
+      params.kind !== "google-vertex" ||
+      retryIndex >= maxRetries ||
+      !isRetryableGoogleVertexPreStreamResponse(response) ||
+      params.signal?.aborted
+    ) {
+      if (params.kind === "google-vertex" && isRetryableGoogleVertexPreStreamResponse(response)) {
+        vertexTransportLog.debug("vertex pre-stream retry exhausted; giving up", {
+          status: response.status,
+          attempts: retryIndex,
+          aborted: Boolean(params.signal?.aborted),
+        });
+      }
+      throw await createProviderHttpError(response, params.errorPrefix);
+    }
+
+    retryIndex += 1;
+    const retryAfterHonored =
+      parseGoogleVertexRetryAfterMs(response.headers.get("retry-after")) !== undefined;
+    const delayMs = resolveGoogleVertexStreamRetryDelayMs({
+      response,
+      retryIndex,
+      baseDelayMs: retryConfig?.baseDelayMs ?? GOOGLE_VERTEX_STREAM_RETRY_BASE_DELAY_DEFAULT_MS,
+      maxDelayMs: retryConfig?.maxDelayMs ?? GOOGLE_VERTEX_STREAM_RETRY_MAX_DELAY_DEFAULT_MS,
+    });
+    vertexTransportLog.debug("retrying vertex pre-stream request", {
+      status: response.status,
+      attempt: retryIndex,
+      maxRetries,
+      delayMs,
+      retryAfterHonored,
+    });
+    await response.body?.cancel().catch(() => undefined);
+    await sleepGoogleVertexStreamRetry(delayMs, params.signal);
+  }
+}
+
 async function openGoogleSseChunks(params: {
   kind: CanonicalGoogleTransportApi;
   model: GoogleTransportModel;
@@ -1018,15 +1198,15 @@ async function openGoogleSseChunks(params: {
       ? "Google Vertex AI API error"
       : "Google Generative AI API error";
   if (!shouldRetryGoogleGemini3FirstResponse({ kind: params.kind, model: params.model })) {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
+    const response = await fetchGooglePreStreamResponse({
+      kind: params.kind,
+      guardedFetch: params.guardedFetch,
+      url: params.url,
       headers: params.headers,
-      body: JSON.stringify(params.request),
+      request: params.request,
       signal: params.options?.signal,
+      errorPrefix,
     });
-    if (!response.ok) {
-      throw await createProviderHttpError(response, errorPrefix);
-    }
     return {
       type: "ready",
       chunks: parseGoogleSseChunks(response, params.options?.signal),
@@ -1042,15 +1222,15 @@ async function openGoogleSseChunks(params: {
         })
       : undefined;
   if (!retryRequest) {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
+    const response = await fetchGooglePreStreamResponse({
+      kind: params.kind,
+      guardedFetch: params.guardedFetch,
+      url: params.url,
       headers: params.headers,
-      body: JSON.stringify(params.request),
+      request: params.request,
       signal: params.options?.signal,
+      errorPrefix,
     });
-    if (!response.ok) {
-      throw await createProviderHttpError(response, errorPrefix);
-    }
     return {
       type: "ready",
       chunks: parseGoogleSseChunks(response, params.options?.signal),
@@ -1100,6 +1280,39 @@ async function buildGoogleTransportHeaders(params: {
         params.fetchImpl,
       )
     : buildGoogleHeaders(params.model, params.apiKey, params.optionHeaders);
+}
+
+function isGoogleVertexUnauthenticatedError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const record = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    code?: unknown;
+    errorCode?: unknown;
+    message?: unknown;
+  };
+  const status = typeof record.status === "number" ? record.status : record.statusCode;
+  if (status !== 401) {
+    return false;
+  }
+  const code = normalizeLowercaseStringOrEmpty(
+    typeof record.errorCode === "string"
+      ? record.errorCode
+      : typeof record.code === "string"
+        ? record.code
+        : undefined,
+  );
+  const message = normalizeLowercaseStringOrEmpty(
+    typeof record.message === "string" ? record.message : undefined,
+  );
+  return (
+    code.includes("unauthenticated") ||
+    message.includes("unauthenticated") ||
+    message.includes("invalid authentication credentials") ||
+    message.includes("invalid auth credentials")
+  );
 }
 
 async function* parseGoogleSseChunks(
@@ -1232,22 +1445,53 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           params = nextParams as GoogleGenerateContentRequest;
         }
         const requestUrl = buildGoogleTransportRequestUrl(kind, model, options);
-        const requestHeaders = await buildGoogleTransportHeaders({
+        let requestHeaders = await buildGoogleTransportHeaders({
           kind,
           model,
           apiKey,
           optionHeaders: options?.headers,
           fetchImpl: (options as { fetch?: typeof fetch } | undefined)?.fetch,
         });
-        const sse = await openGoogleSseChunks({
-          kind,
-          model,
-          options,
-          guardedFetch,
-          url: requestUrl,
-          headers: requestHeaders,
-          request: params,
-        });
+        let sse: Extract<GoogleSseAttempt, { type: "ready" }>;
+        try {
+          sse = await openGoogleSseChunks({
+            kind,
+            model,
+            options,
+            guardedFetch,
+            url: requestUrl,
+            headers: requestHeaders,
+            request: params,
+          });
+        } catch (error) {
+          if (
+            kind !== "google-vertex" ||
+            !isGoogleVertexCredentialsMarker(apiKey) ||
+            !isGoogleVertexUnauthenticatedError(error)
+          ) {
+            throw error;
+          }
+          vertexTransportLog.debug(
+            "vertex 401 UNAUTHENTICATED; clearing ADC token cache and retrying once",
+          );
+          clearGoogleVertexAdcTokenCache();
+          requestHeaders = await buildGoogleTransportHeaders({
+            kind,
+            model,
+            apiKey,
+            optionHeaders: options?.headers,
+            fetchImpl: (options as { fetch?: typeof fetch } | undefined)?.fetch,
+          });
+          sse = await openGoogleSseChunks({
+            kind,
+            model,
+            options,
+            guardedFetch,
+            url: requestUrl,
+            headers: requestHeaders,
+            request: params,
+          });
+        }
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;
         const chunks =
