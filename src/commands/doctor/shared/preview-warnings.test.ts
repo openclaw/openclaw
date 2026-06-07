@@ -262,7 +262,7 @@ describe("doctor preview warnings", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       doctorFixCommand: "openclaw doctor --fix",
       env: { CODEX_HOME: codexHome, HOME: root },
     });
@@ -315,7 +315,7 @@ describe("doctor preview warnings", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       doctorFixCommand: "openclaw doctor --fix",
     });
 

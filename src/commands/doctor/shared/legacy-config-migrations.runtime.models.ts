@@ -1061,7 +1061,7 @@ function getMergeableLegacyOpenAIModels(params: {
     if (!id && !name) {
       return false;
     }
-    return id ? !canonicalModelIds.has(id) : !canonicalModelNames.has(name);
+    return id ? !canonicalModelIds.has(id) : name ? !canonicalModelNames.has(name) : false;
   });
 }
 
