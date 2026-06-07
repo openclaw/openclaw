@@ -1,5 +1,6 @@
 // Tests before-agent-reply hooks in the get-reply pipeline.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DETERMINISTIC_GATEWAY_REPLY } from "../../agents/deterministic-gateway-model.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -34,7 +35,7 @@ async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
 }
 
-function createContinueDirectivesResult() {
+function createContinueDirectivesResult(overrides: { provider?: string; model?: string } = {}) {
   return createGetReplyContinueDirectivesResult({
     body: "hello world",
     abortKey: "agent:main:telegram:-100123",
@@ -44,6 +45,7 @@ function createContinueDirectivesResult() {
     commandSource: "text",
     senderIsOwner: false,
     resetHookTriggered: false,
+    ...overrides,
   });
 }
 
@@ -123,6 +125,18 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     const result = await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {});
 
     expect(result).toEqual({ text: SILENT_REPLY_TOKEN });
+  });
+
+  it("returns a deterministic reply instead of running the agent harness", async () => {
+    mocks.resolveReplyDirectives.mockResolvedValue(
+      createContinueDirectivesResult({ provider: "dummy", model: "dummy" }),
+    );
+    mocks.runBeforeAgentReply.mockResolvedValue({ handled: false });
+
+    const result = await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {});
+
+    expect(result).toEqual({ text: DETERMINISTIC_GATEWAY_REPLY });
+    expect(mocks.runBeforeAgentReply).toHaveBeenCalledTimes(1);
   });
 });
 afterEach(() => {

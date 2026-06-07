@@ -11,6 +11,10 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
+import {
+  DETERMINISTIC_GATEWAY_REPLY,
+  isDeterministicGatewayModel,
+} from "../../agents/deterministic-gateway-model.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -953,6 +957,10 @@ export async function getReplyFromConfig(
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
       }
     }
+  }
+
+  if (isDeterministicGatewayModel(runProvider, runModel)) {
+    return { text: DETERMINISTIC_GATEWAY_REPLY };
   }
 
   // ctx.MediaStaged=true means the caller (e.g. chat.send RPC) already staged
