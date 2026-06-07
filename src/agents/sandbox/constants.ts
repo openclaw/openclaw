@@ -15,6 +15,13 @@ export const DEFAULT_SANDBOX_WORKDIR = "/workspace";
 export const DEFAULT_SANDBOX_IDLE_HOURS = 24;
 export const DEFAULT_SANDBOX_MAX_AGE_DAYS = 7;
 
+/**
+ * Default deadline (ms) for Docker control-plane calls during sandbox init
+ * (inspect/create/start/rm), so a wedged engine fails fast instead of hanging.
+ * Override via agents.defaults.sandbox.docker.initTimeoutMs.
+ */
+export const DEFAULT_SANDBOX_DOCKER_INIT_TIMEOUT_MS = 60_000;
+
 export const DEFAULT_TOOL_ALLOW = [
   "exec",
   "process",

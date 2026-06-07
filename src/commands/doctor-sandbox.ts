@@ -72,14 +72,21 @@ async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise
   return true;
 }
 
-async function isDockerAvailable(): Promise<boolean> {
+type DockerProbeStatus = "available" | "unresponsive" | "unavailable";
+
+async function probeDockerAvailability(): Promise<DockerProbeStatus> {
   try {
     await runExec("docker", ["version", "--format", "{{.Server.Version}}"], {
       timeoutMs: 5_000,
     });
-    return true;
-  } catch {
-    return false;
+    return "available";
+  } catch (error) {
+    // A wedged engine is killed at the execFile timeout (killed===true) rather
+    // than returning a "daemon not running" stderr; distinguish it for the message.
+    if (error && typeof error === "object" && (error as { killed?: boolean }).killed === true) {
+      return "unresponsive";
+    }
+    return "unavailable";
   }
 }
 
@@ -294,17 +301,30 @@ export async function maybeRepairSandboxImages(
     return cfg;
   }
 
-  const dockerAvailable = await isDockerAvailable();
-  if (!dockerAvailable) {
-    const lines = [
-      `Sandbox mode is enabled (mode: "${mode}") but Docker is not available.`,
-      "Docker is required for sandbox mode to function.",
-      "Isolated sessions (cron jobs, sub-agents) will fail without Docker.",
-      "",
-      "Options:",
-      "- Install Docker and restart the gateway",
-      "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
-    ];
+  const dockerStatus = await probeDockerAvailability();
+  if (dockerStatus !== "available") {
+    const lines =
+      dockerStatus === "unresponsive"
+        ? [
+            `Sandbox mode is enabled (mode: "${mode}") but the Docker engine did not respond within 5s.`,
+            "Docker appears installed but the engine may be wedged/unresponsive.",
+            "Sandbox init is bounded by agents.defaults.sandbox.docker.initTimeoutMs (default 60s),",
+            "so sandboxed sessions (cron jobs, sub-agents) fail fast with a clear error instead of",
+            "hanging the gateway; non-sandboxed agents keep serving.",
+            "",
+            "Options:",
+            "- Restart Docker (or the Docker daemon/VM) and re-run",
+            "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+          ]
+        : [
+            `Sandbox mode is enabled (mode: "${mode}") but Docker is not available.`,
+            "Docker is required for sandbox mode to function.",
+            "Isolated sessions (cron jobs, sub-agents) will fail without Docker.",
+            "",
+            "Options:",
+            "- Install Docker and restart the gateway",
+            "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+          ];
     note(lines.join("\n"), "Sandbox");
     return cfg;
   }

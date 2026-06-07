@@ -3,6 +3,7 @@
  *
  * Creates/reuses Docker containers and exposes backend-neutral exec and shell-command handles.
  */
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildDockerExecArgs } from "../bash-tools.shared.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
@@ -16,7 +17,10 @@ import {
   ensureSandboxContainer,
   execDocker,
   execDockerRaw,
+  isDockerExecTimeoutError,
 } from "./docker.js";
+
+const log = createSubsystemLogger("docker");
 
 function resolveConfiguredDockerRuntimeImage(params: {
   config: CreateSandboxBackendParams["cfg"] | import("../../config/config.js").OpenClawConfig;
@@ -35,12 +39,27 @@ function resolveConfiguredDockerRuntimeImage(params: {
 export async function createDockerSandboxBackend(
   params: CreateSandboxBackendParams,
 ): Promise<SandboxBackendHandle> {
-  const containerName = await ensureSandboxContainer({
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-    agentWorkspaceDir: params.agentWorkspaceDir,
-    cfg: params.cfg,
-  });
+  let containerName: string;
+  try {
+    containerName = await ensureSandboxContainer({
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      agentWorkspaceDir: params.agentWorkspaceDir,
+      cfg: params.cfg,
+    });
+  } catch (error) {
+    if (isDockerExecTimeoutError(error)) {
+      // Fail soft: surface a clear timeout failure for this run instead of
+      // hanging; the gateway and non-sandboxed agents keep serving.
+      log.error(
+        `Sandbox unavailable: Docker did not respond within ${error.timeoutMs}ms during sandbox ` +
+          `init for session "${params.sessionKey}". The Docker engine may be wedged. Sandboxed runs ` +
+          `will fail until Docker responds; non-sandboxed agents are unaffected. Restart Docker or ` +
+          `set agents.defaults.sandbox.mode=off.`,
+      );
+    }
+    throw error;
+  }
   return createDockerSandboxBackendHandle({
     containerName,
     workdir: params.cfg.docker.workdir,

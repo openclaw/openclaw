@@ -67,14 +67,22 @@ function normalizeForHash(value: unknown): unknown {
   return value;
 }
 
+// initTimeoutMs is a client-side operational timeout, not container identity, so
+// it must not enter the reuse hash (else it would force recreation on upgrade).
+function stripDockerNonIdentityFields(docker: SandboxDockerConfig): SandboxDockerConfig {
+  const rest = { ...docker };
+  delete rest.initTimeoutMs;
+  return rest;
+}
+
 /** Computes the sandbox container config hash. */
 export function computeSandboxConfigHash(input: SandboxHashInput): string {
-  return computeHash(input);
+  return computeHash({ ...input, docker: stripDockerNonIdentityFields(input.docker) });
 }
 
 /** Computes the browser-enabled sandbox container config hash. */
 export function computeSandboxBrowserConfigHash(input: SandboxBrowserHashInput): string {
-  return computeHash(input);
+  return computeHash({ ...input, docker: stripDockerNonIdentityFields(input.docker) });
 }
 
 function computeHash(input: unknown): string {
