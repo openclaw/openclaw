@@ -657,6 +657,29 @@ export class QmdMemoryManager implements MemorySearchManager {
     } catch {
       // ignore; older qmd versions might not support list --json.
     }
+    // `qmd collection list` never returns `path`, so `shouldRebindCollection`
+    // would always skip rebinds (defensive "incomplete metadata" branch).
+    // Enrich each entry by querying `qmd collection show <name> --json`,
+    // which does expose the current filesystem path.
+    for (const [name, details] of existing) {
+      if (details.path) {
+        continue;
+      }
+      try {
+        const showResult = await this.runQmd(["collection", "show", name, "--json"], {
+          timeoutMs: this.qmd.update.commandTimeoutMs,
+        });
+        const trimmed = showResult.stdout.trim();
+        if (trimmed) {
+          const showParsed = JSON.parse(trimmed) as { path?: unknown };
+          if (typeof showParsed.path === "string") {
+            details.path = showParsed.path;
+          }
+        }
+      } catch {
+        // best-effort enrichment; leave path undefined on failure
+      }
+    }
     return existing;
   }
 
