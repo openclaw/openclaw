@@ -7,6 +7,8 @@
  * runtime import cycle between the provider and the realtime module).
  */
 export interface MsteamsVideoFrame {
+  /** Which inbound stream this frame came from. */
+  source: "camera" | "screenshare";
   /** Base64-encoded image (JPEG) ready to attach to a vision model. */
   dataBase64: string;
   /** MIME type, e.g. "image/jpeg". */
@@ -15,4 +17,11 @@ export interface MsteamsVideoFrame {
   height: number;
   /** Worker capture timestamp (epoch ms). */
   ts: number;
+  /**
+   * Who this frame belongs to (group calls): the subscribed speaker for a camera frame, the sharer
+   * for a screen-share. Lets the vision model attribute a face/screen to a named person. Best-effort
+   * — undefined for anonymous/guest participants, 1:1 calls, or older workers.
+   */
+  participantId?: string;
+  participantName?: string;
 }
