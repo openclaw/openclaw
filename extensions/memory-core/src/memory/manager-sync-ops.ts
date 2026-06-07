@@ -1846,12 +1846,23 @@ export abstract class MemoryManagerSyncOps {
     });
     const hasIndexedChunks = this.hasIndexedChunks();
     const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
+    // A long-running gateway whose on-disk index metadata went missing (lost/corrupt
+    // meta row after a schema bump, or its DB file swapped out by a concurrent
+    // `openclaw memory` reindex) cannot recover otherwise: search() gates on a valid
+    // identity and returns []. Only a `reason === "cli"` sync rebuilt a chunk-backed
+    // invalid index, which forces an out-of-process reindex the running gateway never
+    // sees. Self-heal in-process for "missing" — runSafeReindex reopens the DB handle
+    // via openDatabase(), so this also drops a stale/orphaned connection. A deliberate
+    // provider/model change ("mismatched") stays operator-gated.
+    const needsSelfHealReindex =
+      indexIdentity.status === "missing" && hasIndexedChunks && !hasTargetSessionFiles;
     const needsExplicitIdentityReindex =
       params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetSessionFiles;
     const needsFullReindex =
       (params?.force && !hasTargetSessionFiles) ||
       needsInitialIndex ||
-      needsExplicitIdentityReindex;
+      needsExplicitIdentityReindex ||
+      needsSelfHealReindex;
     if (indexIdentity.status !== "valid" && !needsFullReindex) {
       this.dirty = true;
       const sessionsDirty = markMemoryTargetSessionFilesDirty({
