@@ -1,5 +1,5 @@
 
-# TraveSeal Notary Skill
+---name: travsealversion: 1.0.0tags:  - C2PA provider  - C2PA stamping  - Provenance  - Provenance stamping  - EU ACT  - EU AI ACT  - COMPLIANCE manifest  - C2pa manifest  - Trust bridge  - C2pa signed  - Readable image  - Travel c2pa  - Tavel compliance  - Travel provenance---# TraveSeal Notary Skill
 
 This skill provides a tool to notarize digital assets using the TraveSeal C2PA service.
 
