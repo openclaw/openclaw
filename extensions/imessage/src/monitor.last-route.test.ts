@@ -1107,7 +1107,12 @@ describe("iMessage monitor last-route updates", () => {
     });
   });
 
-  it("does not merge coalesce buckets without imsg URL balloon metadata", async () => {
+  it("legacy-merges coalesce buckets when imsg emits no balloon metadata (older builds)", async () => {
+    // Back-compat: older imsg builds emit no balloon_bundle_id, so a Dump + URL
+    // split-send arrives as two fieldless rows. We cannot structurally tell that
+    // apart from separate sends, so we preserve the pre-metadata merge rather
+    // than regress split-send users to two turns. Removed once imsg coalesces
+    // upstream (openclaw/imsg#141, tracked by #91243).
     debouncerControl.holdEntries = true;
 
     let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
@@ -1173,11 +1178,10 @@ describe("iMessage monitor last-route updates", () => {
       runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
     });
 
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-    expect(dispatchInboundMessageMock.mock.calls[0]?.[0].ctx.Body).toContain(": Dump");
-    expect(dispatchInboundMessageMock.mock.calls[1]?.[0].ctx.Body).toContain(
-      ": https://example.com",
-    );
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    const mergedBody = dispatchInboundMessageMock.mock.calls[0]?.[0].ctx.Body ?? "";
+    expect(mergedBody).toContain("Dump");
+    expect(mergedBody).toContain("https://example.com");
   });
 
   it("merges coalesce buckets when imsg marks the URL balloon row structurally", async () => {

@@ -33,8 +33,41 @@ describe("combineIMessagePayloads", () => {
 
     expect(hasIMessageUrlBalloonBundleID(text)).toBe(false);
     expect(hasIMessageUrlBalloonBundleID(balloon)).toBe(true);
-    expect(shouldCombineIMessagePayloadBucket([text, balloon])).toBe(true);
-    expect(shouldCombineIMessagePayloadBucket([text, makePayload({ text: "ok" })])).toBe(false);
+    // A real URL split-send merges regardless of the session capability latch.
+    expect(shouldCombineIMessagePayloadBucket([text, balloon], false)).toBe(true);
+    expect(shouldCombineIMessagePayloadBucket([text, balloon], true)).toBe(true);
+  });
+
+  it("falls back to a legacy merge when the build has never emitted balloon metadata (older imsg)", () => {
+    // Older imsg builds emit no balloon_bundle_id at all. We cannot tell a URL
+    // split-send from separate sends, so we preserve the pre-metadata merge
+    // rather than regress split-send users to two turns. Back-compat path,
+    // removed once imsg coalesces upstream (openclaw/imsg#141, tracked by #91243).
+    const text = makePayload({ text: "Dump" });
+    const url = makePayload({ text: "https://example.com/article" });
+    expect(shouldCombineIMessagePayloadBucket([text, url], false)).toBe(true);
+  });
+
+  it("keeps a plain bucket separate once the build is known to emit balloon metadata", () => {
+    // Capability latch is true (a prior row this session carried metadata), so a
+    // plain bucket with no URL marker is genuinely not a split-send. imsg omits
+    // the field for plain rows, so this case is indistinguishable per-bucket and
+    // depends on the session-level signal.
+    const a = makePayload({ text: "first" });
+    const b = makePayload({ text: "second" });
+    expect(shouldCombineIMessagePayloadBucket([a, b], true)).toBe(false);
+  });
+
+  it("keeps a bucket separate when imsg exposes balloon metadata in the bucket but no URL marker", () => {
+    // New imsg surfaced balloon metadata in this very bucket, proving this build
+    // emits the field, but the bucket is not a URL split-send. Keep separate even
+    // if the latch had not flipped yet.
+    const text = makePayload({ text: "hi" });
+    const nonUrlBalloon = makePayload({
+      text: "tap to vote",
+      balloon_bundle_id: "com.apple.messages.MSMessageExtensionBalloonPlugin",
+    });
+    expect(shouldCombineIMessagePayloadBucket([text, nonUrlBalloon], false)).toBe(false);
   });
 
   it("throws on empty input", () => {

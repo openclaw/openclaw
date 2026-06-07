@@ -66,7 +66,11 @@ import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
 import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
-import { combineIMessagePayloads, shouldCombineIMessagePayloadBucket } from "./coalesce.js";
+import {
+  combineIMessagePayloads,
+  hasIMessageBalloonMetadata,
+  shouldCombineIMessagePayloadBucket,
+} from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
@@ -359,6 +363,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const debounceMsOverride =
     coalesceSameSenderDms && !hasExplicitInboundDebounce ? 2500 : undefined;
 
+  // Session capability latch: flips true once any inbound row from this imsg
+  // build carries balloon metadata. The coalesce flush gate needs a build-level
+  // (not per-bucket) signal because imsg omits `balloon_bundle_id` for plain
+  // rows, so a bucket of plain text looks identical on old and new builds.
+  let imsgEmitsBalloonMetadata = false;
+
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<{
     message: IMessagePayload;
   }>({
@@ -397,9 +407,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
 
       // Hold opt-in DMs long enough for a following URL-balloon row to arrive.
-      // Buckets without imsg's balloon_bundle_id marker flush as separate
-      // messages, so ordinary rapid DMs and older imsg builds are not merged
-      // from text shape alone.
+      // The flush gate (shouldCombineIMessagePayloadBucket) decides merge vs.
+      // separate: it merges precisely on imsg's balloon marker, and falls back
+      // to a legacy merge only when the build emits no balloon metadata at all.
       if (coalesceSameSenderDms) {
         return msg.is_group !== true;
       }
@@ -423,7 +433,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
 
       const messages = entries.map((e) => e.message);
-      if (!shouldCombineIMessagePayloadBucket(messages)) {
+      if (!shouldCombineIMessagePayloadBucket(messages, imsgEmitsBalloonMetadata)) {
         for (const message of messages) {
           await handleMessageNow(message);
         }
@@ -1042,6 +1052,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           : typeof raw;
       runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);
       return;
+    }
+    // Latch build capability from any row that carries balloon metadata so the
+    // coalesce flush gate can trust a missing URL marker on later plain buckets.
+    if (!imsgEmitsBalloonMetadata && hasIMessageBalloonMetadata(message)) {
+      imsgEmitsBalloonMetadata = true;
     }
     if (
       watchStartupRowidWatermark !== null &&

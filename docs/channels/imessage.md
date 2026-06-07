@@ -654,7 +654,7 @@ When a user types a command and a URL together — e.g. `Dump https://example.co
 
 The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalescing, the agent receives the command alone on turn 1, replies (often "send me the URL"), and only sees the URL on turn 2 — at which point the command context is already lost. This is Apple's send pipeline, not anything OpenClaw or `imsg` introduces.
 
-`channels.imessage.coalesceSameSenderDms` opts a DM into buffering consecutive same-sender rows, but OpenClaw only merges a bucket when `imsg` exposes the structural URL-preview marker `balloon_bundle_id: "com.apple.messages.URLBalloonProvider"` on one of the source rows. Buckets without that marker flush as separate agent turns, so older `imsg` builds and ordinary rapid DMs do not merge based on text shape. Group chats continue to dispatch per-message so multi-user turn structure is preserved.
+`channels.imessage.coalesceSameSenderDms` opts a DM into buffering consecutive same-sender rows. When `imsg` exposes the structural URL-preview marker `balloon_bundle_id: "com.apple.messages.URLBalloonProvider"` on one of the source rows, OpenClaw merges only that real split-send and keeps any other buffered rows as separate turns. On older `imsg` builds that emit no balloon metadata at all, OpenClaw cannot tell a split-send from separate sends, so it falls back to merging the bucket. That preserves the pre-metadata behavior rather than regressing `Dump <url>` split-sends into two turns. Group chats continue to dispatch per-message so multi-user turn structure is preserved.
 
 <Tabs>
   <Tab title="When to enable">
@@ -702,7 +702,7 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
 
   </Tab>
   <Tab title="Trade-offs">
-    - **Requires current `imsg` payload metadata.** Split-send merging only activates when the URL row includes `balloon_bundle_id`. If the installed `imsg` build does not expose that field, buffered DMs flush separately after the window instead of being guessed from short text or URL shape.
+    - **Precise merging needs current `imsg` payload metadata.** When the URL row includes `balloon_bundle_id`, only that real split-send merges and other buffered rows stay separate. On older `imsg` builds that expose no balloon metadata, OpenClaw falls back to merging the buffered bucket so `Dump <url>` split-sends are not regressed into two turns (interim back-compat, removed once `imsg` coalesces split-sends upstream).
     - **Added latency for DM messages.** With the flag on, every DM (including standalone control commands and single-text follow-ups) waits up to the debounce window before dispatching, in case a URL-preview row is coming. Group-chat messages keep instant dispatch.
     - **Merged output is bounded.** Merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source GUID is tracked in `coalescedMessageGuids` for downstream telemetry.
     - **DM-only.** Group chats fall through to per-message dispatch so the bot stays responsive when multiple people are typing.
