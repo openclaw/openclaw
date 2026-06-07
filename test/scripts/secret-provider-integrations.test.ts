@@ -114,6 +114,25 @@ function writeSignaledStartupOpenClaw(root: string): string {
   return scriptPath;
 }
 
+function writeNoisySecretsConfigureOpenClaw(root: string): string {
+  const scriptPath = path.join(root, "fake-noisy-secrets-configure-openclaw.mjs");
+  fs.writeFileSync(
+    scriptPath,
+    [
+      "#!/usr/bin/env node",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === 'secrets' && args[1] === 'configure') {",
+      "  process.stdout.write('x'.repeat(4096));",
+      "  process.exit(7);",
+      "}",
+      "process.exit(2);",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return scriptPath;
+}
+
 function runProofHarness(
   root: string,
   fakeOpenClaw: string,
@@ -233,6 +252,47 @@ describe("secret provider integration proof harness", () => {
         delete process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES;
       } else {
         process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES = previousLimit;
+      }
+    }
+  });
+
+  it.runIf(process.platform !== "win32")("bounds captured PTY configure output", async () => {
+    const root = makeTempDir();
+    const fakeOpenClaw = writeNoisySecretsConfigureOpenClaw(root);
+    const previousLimit = process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES;
+    const previousEntry = process.env.OPENCLAW_ENTRY;
+    process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES = "128";
+    process.env.OPENCLAW_ENTRY = fakeOpenClaw;
+    try {
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=pty-output-${Date.now()}`
+      );
+
+      const error = await proof
+        .runPtySecretsConfigurePreset({
+          env: {
+            ...process.env,
+            OPENCLAW_ENTRY: fakeOpenClaw,
+          },
+        })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("secrets configure preset failed (7)");
+      expect((error as Error).message).toContain(
+        "secrets configure stdout truncated after 128 bytes",
+      );
+      expect((error as Error).message.length).toBeLessThan(600);
+    } finally {
+      if (previousLimit === undefined) {
+        delete process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES;
+      } else {
+        process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES = previousLimit;
+      }
+      if (previousEntry === undefined) {
+        delete process.env.OPENCLAW_ENTRY;
+      } else {
+        process.env.OPENCLAW_ENTRY = previousEntry;
       }
     }
   });

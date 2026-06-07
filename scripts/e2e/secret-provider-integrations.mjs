@@ -149,6 +149,12 @@ function createOutputCapture(label, options = {}) {
     text() {
       return output;
     },
+    reset() {
+      output = "";
+      bytes = 0;
+      truncated = false;
+      scanTail = "";
+    },
     leakedForbiddenValue() {
       return leakedForbiddenValue;
     },
@@ -1606,7 +1612,7 @@ async function runPtySecretsConfigurePreset(envCtx) {
     cwd: command.options.cwd ?? process.cwd(),
     env: command.options.env ?? envCtx.env,
   });
-  let output = "";
+  const output = createOutputCapture("secrets configure stdout");
   let phase = "providers-menu";
   const sendKeys = (keys) => {
     keys.forEach((key, index) => {
@@ -1616,22 +1622,23 @@ async function runPtySecretsConfigurePreset(envCtx) {
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill();
-      reject(new Error(`secrets configure preset timed out: ${scrub(output)}`));
+      reject(new Error(`secrets configure preset timed out: ${scrub(output.text())}`));
     }, 60000);
     child.onData((data) => {
-      output += data;
-      if (phase === "providers-menu" && output.includes("Configure secret providers")) {
+      output.append(data);
+      const outputText = output.text();
+      if (phase === "providers-menu" && outputText.includes("Configure secret providers")) {
         phase = "selecting-preset";
         sendKeys(["\x1b[B", "\r"]);
         return;
       }
-      if (phase === "selecting-preset" && output.includes("Select plugin preset")) {
+      if (phase === "selecting-preset" && outputText.includes("Select plugin preset")) {
         phase = "preset-selected";
         sendKeys(["\r"]);
-        output = "";
+        output.reset();
         return;
       }
-      if (phase === "preset-selected" && output.includes("Configure secret providers")) {
+      if (phase === "preset-selected" && outputText.includes("Configure secret providers")) {
         phase = "continue-selected";
         sendKeys(["\x1b[A", "\r"]);
       }
@@ -1639,10 +1646,10 @@ async function runPtySecretsConfigurePreset(envCtx) {
     child.onExit(({ exitCode }) => {
       clearTimeout(timer);
       if (exitCode !== 0) {
-        reject(new Error(`secrets configure preset failed (${exitCode}): ${scrub(output)}`));
+        reject(new Error(`secrets configure preset failed (${exitCode}): ${scrub(output.text())}`));
         return;
       }
-      resolve(output);
+      resolve(output.text());
     });
   });
 }
@@ -1858,6 +1865,7 @@ export {
   cleanupEnv,
   expectGatewayStartupFails,
   gatewayCall,
+  runPtySecretsConfigurePreset,
   runCommand,
   startGateway,
   waitForManagedGatewayStatus,

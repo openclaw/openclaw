@@ -354,6 +354,50 @@ describe("kitchen-sink plugin assertions", () => {
     }
   });
 
+  it("bounds huge single-line kitchen-sink log findings", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
+    const home = path.join(parent, "home");
+    const scratchRoot = path.join(parent, "scratch");
+    try {
+      mkdirSync(home, { recursive: true });
+      mkdirSync(scratchRoot, { recursive: true });
+      writeFileSync(
+        path.join(scratchRoot, "single-line.jsonl"),
+        `DO_NOT_DUMP_OLD_PREFIX${"x".repeat(256 * 1024)}recent marker [ERROR] bad state`,
+      );
+
+      const result = runScanLogs({ home, scratchRoot });
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain("recent marker");
+      expect(`${result.stdout}\n${result.stderr}`).not.toContain("DO_NOT_DUMP_OLD_PREFIX");
+      expect(`${result.stdout}\n${result.stderr}`.length).toBeLessThan(25 * 1024);
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
+  it("detects kitchen-sink log errors split across scan segment boundaries", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
+    const home = path.join(parent, "home");
+    const scratchRoot = path.join(parent, "scratch");
+    try {
+      mkdirSync(home, { recursive: true });
+      mkdirSync(scratchRoot, { recursive: true });
+      writeFileSync(
+        path.join(scratchRoot, "split-marker.jsonl"),
+        `${"x".repeat(16 * 1024 - 3)}[ERROR] split boundary marker`,
+      );
+
+      const result = runScanLogs({ home, scratchRoot });
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain("split boundary marker");
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
   it("rejects kitchen-sink log scans without an isolated scratch root", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
     try {

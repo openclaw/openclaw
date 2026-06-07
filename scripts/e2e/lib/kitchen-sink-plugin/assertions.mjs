@@ -8,7 +8,11 @@ const command = process.argv[2];
 const scratchRoot = process.env.KITCHEN_SINK_TMP_DIR || os.tmpdir();
 
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
+const LOG_SCAN_FINDING_CONTEXT_CHARS = 2048;
+const LOG_SCAN_MAX_FILES = 5000;
 const LOG_SCAN_MAX_FINDINGS = 100;
+const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
+const LOG_SCAN_SEGMENT_OVERLAP_CHARS = 256;
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
@@ -46,29 +50,102 @@ function scanTextFileLines(file, onLine) {
   const fd = fs.openSync(file, "r");
   try {
     const buffer = Buffer.alloc(LOG_SCAN_CHUNK_BYTES);
-    let carry = "";
+    let currentLine = "";
     let lineNumber = 1;
+    const emitLine = (line, info = {}) => onLine(line, lineNumber, info);
+    const appendLineText = (text, complete) => {
+      currentLine += text;
+      while (currentLine.length > LOG_SCAN_MAX_LINE_CHARS) {
+        const segment = currentLine.slice(0, LOG_SCAN_MAX_LINE_CHARS);
+        currentLine = currentLine.slice(LOG_SCAN_MAX_LINE_CHARS - LOG_SCAN_SEGMENT_OVERLAP_CHARS);
+        if (emitLine(segment, { truncated: true }) === false) {
+          return false;
+        }
+      }
+      if (complete) {
+        if (emitLine(currentLine) === false) {
+          return false;
+        }
+        currentLine = "";
+        lineNumber += 1;
+      }
+      return true;
+    };
+
     while (true) {
       const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
       if (bytesRead <= 0) {
         break;
       }
-      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      const text = buffer.subarray(0, bytesRead).toString("utf8");
       const lines = text.split(/\r?\n/u);
-      carry = lines.pop() ?? "";
-      for (const line of lines) {
-        if (onLine(line, lineNumber) === false) {
+      for (let index = 0; index < lines.length - 1; index += 1) {
+        if (appendLineText(lines[index], true) === false) {
           return;
         }
-        lineNumber += 1;
+      }
+      if (appendLineText(lines.at(-1) ?? "", false) === false) {
+        return;
       }
     }
-    if (carry.length > 0) {
-      onLine(carry, lineNumber);
+    if (currentLine.length > 0) {
+      onLine(currentLine, lineNumber);
     }
   } finally {
     fs.closeSync(fd);
   }
+}
+
+function formatFindingLine(line, pattern, info = {}) {
+  const matchIndex = Math.max(0, line.search(pattern));
+  const halfWindow = Math.floor(LOG_SCAN_FINDING_CONTEXT_CHARS / 2);
+  const start = Math.max(0, matchIndex - halfWindow);
+  const end = Math.min(line.length, start + LOG_SCAN_FINDING_CONTEXT_CHARS);
+  const prefix = start > 0 ? "... " : "";
+  const suffix = end < line.length || info.truncated ? " ..." : "";
+  return `${prefix}${line.slice(start, end)}${suffix}`;
+}
+
+function shouldScanLogFile(entry) {
+  if (!(/\.(?:log|jsonl)$/u.test(entry) || /openclaw-kitchen-sink-/u.test(path.basename(entry)))) {
+    return false;
+  }
+  return !normalizedPath(entry).includes("/.npm/_logs/");
+}
+
+function scanLogFiles(roots, onFile) {
+  let scannedFiles = 0;
+  for (const root of roots) {
+    const pending = [root];
+    while (pending.length > 0) {
+      const entry = pending.pop();
+      if (!entry || !fs.existsSync(entry)) {
+        continue;
+      }
+      const stat = fs.lstatSync(entry);
+      if (stat.isSymbolicLink()) {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        const children = fs.readdirSync(entry).toSorted((left, right) => right.localeCompare(left));
+        for (const child of children) {
+          pending.push(path.join(entry, child));
+        }
+        continue;
+      }
+      if (!shouldScanLogFile(entry)) {
+        continue;
+      }
+      scannedFiles += 1;
+      if (scannedFiles > LOG_SCAN_MAX_FILES) {
+        throw new Error(`kitchen-sink log scan exceeded ${LOG_SCAN_MAX_FILES} candidate files`);
+      }
+      if (onFile(entry, scannedFiles) === false) {
+        return scannedFiles;
+      }
+    }
+  }
+  return scannedFiles;
 }
 
 function scanLogs() {
@@ -76,37 +153,6 @@ function scanLogs() {
     throw new Error("KITCHEN_SINK_TMP_DIR is required for kitchen-sink log scans");
   }
   const roots = [scratchRoot, path.join(process.env.HOME, ".openclaw")];
-  const files = [];
-  const visit = (entry) => {
-    if (!fs.existsSync(entry)) {
-      return;
-    }
-    const stat = fs.lstatSync(entry);
-    if (stat.isSymbolicLink()) {
-      return;
-    }
-    if (stat.isDirectory()) {
-      for (const child of fs.readdirSync(entry).toSorted()) {
-        visit(path.join(entry, child));
-      }
-      return;
-    }
-    if (/\.(?:log|jsonl)$/u.test(entry) || /openclaw-kitchen-sink-/u.test(path.basename(entry))) {
-      if (normalizedPath(entry).includes("/.npm/_logs/")) {
-        return;
-      }
-      files.push(entry);
-    }
-  };
-  for (const root of roots) {
-    visit(root);
-  }
-  if (files.length === 0) {
-    throw new Error(
-      "kitchen-sink log scan found no files under the isolated scratch root or OpenClaw home",
-    );
-  }
-
   const deny = [
     /\buncaught exception\b/iu,
     /\bunhandled rejection\b/iu,
@@ -122,29 +168,36 @@ function scanLogs() {
   ];
   const findings = [];
   let omittedFindings = false;
-  for (const file of files) {
-    scanTextFileLines(file, (line, lineNumber) => {
+  const scannedFiles = scanLogFiles(roots, (file) => {
+    scanTextFileLines(file, (line, lineNumber, info) => {
       if (allow.some((pattern) => pattern.test(line))) {
         return true;
       }
-      if (deny.some((pattern) => pattern.test(line))) {
+      const matchedPattern = deny.find((pattern) => pattern.test(line));
+      if (matchedPattern) {
         if (findings.length >= LOG_SCAN_MAX_FINDINGS) {
           omittedFindings = true;
           return false;
         }
-        findings.push(`${file}:${lineNumber}: ${line}`);
+        findings.push(`${file}:${lineNumber}: ${formatFindingLine(line, matchedPattern, info)}`);
       }
       return true;
     });
     if (omittedFindings) {
-      break;
+      return false;
     }
+    return true;
+  });
+  if (scannedFiles === 0) {
+    throw new Error(
+      "kitchen-sink log scan found no files under the isolated scratch root or OpenClaw home",
+    );
   }
   if (findings.length > 0) {
     const suffix = omittedFindings ? "\n... additional findings omitted" : "";
     throw new Error(`unexpected error-like log lines:\n${findings.join("\n")}${suffix}`);
   }
-  console.log(`log scan passed (${files.length} file(s))`);
+  console.log(`log scan passed (${scannedFiles} file(s))`);
 }
 
 function readConfig() {
