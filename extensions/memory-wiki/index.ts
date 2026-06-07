@@ -6,6 +6,10 @@ import { createWikiCorpusSupplement } from "./src/corpus-supplement.js";
 import { registerMemoryWikiGatewayMethods } from "./src/gateway.js";
 import { createWikiPromptSectionBuilder } from "./src/prompt-section.js";
 import {
+  configureMemoryWikiSourceSyncStateStore,
+  createMemoryWikiSourceSyncStateStore,
+} from "./src/source-sync-state.js";
+import {
   createWikiApplyTool,
   createWikiGetTool,
   createWikiLintTool,
@@ -20,6 +24,9 @@ export default definePluginEntry({
   configSchema: memoryWikiConfigSchema,
   register(api) {
     const config = resolveMemoryWikiConfig(api.pluginConfig);
+    configureMemoryWikiSourceSyncStateStore(
+      createMemoryWikiSourceSyncStateStore(api.runtime.state.openKeyedStore),
+    );
 
     api.registerMemoryPromptSupplement(createWikiPromptSectionBuilder(config));
     api.registerMemoryCorpusSupplement(
