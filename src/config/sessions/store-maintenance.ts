@@ -19,6 +19,7 @@ import type { SessionEntry } from "./types.js";
 const log = createSubsystemLogger("sessions/store");
 
 const DEFAULT_SESSION_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+const DEFAULT_MODEL_RUN_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
@@ -40,6 +41,7 @@ export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
+  modelRunPruneAfterMs: number | null;
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
@@ -74,6 +76,22 @@ function resolveResetArchiveRetentionMs(
     return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
     return pruneAfterMs;
+  }
+}
+
+function resolveModelRunPruneAfterMs(maintenance?: SessionMaintenanceConfig): number | null {
+  const raw = maintenance?.modelRunPruneAfter;
+  if (raw === false) {
+    return null;
+  }
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
+    return DEFAULT_MODEL_RUN_PRUNE_AFTER_MS;
+  }
+  try {
+    return parseDurationMs(normalized, { defaultUnit: "d" });
+  } catch {
+    return DEFAULT_MODEL_RUN_PRUNE_AFTER_MS;
   }
 }
 
@@ -138,6 +156,7 @@ export function resolveMaintenanceConfigFromInput(
     mode: maintenance?.mode ?? DEFAULT_SESSION_MAINTENANCE_MODE,
     pruneAfterMs,
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
+    modelRunPruneAfterMs: resolveModelRunPruneAfterMs(maintenance),
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
@@ -170,6 +189,14 @@ export function shouldRunSessionEntryMaintenance(params: {
   return params.entryCount >= resolveSessionEntryMaintenanceHighWater(params.maxEntries);
 }
 
+export function isGatewayModelRunSessionKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return /^explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+    rest,
+  );
+}
+
 /**
  * Remove entries whose `updatedAt` is older than the configured threshold.
  * Entries without `updatedAt` are kept (cannot determine staleness).
@@ -199,6 +226,47 @@ export function pruneStaleEntries(
   }
   if (pruned > 0 && opts.log !== false) {
     log.info("pruned stale session entries", { pruned, maxAgeMs });
+  }
+  return pruned;
+}
+
+/**
+ * Remove stale one-shot gateway model-run probe sessions before normal retention/capping.
+ * Existing polluted stores may not carry modelRun metadata, so this intentionally keys off the
+ * strict explicit model-run UUID session shape created by the gateway probe CLI path.
+ */
+export function pruneStaleModelRunEntries(
+  store: Record<string, SessionEntry>,
+  overrideMaxAgeMs?: number | null,
+  opts: {
+    log?: boolean;
+    onPruned?: (params: { key: string; entry: SessionEntry }) => void;
+    preserveKeys?: ReadonlySet<string>;
+  } = {},
+): number {
+  if (overrideMaxAgeMs == null) {
+    return 0;
+  }
+  const cutoffMs = Date.now() - overrideMaxAgeMs;
+  let pruned = 0;
+  for (const [key, entry] of Object.entries(store)) {
+    if (opts.preserveKeys?.has(key) === true) {
+      continue;
+    }
+    if (!isGatewayModelRunSessionKey(key)) {
+      continue;
+    }
+    if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
+      opts.onPruned?.({ key, entry });
+      delete store[key];
+      pruned++;
+    }
+  }
+  if (pruned > 0 && opts.log !== false) {
+    log.info("pruned stale gateway model-run session entries", {
+      pruned,
+      maxAgeMs: overrideMaxAgeMs,
+    });
   }
   return pruned;
 }

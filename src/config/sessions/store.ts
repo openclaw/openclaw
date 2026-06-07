@@ -66,6 +66,7 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
+  pruneStaleModelRunEntries,
   pruneStaleEntries,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
@@ -167,6 +168,7 @@ export {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
   getSessionStoreCacheVersion,
+  pruneStaleModelRunEntries,
   pruneStaleEntries,
   resolveMaintenanceConfig,
 };

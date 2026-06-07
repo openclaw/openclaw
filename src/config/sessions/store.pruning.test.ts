@@ -8,12 +8,18 @@ import {
   registerSessionMaintenancePreserveKeysProvider,
 } from "./store-maintenance-preserve.js";
 import {
+  isGatewayModelRunSessionKey,
   isProtectedSessionMaintenanceEntry,
   resolveMaintenanceConfigFromInput,
   resolveQuotaSuspensionEntryMaintenance,
   resolveSessionEntryMaintenanceHighWater,
 } from "./store-maintenance.js";
-import { capEntryCount, getActiveSessionMaintenanceWarning, pruneStaleEntries } from "./store.js";
+import {
+  capEntryCount,
+  getActiveSessionMaintenanceWarning,
+  pruneStaleEntries,
+  pruneStaleModelRunEntries,
+} from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -178,6 +184,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         mode: "enforce",
         pruneAfterMs: 7 * DAY_MS,
         maxEntries: 500,
+        modelRunPruneAfterMs: null,
         resetArchiveRetentionMs: null,
         maxDiskBytes: null,
         highWaterBytes: null,
@@ -213,6 +220,63 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       },
     ]);
     expect(trajectoryCleanupReferencedIds).toEqual(new Set(["shared-session", "active-session"]));
+  });
+});
+
+describe("pruneStaleModelRunEntries", () => {
+  it("removes only stale generated gateway model-run sessions", () => {
+    const now = Date.now();
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174001";
+    const store = makeStore([
+      [staleModelRun, makeEntry(now - 25 * 60 * 60 * 1000)],
+      [recentModelRun, makeEntry(now)],
+      ["agent:main:explicit:model-run-not-a-uuid", makeEntry(now - 10 * DAY_MS)],
+      [
+        "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174002",
+        makeEntry(now - 10 * DAY_MS),
+      ],
+      ["agent:main:telegram:group:-100123:topic:77", makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:cron:job:run:123", makeEntry(now - 10 * DAY_MS)],
+    ]);
+
+    const pruned = pruneStaleModelRunEntries(store, DAY_MS);
+
+    expect(pruned).toBe(1);
+    expect(store[staleModelRun]).toBeUndefined();
+    expect(store).toHaveProperty(recentModelRun);
+    expect(store).toHaveProperty("agent:main:explicit:model-run-not-a-uuid");
+    expect(store).toHaveProperty(
+      "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174002",
+    );
+    expect(store).toHaveProperty("agent:main:telegram:group:-100123:topic:77");
+    expect(store).toHaveProperty("agent:main:cron:job:run:123");
+  });
+
+  it("honors preserve keys and disabled retention", () => {
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const store = makeStore([[staleModelRun, makeEntry(Date.now() - 10 * DAY_MS)]]);
+
+    expect(
+      pruneStaleModelRunEntries(store, DAY_MS, { preserveKeys: new Set([staleModelRun]) }),
+    ).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+    expect(pruneStaleModelRunEntries(store, null)).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+  });
+
+  it("matches only explicit model-run uuid session keys", () => {
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(true);
+    expect(isGatewayModelRunSessionKey("agent:main:explicit:model-run-not-a-uuid")).toBe(false);
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(false);
   });
 });
 

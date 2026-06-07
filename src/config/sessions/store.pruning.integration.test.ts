@@ -33,6 +33,7 @@ const ENFORCED_MAINTENANCE_OVERRIDE = {
   mode: "enforce" as const,
   pruneAfterMs: 7 * DAY_MS,
   maxEntries: 500,
+  modelRunPruneAfterMs: DAY_MS,
   resetArchiveRetentionMs: 7 * DAY_MS,
   maxDiskBytes: null,
   highWaterBytes: null,
@@ -131,6 +132,63 @@ describe("Integration: saveSessionStore with pruning", () => {
     } else {
       process.env.OPENCLAW_SESSION_CACHE_TTL_MS = savedCacheTtl;
     }
+  });
+
+  it("saveSessionStore prunes stale model-run probes before global retention", async () => {
+    const now = Date.now();
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174001";
+    const normalRecent = "agent:main:explicit:normal-recent";
+    const store: Record<string, SessionEntry> = {
+      [staleModelRun]: makeEntry(now - 2 * DAY_MS),
+      [recentModelRun]: makeEntry(now),
+      [normalRecent]: makeEntry(now - 2 * DAY_MS),
+    };
+
+    await saveSessionStore(storePath, store, {
+      maintenanceOverride: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        pruneAfterMs: 30 * DAY_MS,
+        maxEntries: 500,
+      },
+    });
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded[staleModelRun]).toBeUndefined();
+    expect(loaded).toHaveProperty(recentModelRun);
+    expect(loaded).toHaveProperty(normalRecent);
+  });
+
+  it("sessions cleanup dry-run and apply report stale model-run probe pruning", async () => {
+    const now = Date.now();
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174010";
+    const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174011";
+    const store: Record<string, SessionEntry> = {
+      [staleModelRun]: makeEntry(now - 2 * DAY_MS),
+      [recentModelRun]: makeEntry(now),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const cfg = { session: { store: storePath } };
+    const dryRun = await runSessionsCleanup({
+      cfg,
+      opts: { dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(dryRun.previewResults[0]?.summary.modelRunPruned).toBe(1);
+    expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(staleModelRun);
+
+    const applied = await runSessionsCleanup({
+      cfg,
+      opts: { dryRun: false, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.modelRunPruned).toBe(1);
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded[staleModelRun]).toBeUndefined();
+    expect(loaded).toHaveProperty(recentModelRun);
   });
 
   it("saveSessionStore prunes stale entries on write", async () => {

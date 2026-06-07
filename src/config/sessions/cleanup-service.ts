@@ -28,6 +28,7 @@ import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-prese
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
+  pruneStaleModelRunEntries,
   pruneStaleEntries,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -51,6 +52,7 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
 export type SessionCleanupAction =
   | "keep"
   | "prune-missing"
+  | "prune-model-run"
   | "prune-stale"
   | "cap-overflow"
   | "evict-budget"
@@ -65,6 +67,7 @@ export type SessionCleanupSummary = {
   afterCount: number;
   missing: number;
   dmScopeRetired: number;
+  modelRunPruned: number;
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
@@ -89,6 +92,7 @@ export type SessionsCleanupRunResult = {
     summary: SessionCleanupSummary;
     beforeStore: Record<string, SessionEntry>;
     missingKeys: Set<string>;
+    modelRunPrunedKeys: Set<string>;
     staleKeys: Set<string>;
     cappedKeys: Set<string>;
     budgetEvictedKeys: Set<string>;
@@ -169,6 +173,7 @@ function transcriptHasNoMessageRecords(transcriptPath: string): boolean {
 export function resolveSessionCleanupAction(params: {
   key: string;
   missingKeys: Set<string>;
+  modelRunPrunedKeys: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
@@ -179,6 +184,9 @@ export function resolveSessionCleanupAction(params: {
   }
   if (params.missingKeys.has(params.key)) {
     return "prune-missing";
+  }
+  if (params.modelRunPrunedKeys.has(params.key)) {
+    return "prune-model-run";
   }
   if (params.staleKeys.has(params.key)) {
     return "prune-stale";
@@ -333,6 +341,7 @@ async function previewStoreCleanup(params: {
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
+  const modelRunPrunedKeys = new Set<string>();
   const dmScopeRetiredKeys = new Set<string>();
   const missing =
     params.fixMissing === true
@@ -357,6 +366,17 @@ async function previewStoreCleanup(params: {
         })
       : 0;
   const preserveSessionKeys = collectSessionMaintenancePreserveKeys([params.activeKey]);
+  const modelRunPruned = pruneStaleModelRunEntries(
+    previewStore,
+    params.maintenance.modelRunPruneAfterMs,
+    {
+      log: false,
+      preserveKeys: preserveSessionKeys,
+      onPruned: ({ key }) => {
+        modelRunPrunedKeys.add(key);
+      },
+    },
+  );
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
     preserveKeys: preserveSessionKeys,
@@ -372,6 +392,12 @@ async function previewStoreCleanup(params: {
     },
   });
   const entryCleanupArtifactPaths = new Set<string>();
+  addEntryArtifactPathsToSet({
+    paths: entryCleanupArtifactPaths,
+    store: beforeStore,
+    storePath: params.target.storePath,
+    keys: modelRunPrunedKeys,
+  });
   addEntryArtifactPathsToSet({
     paths: entryCleanupArtifactPaths,
     store: beforeStore,
@@ -422,6 +448,7 @@ async function previewStoreCleanup(params: {
   const wouldMutate =
     missing > 0 ||
     dmScopeRetired > 0 ||
+    modelRunPruned > 0 ||
     pruned > 0 ||
     capped > 0 ||
     unreferencedArtifacts.removedFiles > 0 ||
@@ -437,6 +464,7 @@ async function previewStoreCleanup(params: {
     afterCount: afterPreviewCount,
     missing,
     dmScopeRetired,
+    modelRunPruned,
     pruned,
     capped,
     unreferencedArtifacts,
@@ -448,6 +476,7 @@ async function previewStoreCleanup(params: {
     summary,
     beforeStore,
     missingKeys,
+    modelRunPrunedKeys,
     staleKeys,
     cappedKeys,
     budgetEvictedKeys,
@@ -577,6 +606,7 @@ export async function runSessionsCleanup(params: {
                 afterCount: 0,
                 missing: 0,
                 dmScopeRetired: 0,
+                modelRunPruned: 0,
                 pruned: 0,
                 capped: 0,
                 unreferencedArtifacts,
@@ -599,6 +629,7 @@ export async function runSessionsCleanup(params: {
               afterCount: appliedReport.afterCount,
               missing: missingApplied,
               dmScopeRetired: dmScopeRetiredApplied,
+              modelRunPruned: appliedReport.modelRunPruned,
               pruned: appliedReport.pruned,
               capped: appliedReport.capped,
               unreferencedArtifacts,
@@ -606,6 +637,7 @@ export async function runSessionsCleanup(params: {
               wouldMutate:
                 missingApplied > 0 ||
                 dmScopeRetiredApplied > 0 ||
+                appliedReport.modelRunPruned > 0 ||
                 appliedReport.pruned > 0 ||
                 appliedReport.capped > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||
