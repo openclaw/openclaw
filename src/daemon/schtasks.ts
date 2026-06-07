@@ -1020,35 +1020,48 @@ async function updateExistingScheduledTask(params: {
 async function shouldFallbackScheduledTaskLaunch(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
+  taskPort: number | null;
+  preExistingListenerPids: ReadonlySet<number>;
 }): Promise<boolean> {
+  const taskName = resolveTaskName(params.env);
+
+  // Reads raw schtasks state without the listener-backed enrichment so a
+  // foreground gateway on the same port cannot mask a task startup failure.
   const readLaunchObservation = async (): Promise<{
     state: "running" | "not-yet-run" | "other";
     signature: string;
   }> => {
-    const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
-    if (runtime?.status === "running") {
-      return {
-        state: "running",
-        signature: [runtime.state, runtime.lastRunTime, runtime.lastRunResult, runtime.detail]
-          .filter(Boolean)
-          .join("|"),
-      };
+    let parsedInfo: ScheduledTaskInfo | null = null;
+    try {
+      const available = await execSchtasks(["/Query"]);
+      if (available.code === 0) {
+        const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
+        if (res.code === 0) {
+          parsedInfo = parseSchtasksQuery(res.stdout || "");
+        }
+      }
+    } catch {
+      // ignore
     }
-    const normalizedResult = normalizeTaskResultCode(runtime?.lastRunResult);
+    const derived = parsedInfo ? deriveScheduledTaskRuntimeStatus(parsedInfo) : null;
+    const sig = [parsedInfo?.status, parsedInfo?.lastRunTime, parsedInfo?.lastRunResult]
+      .filter(Boolean)
+      .join("|");
+    if (derived?.status === "running") {
+      return { state: "running", signature: sig };
+    }
+    if (params.taskPort) {
+      const pids = await resolveScheduledTaskGatewayListenerPids(params.taskPort);
+      const newPids = pids.filter((pid) => !params.preExistingListenerPids.has(pid));
+      if (newPids.length > 0) {
+        return { state: "running", signature: sig };
+      }
+    }
+    const normalizedResult = normalizeTaskResultCode(parsedInfo?.lastRunResult);
     if (normalizedResult && NOT_YET_RUN_RESULT_CODES.has(normalizedResult)) {
-      return {
-        state: "not-yet-run",
-        signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
-          .filter(Boolean)
-          .join("|"),
-      };
+      return { state: "not-yet-run", signature: sig };
     }
-    return {
-      state: "other",
-      signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
-        .filter(Boolean)
-        .join("|"),
-    };
+    return { state: "other", signature: sig };
   };
 
   const hasLaunchEvidence = async (): Promise<boolean> => {
@@ -1061,7 +1074,10 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
     if (manageGatewayPort && taskPort) {
       const listenerPids = await resolveScheduledTaskGatewayListenerPids(taskPort);
-      if (listenerPids.length > 0) {
+      const newListenerPids = listenerPids.filter(
+        (pid) => !params.preExistingListenerPids.has(pid),
+      );
+      if (newListenerPids.length > 0) {
         return true;
       }
     }
@@ -1101,6 +1117,10 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       if (!commandLine) {
         return false;
       }
+      const pid = getSnapshotProcessId(entry);
+      if (pid !== null && params.preExistingListenerPids.has(pid)) {
+        return false;
+      }
       const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
       return (
         isGatewayArgv(argv, { allowGatewayBinary: true }) &&
@@ -1133,14 +1153,33 @@ async function runScheduledTaskOrThrow(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
 }): Promise<void> {
+  // Snapshot only verified gateway PIDs before launching so a foreground gateway
+  // cannot mask task-start evidence and only owned processes are terminated (#91144).
+  const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
+  const taskPort = manageGatewayPort ? await resolveScheduledTaskPort(params.env) : null;
+  const preExistingListenerPids = taskPort
+    ? new Set(findVerifiedGatewayListenerPidsOnPortSync(taskPort))
+    : new Set<number>();
+
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
   }
   if (
-    !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
+    !(await shouldFallbackScheduledTaskLaunch({
+      env: params.env,
+      scriptPath: params.scriptPath,
+      taskPort,
+      preExistingListenerPids,
+    }))
   ) {
     return;
+  }
+  // A foreground gateway on the port causes the supervised fallback to yield to
+  // it as "healthy" and exit, leaving no managed gateway after the foreground closes.
+  // Use the pre-existing snapshot to avoid a TOCTOU kill of a newly-started managed gateway.
+  for (const pid of preExistingListenerPids) {
+    await terminateGatewayProcessTree(pid, 300);
   }
   await launchFallbackTaskScript(params.env);
 }
