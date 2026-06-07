@@ -40,10 +40,30 @@ describe("OpenClawSchema talk validation", () => {
             },
             instructions: "Speak with crisp diction.",
             consultRouting: "force-agent-consult",
+            finalHud: {
+              enabled: true,
+              baseUrl: "http://127.0.0.1:18802",
+              streamChannel: "voice",
+              monitorKind: "talk",
+            },
           },
         },
       }),
     ).not.toThrow();
+  });
+
+  it("rejects invalid realtime Talk final HUD stream channels", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          realtime: {
+            finalHud: {
+              streamChannel: "external",
+            },
+          },
+        },
+      }),
+    ).toThrow(/streamChannel/i);
   });
 
   it("rejects invalid realtime Talk consult routing", () => {

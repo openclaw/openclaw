@@ -10,6 +10,7 @@ import type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+import type { AgentEventHandlerOptions } from "./server-chat.js";
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
@@ -27,6 +28,7 @@ export function startGatewayEventSubscriptions(params: {
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  onChatRunFinal?: AgentEventHandlerOptions["onChatRunFinal"];
 }) {
   let agentEventHandlerPromise: Promise<
     ReturnType<typeof import("./server-chat.js").createAgentEventHandler>
@@ -48,6 +50,7 @@ export function startGatewayEventSubscriptions(params: {
         toolEventRecipients: params.toolEventRecipients,
         sessionEventSubscribers: params.sessionEventSubscribers,
         sessionMessageSubscribers: params.sessionMessageSubscribers,
+        onChatRunFinal: params.onChatRunFinal,
         clearTrackedActiveRun: ({ runId, clientRunId }) => {
           const candidateRunIds = runId === clientRunId ? [runId] : [runId, clientRunId];
           for (const candidateRunId of candidateRunIds) {

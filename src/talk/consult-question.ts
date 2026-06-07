@@ -32,7 +32,15 @@ const REALTIME_VOICE_CONSULT_QUESTION_STOPWORDS = new Set([
 ]);
 
 const DEFAULT_REALTIME_VOICE_CONSULT_QUESTION_KEYS = ["question", "prompt", "query", "task"];
-const DEFAULT_REALTIME_VOICE_SPEAKABLE_RESULT_KEYS = ["text", "result", "output", "error"];
+const DEFAULT_REALTIME_VOICE_SPEAKABLE_RESULT_KEYS = [
+  "response",
+  "spokenText",
+  "summaryText",
+  "text",
+  "result",
+  "output",
+  "error",
+];
 const DEFAULT_REALTIME_VOICE_SPEAKABLE_RESULT_MAX_CHARS = 1_800;
 
 export type RealtimeVoiceConsultQuestionMatchOptions = {
@@ -130,7 +138,15 @@ export function readSpeakableRealtimeVoiceToolResult(
   options: RealtimeVoiceSpeakableToolResultOptions = {},
 ): string | undefined {
   const stringResult = options.stringResult ?? true;
+  const keys = options.keys ?? DEFAULT_REALTIME_VOICE_SPEAKABLE_RESULT_KEYS;
   if (typeof result === "string") {
+    const structuredText = readSpeakableRealtimeVoiceResultRecord(
+      parseSpeakableRealtimeVoiceJsonObject(result),
+      keys,
+    );
+    if (structuredText) {
+      return limitSpeakableRealtimeVoiceToolResult(structuredText, options.maxChars);
+    }
     return stringResult
       ? limitSpeakableRealtimeVoiceToolResult(result, options.maxChars)
       : undefined;
@@ -139,14 +155,49 @@ export function readSpeakableRealtimeVoiceToolResult(
     return undefined;
   }
   const record = result as Record<string, unknown>;
-  const keys = options.keys ?? DEFAULT_REALTIME_VOICE_SPEAKABLE_RESULT_KEYS;
+  return limitSpeakableRealtimeVoiceToolResult(
+    readSpeakableRealtimeVoiceResultRecord(record, keys),
+    options.maxChars,
+  );
+}
+
+function readSpeakableRealtimeVoiceResultRecord(
+  record: Record<string, unknown> | undefined,
+  keys: readonly string[],
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
   for (const key of keys) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) {
-      return limitSpeakableRealtimeVoiceToolResult(value, options.maxChars);
+      return value;
     }
   }
   return undefined;
+}
+
+function parseSpeakableRealtimeVoiceJsonObject(value: string): Record<string, unknown> | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return parseJsonRecord(trimmed) ?? parseJsonRecord(trimmed.split(/\r?\n/u, 1)[0] ?? "");
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> | undefined {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function realtimeVoiceConsultQuestionTokens(value: string): Set<string> {
@@ -163,10 +214,10 @@ function realtimeVoiceConsultQuestionTokens(value: string): Set<string> {
 }
 
 function limitSpeakableRealtimeVoiceToolResult(
-  value: string,
+  value: string | undefined,
   maxChars = DEFAULT_REALTIME_VOICE_SPEAKABLE_RESULT_MAX_CHARS,
 ): string | undefined {
-  const trimmed = value.trim();
+  const trimmed = value?.trim();
   if (!trimmed) {
     return undefined;
   }

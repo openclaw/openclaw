@@ -11,10 +11,12 @@ function createMockContext() {
   const chatAbortedRuns = new Map();
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map();
+  const onChatRunFinal = vi.fn();
 
   return {
     broadcast,
     nodeSendToSession,
+    onChatRunFinal,
     chatAbortControllers,
     chatAbortedRuns,
     agentRunSeq,
@@ -75,6 +77,13 @@ describe("chat.send error broadcast", () => {
         }),
       }),
     );
+    expect(ctx.onChatRunFinal).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      clientRunId: "test-run-1",
+      sourceRunId: "test-run-1",
+      state: "error",
+      error: expect.stringContaining("LLM timeout"),
+    });
   });
 
   it("scopes selected-agent global errors to the linked agent", async () => {

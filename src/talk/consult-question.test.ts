@@ -30,6 +30,11 @@ describe("realtime voice consult question helpers", () => {
   });
 
   it("extracts bounded speakable text from tool results", () => {
+    expect(readSpeakableRealtimeVoiceToolResult({ response: " Brain response " })).toBe(
+      "Brain response",
+    );
+    expect(readSpeakableRealtimeVoiceToolResult({ spokenText: "Spoken" })).toBe("Spoken");
+    expect(readSpeakableRealtimeVoiceToolResult({ summaryText: "Summary" })).toBe("Summary");
     expect(readSpeakableRealtimeVoiceToolResult({ text: " Answer " })).toBe("Answer");
     expect(readSpeakableRealtimeVoiceToolResult({ result: "Result" })).toBe("Result");
     expect(readSpeakableRealtimeVoiceToolResult("Direct")).toBe("Direct");
@@ -39,5 +44,19 @@ describe("realtime voice consult question helpers", () => {
         { maxChars: 24 },
       ),
     ).toBe("abcdefgh [truncated]");
+  });
+
+  it("prefers structured voice fields over raw JSON strings", () => {
+    expect(
+      readSpeakableRealtimeVoiceToolResult('{"response":"Read this","debug":"not this"}'),
+    ).toBe("Read this");
+    expect(
+      readSpeakableRealtimeVoiceToolResult(
+        '{"spokenText":"Speak only this","response":"fallback"}\nextra diagnostic text',
+      ),
+    ).toBe("fallback");
+    expect(
+      readSpeakableRealtimeVoiceToolResult('{"debug":"no voice field"}', { stringResult: false }),
+    ).toBeUndefined();
   });
 });

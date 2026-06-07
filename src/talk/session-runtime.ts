@@ -9,6 +9,7 @@ import type {
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceRole,
+  RealtimeVoiceSpeakTextOptions,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
   RealtimeVoiceToolResultOptions,
@@ -39,6 +40,7 @@ export type RealtimeVoiceBridgeSession = {
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   sendUserMessage(text: string): void;
+  speakText(text: string, options?: RealtimeVoiceSpeakTextOptions): void;
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
   setMediaTimestamp(ts: number): void;
   submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;
@@ -93,6 +95,14 @@ export function createRealtimeVoiceBridgeSession(
     connect: () => requireBridge().connect(),
     sendAudio: (audio) => requireBridge().sendAudio(audio),
     sendUserMessage: (text) => requireBridge().sendUserMessage?.(text),
+    speakText: (text, options) => {
+      const bridge = requireBridge();
+      if (bridge.speakText) {
+        bridge.speakText(text, options);
+        return;
+      }
+      throw new Error("Realtime voice provider does not support text speech");
+    },
     handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
     setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
     submitToolResult: (callId, result, options) =>

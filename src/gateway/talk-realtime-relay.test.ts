@@ -12,6 +12,7 @@ import {
   cancelTalkRealtimeRelayTurn,
   clearTalkRealtimeRelaySessionsForTest,
   createTalkRealtimeRelaySession,
+  deliverTalkRealtimeRelayAgentRunFinal,
   registerTalkRealtimeRelayAgentRun,
   sendTalkRealtimeRelayAudio,
   steerTalkRealtimeRelayAgentRun,
@@ -219,6 +220,7 @@ describe("talk realtime gateway relay", () => {
       sendAudio: vi.fn(),
       setMediaTimestamp: vi.fn(),
       sendUserMessage: vi.fn(),
+      speakText: vi.fn(),
       triggerGreeting: vi.fn(),
       handleBargeIn: vi.fn(),
       submitToolResult: vi.fn(),
@@ -547,6 +549,7 @@ describe("talk realtime gateway relay", () => {
       sendAudio: vi.fn(),
       setMediaTimestamp: vi.fn(),
       sendUserMessage: vi.fn(),
+      speakText: vi.fn(),
       triggerGreeting: vi.fn(),
       handleBargeIn: vi.fn(),
       submitToolResult: vi.fn(),
@@ -607,6 +610,7 @@ describe("talk realtime gateway relay", () => {
       sendAudio: vi.fn(),
       setMediaTimestamp: vi.fn(),
       sendUserMessage: vi.fn(),
+      speakText: vi.fn(),
       triggerGreeting: vi.fn(),
       handleBargeIn: vi.fn(),
       submitToolResult: vi.fn(),
@@ -714,23 +718,33 @@ describe("talk realtime gateway relay", () => {
       },
       { suppressResponse: true },
     );
-    expect(bridge.sendUserMessage).toHaveBeenLastCalledWith(
-      [
-        "OpenClaw finished checking. Speak this result naturally and concisely.",
-        "Do not mention tool calls, JSON, or internal routing.",
-        "",
-        "Here is the checked answer.",
-      ].join("\n"),
+    expect(bridge.speakText).toHaveBeenLastCalledWith(
+      "Here is the checked answer.",
+      expect.objectContaining({
+        source: "forced-agent-final",
+        mode: "exact",
+      }),
     );
     expect(
       bridge.submitToolResult.mock.invocationCallOrder[
         bridge.submitToolResult.mock.invocationCallOrder.length - 1
       ],
     ).toBeLessThan(
-      bridge.sendUserMessage.mock.invocationCallOrder[
-        bridge.sendUserMessage.mock.invocationCallOrder.length - 1
+      bridge.speakText.mock.invocationCallOrder[
+        bridge.speakText.mock.invocationCallOrder.length - 1
       ] ?? 0,
     );
+    const finalSpeechPayload = findEventPayload(
+      events,
+      (payload) => payload.type === "finalSpeech",
+    );
+    expectRecordFields(finalSpeechPayload, {
+      relaySessionId: session.relaySessionId,
+      type: "finalSpeech",
+      text: "Here is the checked answer.",
+      status: "speaking",
+      source: "forced-agent-final",
+    });
     expect(
       events.some((entry) => {
         const payload = entry.payload;
@@ -1044,6 +1058,88 @@ describe("talk realtime gateway relay", () => {
       "chat",
       expect.objectContaining({ runId: "run-1", state: "aborted" }),
     );
+  });
+
+  it("delivers chat-run finals back through the active realtime voice bridge", () => {
+    const bridge = {
+      supportsToolResultContinuation: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      sendUserMessage: vi.fn(),
+      speakText: vi.fn(),
+      triggerGreeting: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: () => bridge,
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+    registerTalkRealtimeRelayAgentRun({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      sessionKey: "main",
+      runId: "run-1",
+      callId: "call-1",
+    });
+
+    expect(
+      deliverTalkRealtimeRelayAgentRunFinal({
+        runId: "run-1",
+        sessionKey: "main",
+        result: { response: "Done with the check." },
+        source: "chat-final",
+      }),
+    ).toBe(true);
+
+    expect(bridge.submitToolResult).toHaveBeenCalledWith(
+      "call-1",
+      {
+        status: "already_delivered",
+        message: "OpenClaw already delivered this consult result internally. Do not repeat it.",
+      },
+      { suppressResponse: true },
+    );
+    expect(bridge.speakText).toHaveBeenCalledWith(
+      "Done with the check.",
+      expect.objectContaining({
+        source: "chat-final",
+        mode: "exact",
+      }),
+    );
+    const finalSpeechPayload = findEventPayload(
+      events,
+      (payload) => payload.type === "finalSpeech",
+    );
+    expectRecordFields(finalSpeechPayload, {
+      relaySessionId: session.relaySessionId,
+      type: "finalSpeech",
+      text: "Done with the check.",
+      status: "speaking",
+      source: "chat-final",
+      runId: "run-1",
+      callId: "call-1",
+    });
   });
 
   it("returns structured relay steering status and emits Talk progress", async () => {

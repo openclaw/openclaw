@@ -44,6 +44,7 @@ import {
 } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import { mirrorTalkFinalHud, type TalkFinalHudMirrorStatus } from "./talk-final-hud-mirror.js";
 import {
   closeExpiredTalkRelaySessions,
   requireActiveTalkRelaySession,
@@ -90,6 +91,16 @@ type TalkRealtimeRelayEventPayload =
     }
   | { relaySessionId: string; type: "toolResult"; callId: string }
   | { relaySessionId: string; type: "toolProgress"; result: RealtimeVoiceAgentControlResult }
+  | {
+      relaySessionId: string;
+      type: "finalSpeech";
+      text: string;
+      status: TalkFinalHudMirrorStatus;
+      detail?: string;
+      source?: string;
+      callId?: string;
+      runId?: string;
+    }
   | { relaySessionId: string; type: "error"; message: string }
   | { relaySessionId: string; type: "close"; reason: "completed" | "error" };
 
@@ -167,15 +178,6 @@ function buildForcedConsultCheckingPrompt(): string {
   ].join(" ");
 }
 
-function buildForcedConsultSpeechPrompt(text: string): string {
-  return [
-    "OpenClaw finished checking. Speak this result naturally and concisely.",
-    "Do not mention tool calls, JSON, or internal routing.",
-    "",
-    text,
-  ].join("\n");
-}
-
 function buildAlreadyDeliveredToolResult(): Record<string, string> {
   return {
     status: "already_delivered",
@@ -247,6 +249,111 @@ function broadcastToolResultToOwner(
       final: params.final,
     }),
   });
+}
+
+function getRelayRuntimeConfig(session: RelaySession): OpenClawConfig | undefined {
+  return (session.context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.();
+}
+
+function reportFinalSpeechStatus(
+  session: RelaySession,
+  params: {
+    text: string;
+    status: TalkFinalHudMirrorStatus;
+    detail?: string;
+    source?: string;
+    callId?: string;
+    runId?: string;
+  },
+): void {
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "finalSpeech",
+    text: params.text,
+    status: params.status,
+    ...(params.detail ? { detail: params.detail } : {}),
+    ...(params.source ? { source: params.source } : {}),
+    ...(params.callId ? { callId: params.callId } : {}),
+    ...(params.runId ? { runId: params.runId } : {}),
+    talkEvent: session.talk.emit({
+      type: "health.changed",
+      payload: {
+        component: "final-voice",
+        status: params.status,
+        text: params.text,
+        ...(params.detail ? { detail: params.detail } : {}),
+        ...(params.source ? { source: params.source } : {}),
+        ...(params.callId ? { callId: params.callId } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
+      },
+      final: params.status === "degraded",
+    }),
+  });
+  void mirrorTalkFinalHud({
+    cfg: getRelayRuntimeConfig(session),
+    text: params.text,
+    status: params.status,
+    detail: params.detail,
+    source: params.source,
+    sessionId: session.id,
+    runId: params.runId,
+    callId: params.callId,
+    provider: session.talk.context.provider,
+  });
+}
+
+function deliverRelayFinalSpeech(
+  session: RelaySession,
+  params: {
+    text: string | undefined;
+    source: string;
+    callId?: string;
+    runId?: string;
+  },
+): boolean {
+  const text = params.text?.trim();
+  if (!text) {
+    reportFinalSpeechStatus(session, {
+      text: "",
+      status: "degraded",
+      detail: "No speakable final text was returned.",
+      source: params.source,
+      callId: params.callId,
+      runId: params.runId,
+    });
+    return false;
+  }
+  try {
+    if (!session.bridge.bridge.isConnected()) {
+      throw new Error("Realtime voice bridge is not connected");
+    }
+    session.bridge.speakText(text, {
+      source: params.source,
+      mode: "exact",
+      idempotencyKey: [session.id, params.source, params.runId, params.callId]
+        .filter(Boolean)
+        .join(":"),
+    });
+    reportFinalSpeechStatus(session, {
+      text,
+      status: "speaking",
+      detail: "Scheduled through realtime voice provider.",
+      source: params.source,
+      callId: params.callId,
+      runId: params.runId,
+    });
+    return true;
+  } catch (error) {
+    reportFinalSpeechStatus(session, {
+      text,
+      status: "degraded",
+      detail: formatError(error),
+      source: params.source,
+      callId: params.callId,
+      runId: params.runId,
+    });
+    return false;
+  }
 }
 
 function submitRelayAgentControlProviderResults(
@@ -795,9 +902,11 @@ export function submitTalkRealtimeRelayToolResult(params: {
       for (const nativeCallId of session.forcedConsults.nativeCallIds(forcedConsult)) {
         submitAlreadyDeliveredToolResult(session, nativeCallId, turnId);
       }
-      if (text) {
-        session.bridge.sendUserMessage(buildForcedConsultSpeechPrompt(text));
-      }
+      deliverRelayFinalSpeech(session, {
+        text,
+        source: "forced-agent-final",
+        callId: params.callId,
+      });
     }
     const final = params.options?.willContinue !== true;
     if (final && !cancelled && !isWorkingToolResult(params.result)) {
@@ -812,11 +921,24 @@ export function submitTalkRealtimeRelayToolResult(params: {
     });
     return;
   }
-  session.bridge.submitToolResult(params.callId, params.result, params.options);
   const turnId = ensureRelayTurn(session);
   const final = params.options?.willContinue !== true;
+  const runId = session.activeAgentToolCalls.get(params.callId);
+  if (final && runId && !isWorkingToolResult(params.result)) {
+    const text = readSpeakableRealtimeVoiceToolResult(params.result);
+    session.bridge.submitToolResult(params.callId, buildAlreadyDeliveredToolResult(), {
+      suppressResponse: true,
+    });
+    deliverRelayFinalSpeech(session, {
+      text,
+      source: "agent-final",
+      callId: params.callId,
+      runId,
+    });
+  } else {
+    session.bridge.submitToolResult(params.callId, params.result, params.options);
+  }
   if (final) {
-    const runId = session.activeAgentToolCalls.get(params.callId);
     if (runId) {
       session.activeAgentRuns.delete(runId);
       session.activeAgentToolCalls.delete(params.callId);
@@ -846,6 +968,60 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   if (!session.sessionKey) {
     session.sessionKey = params.sessionKey;
   }
+}
+
+/** Delivers a chat-run final back to the realtime Talk session that owns that run. */
+export function deliverTalkRealtimeRelayAgentRunFinal(params: {
+  runId: string;
+  sessionKey?: string;
+  result: unknown;
+  source?: string;
+}): boolean {
+  for (const session of relaySessions.values()) {
+    const registeredSessionKey = session.activeAgentRuns.get(params.runId);
+    if (!registeredSessionKey) {
+      continue;
+    }
+    if (params.sessionKey && registeredSessionKey !== params.sessionKey) {
+      continue;
+    }
+    const turnId = ensureRelayTurn(session);
+    const text = readSpeakableRealtimeVoiceToolResult(params.result);
+    const callId = [...session.activeAgentToolCalls.entries()].find(
+      ([, runId]) => runId === params.runId,
+    )?.[0];
+    if (callId && !session.completedAgentToolCalls.has(callId)) {
+      const forcedConsult = session.forcedConsults.handles().find((handle) => handle.id === callId);
+      if (forcedConsult) {
+        session.forcedConsults.markDelivered(forcedConsult);
+        for (const nativeCallId of session.forcedConsults.nativeCallIds(forcedConsult)) {
+          submitAlreadyDeliveredToolResult(session, nativeCallId, turnId);
+        }
+      } else {
+        session.bridge.submitToolResult(callId, buildAlreadyDeliveredToolResult(), {
+          suppressResponse: true,
+        });
+      }
+      broadcastToolResultToOwner(session, {
+        callId,
+        turnId,
+        result: params.result,
+        forced: Boolean(forcedConsult),
+        final: true,
+      });
+      session.activeAgentToolCalls.delete(callId);
+      session.completedAgentToolCalls.add(callId);
+    }
+    deliverRelayFinalSpeech(session, {
+      text,
+      source: params.source ?? "agent-final",
+      callId,
+      runId: params.runId,
+    });
+    session.activeAgentRuns.delete(params.runId);
+    return true;
+  }
+  return false;
 }
 
 /** Applies realtime voice-control text to the active agent-consult chat run. */

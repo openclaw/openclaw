@@ -311,6 +311,15 @@ const TalkProviderEntrySchema = z
   })
   .catchall(z.unknown());
 
+const TalkRealtimeFinalHudSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    baseUrl: z.string().optional(),
+    streamChannel: z.enum(["system", "brain", "voice", "agent", "chat", "mcp"]).optional(),
+    monitorKind: z.string().optional(),
+  })
+  .strict();
+
 const TalkRealtimeSchema = z
   .object({
     provider: z.string().optional(),
@@ -324,6 +333,7 @@ const TalkRealtimeSchema = z
     transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
     consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
+    finalHud: TalkRealtimeFinalHudSchema.optional(),
   })
   .strict()
   .superRefine((realtime, ctx) => {

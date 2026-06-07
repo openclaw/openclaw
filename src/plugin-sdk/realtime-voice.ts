@@ -18,6 +18,7 @@ export type {
   RealtimeVoiceProviderId,
   RealtimeVoiceProviderResolveConfigContext,
   RealtimeVoiceRole,
+  RealtimeVoiceSpeakTextOptions,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
   RealtimeVoiceToolResultOptions,

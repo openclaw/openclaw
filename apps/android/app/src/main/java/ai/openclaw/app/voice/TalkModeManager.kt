@@ -1662,22 +1662,26 @@ class TalkModeManager internal constructor(
   }
 
   private fun buildPrompt(transcript: String): String {
-    val lines =
-      mutableListOf(
-        "Talk Mode active. Reply in a concise, spoken tone.",
-        "You may optionally prefix the response with JSON (first line) to set ElevenLabs voice (id or alias), e.g. {\"voice\":\"<id>\",\"once\":true}.",
-      )
-    lastInterruptedAtSeconds?.let {
-      lines.add("Assistant speech interrupted at ${"%.1f".format(it)}s.")
+    val interruptedLine =
+      lastInterruptedAtSeconds?.let {
+        "Assistant speech interrupted at ${"%.1f".format(it)}s."
+      }
+    if (interruptedLine != null) {
       lastInterruptedAtSeconds = null
     }
-    lines.add("")
-    lines.add(transcript)
-    return lines.joinToString("\n")
+    return listOfNotNull(
+      "Talk Mode active. Reply in a concise, spoken tone.",
+      "Return exactly one compact JSON object like {\"response\":\"...\"}. The voice layer will speak only `response`; put no tool notes, routing notes, or metadata in it. Do not wrap the JSON in Markdown.",
+      "Optional provider-neutral voice controls may be included as sibling JSON fields; they are not spoken.",
+      interruptedLine,
+      "",
+      transcript,
+    )
+      .joinToString("\n")
   }
 
   private suspend fun sendChat(
-    message: String,
+    prompt: String,
     session: GatewaySession,
   ): String {
     val runId = UUID.randomUUID().toString()
@@ -1685,7 +1689,7 @@ class TalkModeManager internal constructor(
     val params =
       buildJsonObject {
         put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
-        put("message", JsonPrimitive(message))
+        put("message", JsonPrimitive(prompt))
         put("thinking", JsonPrimitive("low"))
         put("timeoutMs", JsonPrimitive(30_000))
         put("idempotencyKey", JsonPrimitive(runId))
@@ -1823,12 +1827,14 @@ class TalkModeManager internal constructor(
     text: String,
     playbackToken: Long,
   ) {
+    val envelope = TalkResponseEnvelopeParser.parse(text)
     val parsed = TalkDirectiveParser.parse(text)
-    if (parsed.unknownKeys.isNotEmpty()) {
-      Log.w(tag, "Unknown talk directive keys: ${parsed.unknownKeys}")
+    val unknownKeys = parsed.unknownKeys.filter { !TalkResponseEnvelopeParser.isEnvelopeKey(it) }
+    if (unknownKeys.isNotEmpty()) {
+      Log.w(tag, "Unknown talk directive keys: $unknownKeys")
     }
     val directive = parsed.directive
-    val cleaned = parsed.stripped.trim()
+    val cleaned = (if (envelope.isEnvelope) envelope.response.orEmpty() else parsed.stripped).trim()
     if (cleaned.isEmpty()) return
     _lastAssistantText.value = cleaned
     ensurePlaybackActive(playbackToken)

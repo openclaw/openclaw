@@ -83,6 +83,7 @@ describe("agent event handler", () => {
     lifecycleErrorRetryGraceMs?: number;
     isChatSendRunActive?: (runId: string) => boolean;
     clearTrackedActiveRun?: AgentEventHandlerOptions["clearTrackedActiveRun"];
+    onChatRunFinal?: AgentEventHandlerOptions["onChatRunFinal"];
   }) {
     const nowSpy =
       params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -113,6 +114,7 @@ describe("agent event handler", () => {
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
       clearTrackedActiveRun: params?.clearTrackedActiveRun ?? clearTrackedActiveRun,
+      onChatRunFinal: params?.onChatRunFinal,
     });
 
     return {
@@ -445,7 +447,10 @@ describe("agent event handler", () => {
   it("flushes coalesced assistant agent text before lifecycle end", () => {
     let now = 20_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    const onChatRunFinal = vi.fn();
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({
+      onChatRunFinal,
+    });
     chatRunState.registry.add("run-agent-flush", {
       sessionKey: "session-agent-flush",
       clientRunId: "client-agent-flush",
@@ -493,6 +498,15 @@ describe("agent event handler", () => {
     );
     expect((agentCalls[2][1] as { data?: { phase?: string } }).data?.phase).toBe("end");
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(3);
+    expect(onChatRunFinal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "session-agent-flush",
+        clientRunId: "client-agent-flush",
+        sourceRunId: "run-agent-flush",
+        state: "done",
+        text: "Hello world!",
+      }),
+    );
     nowSpy.mockRestore();
   });
 

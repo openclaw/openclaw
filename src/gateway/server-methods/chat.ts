@@ -1119,23 +1119,6 @@ function normalizeOptionalChatSystemReceipt(
   return { ok: true, receipt: receipt || undefined };
 }
 
-function normalizeOptionalRuntimePromptContext(
-  value: unknown,
-): { ok: true; context?: string } | { ok: false; error: string } {
-  if (value == null) {
-    return { ok: true };
-  }
-  if (typeof value !== "string") {
-    return { ok: false, error: "runtimePromptContext must be a string" };
-  }
-  const sanitized = sanitizeChatSendMessageInput(value);
-  if (!sanitized.ok) {
-    return { ok: false, error: sanitized.error };
-  }
-  const context = sanitized.message.trim();
-  return { ok: true, context: context || undefined };
-}
-
 function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const info = client?.connect?.client;
   return (
@@ -2198,9 +2181,39 @@ function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: strin
   return next;
 }
 
+type ChatRunFinalContext = Partial<Pick<GatewayRequestContext, "onChatRunFinal">>;
+
+type ChatRunFinalEvent = Parameters<NonNullable<GatewayRequestContext["onChatRunFinal"]>>[0];
+
+function notifyChatRunFinal(context: ChatRunFinalContext, event: ChatRunFinalEvent): void {
+  if (!context.onChatRunFinal) {
+    return;
+  }
+  try {
+    void Promise.resolve(context.onChatRunFinal(event)).catch(() => undefined);
+  } catch {
+    // Side-channel final observers must not affect chat delivery.
+  }
+}
+
+function resolveChatFinalNotificationText(
+  message: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!message) {
+    return undefined;
+  }
+  const content = Array.isArray(message.content)
+    ? (message.content as AssistantDisplayContentBlock[])
+    : undefined;
+  return (
+    extractAssistantDisplayTextFromContent(content) ??
+    sanitizeAssistantDisplayText(typeof message.text === "string" ? message.text : undefined)
+  );
+}
+
 function broadcastChatFinal(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
-    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
+    Partial<Pick<GatewayRequestContext, "getRuntimeConfig" | "onChatRunFinal">>;
   runId: string;
   sessionKey: string;
   agentId?: string;
@@ -2208,13 +2221,15 @@ function broadcastChatFinal(params: {
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
   const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
+  const message = projectChatDisplayMessage(params.message);
+  const notificationText = resolveChatFinalNotificationText(message);
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
     ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq,
     state: "final" as const,
-    message: projectChatDisplayMessage(params.message),
+    message,
   };
   params.context.broadcast("chat", payload);
   sendGlobalAwareNodeChatPayload({
@@ -2223,6 +2238,14 @@ function broadcastChatFinal(params: {
     agentId: payloadAgentId,
     event: "chat",
     payload,
+  });
+  notifyChatRunFinal(params.context, {
+    sessionKey: params.sessionKey,
+    clientRunId: params.runId,
+    sourceRunId: params.runId,
+    state: "done",
+    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
+    ...(notificationText ? { text: notificationText } : {}),
   });
   params.context.agentRunSeq.delete(params.runId);
 }
@@ -2264,7 +2287,7 @@ function broadcastSideResult(params: {
 
 function broadcastChatError(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
-    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
+    Partial<Pick<GatewayRequestContext, "getRuntimeConfig" | "onChatRunFinal">>;
   runId: string;
   sessionKey: string;
   agentId?: string;
@@ -2305,6 +2328,14 @@ function broadcastChatError(params: {
     agentId: payloadAgentId,
     event: "chat",
     payload,
+  });
+  notifyChatRunFinal(params.context, {
+    sessionKey: params.sessionKey,
+    clientRunId: params.runId,
+    sourceRunId: params.runId,
+    state: "error",
+    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
+    ...(errorText ? { error: errorText } : {}),
   });
   params.context.agentRunSeq.delete(params.runId);
 }
@@ -2887,7 +2918,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
-      runtimePromptContext?: string;
       suppressCommandInterpretation?: boolean;
       idempotencyKey: string;
     };
@@ -2905,7 +2935,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (
       (p.systemInputProvenance ||
         p.systemProvenanceReceipt ||
-        p.runtimePromptContext ||
         suppressCommandInterpretation ||
         explicitOriginResult.value) &&
       !canInjectSystemProvenance(client)
@@ -2915,11 +2944,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          p.systemInputProvenance ||
-            p.systemProvenanceReceipt ||
-            p.runtimePromptContext ||
-            suppressCommandInterpretation
-            ? "trusted system fields require admin scope"
+          p.systemInputProvenance || p.systemProvenanceReceipt || suppressCommandInterpretation
+            ? "system provenance fields require admin scope"
             : "originating route fields require admin scope",
         ),
       );
@@ -2939,28 +2965,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, systemReceiptResult.error));
       return;
     }
-    const runtimePromptContextResult = normalizeOptionalRuntimePromptContext(
-      p.runtimePromptContext,
-    );
-    if (!runtimePromptContextResult.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, runtimePromptContextResult.error),
-      );
-      return;
-    }
     const inboundMessage = sanitizedMessageResult.message;
     const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
     const systemProvenanceReceipt = systemReceiptResult.receipt;
-    const runtimePromptContext = runtimePromptContextResult.context;
     const systemDedupeScope =
-      systemInputProvenance || systemProvenanceReceipt || runtimePromptContext
-        ? JSON.stringify([
-            systemProvenanceReceipt ?? null,
-            systemInputProvenance ?? null,
-            runtimePromptContext ?? null,
-          ])
+      systemInputProvenance || systemProvenanceReceipt
+        ? JSON.stringify([systemProvenanceReceipt ?? null, systemInputProvenance ?? null])
         : undefined;
     const stopCommand = !suppressCommandInterpretation && isChatStopCommandText(inboundMessage);
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
@@ -3402,7 +3412,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         RawBody: parsedMessage,
         CommandBody: commandBody,
         InputProvenance: systemInputProvenance,
-        ...(runtimePromptContext ? { RuntimePromptContext: runtimePromptContext } : {}),
         SessionKey: sessionKey,
         AgentId: agentId,
         Provider: INTERNAL_MESSAGE_CHANNEL,

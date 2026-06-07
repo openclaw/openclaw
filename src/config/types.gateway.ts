@@ -51,6 +51,17 @@ export type TalkProviderConfig = {
   [key: string]: unknown;
 };
 
+export type TalkRealtimeFinalHudConfig = {
+  /** Enable best-effort final voice delivery mirroring to a HUD-compatible local API. */
+  enabled?: boolean;
+  /** Base URL for the HUD API. The API is expected to expose /api/stream, /api/pulse, and /api/monitor/report. */
+  baseUrl?: string;
+  /** HUD stream channel used for final voice closeouts. */
+  streamChannel?: "system" | "brain" | "voice" | "agent" | "chat" | "mcp";
+  /** Monitor row group for voice delivery state. */
+  monitorKind?: string;
+};
+
 export type TalkRealtimeConfig = {
   /** Active realtime voice provider. */
   provider?: string;
@@ -74,6 +85,8 @@ export type TalkRealtimeConfig = {
   brain?: "agent-consult" | "direct-tools" | "none";
   /** How Gateway relay handles final user transcripts when the provider skips a consult. */
   consultRouting?: "provider-direct" | "force-agent-consult";
+  /** Optional HUD mirror for final realtime voice delivery state. */
+  finalHud?: TalkRealtimeFinalHudConfig;
 };
 
 export type ResolvedTalkConfig = {
