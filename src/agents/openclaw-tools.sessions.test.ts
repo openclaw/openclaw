@@ -707,6 +707,53 @@ describe("sessions tools", () => {
     );
   });
 
+  it("sessions_list uses gateway acpLastActivityAt for delegated idle expiry preview", async () => {
+    const requesterKey = "agent:main:webchat:main";
+    const createdAt = 1_000;
+    const lastActivityAt = 50_000;
+    const idleMs = 72 * 60 * 60_000;
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.list") {
+        expect(request.params?.hubDelegatedOwner).toBe(requesterKey);
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "agent:codex:acp:worker",
+              kind: "direct",
+              sessionId: "sess-worker",
+              updatedAt: lastActivityAt,
+              label: "repo-fix",
+              spawnedBy: requesterKey,
+              parentSessionKey: requesterKey,
+              hubDelegated: { ownerSessionKey: requesterKey, createdAt },
+              acpLastActivityAt: lastActivityAt,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createSessionsListTool({
+      agentSessionKey: requesterKey,
+      config: {
+        session: { mainKey: "main" },
+        tools: {
+          sessions: { visibility: "all" },
+          agentToAgent: { enabled: true },
+        },
+      } as OpenClawConfig,
+      callGateway: callGatewayMock,
+    });
+
+    const result = await tool.execute("call-delegated-list-expiry", { delegated: true });
+    const sessions = (result.details as { sessions?: Array<{ idleExpiresAt?: number }> }).sessions;
+    expect(sessions?.[0]?.idleExpiresAt).toBe(lastActivityAt + idleMs);
+  });
+
   it("sessions_history filters tool messages by default", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };

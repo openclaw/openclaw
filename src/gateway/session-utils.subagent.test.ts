@@ -95,6 +95,30 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(result.sessions.map((session) => session.key)).toEqual([delegateKey]);
   });
 
+  test("projects acp last activity on hub-delegated session rows", () => {
+    const ownerSessionKey = "agent:main:webchat:main";
+    const delegateKey = "agent:codex:acp:worker";
+    const createdAt = 1_000;
+    const lastActivityAt = 50_000;
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        [delegateKey]: {
+          sessionId: "sess-worker",
+          updatedAt: lastActivityAt,
+          label: "repo-fix",
+          hubDelegated: { ownerSessionKey, createdAt },
+          acp: { lastActivityAt } as SessionEntry["acp"],
+        },
+      },
+      opts: { hubDelegatedOwner: ownerSessionKey },
+    });
+
+    expect(result.sessions[0]?.acpLastActivityAt).toBe(lastActivityAt);
+  });
+
   test("applies limit before transcript enrichment", () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:newest": {

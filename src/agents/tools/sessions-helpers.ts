@@ -62,6 +62,7 @@ export type SessionListRow = {
   hubDelegated?: boolean;
   idleExpiresAt?: number;
   maxAgeExpiresAt?: number;
+  acpLastActivityAt?: number;
   deliveryContext?: SessionListDeliveryContext;
   updatedAt?: number | null;
   sessionId?: string;

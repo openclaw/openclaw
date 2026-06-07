@@ -383,11 +383,13 @@ export function createSessionsListTool(opts?: {
                 const hubDelegatedEntry = (
                   entry as { hubDelegated?: { ownerSessionKey: string; createdAt: number } }
                 ).hubDelegated;
+                const acpLastActivityAt =
+                  typeof entry.acpLastActivityAt === "number" ? entry.acpLastActivityAt : undefined;
                 if (
                   !hubDelegatedEntry ||
                   !isHubDelegatedAcpSessionEntry({
                     hubDelegated: hubDelegatedEntry,
-                    acp: (entry as { acp?: { lastActivityAt?: number } }).acp ?? {},
+                    acp: acpLastActivityAt != null ? { lastActivityAt: acpLastActivityAt } : {},
                   })
                 ) {
                   return {};
@@ -395,7 +397,8 @@ export function createSessionsListTool(opts?: {
                 const expiry = resolveHubDelegatedExpiryPreview({
                   entry: {
                     hubDelegated: hubDelegatedEntry,
-                    acp: (entry as { acp?: { lastActivityAt?: number } }).acp,
+                    acp:
+                      acpLastActivityAt != null ? { lastActivityAt: acpLastActivityAt } : undefined,
                   },
                   policy: hubDelegatePolicy,
                 });

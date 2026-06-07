@@ -679,6 +679,51 @@ describe("gateway sessions patch", () => {
     expect(entry.spawnedBy).toBe("agent:main:main");
   });
 
+  test("sets parentSessionKey for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: {
+          key: "agent:main:acp:child",
+          parentSessionKey: "agent:main:main",
+        },
+      }),
+    );
+    expect(entry.parentSessionKey).toBe("agent:main:main");
+  });
+
+  test("rejects parentSessionKey for non-lineage session keys", async () => {
+    expectPatchError(
+      await runPatch({
+        patch: {
+          key: MAIN_SESSION_KEY,
+          parentSessionKey: "agent:main:main",
+        },
+      }),
+      "parentSessionKey is only supported for subagent:* or acp:* sessions",
+    );
+  });
+
+  test("rejects clearing parentSessionKey once set", async () => {
+    expectPatchError(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        store: {
+          "agent:main:acp:child": {
+            sessionId: "sess",
+            updatedAt: 1,
+            parentSessionKey: "agent:main:main",
+          } as SessionEntry,
+        },
+        patch: {
+          key: "agent:main:acp:child",
+          parentSessionKey: null,
+        },
+      }),
+      "parentSessionKey cannot be cleared once set",
+    );
+  });
+
   test("sets hubDelegated metadata for ACP sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({

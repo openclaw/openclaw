@@ -86,6 +86,8 @@ export type GatewaySessionRow = {
   runtimeMs?: number;
   parentSessionKey?: string;
   hubDelegated?: SessionEntry["hubDelegated"];
+  /** ACP harness last activity timestamp when available for hub-delegated expiry previews. */
+  acpLastActivityAt?: number;
   childSessions?: string[];
   responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;

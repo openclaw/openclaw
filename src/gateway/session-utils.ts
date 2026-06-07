@@ -2252,6 +2252,9 @@ export function buildGatewaySessionRow(params: {
     endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
+    ...(typeof entry?.acp?.lastActivityAt === "number" && Number.isFinite(entry.acp.lastActivityAt)
+      ? { acpLastActivityAt: entry.acp.lastActivityAt }
+      : {}),
     childSessions,
     responseUsage: entry?.responseUsage,
     modelProvider: rowModelProvider,
