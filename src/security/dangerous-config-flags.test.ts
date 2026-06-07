@@ -131,6 +131,31 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     ).toContain("security.audit.suppressions configured (1)");
   });
 
+  it("collects WhatsApp dangerous group-name matching flags", () => {
+    expect(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
+        asConfig({
+          channels: {
+            whatsapp: {
+              dangerouslyAllowGroupNameMatching: true,
+              accounts: {
+                work: {
+                  dangerouslyAllowGroupNameMatching: true,
+                },
+                personal: {
+                  dangerouslyAllowGroupNameMatching: false,
+                },
+              },
+            },
+          },
+        }),
+      ),
+    ).toStrictEqual([
+      "channels.whatsapp.dangerouslyAllowGroupNameMatching=true",
+      "channels.whatsapp.accounts.work.dangerouslyAllowGroupNameMatching=true",
+    ]);
+  });
+
   it("uses stable agent ids for per-agent dangerous sandbox flags", () => {
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(

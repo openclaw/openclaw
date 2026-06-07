@@ -57,6 +57,7 @@ export async function maybeSendAckReaction(params: {
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           conversationId: conversationIdForCheck,
+          groupSubject: params.msg.groupSubject,
         })
       : null;
   const shouldSendReaction = () =>

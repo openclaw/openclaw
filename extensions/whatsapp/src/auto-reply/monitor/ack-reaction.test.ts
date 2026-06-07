@@ -137,6 +137,37 @@ describe("maybeSendAckReaction", () => {
     expectAckReactionSent("work", cfg);
   });
 
+  it("uses exact group-name activation for group ack reactions when enabled", async () => {
+    const cfg = createConfig("ack", {
+      dangerouslyAllowGroupNameMatching: true,
+      groups: {
+        "Family Chat": { requireMention: false },
+      },
+    });
+    const ackReaction = await runAckReaction({
+      cfg,
+      msg: createMessage({
+        chatType: "group",
+        conversationId: "123@g.us",
+        from: "123@g.us",
+        chatId: "123@g.us",
+        groupSubject: "Family Chat",
+        wasMentioned: false,
+      }),
+      sessionKey: "whatsapp:default:123@g.us",
+      conversationId: "123@g.us",
+    });
+
+    expect(ackReaction?.ackReactionValue).toBe("👀");
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith("123@g.us", "msg-1", "👀", {
+      verbose: false,
+      fromMe: false,
+      accountId: "default",
+      cfg,
+    });
+  });
+
   it("uses the agent identity emoji when WhatsApp ackReaction has no emoji", async () => {
     const cfg = {
       agents: {

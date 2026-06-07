@@ -66,6 +66,7 @@ export async function createWhatsAppStatusReactionController(
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           conversationId: conversationIdForCheck,
+          groupSubject: params.msg.groupSubject,
         })
       : null;
 
