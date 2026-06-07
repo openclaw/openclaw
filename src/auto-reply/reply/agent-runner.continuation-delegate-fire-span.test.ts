@@ -1,5 +1,5 @@
-// Integration test pinning the runner-side `continuation.delegate.fire` span
-// emission contract at the timer-callback seam before reservation lookup.
+// Integration tests pinning delayed continuation delegates on the common
+// TaskFlow-backed dispatch path.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -24,9 +24,14 @@ import {
   registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import {
-  clearDelayedContinuationReservations,
-  enqueuePendingDelegate,
-} from "../continuation/delegate-store.js";
+  dispatchToolDelegates,
+  resetDelegateDispatchHedgesForTests,
+} from "../continuation/delegate-dispatch.js";
+import { enqueuePendingDelegate, pendingDelegateCount } from "../continuation/delegate-store.js";
+import {
+  loadContinuationChainState,
+  resetContinuationStateForTests,
+} from "../continuation/state.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { __testing as replyRunRegistryTesting } from "./reply-run-registry.js";
@@ -220,6 +225,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  resetDelegateDispatchHedgesForTests();
+  resetContinuationStateForTests();
   clearRuntimeConfigSnapshot();
   clearMemoryPluginState();
   replyRunRegistryTesting.resetReplyRunRegistry();
@@ -233,11 +240,15 @@ function createContinuationRun(params?: {
   sessionKey?: string;
   config?: Record<string, unknown>;
   sessionEntry?: SessionEntry;
+  messageProvider?: string;
 }) {
   const sessionKey = params?.sessionKey ?? "continuation-delegate-fire-span";
+  const messageProvider = params?.messageProvider ?? "discord";
   const typing = createMockTypingController();
   const sessionCtx = {
-    Provider: "discord",
+    Provider: messageProvider,
+    Surface: messageProvider,
+    OriginatingChannel: messageProvider,
     OriginatingTo: "channel:1",
     AccountId: "primary",
     MessageSid: "msg",
@@ -256,7 +267,7 @@ function createContinuationRun(params?: {
     run: {
       sessionId: "session",
       sessionKey,
-      messageProvider: "discord",
+      messageProvider,
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       config:
@@ -289,6 +300,9 @@ function createContinuationRun(params?: {
       timeoutMs: 1_000,
       blockReplyBreak: "message_end",
     },
+    originatingChannel: messageProvider,
+    originatingAccountId: "primary",
+    originatingTo: "channel:1",
   } as unknown as FollowupRun;
 
   return { sessionKey, sessionEntry, typing, sessionCtx, resolvedQueue, followupRun };
@@ -324,7 +338,7 @@ async function runDelegateTurn(
 }
 
 describe("runReplyAgent :: continuation.delegate.fire span", () => {
-  it("bracket-delegate timer fire emits exactly one `continuation.delegate.fire` with chain.id matching the dispatch span", async () => {
+  it("bracket-delayed delegate fires through TaskFlow hedge with matching fire and dispatch chain.id", async () => {
     vi.useFakeTimers();
     const { tracer, spans } = createRecordingTracer();
     setContinuationTracer(tracer);
@@ -341,32 +355,34 @@ describe("runReplyAgent :: continuation.delegate.fire span", () => {
 
     await runDelegateTurn(run, { [run.sessionKey]: run.sessionEntry });
 
-    // Before timer fires: dispatch span recorded, fire span not yet.
-    const dispatchSpans = spans.filter((s) => s.name === "continuation.delegate.dispatch");
-    expect(dispatchSpans).toHaveLength(1);
-    expect(dispatchSpans[0]?.traceparent).toBe(
-      "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
-    );
+    expect(pendingDelegateCount(run.sessionKey)).toBe(1);
+    expect(spans.filter((s) => s.name === "continuation.delegate.dispatch")).toHaveLength(0);
     expect(spans.filter((s) => s.name === "continuation.delegate.fire")).toHaveLength(0);
 
-    // Advance past the clamped delay (1000ms) to fire the timer callback.
+    // Advance past the clamped delay (1000ms) to fire the common hedge path.
     await vi.advanceTimersByTimeAsync(1_000);
 
+    const dispatchSpans = spans.filter((s) => s.name === "continuation.delegate.dispatch");
     const fireSpans = spans.filter((s) => s.name === "continuation.delegate.fire");
+    expect(dispatchSpans).toHaveLength(1);
     expect(fireSpans).toHaveLength(1);
 
+    const dispatch = dispatchSpans[0];
     const fire = fireSpans[0];
-    if (!fire) {
-      throw new Error("expected a recorded continuation.delegate.fire span");
+    if (!dispatch || !fire) {
+      throw new Error("expected recorded continuation delegate dispatch and fire spans");
     }
+    expect(dispatch.ended).toBe(true);
     expect(fire.status).toBe("OK");
     expect(fire.ended).toBe(true);
 
-    const dispatchChainId = dispatchSpans[0]?.attributes["chain.id"];
+    const dispatchChainId = dispatch.attributes["chain.id"];
     expect(typeof dispatchChainId).toBe("string");
     expect(dispatchChainId as string).toMatch(UUID_REGEX);
-    // Trace stitches: fire.chain.id === dispatch.chain.id
     expect(fire.attributes["chain.id"]).toBe(dispatchChainId);
+    expect(dispatch.traceparent).toBe("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
+    expect(dispatch.attributes["delay.ms"]).toBe(1_000);
+    expect(dispatch.attributes["delegate.delivery"]).toBe("timer");
     expect(fire.attributes["delay.ms"]).toBe(1_000);
     expect(fire.attributes["delegate.delivery"]).toBe("timer");
     expect(typeof fire.attributes["delegate.mode"]).toBe("string");
@@ -376,6 +392,7 @@ describe("runReplyAgent :: continuation.delegate.fire span", () => {
     const fireDeferredMs = fire.attributes["fire.deferred_ms"] as number;
     expect(fireDeferredMs).toBeGreaterThanOrEqual(0);
     expect(fireDeferredMs).toBeLessThan(1_000 + 5_000);
+    expect(pendingDelegateCount(run.sessionKey)).toBe(0);
   });
 
   it("tool-delegate immediate dispatch emits exactly one `continuation.delegate.dispatch` with chain.id", async () => {
@@ -463,59 +480,104 @@ describe("runReplyAgent :: continuation.delegate.fire span", () => {
     });
   });
 
-  it("reservation-missing path: timer fire emits `continuation.delegate.fire` AND sibling `continuation.disabled (reason=reservation.missing)` sharing chain.id", async () => {
-    vi.useFakeTimers();
-    const { tracer, spans } = createRecordingTracer();
-    setContinuationTracer(tracer);
+  it("immediate bracket delegate derives its hop from persisted chain state, not pending delayed rows", async () => {
+    const sessionKey = "continuation-delegate-immediate-hop-with-pending";
+    const run = createContinuationRun({ sessionKey });
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      enqueuePendingDelegate(sessionKey, {
+        task: "already queued delayed shard",
+        delayMs: 10_000,
+      });
+      return {
+        payloads: [{ text: "Reply\n[[CONTINUE_DELEGATE: immediate shard]]" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      };
+    });
 
-    const run = createContinuationRun({ sessionKey: "continuation-delegate-fire-resv-missing" });
+    await runDelegateTurn(run, { [sessionKey]: run.sessionEntry });
+
+    const spawnArgs = spawnSubagentDirectMock.mock.calls[0]?.[0] as { task?: string };
+    expect(spawnArgs.task).toContain("[continuation:chain-hop:1]");
+    expect(spawnArgs.task).toContain("immediate shard");
+    expect(pendingDelegateCount(sessionKey)).toBe(1);
+  });
+
+  it("restart-survival: bracket-delayed delegate remains in TaskFlow and fires with fire-time hop", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "continuation-delegate-restart-survival";
+
+    const run = createContinuationRun({ sessionKey });
     const sessionStore = { [run.sessionKey]: run.sessionEntry };
     runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Reply\n[[CONTINUE_DELEGATE: inspect logs +1s]]" }],
+      payloads: [{ text: "Reply\n[[CONTINUE_DELEGATE: inspect restart state +1s]]" }],
       meta: { agentMeta: { usage: { input: 1, output: 1 } } },
     });
 
     await runDelegateTurn(run, sessionStore);
 
-    // Clear the reservation between arm and fire WITHOUT cancelling the
-    // timer (which would call clearTimeout and prevent the callback). This
-    // models the existing fire-time divergence: timer fires (wall-clock
-    // truth) but `takeDelayedContinuationReservation` returns null because
-    // some other path (compaction, explicit cancel via a different code
-    // path, session teardown) already cleared the reservation.
-    clearDelayedContinuationReservations(run.sessionKey);
+    expect(pendingDelegateCount(sessionKey)).toBe(1);
+    resetDelegateDispatchHedgesForTests();
+    resetContinuationStateForTests();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    run.sessionEntry.continuationChainCount = 2;
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: loadContinuationChainState(run.sessionEntry, 0),
+      ctx: {
+        sessionKey,
+        agentChannel: "discord",
+        agentAccountId: "primary",
+        agentTo: "channel:1",
+      },
+      maxChainLength: 4,
+      config: {
+        enabled: true,
+        defaultDelayMs: 1_000,
+        minDelayMs: 0,
+        maxDelayMs: 5_000,
+        maxChainLength: 4,
+        costCapTokens: 0,
+        maxDelegatesPerTurn: 4,
+        crossSessionTargeting: "enabled",
+      },
+    });
+
+    expect(result.dispatched).toBe(1);
+    expect(pendingDelegateCount(sessionKey)).toBe(0);
+    const spawnArgs = spawnSubagentDirectMock.mock.calls[0]?.[0] as { task?: string };
+    expect(spawnArgs.task).toContain("[continuation:chain-hop:3]");
+    expect(spawnArgs.task).toContain("inspect restart state");
+  });
+
+  it("bare-silent quiet-channel bracket-delayed delegate hedges, fires, and persists chain count", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "continuation-delegate-silent-quiet-channel";
+    const run = createContinuationRun({ sessionKey, messageProvider: "quietchat" });
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "[[CONTINUE_DELEGATE: quiet channel shard +1s | silent]]" }],
+      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+    });
+
+    await runDelegateTurn(run, { [sessionKey]: run.sessionEntry });
+
+    expect(pendingDelegateCount(sessionKey)).toBe(1);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1_000);
 
-    const fireSpans = spans.filter((s) => s.name === "continuation.delegate.fire");
-    expect(fireSpans).toHaveLength(1);
-    const fire = fireSpans[0];
-    if (!fire) {
-      throw new Error("expected a recorded continuation.delegate.fire span");
-    }
-
-    const reservationMissingSpans = spans.filter(
-      (s) =>
-        s.name === "continuation.disabled" &&
-        s.attributes["disabled.reason"] === "reservation.missing",
-    );
-    expect(reservationMissingSpans).toHaveLength(1);
-    const sibling = reservationMissingSpans[0];
-    if (!sibling) {
-      throw new Error("expected a reservation.missing continuation.disabled sibling");
-    }
-
-    // Both share chain.id — trace consumers can pair fire+disabled events.
-    expect(fire.attributes["chain.id"]).toBeDefined();
-    expect(sibling.attributes["chain.id"]).toBe(fire.attributes["chain.id"]);
-    expect(sibling.attributes["signal.kind"]).toBe("bracket-delegate");
-    expect(sibling.attributes["delegate.delivery"]).toBe("timer");
-    expect(sibling.attributes["continuation.disabled"]).toBe(true);
-
-    // No spawn happened on reservation-missing: the only tool-spawn paths
-    // are `doSpawn` (bracket) → `spawnSubagentDirect`. Neither runs after
-    // a cleared reservation.
-    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(pendingDelegateCount(sessionKey)).toBe(0);
+    expect(run.sessionEntry.continuationChainCount).toBe(1);
+    const spawnArgs = spawnSubagentDirectMock.mock.calls[0]?.[0] as {
+      task?: string;
+      silentAnnounce?: boolean;
+      wakeOnReturn?: boolean;
+    };
+    expect(spawnArgs.task).toContain("quiet channel shard");
+    expect(spawnArgs.silentAnnounce).toBe(true);
+    expect(spawnArgs.wakeOnReturn).toBeUndefined();
   });
 });
 

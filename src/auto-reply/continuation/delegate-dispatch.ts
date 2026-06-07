@@ -15,6 +15,7 @@
 import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import type { SpawnSubagentContext } from "../../agents/subagent-spawn.js";
 import {
+  emitContinuationDelegateFireSpan,
   emitContinuationDisabledSpan,
   resolveContinuationTraceparent,
   startContinuationDelegateSpan,
@@ -79,8 +80,8 @@ function armHedgeTimer(
     ctx: DelegateDispatchContext;
     maxChainLength: number;
     config?: ContinuationRuntimeConfig;
-    reservedDelegateSlots?: number;
     loadFreshChainState?: () => ChainState;
+    persistChainState?: (chainState: ChainState) => void | Promise<void>;
   },
 ): void {
   clearHedgeTimer(sessionKey);
@@ -112,22 +113,28 @@ function armHedgeTimer(
       ctx: params.ctx,
       maxChainLength: params.maxChainLength,
       ...(params.config ? { config: params.config } : {}),
-      ...(params.reservedDelegateSlots !== undefined
-        ? { reservedDelegateSlots: params.reservedDelegateSlots }
-        : {}),
       loadFreshChainState: params.loadFreshChainState,
-    }).catch((err: unknown) => {
-      const errorMessage = formatErrorMessage(err);
-      log.error(`[continuation:delegate-hedge-error] error=${errorMessage} session=${sessionKey}`);
-      surfaceHedgeDispatchFailure(sessionKey, errorMessage);
-      try {
-        armHedgeTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS, params);
-      } catch (rearmErr) {
+      persistChainState: params.persistChainState,
+    })
+      .then(async (result) => {
+        if (params.persistChainState && (result.dispatched > 0 || result.rejected > 0)) {
+          await params.persistChainState(result.chainState);
+        }
+      })
+      .catch((err: unknown) => {
+        const errorMessage = formatErrorMessage(err);
         log.error(
-          `[continuation:delegate-hedge-rearm-error] error=${formatErrorMessage(rearmErr)} session=${sessionKey}`,
+          `[continuation:delegate-hedge-error] error=${errorMessage} session=${sessionKey}`,
         );
-      }
-    });
+        surfaceHedgeDispatchFailure(sessionKey, errorMessage);
+        try {
+          armHedgeTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS, params);
+        } catch (rearmErr) {
+          log.error(
+            `[continuation:delegate-hedge-rearm-error] error=${formatErrorMessage(rearmErr)} session=${sessionKey}`,
+          );
+        }
+      });
   }, fireIn);
   registerContinuationTimerHandle(sessionKey, handle);
   handle.unref();
@@ -189,6 +196,11 @@ export async function dispatchToolDelegates(params: {
    * dispatch past `maxChainLength`.
    */
   loadFreshChainState?: () => ChainState;
+  /**
+   * Optional callback used by hedge-fired dispatches, where there is no
+   * enclosing runner finalize frame to persist the advanced chain state.
+   */
+  persistChainState?: (chainState: ChainState) => void | Promise<void>;
 }): Promise<{ dispatched: number; rejected: number; chainState: ChainState }> {
   const { sessionKey, chainState, ctx } = params;
   const config = params.config ?? resolveContinuationRuntimeConfig();
@@ -204,10 +216,8 @@ export async function dispatchToolDelegates(params: {
       ctx: params.ctx,
       maxChainLength: params.maxChainLength,
       ...(params.config ? { config: params.config } : {}),
-      ...(params.reservedDelegateSlots !== undefined
-        ? { reservedDelegateSlots: params.reservedDelegateSlots }
-        : {}),
       loadFreshChainState: params.loadFreshChainState,
+      persistChainState: params.persistChainState,
     });
   } else {
     clearHedgeTimer(sessionKey);
@@ -307,6 +317,8 @@ export async function dispatchToolDelegates(params: {
     const silentWake = delegate.mode === "silent-wake";
     const outboundTraceparent = resolveContinuationTraceparent(delegate.traceparent);
     const delegateMode = silentWake ? "silent-wake" : silent ? "silent" : "normal";
+    const delegateDelayMs = delegate.delayMs ?? 0;
+    const delegateDelivery: "immediate" | "timer" = delegateDelayMs > 0 ? "timer" : "immediate";
 
     const spawnCtx: SpawnSubagentContext = {
       agentSessionKey: sessionKey,
@@ -319,11 +331,22 @@ export async function dispatchToolDelegates(params: {
     let dispatchSpan: ReturnType<typeof startContinuationDelegateSpan> | undefined;
     const dispatchChainId = currentChainId ?? generateChainId();
     try {
+      if (delegateDelivery === "timer") {
+        emitContinuationDelegateFireSpan({
+          chainId: dispatchChainId,
+          chainStepRemainingAtDispatch: maxChainLength - nextHop,
+          delegateMode,
+          delayMs: delegateDelayMs,
+          fireDeferredMs: Date.now() - (delegate.firstArmedAt ?? Date.now()),
+          reason: delegate.task,
+          log: (message) => log.info(message),
+        });
+      }
       dispatchSpan = startContinuationDelegateSpan({
         chainId: dispatchChainId,
         chainStepRemaining: maxChainLength - nextHop,
-        delayMs: 0,
-        delivery: "immediate",
+        delayMs: delegateDelayMs,
+        delivery: delegateDelivery,
         delegateMode,
         reason: delegate.task,
         traceparent: outboundTraceparent,
