@@ -57,11 +57,18 @@ describe("extra-params: DeepSeek V4 OpenAI-compatible thinking fallback", () => 
 
   it("does not inject thinking on Microsoft Foundry alias providers", () => {
     const payload = runDeepSeekV4Case({
+      messages: [
+        { role: "user", content: "continue" },
+        { role: "assistant", content: "prior", reasoning_content: "native reasoning" },
+      ],
       provider: "microsoft-foundry-9433",
       thinkingLevel: "high",
     });
     expect(payload).not.toHaveProperty("thinking");
     expect(payload).not.toHaveProperty("reasoning_effort");
+    expect((payload.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
+      "reasoning_content",
+    );
   });
 
   it("does not inject thinking when thinkingFormat is openai (Azure Foundry)", () => {

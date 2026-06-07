@@ -966,10 +966,7 @@ function createDeepSeekV4NonNativeCompatSanitizerWrapper(
     return undefined;
   }
   return (model, context, options) => {
-    if (
-      !isDeepSeekV4OpenAICompletionsModel(model) ||
-      deepSeekV4NativeThinkingAllowedByCompat(model)
-    ) {
+    if (!shouldSanitizeDeepSeekV4NonNativeFields(model)) {
       return baseStreamFn(model, context, options);
     }
     return streamWithPayloadPatch(baseStreamFn, model, context, options, (payload) => {
@@ -977,6 +974,14 @@ function createDeepSeekV4NonNativeCompatSanitizerWrapper(
       stripDeepSeekV4ReasoningContent(payload);
     });
   };
+}
+
+function shouldSanitizeDeepSeekV4NonNativeFields(model: Parameters<StreamFn>[0]): boolean {
+  return (
+    isDeepSeekV4OpenAICompletionsModel(model) &&
+    (isMicrosoftFoundryProviderId(model.provider) ||
+      !deepSeekV4NativeThinkingAllowedByCompat(model))
+  );
 }
 
 function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
