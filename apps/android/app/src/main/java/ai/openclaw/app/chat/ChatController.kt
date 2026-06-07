@@ -299,11 +299,16 @@ class ChatController internal constructor(
         _streamingAssistantText.value = null
         if (ack.isTerminalSuccess) {
           refreshCurrentHistoryBestEffort()
-        } else if (ack.normalizedStatus == "error") {
+          true
+        } else {
+          // Terminal timeout/error means the gateway did not accept a runnable turn.
+          // Surface failed acceptance instead of letting a cleared composer look successful.
           _errorText.value = "Chat failed before the run started; try again."
+          false
         }
+      } else {
+        true
       }
-      true
     } catch (err: Throwable) {
       clearPendingRun(runId)
       removeOptimisticMessage(runId)

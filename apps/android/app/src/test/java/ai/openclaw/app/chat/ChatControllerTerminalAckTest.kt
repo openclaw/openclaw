@@ -15,7 +15,7 @@ class ChatControllerTerminalAckTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun terminalTimeoutAckRemovesOptimisticUserEchoWithoutErrorText() =
+  fun terminalTimeoutAckRemovesOptimisticUserEchoAndSurfacesFailedAcceptance() =
     runTest {
       var requestedMethod: String? = null
       val controller =
@@ -36,11 +36,36 @@ class ChatControllerTerminalAckTest {
           attachments = emptyList(),
         )
 
-      assertTrue(accepted)
+      assertFalse(accepted)
       assertEquals("chat.send", requestedMethod)
       assertEquals(0, controller.pendingRunCount.value)
-      assertNull(controller.errorText.value)
+      assertEquals("Chat failed before the run started; try again.", controller.errorText.value)
       assertFalse(controller.messages.value.hasUserText("message that times out before start"))
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun nonTerminalStartedAckRetainsOptimisticUserEchoAndPendingRun() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { _, _ -> """{"runId":"run-started","status":"started"}""" },
+        )
+      controller.handleGatewayEvent("health", null)
+
+      val accepted =
+        controller.sendMessageAwaitAcceptance(
+          message = "message that started",
+          thinkingLevel = "off",
+          attachments = emptyList(),
+        )
+
+      assertTrue(accepted)
+      assertEquals(1, controller.pendingRunCount.value)
+      assertNull(controller.errorText.value)
+      assertTrue(controller.messages.value.hasUserText("message that started"))
     }
 
   @Test
@@ -106,7 +131,7 @@ class ChatControllerTerminalAckTest {
           attachments = emptyList(),
         )
 
-      assertTrue(accepted)
+      assertFalse(accepted)
       assertEquals(0, controller.pendingRunCount.value)
       assertEquals("Chat failed before the run started; try again.", controller.errorText.value)
       assertFalse(controller.messages.value.hasUserText("message that errors before start"))

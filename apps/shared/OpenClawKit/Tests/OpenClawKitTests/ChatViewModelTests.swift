@@ -913,7 +913,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.messages.containsUserText("cached") })
     }
 
-    @Test func terminalTimeoutSendAckClearsPendingRunAndAllowsNextSend() async throws {
+    @Test func terminalTimeoutSendAckSurfacesErrorAndAllowsNextSend() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId, messages: [])
         let sendCount = AsyncCounter()
@@ -932,7 +932,7 @@ struct ChatViewModelTests {
             await MainActor.run { vm.pendingRunCount == 0 && !vm.isSending }
         }
         #expect(await transport.sentRunIds().count == 1)
-        #expect(await MainActor.run { vm.errorText } == nil)
+        #expect(await MainActor.run { vm.errorText } == "Chat failed before the run started; try again.")
         #expect(await MainActor.run { !vm.messages.containsUserText("first") })
 
         await sendUserMessage(vm, text: "second")

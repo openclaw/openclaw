@@ -1740,6 +1740,7 @@ public final class OpenClawChatViewModel {
             self.clearPendingRun(response.runId)
             self.pendingToolCallsById = [:]
             self.streamingAssistantText = nil
+            self.errorText = "Chat failed before the run started; try again."
             self.logDiagnostic(
                 "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
                     + "runId=\(response.runId) status=timeout")
