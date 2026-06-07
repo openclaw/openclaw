@@ -1,3 +1,4 @@
+// Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 
 export const FIELD_LABELS: Record<string, string> = {
@@ -515,6 +516,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "memory.qmd.mcporter.serverName": "QMD MCPorter Server Name",
   "memory.qmd.mcporter.startDaemon": "QMD MCPorter Start Daemon",
   "memory.qmd.searchMode": "QMD Search Mode",
+  "memory.qmd.rerank": "QMD Rerank",
   "memory.qmd.searchTool": "QMD Search Tool Override",
   "memory.qmd.includeDefaultMemory": "QMD Include Default Memory",
   "memory.qmd.paths": "QMD Extra Paths",

@@ -1,3 +1,4 @@
+// Control UI chat module implements build chat items behavior.
 import type { ChatItem, MessageGroup, NormalizedMessage, ToolCard } from "../types/chat-types.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
 import {
@@ -9,6 +10,7 @@ import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage, stripMessageDisplayMetadataText } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
+import { trimAccumulatedStreamPrefix } from "./stream-text.ts";
 import { extractToolCardsCached, extractToolPreview } from "./tool-cards.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
@@ -300,13 +302,6 @@ function sanitizeStreamText(text: string): string {
   return stripped.trim().length > 0 ? stripped : "";
 }
 
-function trimAccumulatedStreamPrefix(text: string, previousText: string | null): string {
-  if (!previousText || !text.startsWith(previousText)) {
-    return text;
-  }
-  return text.slice(previousText.length).trimStart();
-}
-
 function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   if (typeof item.sendSubmittedAtMs !== "number" || item.sendState === "failed") {
     return false;
@@ -354,6 +349,19 @@ function chatItemTimestamp(item: ChatItem): number | null {
       return null;
   }
   return null;
+}
+
+function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: number): number {
+  const latestTimestamp = items.reduce<number | null>((latest, item) => {
+    const timestamp = chatItemTimestamp(item);
+    if (timestamp == null) {
+      return latest;
+    }
+    return latest == null || timestamp > latest ? timestamp : latest;
+  }, null);
+  return latestTimestamp != null && desiredTimestamp <= latestTimestamp
+    ? latestTimestamp + 1
+    : desiredTimestamp;
 }
 
 function sortChatItemsByVisibleTime(items: ChatItem[]): ChatItem[] {
@@ -667,13 +675,14 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
     const text = sanitizeStreamText(props.stream);
     const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+    const startedAt = timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now());
     if (visibleText.length > 0) {
       if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
         items.push({
           kind: "stream",
           key,
           text: visibleText,
-          startedAt: props.streamStartedAt ?? Date.now(),
+          startedAt,
           isStreaming: true,
         });
       }

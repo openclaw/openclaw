@@ -1,3 +1,4 @@
+// Memory Core tests cover manager sync ops.startup catchup plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -111,6 +112,8 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected pruneEmbeddingCacheIfNeeded(): void {}
 
   protected resetProviderInitializationForRetry(): void {}
+
+  protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(
     _entry: MemoryIndexEntry,

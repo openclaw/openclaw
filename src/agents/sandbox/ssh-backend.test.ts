@@ -1,3 +1,5 @@
+// SSH sandbox backend tests cover runtime description/removal, remote seeding,
+// command execution, bind validation, and backend config plumbing.
 import os from "node:os";
 import path from "node:path";
 import {
@@ -7,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { captureFullEnv } from "../../test-utils/env.js";
 import type { SandboxConfig } from "./types.js";
 
 const sshMocks = vi.hoisted(() => ({
@@ -73,6 +76,8 @@ function requireMockRecordArg(mock: ReturnType<typeof vi.fn>, callIndex: number,
 }
 
 function requireSshRunCommandParams(callIndex = 0) {
+  // Backend assertions inspect the normalized remote command params before the
+  // ssh helper turns them into argv.
   return requireMockRecordArg(sshMocks.runSshSandboxCommand, callIndex, "ssh run command params");
 }
 
@@ -137,9 +142,10 @@ async function expectBackendCreationToReject(params: {
 }
 
 describe("ssh sandbox backend", () => {
-  const originalEnv = { ...process.env };
+  let envSnapshot: ReturnType<typeof captureFullEnv>;
 
   beforeEach(() => {
+    envSnapshot = captureFullEnv();
     vi.clearAllMocks();
     sshMocks.createSshSandboxSessionFromSettings.mockResolvedValue(createSession());
     sshMocks.disposeSshSandboxSession.mockResolvedValue(undefined);
@@ -160,12 +166,7 @@ describe("ssh sandbox backend", () => {
   });
 
   afterEach(() => {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in originalEnv)) {
-        delete process.env[key];
-      }
-    }
-    Object.assign(process.env, originalEnv);
+    envSnapshot.restore();
     vi.restoreAllMocks();
   });
 

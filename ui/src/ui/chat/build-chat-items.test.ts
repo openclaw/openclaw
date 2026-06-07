@@ -1,3 +1,4 @@
+// Control UI tests cover build chat items behavior.
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../types/chat-types.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
@@ -492,6 +493,31 @@ describe("buildChatItems", () => {
       isStreaming: false,
     });
     expect(messageRecord(requireGroup(items[1])).content).toBe("Missing timestamp.");
+  });
+
+  it("renders an active stream after the persisted user turn it answers", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Persisted prompt." }],
+            timestamp: 2_000,
+          },
+        ],
+        stream: "Visible partial answer.",
+        streamStartedAt: 1_000,
+      }),
+    );
+
+    expect(items).toHaveLength(2);
+    expect(requireGroup(items[0]).role).toBe("user");
+    expect(items[1]).toMatchObject({
+      kind: "stream",
+      text: "Visible partial answer.",
+      startedAt: 2_001,
+      isStreaming: true,
+    });
   });
 
   it("renders submitted queued sends as user turns before chat.send ACK", () => {

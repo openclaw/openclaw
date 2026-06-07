@@ -1,3 +1,5 @@
+// Gateway chat display projection.
+// Converts raw transcript messages into bounded Control UI/history display records.
 import { createHash } from "node:crypto";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
@@ -5,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { extractCanvasFromText } from "../chat/canvas-render.js";
 import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
@@ -15,6 +18,7 @@ import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
@@ -31,9 +35,12 @@ type PendingMessageToolVisibleReply = {
   text: string;
   anchor: Record<string, unknown>;
   completionAnchor?: Record<string, unknown>;
+  deliveryMirrorAnchor?: Record<string, unknown>;
+  deliveryMirrorIndex?: number;
   succeeded: boolean;
 };
 
+/** Resolve the text cap used when projecting chat history for display. */
 export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
@@ -54,6 +61,7 @@ function truncateChatHistoryText(
   };
 }
 
+/** Return true for known tool-call/tool-result block type spellings in transcripts. */
 export function isToolHistoryBlockType(type: unknown): boolean {
   if (typeof type !== "string") {
     return false;
@@ -67,6 +75,178 @@ export function isToolHistoryBlockType(type: unknown): boolean {
     normalized === "toolresult" ||
     normalized === "tool_result"
   );
+}
+
+function extractChatHistoryBlockText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as Record<string, unknown>;
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  if (typeof entry.text === "string") {
+    return entry.text;
+  }
+  if (!Array.isArray(entry.content)) {
+    return undefined;
+  }
+  const textParts = entry.content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return undefined;
+      }
+      const typed = block as { text?: unknown };
+      return typeof typed.text === "string" ? typed.text : undefined;
+    })
+    .filter((value): value is string => typeof value === "string");
+  return textParts.length > 0 ? textParts.join("\n") : undefined;
+}
+
+function appendCanvasBlockToAssistantHistoryMessage(params: {
+  message: unknown;
+  preview: ReturnType<typeof extractCanvasFromText>;
+  rawText: string | null;
+}): unknown {
+  const preview = params.preview;
+  if (!preview || !params.message || typeof params.message !== "object") {
+    return params.message;
+  }
+  const entry = params.message as Record<string, unknown>;
+  const baseContent = Array.isArray(entry.content)
+    ? [...entry.content]
+    : typeof entry.content === "string"
+      ? [{ type: "text", text: entry.content }]
+      : typeof entry.text === "string"
+        ? [{ type: "text", text: entry.text }]
+        : [];
+  const alreadyPresent = baseContent.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const typed = block as { type?: unknown; preview?: unknown };
+    return (
+      typed.type === "canvas" &&
+      typed.preview &&
+      typeof typed.preview === "object" &&
+      (((typed.preview as { viewId?: unknown }).viewId &&
+        (typed.preview as { viewId?: unknown }).viewId === preview.viewId) ||
+        ((typed.preview as { url?: unknown }).url &&
+          (typed.preview as { url?: unknown }).url === preview.url))
+    );
+  });
+  if (!alreadyPresent) {
+    baseContent.push({
+      type: "canvas",
+      preview,
+      rawText: params.rawText,
+    });
+  }
+  return {
+    ...entry,
+    content: baseContent,
+  };
+}
+
+function messageContainsToolHistoryContent(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  if (
+    typeof entry.toolCallId === "string" ||
+    typeof entry.tool_call_id === "string" ||
+    typeof entry.toolName === "string" ||
+    typeof entry.tool_name === "string"
+  ) {
+    return true;
+  }
+  if (!Array.isArray(entry.content)) {
+    return false;
+  }
+  return entry.content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    return isToolHistoryBlockType((block as { type?: unknown }).type);
+  });
+}
+
+export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+  const next = [...messages];
+  let changed = false;
+  let lastAssistantIndex = -1;
+  let lastRenderableAssistantIndex = -1;
+  const pending: Array<{
+    preview: NonNullable<ReturnType<typeof extractCanvasFromText>>;
+    rawText: string | null;
+  }> = [];
+  for (let index = 0; index < next.length; index++) {
+    const message = next[index];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const entry = message as Record<string, unknown>;
+    const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+    if (role === "assistant") {
+      lastAssistantIndex = index;
+      if (!messageContainsToolHistoryContent(entry)) {
+        lastRenderableAssistantIndex = index;
+        if (pending.length > 0) {
+          let target = next[index];
+          for (const item of pending) {
+            target = appendCanvasBlockToAssistantHistoryMessage({
+              message: target,
+              preview: item.preview,
+              rawText: item.rawText,
+            });
+          }
+          next[index] = target;
+          pending.length = 0;
+          changed = true;
+        }
+      }
+      continue;
+    }
+    if (!messageContainsToolHistoryContent(entry)) {
+      continue;
+    }
+    const toolName =
+      typeof entry.toolName === "string"
+        ? entry.toolName
+        : typeof entry.tool_name === "string"
+          ? entry.tool_name
+          : undefined;
+    const text = extractChatHistoryBlockText(entry);
+    const preview = extractCanvasFromText(text, toolName);
+    if (!preview) {
+      continue;
+    }
+    pending.push({
+      preview,
+      rawText: text ?? null,
+    });
+  }
+  if (pending.length > 0) {
+    const targetIndex =
+      lastRenderableAssistantIndex >= 0 ? lastRenderableAssistantIndex : lastAssistantIndex;
+    if (targetIndex >= 0) {
+      let target = next[targetIndex];
+      for (const item of pending) {
+        target = appendCanvasBlockToAssistantHistoryMessage({
+          message: target,
+          preview: item.preview,
+          rawText: item.rawText,
+        });
+      }
+      next[targetIndex] = target;
+      changed = true;
+    }
+  }
+  return changed ? next : messages;
 }
 
 function sanitizeChatHistoryContentBlock(
@@ -752,6 +932,16 @@ function buildMessageToolVisibleReplyMirror(
   return mirror;
 }
 
+function readMessageToolDeliveryMirrorText(message: Record<string, unknown>): string | undefined {
+  // Delivery mirrors can arrive between a successful message-tool result and
+  // the final NO_REPLY. The pending mirror is the display row; the raw mirror
+  // would duplicate that same send.
+  if (!isOpenClawDeliveryMirrorAssistantMessage(message)) {
+    return undefined;
+  }
+  return displayTextForDuplicateCheck(message);
+}
+
 function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -780,6 +970,24 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
     clearPending();
   };
 
+  const flushSelectedMirrors = (items: PendingMessageToolVisibleReply[]) => {
+    if (items.length === 0) {
+      return;
+    }
+    const selected = new Set(items);
+    const remaining: PendingMessageToolVisibleReply[] = [];
+    for (const item of pending) {
+      if (selected.has(item) && item.succeeded) {
+        next.push(buildMessageToolVisibleReplyMirror(item));
+        changed = true;
+        continue;
+      }
+      remaining.push(item);
+    }
+    pending.length = 0;
+    pending.push(...remaining);
+  };
+
   for (const message of messages) {
     const record = readRecord(message);
     if (!record) {
@@ -801,6 +1009,12 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       continue;
     }
 
+    const flushAfterCurrentMessage: PendingMessageToolVisibleReply[] = [];
+    const deliveryMirrorText = readMessageToolDeliveryMirrorText(record);
+    const matchingDeliveryMirrorPending = deliveryMirrorText
+      ? pending.filter((item) => item.text.trim() === deliveryMirrorText)
+      : [];
+    const duplicateDeliveryMirror = matchingDeliveryMirrorPending.some((item) => item.succeeded);
     const visibleReplies = extractMessageToolVisibleReplies(record);
     if (visibleReplies.length > 0) {
       for (const reply of visibleReplies) {
@@ -810,7 +1024,10 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
           succeeded: false,
         });
       }
-    } else if (isRenderableAssistantDisplayMessage(record)) {
+    } else if (
+      matchingDeliveryMirrorPending.length === 0 &&
+      isRenderableAssistantDisplayMessage(record)
+    ) {
       clearPending();
     }
 
@@ -818,7 +1035,13 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       for (const item of pending) {
         if (!item.succeeded && isSuccessfulMessageToolResult(record, item)) {
           item.succeeded = true;
-          item.completionAnchor = record;
+          item.completionAnchor = item.deliveryMirrorAnchor ?? record;
+          if (item.deliveryMirrorAnchor) {
+            if (typeof item.deliveryMirrorIndex === "number") {
+              next[item.deliveryMirrorIndex] = { ...item.deliveryMirrorAnchor, display: false };
+            }
+            flushAfterCurrentMessage.push(item);
+          }
         }
       }
       if (isAssistantSilentControlReplyOnly(record)) {
@@ -826,7 +1049,21 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       }
     }
 
+    if (duplicateDeliveryMirror) {
+      for (const item of matchingDeliveryMirrorPending) {
+        item.completionAnchor = record;
+      }
+      flushSelectedMirrors(matchingDeliveryMirrorPending);
+      changed = true;
+      continue;
+    }
+
+    for (const item of matchingDeliveryMirrorPending) {
+      item.deliveryMirrorAnchor = record;
+      item.deliveryMirrorIndex = next.length;
+    }
     next.push(message);
+    flushSelectedMirrors(flushAfterCurrentMessage);
   }
 
   return changed ? next : messages;
@@ -1091,6 +1328,71 @@ function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unkno
   return (
     text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) && text.includes("sourceTool=subagent_announce")
   );
+}
+
+function readChatHistoryRecordTimestampMs(message: unknown): number | undefined {
+  const meta = readRecord(readRecord(message)?.["__openclaw"]);
+  const value = meta?.recordTimestampMs;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  const timestamp = readRecord(message)?.timestamp;
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown): boolean {
+  const record = readRecord(message);
+  if (!record || record.role !== "user") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance(record.provenance);
+  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
+    return true;
+  }
+  const text = extractChatHistoryBlockText(record);
+  return (
+    typeof text === "string" &&
+    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) &&
+    text.includes("sourceTool=subagent_announce")
+  );
+}
+
+function isChatHistoryAssistantMessage(message: unknown): boolean {
+  return readRecord(message)?.role === "assistant";
+}
+
+export function dropPreSessionStartAnnouncePairs(
+  messages: unknown[],
+  sessionStartedAt: number | undefined,
+): unknown[] {
+  if (sessionStartedAt === undefined || messages.length === 0) {
+    return messages;
+  }
+  let changed = false;
+  const kept: unknown[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const current = messages[i];
+    if (isSubagentAnnounceInterSessionUserChatHistoryMessage(current)) {
+      const ts = readChatHistoryRecordTimestampMs(current);
+      if (typeof ts === "number" && ts < sessionStartedAt) {
+        const next = messages[i + 1];
+        const nextTs = readChatHistoryRecordTimestampMs(next);
+        if (
+          isChatHistoryAssistantMessage(next) &&
+          typeof nextTs === "number" &&
+          nextTs < sessionStartedAt
+        ) {
+          // Skip only an assistant reply that is also pre-session-start; recent
+          // or timestampless assistants may be real fresh-session context.
+          i++;
+        }
+        changed = true;
+        continue;
+      }
+    }
+    kept.push(current);
+  }
+  return changed ? kept : messages;
 }
 
 function isSessionsSendInterSessionUserMessage(message: Record<string, unknown>): boolean {

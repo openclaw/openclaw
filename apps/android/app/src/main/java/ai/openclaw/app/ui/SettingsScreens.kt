@@ -8,7 +8,6 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
@@ -44,11 +43,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -893,18 +896,14 @@ private fun GatewaySettingsScreen(
                 .orEmpty()
                 .ifEmpty { passwordInput.trim() }
             validationText = null
-            viewModel.setManualEnabled(true)
-            viewModel.setManualHost(endpointConfig.host)
-            viewModel.setManualPort(endpointConfig.port)
-            viewModel.setManualTls(endpointConfig.tls)
-            viewModel.setGatewayBootstrapToken(bootstrapToken)
-            viewModel.setGatewayToken(token)
-            viewModel.setGatewayPassword(password)
-            viewModel.connect(
-              GatewayEndpoint.manual(host = endpointConfig.host, port = endpointConfig.port),
-              token = token.ifEmpty { null },
-              bootstrapToken = bootstrapToken.ifEmpty { null },
-              password = password.ifEmpty { null },
+            viewModel.saveGatewayConfigAndConnect(
+              host = endpointConfig.host,
+              port = endpointConfig.port,
+              tls = endpointConfig.tls,
+              token = token,
+              bootstrapToken = bootstrapToken,
+              password = password,
+              resetSetupAuth = setup != null,
             )
           },
           modifier = Modifier.fillMaxWidth(),
@@ -967,7 +966,7 @@ private fun AboutSettingsScreen(
         listOf(
           SettingsMetric("Android App", BuildConfig.VERSION_NAME),
           SettingsMetric("Build", BuildConfig.VERSION_CODE.toString()),
-          SettingsMetric("Channel", "Play"),
+          SettingsMetric("Channel", androidDistributionChannel()),
           SettingsMetric("Gateway", currentGatewayVersion ?: "Not connected"),
         ),
     )
@@ -989,6 +988,14 @@ private fun AboutSettingsScreen(
     }
   }
 }
+
+internal fun androidDistributionChannel(flavor: String = BuildConfig.FLAVOR): String =
+  when (flavor.trim()) {
+    "play" -> "Play"
+    "thirdParty" -> "Third-party"
+    "" -> "Unknown"
+    else -> flavor.trim()
+  }
 
 @Composable
 private fun AboutStatusRow(
@@ -1028,8 +1035,11 @@ internal fun SettingsDetailFrame(
   onBack: () -> Unit,
   content: @Composable () -> Unit,
 ) {
-  ClawScaffold(contentPadding = PaddingValues(start = ClawTheme.spacing.lg, top = 14.dp, end = ClawTheme.spacing.lg, bottom = 20.dp)) {
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+  ClawScaffold(
+    contentPadding = PaddingValues(start = ClawTheme.spacing.lg, top = 14.dp, end = ClawTheme.spacing.lg, bottom = 6.dp),
+    contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+  ) {
+    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
       item {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
           SettingsBackButton(onClick = onBack)
@@ -1044,9 +1054,6 @@ internal fun SettingsDetailFrame(
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
           content()
         }
-      }
-      item {
-        Spacer(modifier = Modifier.height(12.dp))
       }
     }
   }
