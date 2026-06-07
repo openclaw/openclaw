@@ -141,7 +141,7 @@ function resolveSendCapableMessageAdapter(
 }
 
 function channelPluginHasRuntimeOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
-  return Boolean(plugin?.outbound?.sendText ?? resolveSendCapableMessageAdapter(plugin));
+  return Boolean(plugin?.outbound ?? resolveSendCapableMessageAdapter(plugin));
 }
 
 function resolveRuntimeOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {

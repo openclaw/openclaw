@@ -342,6 +342,29 @@ describe("outbound channel resolution", () => {
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
+  it("resolves runtime outbound adapters that do not send text directly", async () => {
+    const setupPlugin = { id: "alpha" };
+    const runtimePlugin = { id: "alpha", outbound: { deliveryMode: "gateway" } };
+    getLoadedChannelPluginMock.mockReturnValue(setupPlugin);
+    getChannelPluginMock.mockReturnValue(undefined);
+    getActivePluginRegistryMock.mockReturnValue({
+      channels: [{ plugin: runtimePlugin }],
+    });
+    getActivePluginChannelRegistryMock.mockReturnValue({
+      channels: [{ plugin: setupPlugin }],
+    });
+    const channelResolution = await importChannelResolution("runtime-outbound-adapter");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(runtimePlugin);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
   it("keeps setup shells visible for read-only channel lookup", async () => {
     const setupPlugin = { id: "alpha" };
     const runtimePlugin = { id: "alpha", outbound: { sendText: vi.fn() } };
