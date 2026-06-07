@@ -20,6 +20,7 @@ import {
   validateProviderConfig,
 } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
+import { resolveGroupCallGateConfig } from "./group-call-gate.js";
 import { CallManager } from "./manager.js";
 import { wireMsteamsRuntime } from "./msteams.runtime.js";
 import type { VoiceCallProvider } from "./providers/base.js";
@@ -588,6 +589,8 @@ export async function createVoiceCallRuntime(params: {
           toolPolicy: config.realtime.toolPolicy,
           // Self-echo guard (off by default); configurable via realtime config.
           suppressInputDuringPlayback: config.realtime.suppressInputDuringPlayback,
+          // Group-call "speak only when addressed" gate (instruction-based on the realtime path).
+          groupCallGate: resolveGroupCallGateConfig(config.msteams?.groupCall),
           agentRuntime,
           voiceConfig: config,
           logger: log,
