@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getSessionEntry,
-  loadSessionStore,
   updateSessionStore,
   upsertSessionEntry,
 } from "../../config/sessions.js";
@@ -143,61 +142,6 @@ describe("name command", () => {
     expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
   });
 
-  it("seeds the first native slash session from the active session entry", async () => {
-    const storePath = await createStorePath();
-    const params = buildNameParams("/name Native kickoff", storePath, {
-      commandSource: "native",
-    });
-    params.sessionEntry = {
-      sessionId: "sess-main",
-      updatedAt: 1,
-      totalTokens: 0,
-      totalTokensFresh: true,
-    };
-
-    const result = await handleNameCommand(params, true);
-
-    expect(result?.reply?.text).toContain("Native kickoff");
-    expect(getSessionEntry({ storePath, sessionKey })?.label).toBe("Native kickoff");
-    expect(params.sessionEntry?.label).toBe("Native kickoff");
-    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
-      { sessionKey, reason: "command-metadata" },
-    ]);
-  });
-
-  it("renames through a legacy folded alias and persists the canonical key", async () => {
-    const storePath = await createStorePath();
-    const canonicalKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
-    const legacyKey = "agent:main:matrix:channel:!mixedcase:example.org";
-    await updateSessionStore(storePath, (store) => {
-      store[legacyKey] = {
-        sessionId: "sess-main",
-        updatedAt: 1,
-        totalTokens: 0,
-        totalTokensFresh: true,
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!MixedCase:Example.Org",
-          accountId: "matrix-account",
-        },
-      };
-      return null;
-    });
-
-    const params = buildNameParams("/name Matrix room", storePath, {
-      sessionKey: canonicalKey,
-    });
-    const result = await handleNameCommand(params, true);
-    const store = loadSessionStore(storePath);
-
-    expect(result?.reply?.text).toContain("Matrix room");
-    expect(store[canonicalKey]?.label).toBe("Matrix room");
-    expect(store[legacyKey]).toBeUndefined();
-    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
-      { sessionKey: canonicalKey, reason: "command-metadata" },
-    ]);
-  });
-
   it("reads the persisted name when params.sessionEntry is absent", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry({
@@ -237,6 +181,9 @@ describe("name command", () => {
     expect(result?.reply?.text).toContain("First native");
     expect(getSessionEntry({ storePath, sessionKey })?.label).toBe("First native");
     expect(params.sessionEntry?.label).toBe("First native");
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
+      { sessionKey, reason: "command-metadata" },
+    ]);
   });
 
   it("persists the rename under the canonical key when stored under a legacy alias", async () => {
@@ -264,6 +211,9 @@ describe("name command", () => {
     });
     expect(keys).toContain(sessionKey);
     expect(keys).not.toContain(legacyKey);
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
+      { sessionKey, reason: "command-metadata" },
+    ]);
   });
 
   it("does not rename for an unauthorized sender", async () => {
