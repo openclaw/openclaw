@@ -93,6 +93,8 @@ function isTerminalChatSendAckSuccess(status: unknown): boolean {
   return normalizedChatSendAckStatus(status) === "ok";
 }
 
+const TERMINAL_CHAT_SEND_FAILURE_MESSAGE = "Chat failed before the run started; try again.";
+
 function goalContinuationPrompt(text: string): string | null {
   const parsed = parseGoalCommand(text);
   if (!parsed) {
@@ -784,11 +786,29 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         timeoutMs: opts.timeoutMs,
         runId,
       });
+      const acceptedRunId = sendResult.runId || runId;
+      const terminalAckFailure = isTerminalChatSendAckFailure(sendResult.status);
+      const terminalAckSuccess = isTerminalChatSendAckSuccess(sendResult.status);
+      const terminalAck = terminalAckFailure || terminalAckSuccess;
+      if (isBtw && terminalAck) {
+        forgetLocalBtwRunId?.(runId);
+        if (acceptedRunId !== runId) {
+          forgetLocalBtwRunId?.(acceptedRunId);
+        }
+        if (terminalAckFailure) {
+          chatLog.addSystem(`btw failed: ${TERMINAL_CHAT_SEND_FAILURE_MESSAGE}`);
+        }
+        tui.requestRender();
+        return;
+      }
+      if (isBtw) {
+        if (acceptedRunId !== runId) {
+          forgetLocalBtwRunId?.(runId);
+          noteLocalBtwRunId?.(acceptedRunId);
+        }
+        return;
+      }
       if (!isBtw) {
-        const acceptedRunId = sendResult.runId || runId;
-        const terminalAckFailure = isTerminalChatSendAckFailure(sendResult.status);
-        const terminalAckSuccess = isTerminalChatSendAckSuccess(sendResult.status);
-        const terminalAck = terminalAckFailure || terminalAckSuccess;
         const acceptedRunAlreadyCompleted =
           acceptedRunId !== runId &&
           !terminalAck &&
@@ -820,7 +840,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.pendingOptimisticUserMessage = false;
           state.pendingChatRunId = null;
           if (normalizedChatSendAckStatus(sendResult.status) === "error") {
-            chatLog.addSystem("send failed: Chat failed before the run started; try again.");
+            chatLog.addSystem(`send failed: ${TERMINAL_CHAT_SEND_FAILURE_MESSAGE}`);
             setActivityStatus("error");
           } else {
             setActivityStatus("idle");
