@@ -467,6 +467,31 @@ describe("acp translator stable lifecycle handlers", () => {
     ).rejects.toThrow("Chat failed before the run started; try again.");
   });
 
+  it("resolves prompts when chat send returns a terminal ok ack", async () => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        return { runId: params?.idempotencyKey, status: "ok" };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    sessionStore.createSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:work",
+      cwd: "/tmp/openclaw",
+    });
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await expect(
+      settlePromptQuickly(agent.prompt(createPromptRequest("session-1"))),
+    ).resolves.toEqual({
+      stopReason: "end_turn",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("closes sessions by aborting active work, resolving pending prompts, and deleting bridge state", async () => {
     const sentRunIds: string[] = [];
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
