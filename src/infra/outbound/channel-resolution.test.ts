@@ -182,6 +182,31 @@ describe("outbound channel resolution", () => {
     ).toBe(message);
   });
 
+  it("skips metadata-only loaded message shells for active send-capable message adapters", async () => {
+    const setupMessage = { receive: { defaultAckPolicy: "manual" } };
+    const runtimeMessage = { send: { text: vi.fn() } };
+    const setupPlugin = { id: "alpha", message: setupMessage };
+    const runtimePlugin = { id: "alpha", message: runtimeMessage };
+    getLoadedChannelPluginMock.mockReturnValue(setupPlugin);
+    getChannelPluginMock.mockReturnValue(undefined);
+    getActivePluginChannelRegistryMock.mockReturnValue({
+      channels: [{ plugin: setupPlugin }],
+    });
+    getActivePluginRegistryMock.mockReturnValue({
+      channels: [{ plugin: runtimePlugin }],
+    });
+    const channelResolution = await importChannelResolution("message-metadata-shell");
+
+    expect(
+      channelResolution.resolveOutboundChannelMessageAdapter({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(runtimeMessage);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
   it("bootstraps configured channel plugins when the active registry is missing the target", async () => {
     const plugin = { id: "alpha", outbound: { sendText: vi.fn() } };
     getLoadedChannelPluginMock.mockReturnValueOnce(undefined).mockReturnValueOnce(plugin);

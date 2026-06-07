@@ -131,8 +131,21 @@ function resolveDirectFromActiveRegistry(channel: string): ChannelPlugin | undef
   return resolveDirectFromRegistry(getActivePluginRegistry(), channel);
 }
 
+function messageAdapterCanSendText(
+  message: ChannelMessageAdapterShape | undefined,
+): message is ChannelMessageAdapterShape {
+  return typeof message?.send?.text === "function";
+}
+
+function resolveSendCapableMessageAdapter(
+  plugin: ChannelPlugin | undefined,
+): ChannelMessageAdapterShape | undefined {
+  const message = plugin?.message;
+  return messageAdapterCanSendText(message) ? message : undefined;
+}
+
 function channelPluginHasRuntimeOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
-  return Boolean(plugin?.outbound ?? plugin?.message);
+  return Boolean(plugin?.outbound?.sendText ?? resolveSendCapableMessageAdapter(plugin));
 }
 
 function resolveRuntimeOutboundPluginCandidate(params: {
@@ -283,17 +296,17 @@ export function resolveOutboundChannelMessageAdapter(params: {
     return undefined;
   }
   const current =
-    getLoadedChannelPlugin(normalized)?.message ??
-    resolveValueFromRuntimeRegistries(normalized, (plugin) => plugin.message) ??
-    getChannelPlugin(normalized)?.message;
+    resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
+    resolveValueFromRuntimeRegistries(normalized, resolveSendCapableMessageAdapter) ??
+    resolveSendCapableMessageAdapter(getChannelPlugin(normalized));
   if (current || params.allowBootstrap !== true) {
     return current;
   }
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
   return (
-    getLoadedChannelPlugin(normalized)?.message ??
-    resolveValueFromRuntimeRegistries(normalized, (plugin) => plugin.message) ??
-    getChannelPlugin(normalized)?.message
+    resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
+    resolveValueFromRuntimeRegistries(normalized, resolveSendCapableMessageAdapter) ??
+    resolveSendCapableMessageAdapter(getChannelPlugin(normalized))
   );
 }
 
