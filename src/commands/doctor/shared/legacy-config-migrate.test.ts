@@ -331,6 +331,9 @@ describe("legacy memory search config migrate", () => {
       'Moved models.providers.openai-codex.models[0].api "openai-codex-responses" → "openai-chatgpt-responses"',
       "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai.apiKey, models.providers.openai.params, models.providers.openai.request",
     ]);
+    expect(findLegacyConfigIssues(res.config).map((issue) => issue.path)).not.toContain(
+      "models.providers",
+    );
   });
 
   it("keeps legacy codex provider when legacy auth or headers cannot be model-scoped", () => {
@@ -372,8 +375,8 @@ describe("legacy memory search config migrate", () => {
     ]);
   });
 
-  it("reports blocked codex merges after legacy api normalization already ran", () => {
-    const res = migrateLegacyConfigForTest({
+  it("does not report a fixable legacy issue after blocked codex merge normalization already ran", () => {
+    const raw = {
       models: {
         providers: {
           openai: {
@@ -389,16 +392,14 @@ describe("legacy memory search config migrate", () => {
           },
         },
       },
-    });
+    };
+    const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.models?.providers?.["openai-codex"]).toEqual({
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      models: [{ id: "gpt-5.5", api: "openai-chatgpt-responses" }],
-    });
-    expect(res.changes).toEqual([
-      "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai.params.",
-    ]);
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain(
+      "models.providers",
+    );
   });
 
   it("merges distinct legacy model ids even when display names collide", () => {

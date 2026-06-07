@@ -1022,6 +1022,82 @@ function collectModelMergeBlockers(params: {
   return blockers;
 }
 
+function getCanonicalOpenAIProviderEntry(
+  providers: Record<string, unknown>,
+): { key: string; value: Record<string, unknown> } | undefined {
+  const key = Object.keys(providers).find((k) => normalizeProviderId(k) === OPENAI_PROVIDER_ID);
+  const value = key ? getRecord(providers[key]) : undefined;
+  return key && value ? { key, value } : undefined;
+}
+
+function getMergeableLegacyOpenAIModels(params: {
+  canonical: Record<string, unknown>;
+  legacy: Record<string, unknown>;
+}): unknown[] {
+  const legacyModels: unknown[] = Array.isArray(params.legacy.models)
+    ? (params.legacy.models as unknown[])
+    : [];
+  const canonicalModels: unknown[] = Array.isArray(params.canonical.models)
+    ? (params.canonical.models as unknown[])
+    : [];
+  const canonicalModelIds = new Set<string>();
+  const canonicalModelNames = new Set<string>();
+  for (const m of canonicalModels) {
+    const mr = getRecord(m);
+    if (typeof mr?.id === "string" && mr.id) {
+      canonicalModelIds.add(mr.id);
+    }
+    if (typeof mr?.name === "string" && mr.name) {
+      canonicalModelNames.add(mr.name);
+    }
+  }
+  return legacyModels.filter((m) => {
+    const mr = getRecord(m);
+    if (!mr) {
+      return false;
+    }
+    const id = typeof mr.id === "string" ? mr.id : undefined;
+    const name = typeof mr.name === "string" ? mr.name : undefined;
+    if (!id && !name) {
+      return false;
+    }
+    return id ? !canonicalModelIds.has(id) : !canonicalModelNames.has(name);
+  });
+}
+
+function hasAutoFixableLegacyOpenAICodexProvider(providersValue: unknown): boolean {
+  const providers = getRecord(providersValue);
+  if (!providers) {
+    return false;
+  }
+  const canonicalEntry = getCanonicalOpenAIProviderEntry(providers);
+  for (const [providerId, providerValue] of Object.entries(providers)) {
+    const provider = getRecord(providerValue);
+    if (!provider || normalizeProviderId(providerId) !== LEGACY_OPENAI_CODEX_PROVIDER_ID) {
+      continue;
+    }
+    const normalized = normalizeLegacyOpenAIResponsesApi(providerId, provider, []);
+    if (normalized.changed || !canonicalEntry) {
+      return true;
+    }
+    const modelsToMerge = getMergeableLegacyOpenAIModels({
+      canonical: canonicalEntry.value,
+      legacy: normalized.value,
+    });
+    if (modelsToMerge.length === 0) {
+      return true;
+    }
+    const mergeBlockers = collectModelMergeBlockers({
+      canonical: canonicalEntry.value,
+      legacy: normalized.value,
+    });
+    if (mergeBlockers.length === 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildMergedLegacyOpenAIModel(
   model: unknown,
   legacyProvider: Record<string, unknown>,
@@ -1100,38 +1176,15 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
       // entries from the legacy provider so disjoint models (e.g. a chat model
       // on the Codex OAuth path alongside an embeddings-only openai provider)
       // are preserved instead of silently dropped. (#90047)
-      const legacyModels: unknown[] = Array.isArray(normalized.value.models)
-        ? (normalized.value.models as unknown[])
-        : [];
-      const canonicalKey =
-        Object.keys(providers).find((k) => normalizeProviderId(k) === OPENAI_PROVIDER_ID) ??
-        OPENAI_PROVIDER_ID;
-      const canonical = getRecord(providers[canonicalKey]) ?? {};
+      const canonicalEntry = getCanonicalOpenAIProviderEntry(providers);
+      const canonicalKey = canonicalEntry?.key ?? OPENAI_PROVIDER_ID;
+      const canonical = canonicalEntry?.value ?? {};
       const canonicalModels: unknown[] = Array.isArray(canonical.models)
         ? (canonical.models as unknown[])
         : [];
-      const canonicalModelIds = new Set<string>();
-      const canonicalModelNames = new Set<string>();
-      for (const m of canonicalModels) {
-        const mr = getRecord(m);
-        if (typeof mr?.id === "string" && mr.id) {
-          canonicalModelIds.add(mr.id);
-        }
-        if (typeof mr?.name === "string" && mr.name) {
-          canonicalModelNames.add(mr.name);
-        }
-      }
-      const modelsToMerge = legacyModels.filter((m) => {
-        const mr = getRecord(m);
-        if (!mr) {
-          return false;
-        }
-        const id = typeof mr.id === "string" ? mr.id : undefined;
-        const name = typeof mr.name === "string" ? mr.name : undefined;
-        if (!id && !name) {
-          return false;
-        }
-        return id ? !canonicalModelIds.has(id) : !canonicalModelNames.has(name);
+      const modelsToMerge = getMergeableLegacyOpenAIModels({
+        canonical,
+        legacy: normalized.value,
       });
       const mergeBlockers =
         modelsToMerge.length > 0
@@ -1141,10 +1194,10 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
         if (normalized.changed) {
           providers[providerId] = normalized.value;
           providersChanged = true;
+          changes.push(
+            `Skipped merging models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} into models.providers.${OPENAI_PROVIDER_ID} because provider-level defaults cannot be represented safely on merged models: ${mergeBlockers.join(", ")}.`,
+          );
         }
-        changes.push(
-          `Skipped merging models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} into models.providers.${OPENAI_PROVIDER_ID} because provider-level defaults cannot be represented safely on merged models: ${mergeBlockers.join(", ")}.`,
-        );
         continue;
       }
       // Stamp model-scoped legacy provider defaults onto each merged model so it
@@ -1205,14 +1258,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
         path: ["models", "providers"],
         message:
           'models.providers.openai-codex is legacy; run "openclaw doctor --fix" to move it to models.providers.openai.',
-        match: (value) => {
-          const providers = getRecord(value);
-          return providers
-            ? Object.keys(providers).some(
-                (providerId) => normalizeProviderId(providerId) === LEGACY_OPENAI_CODEX_PROVIDER_ID,
-              )
-            : false;
-        },
+        match: (value) => hasAutoFixableLegacyOpenAICodexProvider(value),
       },
       {
         path: ["models", "providers"],
