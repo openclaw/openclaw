@@ -508,9 +508,8 @@ function resolveAttemptSuccessfulToolTerminalFallback(params: {
 }) {
   return resolveSuccessfulToolTerminalFallback({
     observations: params.observations,
-    requireDeclaredPresentableFallback: Boolean(
-      params.attempt.replayMetadata?.hadPotentialSideEffects,
-    ),
+    requireDeclaredPresentableFallback:
+      params.attempt.replayMetadata?.hadPotentialSideEffects === true,
   });
 }
 
@@ -3873,6 +3872,11 @@ export async function runEmbeddedAgent(
             continue;
           }
           if (incompleteTurnText) {
+            const incompleteTurnPayloadsFromExistingError = payloadsForTerminalPath?.some(
+              (payload) => "isError" in payload && payload.isError === true,
+            )
+              ? payloadsForTerminalPath
+              : undefined;
             const incompleteTurnAsyncTaskPayloads = canUseAttemptTerminalFallback
               ? buildAsyncTaskTerminalPayloads(attempt)
               : undefined;
@@ -3883,12 +3887,16 @@ export async function runEmbeddedAgent(
                 })
               : undefined;
             const replayInvalid = resolveReplayInvalidForAttempt(
-              incompleteTurnAsyncTaskPayloads || incompleteTurnToolFallback
+              incompleteTurnPayloadsFromExistingError ||
+                incompleteTurnAsyncTaskPayloads ||
+                incompleteTurnToolFallback
                 ? null
                 : incompleteTurnText,
             );
             const livenessState: EmbeddedRunLivenessState =
-              incompleteTurnAsyncTaskPayloads || incompleteTurnToolFallback
+              incompleteTurnPayloadsFromExistingError ||
+              incompleteTurnAsyncTaskPayloads ||
+              incompleteTurnToolFallback
                 ? "working"
                 : resolveRunLivenessState({
                     payloadCount,
@@ -3898,15 +3906,18 @@ export async function runEmbeddedAgent(
                     incompleteTurnText,
                   });
             const incompleteTurnPayloads =
+              incompleteTurnPayloadsFromExistingError ??
               incompleteTurnAsyncTaskPayloads ??
               (incompleteTurnToolFallback
                 ? [incompleteTurnToolFallback.payload]
                 : [{ text: incompleteTurnText, isError: true }]);
-            const incompleteTurnSurface = incompleteTurnAsyncTaskPayloads
-              ? "async task fallback"
-              : incompleteTurnToolFallback
-                ? `${incompleteTurnToolFallback.toolName} tool fallback`
-                : "error";
+            const incompleteTurnSurface = incompleteTurnPayloadsFromExistingError
+              ? "existing error payload"
+              : incompleteTurnAsyncTaskPayloads
+                ? "async task fallback"
+                : incompleteTurnToolFallback
+                  ? `${incompleteTurnToolFallback.toolName} tool fallback`
+                  : "error";
             setTerminalLifecycleMeta({
               replayInvalid,
               livenessState,
@@ -3927,7 +3938,12 @@ export async function runEmbeddedAgent(
 
             // Mark the failing profile for cooldown so multi-profile setups
             // rotate away from the exhausted credential on the next turn.
-            if (lastProfileId && !incompleteTurnAsyncTaskPayloads && !incompleteTurnToolFallback) {
+            if (
+              lastProfileId &&
+              !incompleteTurnPayloadsFromExistingError &&
+              !incompleteTurnAsyncTaskPayloads &&
+              !incompleteTurnToolFallback
+            ) {
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,

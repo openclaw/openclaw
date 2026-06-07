@@ -10,6 +10,7 @@ import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   mockedClassifyFailoverReason,
+  mockedBuildEmbeddedRunPayloads,
   mockedGlobalHookRunner,
   mockedLog,
   mockedMarkAuthProfileFailure,
@@ -854,6 +855,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not let a successful tool fallback hide a later tool error", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedBuildEmbeddedRunPayloads.mockReturnValueOnce([
+      { text: "⚠️ Web fetch failed", isError: true },
+    ]);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
       const attemptParams = params as {
         onToolOutcome?: (observation: {
@@ -1544,7 +1548,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           "No user-facing result text was provided.",
       },
     ]);
-    expect(JSON.stringify(result.payloads)).not.toContain("status_probe completed");
+    expect(result.payloads).toBeUndefined();
   });
 
   it("detects replay-safe planning-only GPT turns", () => {
