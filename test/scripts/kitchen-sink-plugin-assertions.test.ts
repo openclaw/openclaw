@@ -193,11 +193,20 @@ function runAssertClawhubInstalled({
   }
 }
 
-function runScanLogs({ home, scratchRoot }: { home: string; scratchRoot: string }) {
+function runScanLogs({
+  env = {},
+  home,
+  scratchRoot,
+}: {
+  env?: NodeJS.ProcessEnv;
+  home: string;
+  scratchRoot: string;
+}) {
   return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "scan-logs"], {
     encoding: "utf8",
     env: {
       ...process.env,
+      ...env,
       HOME: home,
       KITCHEN_SINK_TMP_DIR: scratchRoot,
     },
@@ -286,6 +295,35 @@ describe("kitchen-sink plugin assertions", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("log scan passed");
       expect(`${result.stdout}\n${result.stderr}`).not.toContain("stale sibling failure");
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
+  it("bounds irrelevant OpenClaw home traversal during log scans", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
+    const home = path.join(parent, "home");
+    const scratchRoot = path.join(parent, "scratch");
+    try {
+      mkdirSync(path.join(home, ".openclaw"), { recursive: true });
+      mkdirSync(scratchRoot, { recursive: true });
+      writeFileSync(path.join(scratchRoot, "scenario.log"), "0 errors\n");
+      for (let index = 0; index < 20; index += 1) {
+        const dir = path.join(home, ".openclaw", `cache-${index}`);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(path.join(dir, "state.txt"), "not a log\n");
+      }
+
+      const result = runScanLogs({
+        env: { KITCHEN_SINK_LOG_SCAN_MAX_ENTRIES: "8" },
+        home,
+        scratchRoot,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        "kitchen-sink log scan exceeded 8 filesystem entries",
+      );
     } finally {
       rmSync(parent, { force: true, recursive: true });
     }

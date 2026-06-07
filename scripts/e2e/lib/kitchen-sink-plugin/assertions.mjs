@@ -9,6 +9,7 @@ const scratchRoot = process.env.KITCHEN_SINK_TMP_DIR || os.tmpdir();
 
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_FINDING_CONTEXT_CHARS = 2048;
+const LOG_SCAN_MAX_ENTRIES = readPositiveIntEnv("KITCHEN_SINK_LOG_SCAN_MAX_ENTRIES", 20_000);
 const LOG_SCAN_MAX_FILES = 5000;
 const LOG_SCAN_MAX_FINDINGS = 100;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
@@ -17,6 +18,22 @@ const LOG_SCAN_SEGMENT_OVERLAP_CHARS = 256;
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const normalizedPath = (filePath) => filePath.replaceAll("\\", "/");
+
+function readPositiveIntEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  const text = raw.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${name} must be a positive integer; got: ${raw}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer; got: ${raw}`);
+  }
+  return parsed;
+}
 
 function resolveHomePath(value) {
   if (value === "~") {
@@ -115,12 +132,19 @@ function shouldScanLogFile(entry) {
 
 function scanLogFiles(roots, onFile) {
   let scannedFiles = 0;
+  let visitedEntries = 0;
   for (const root of roots) {
     const pending = [root];
     while (pending.length > 0) {
       const entry = pending.pop();
       if (!entry || !fs.existsSync(entry)) {
         continue;
+      }
+      visitedEntries += 1;
+      if (visitedEntries > LOG_SCAN_MAX_ENTRIES) {
+        throw new Error(
+          `kitchen-sink log scan exceeded ${LOG_SCAN_MAX_ENTRIES} filesystem entries`,
+        );
       }
       const stat = fs.lstatSync(entry);
       if (stat.isSymbolicLink()) {

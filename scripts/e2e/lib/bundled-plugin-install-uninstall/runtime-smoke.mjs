@@ -839,6 +839,10 @@ function hasOwnPayloadField(raw, field) {
   );
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
     throw new Error(`gateway RPC failed: ${JSON.stringify(raw.error ?? raw)}`);
@@ -853,6 +857,36 @@ export function unwrapRpcPayload(raw) {
     return raw.data;
   }
   return raw;
+}
+
+export function assertGatewayHealthPayload(payload, label = "health") {
+  if (!isRecord(payload)) {
+    throw new Error(`${label} returned invalid payload: expected object.`);
+  }
+  if (payload.ok !== true) {
+    throw new Error(`${label} returned invalid payload: expected ok=true.`);
+  }
+  if (!Number.isFinite(payload.ts)) {
+    throw new Error(`${label} returned invalid payload: expected numeric ts.`);
+  }
+  if (!Number.isFinite(payload.durationMs)) {
+    throw new Error(`${label} returned invalid payload: expected numeric durationMs.`);
+  }
+  if (typeof payload.defaultAgentId !== "string" || payload.defaultAgentId.trim() === "") {
+    throw new Error(`${label} returned invalid payload: expected defaultAgentId.`);
+  }
+  if (!Array.isArray(payload.agents)) {
+    throw new Error(`${label} returned invalid payload: expected agents array.`);
+  }
+  if (!isRecord(payload.channels)) {
+    throw new Error(`${label} returned invalid payload: expected channels object.`);
+  }
+  if (!Array.isArray(payload.channelOrder)) {
+    throw new Error(`${label} returned invalid payload: expected channelOrder array.`);
+  }
+  if (!isRecord(payload.sessions)) {
+    throw new Error(`${label} returned invalid payload: expected sessions object.`);
+  }
 }
 
 async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, pluginRoot) {
@@ -922,7 +956,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
 async function assertBaseGatewayProbes(options) {
   await assertHttpOk(options.port, "/healthz");
   await assertReadyzProbe(options);
-  await retryRpcCall("health", {}, options);
+  assertGatewayHealthPayload(await retryRpcCall("health", {}, options));
 }
 
 async function runManifestProbes(plan, options) {
@@ -1055,7 +1089,10 @@ async function runWatchdog(options) {
       `gateway exited after ready for ${options.pluginId}\n${tailFile(options.logPath)}`,
     );
   }
-  await retryRpcCall("health", {}, options);
+  assertGatewayHealthPayload(
+    await retryRpcCall("health", {}, options),
+    `${options.pluginId} watchdog health`,
+  );
   assertGatewayLogNotTruncated(options.logPath);
   assertNoPostReadyRuntimeDepsWork(options.logPath, readyOffset);
   await assertNoPackageManagerChildren(options.child.pid);

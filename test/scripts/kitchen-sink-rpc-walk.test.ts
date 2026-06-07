@@ -697,6 +697,18 @@ describe("kitchen-sink RPC payload unwrapping", () => {
     expect(unwrapRpcPayload({ data: 0 })).toBe(0);
   });
 
+  it("rejects error envelopes without success payload fields", () => {
+    const error = captureSyncError(() =>
+      unwrapRpcPayload({ error: { message: "session store unavailable" } }),
+    );
+
+    expect(error.message).toContain("gateway RPC returned error envelope");
+    expect(error.message).toContain("session store unavailable");
+    expect(unwrapRpcPayload({ error: { message: "ignored" }, payload: { ok: true } })).toEqual({
+      ok: true,
+    });
+  });
+
   it("bounds failed RPC payload diagnostics", () => {
     const error = captureSyncError(() =>
       unwrapRpcPayload({

@@ -571,6 +571,14 @@ export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
     throw new Error(`gateway RPC failed: ${boundedJsonPreview(raw.error ?? raw)}`);
   }
+  if (
+    hasOwnPayloadField(raw, "error") &&
+    !hasOwnPayloadField(raw, "result") &&
+    !hasOwnPayloadField(raw, "payload") &&
+    !hasOwnPayloadField(raw, "data")
+  ) {
+    throw new Error(`gateway RPC returned error envelope: ${boundedJsonPreview(raw.error)}`);
+  }
   if (hasOwnPayloadField(raw, "result")) {
     return raw.result;
   }

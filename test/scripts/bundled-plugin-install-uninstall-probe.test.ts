@@ -229,6 +229,29 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(runtimeSmoke.unwrapRpcPayload({ payload: null, data: { stale: true } })).toBeNull();
   });
 
+  it("rejects incomplete runtime health RPC payloads", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+
+    expect(() =>
+      runtimeSmoke.assertGatewayHealthPayload({
+        agents: [],
+        channelOrder: [],
+        channels: {},
+        defaultAgentId: "codex",
+        durationMs: 3,
+        ok: true,
+        sessions: { count: 0, path: "/state/sessions", recent: [] },
+        ts: Date.now(),
+      }),
+    ).not.toThrow();
+    expect(() => runtimeSmoke.assertGatewayHealthPayload({ ok: true })).toThrow(
+      "health returned invalid payload: expected numeric ts.",
+    );
+    expect(() => runtimeSmoke.assertGatewayHealthPayload({}, "watchdog health")).toThrow(
+      "watchdog health returned invalid payload: expected ok=true.",
+    );
+  });
+
   it("caps noisy runtime gateway logs", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_GATEWAY_LOG_BYTES: "64",
