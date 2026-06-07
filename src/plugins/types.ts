@@ -2037,11 +2037,6 @@ export type PluginCommandResult = ReplyPayload & {
   suppressReply?: boolean;
 };
 
-export type PluginCommandSuppressReply = {
-  /** When true, the channel adapter should not send a fallback reply for this command */
-  suppressReply: true;
-};
-
 /**
  * Handler function for plugin commands.
  */
