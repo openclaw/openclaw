@@ -51,8 +51,8 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function readJsonFile(filePath: string): Promise<unknown | null> {
-  return JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+async function readJsonFile(filePath: string): Promise<unknown> {
+  return JSON.parse(await fs.readFile(filePath, "utf8"));
 }
 
 async function archiveLegacySource(params: {

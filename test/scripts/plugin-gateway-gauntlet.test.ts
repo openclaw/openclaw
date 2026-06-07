@@ -6,6 +6,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildObservationGuardFailures,
   createGauntletPrebuildCommand,
   hasGauntletWorkRows,
   parseArgs,
@@ -34,6 +35,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await fs.rm(repoRoot, { recursive: true, force: true });
   });
 
@@ -756,6 +758,34 @@ setInterval(() => {}, 1000);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("--limit must be a positive integer");
+  });
+
+  it("parses observation failure mode from CLI and env", () => {
+    expect(parseArgs(["--fail-on-observation", "--allow-empty"])).toMatchObject({
+      allowEmpty: true,
+      failOnObservation: true,
+    });
+
+    vi.stubEnv("OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION", "1");
+    expect(parseArgs(["--allow-empty"])).toMatchObject({
+      allowEmpty: true,
+      failOnObservation: true,
+    });
+  });
+
+  it("promotes gauntlet observations to guard failures when requested", () => {
+    const observations = [
+      { kind: "phase-rss-high", phase: "qa:rpc", pluginId: "kitchen", maxRssMb: 2048 },
+    ];
+
+    expect(buildObservationGuardFailures(observations, false)).toEqual([]);
+    expect(buildObservationGuardFailures(observations, true)).toEqual([
+      {
+        kind: "observation:phase-rss-high",
+        message: "Gauntlet observation threshold exceeded: phase-rss-high",
+        observation: observations[0],
+      },
+    ]);
   });
 
   it("cleans the isolated run root after an explicitly empty dry run", async () => {

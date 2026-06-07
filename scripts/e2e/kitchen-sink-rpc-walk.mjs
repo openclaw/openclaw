@@ -1,5 +1,6 @@
 // Walks the kitchen-sink gateway RPC scenario for E2E smoke coverage.
 import childProcess from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -289,7 +290,7 @@ export function runCommand(command, args, options = {}) {
             });
           }
         })
-        .catch((error) => {
+        .catch((/** @type {unknown} */ error) => {
           lastResourceSampleError = error;
         })
         .finally(() => {
@@ -1270,6 +1271,89 @@ export function assertKitchenSinkTextInvokeResult(payload) {
   }
 }
 
+export function assertKitchenSinkImageJobInvokeResult(payload) {
+  if (payload?.ok !== true || payload?.source !== "plugin") {
+    throw new Error(`Kitchen Sink image job tool invoke failed: ${boundedJsonPreview(payload)}`);
+  }
+  const output = assertObjectPayload(payload.output, "Kitchen Sink image job tool output");
+  const image = assertObjectPayload(output.image, "Kitchen Sink image job image");
+  const imageMetadata = assertObjectPayload(
+    image.metadata,
+    "Kitchen Sink image job image metadata",
+  );
+  const mediaBytes = decodePngDataUrl(output.mediaUrl);
+  const mediaSha256 = mediaBytes ? createHash("sha256").update(mediaBytes).digest("hex") : "";
+  if (
+    output.ok !== true ||
+    output.route !== "tool:kitchen_sink_image_job" ||
+    output.job?.status !== "completed" ||
+    output.job?.route !== "tool:kitchen_sink_image_job" ||
+    !mediaBytes ||
+    !hasPngSignature(mediaBytes) ||
+    image.mimeType !== "image/png" ||
+    imageMetadata.assetName !== "kitchen_sink_office.png" ||
+    imageMetadata.width !== 1024 ||
+    imageMetadata.height !== 1024 ||
+    typeof imageMetadata.sha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(imageMetadata.sha256) ||
+    mediaSha256 !== imageMetadata.sha256
+  ) {
+    throw new Error(
+      `Kitchen Sink image job tool output missed expected fixture: ${boundedJsonPreview(output)}`,
+    );
+  }
+}
+
+function decodePngDataUrl(value) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const match = /^data:image\/png;base64,([A-Za-z0-9+/]+={0,2})$/u.exec(value);
+  if (!match || match[1].length === 0 || match[1].length % 4 !== 0) {
+    return undefined;
+  }
+  return Buffer.from(match[1], "base64");
+}
+
+function hasPngSignature(buffer) {
+  return (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  );
+}
+
+const KITCHEN_SINK_TOOL_INVOKES = [
+  {
+    name: "kitchen_sink_search",
+    args: { query: "kitchen sink rpc walk" },
+    idempotencyKey: "kitchen-sink-rpc-search",
+    assertResult: assertKitchenSinkSearchInvokeResult,
+  },
+  {
+    name: "kitchen_sink_text",
+    args: { prompt: "explain kitchen sink rpc walk" },
+    idempotencyKey: "kitchen-sink-rpc-text",
+    assertResult: assertKitchenSinkTextInvokeResult,
+  },
+  {
+    name: "kitchen_sink_image_job",
+    args: { prompt: "generate a kitchen sink rpc walk image" },
+    idempotencyKey: "kitchen-sink-rpc-image-job",
+    assertResult: assertKitchenSinkImageJobInvokeResult,
+  },
+];
+
+export function listKitchenSinkToolInvokeNames() {
+  return KITCHEN_SINK_TOOL_INVOKES.map((entry) => entry.name);
+}
+
 export function assertCreatedKitchenSinkSession(payload, expectedKey = SESSION_KEY) {
   const created = assertObjectPayload(payload, "sessions.create");
   if (created.ok !== true || created.key !== expectedKey || !isNonEmptyString(created.sessionId)) {
@@ -2066,31 +2150,20 @@ export async function main() {
       { requirePluginProvenance: true },
     );
 
-    const searchInvoked = await retryRpcCall(
-      "tools.invoke",
-      {
-        name: "kitchen_sink_search",
-        args: { query: "kitchen sink rpc walk" },
-        sessionKey: createdSession.key,
-        agentId: "main",
-        idempotencyKey: "kitchen-sink-rpc-search",
-      },
-      rpcOptions,
-    );
-    assertKitchenSinkSearchInvokeResult(searchInvoked);
-
-    const textInvoked = await retryRpcCall(
-      "tools.invoke",
-      {
-        name: "kitchen_sink_text",
-        args: { prompt: "explain kitchen sink rpc walk" },
-        sessionKey: createdSession.key,
-        agentId: "main",
-        idempotencyKey: "kitchen-sink-rpc-text",
-      },
-      rpcOptions,
-    );
-    assertKitchenSinkTextInvokeResult(textInvoked);
+    for (const toolInvoke of KITCHEN_SINK_TOOL_INVOKES) {
+      const invoked = await retryRpcCall(
+        "tools.invoke",
+        {
+          name: toolInvoke.name,
+          args: toolInvoke.args,
+          sessionKey: createdSession.key,
+          agentId: "main",
+          idempotencyKey: toolInvoke.idempotencyKey,
+        },
+        rpcOptions,
+      );
+      toolInvoke.assertResult(invoked);
+    }
 
     const ttsProviders = await retryRpcCall("tts.providers", {}, rpcOptions);
     const ttsStatus = await retryRpcCall("tts.status", {}, rpcOptions);

@@ -256,6 +256,63 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
+  it("records optional proof omissions as skips instead of passes", async () => {
+    const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=skip-${Date.now()}`);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const entry = await proof.runWithProof("PX", "optional live proof", async () =>
+        proof.skipProof("missing live credential"),
+      );
+
+      expect(entry.status).toBe("skip");
+      expect(entry.evidence).toBe("missing live credential");
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("[SKIP] PX optional live proof"));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("blocks skipped secret proofs unless local rehearsals explicitly allow skips", async () => {
+    const previousAllowSkips = process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS;
+    const proof = await import(
+      `${pathToFileURL(proofScriptPath).href}?case=skip-block-${Date.now()}`
+    );
+    const entries = [{ name: "PX", status: "skip", elapsedMs: 1, evidence: "missing service" }];
+
+    try {
+      delete process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS;
+      expect(proof.collectBlockingProofResults(entries)).toEqual(entries);
+
+      process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS = "1";
+      expect(proof.collectBlockingProofResults(entries)).toEqual([]);
+    } finally {
+      if (previousAllowSkips === undefined) {
+        delete process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS;
+      } else {
+        process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS = previousAllowSkips;
+      }
+    }
+  });
+
+  it("fails allowed-failure probes when the command exits nonzero", async () => {
+    const proof = await import(
+      `${pathToFileURL(proofScriptPath).href}?case=allowed-failure-${Date.now()}`
+    );
+
+    expect(() =>
+      proof.assertAllowedFailureCommandSucceeded(
+        {
+          code: 1,
+          signal: null,
+          stderr: "resolver invoked openai-profile",
+          stdout: "openai-profile",
+        },
+        "auth-profile SecretRef model status probe",
+        "openai-profile\nresolver invoked",
+      ),
+    ).toThrow("auth-profile SecretRef model status probe failed (1)");
+  });
+
   it.runIf(process.platform !== "win32")("bounds captured PTY configure output", async () => {
     const root = makeTempDir();
     const fakeOpenClaw = writeNoisySecretsConfigureOpenClaw(root);

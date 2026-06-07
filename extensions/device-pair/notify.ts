@@ -108,7 +108,7 @@ async function readNotifyState(api: OpenClawPluginApi): Promise<NotifyStateFile>
 
   const subscribers = subscriberEntries
     .map((entry) => entry.value)
-    .sort((a, b) => a.addedAtMs - b.addedAtMs);
+    .toSorted((a, b) => a.addedAtMs - b.addedAtMs);
   const notifiedRequestIds: Record<string, number> = {};
   for (const entry of seenRequestEntries) {
     const requestId = normalizeOptionalString(entry.value.requestId);
@@ -287,7 +287,7 @@ async function notifySubscriber(params: {
 async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }): Promise<void> {
   const state = await readNotifyState(params.api);
   const pairing = await listDevicePairing();
-  const pending = pairing.pending as PendingPairingRequest[];
+  const pending: PendingPairingRequest[] = pairing.pending;
   const now = Date.now();
   const pendingIds = new Set(pending.map((entry) => entry.requestId));
   let changed = false;

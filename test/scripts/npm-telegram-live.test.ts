@@ -79,6 +79,8 @@ describe("package Telegram live Docker E2E", () => {
     expect(installRun).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
     expect(installRun).not.toContain("run_logged docker run --rm");
     expect(script).toContain("run_logged docker_e2e_run_with_harness");
+    expect(script).toContain('docker_e2e_print_log "$run_log"');
+    expect(script).not.toContain('cat "$run_log"');
     expect(script).toContain('"${docker_env[@]}"');
     expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');
     expect(script).toContain('credential_role="ci"');
@@ -103,6 +105,8 @@ describe("package Telegram live Docker E2E", () => {
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw channels add");
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --fix");
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --non-interactive");
+    expect(runtimeRun).toContain('openclaw_e2e_print_log "$file"');
+    expect(runtimeRun).not.toContain("sed -n '1,220p'");
     expect(runtimeRun).not.toMatch(/^\s*openclaw (onboard|channels add|doctor )/mu);
   });
 

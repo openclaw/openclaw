@@ -73,7 +73,7 @@ prepare_codex_plugin_spec() {
     done < <(find "$CODEX_PLUGIN_PACK_DIR" -maxdepth 1 -type f -name '*.tgz' | sort)
     if [ "${#pack_output[@]}" -ne 1 ]; then
       echo "Expected one packed Codex plugin tarball; found ${#pack_output[@]}." >&2
-      cat /tmp/openclaw-codex-plugin-pack.log >&2 || true
+      docker_e2e_print_log /tmp/openclaw-codex-plugin-pack.log >&2
       exit 1
     fi
     source_path="${pack_output[0]}"

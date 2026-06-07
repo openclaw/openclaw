@@ -1,4 +1,5 @@
 // Microsoft Foundry tests cover index plugin behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -779,6 +780,60 @@ describe("microsoft-foundry plugin", () => {
     const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
     expect(provider?.models[0]?.compat?.supportsStore).toBe(false);
     expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_completion_tokens");
+  });
+
+  it("keeps replay item ids for Foundry encrypted reasoning continuations", async () => {
+    const provider = registerProvider();
+    let capturedReplayIds: boolean | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedReplayIds = (options as { replayResponsesItemIds?: boolean } | undefined)
+        ?.replayResponsesItemIds;
+      return {} as never;
+    };
+
+    const wrappedStreamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn,
+      modelId: "gpt-5.4",
+      model: buildFoundryModel({
+        reasoning: true,
+        compat: { supportsStore: false },
+      }),
+      extraParams: {},
+      config: {},
+      agentDir: defaultFoundryAgentDir,
+    } as never);
+
+    expect(wrappedStreamFn).toBeTypeOf("function");
+    await wrappedStreamFn?.(
+      buildFoundryModel({
+        reasoning: true,
+        compat: { supportsStore: false },
+      }) as never,
+      { systemPrompt: "system", messages: [] } as never,
+      {},
+    );
+
+    expect(capturedReplayIds).toBe(true);
+  });
+
+  it("leaves Foundry chat completions streams unwrapped by Responses defaults", () => {
+    const provider = registerProvider();
+    const baseStreamFn: StreamFn = () => ({}) as never;
+
+    expect(
+      provider.wrapStreamFn?.({
+        streamFn: baseStreamFn,
+        modelId: "gpt-4o-mini",
+        model: buildFoundryModel({
+          id: "gpt-4o-mini",
+          name: "gpt-4o-mini",
+          api: "openai-completions",
+        }),
+        extraParams: {},
+        config: {},
+        agentDir: defaultFoundryAgentDir,
+      } as never),
+    ).toBe(baseStreamFn);
   });
 
   it("marks Foundry chat models as not supporting reasoning_effort", () => {

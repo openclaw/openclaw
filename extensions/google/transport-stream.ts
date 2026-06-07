@@ -28,6 +28,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
+import { stripGoogleProviderPrefix } from "./model-id.js";
 import { normalizeGoogleApiBaseUrl } from "./provider-policy.js";
 import {
   isGoogleGemini25ThinkingBudgetModel,
@@ -323,7 +324,7 @@ function resolveGoogleModelPath(modelId: string): string {
   if (modelId.startsWith("models/") || modelId.startsWith("tunedModels/")) {
     return modelId;
   }
-  return `models/${modelId}`;
+  return `models/${stripGoogleProviderPrefix(modelId)}`;
 }
 
 function buildGoogleGenerativeAiRequestUrl(model: GoogleTransportModel): string {

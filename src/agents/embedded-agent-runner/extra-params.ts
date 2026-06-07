@@ -866,7 +866,7 @@ function applyPostPluginStreamWrappers(
   // MiniMax's Anthropic-compatible stream can leak reasoning_content into the
   // visible reply path because it does not emit native Anthropic thinking
   // blocks. Disable thinking unless an earlier wrapper already set it.
-  ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
+  ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
 
   const rawChatTemplateKwargs = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],

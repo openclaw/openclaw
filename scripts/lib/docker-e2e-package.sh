@@ -224,13 +224,115 @@ docker_e2e_run_with_harness() {
   local run_status=0
   local cid_dir
   local cidfile
+  local docker_run_pid=""
+  local harness_stdin_fd=""
+  local cleanup_done=0
+  local previous_int_trap
+  local previous_term_trap
+  local previous_hup_trap
   cid_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-docker-e2e-container.XXXXXX")"
   cidfile="$cid_dir/container.cid"
-  docker_e2e_docker_run_cmd run --rm --cidfile "$cidfile" "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@" ||
-    run_status="$?"
-  docker_e2e_cleanup_container_cidfile "$cidfile"
-  rmdir "$cid_dir" 2>/dev/null || true
-  docker_e2e_cleanup_package_mount_args
+  previous_int_trap="$(trap -p INT || true)"
+  previous_term_trap="$(trap -p TERM || true)"
+  previous_hup_trap="$(trap -p HUP || true)"
+  restore_harness_traps() {
+    if [ -n "$previous_int_trap" ]; then
+      eval "$previous_int_trap"
+    else
+      trap - INT
+    fi
+    if [ -n "$previous_term_trap" ]; then
+      eval "$previous_term_trap"
+    else
+      trap - TERM
+    fi
+    if [ -n "$previous_hup_trap" ]; then
+      eval "$previous_hup_trap"
+    else
+      trap - HUP
+    fi
+  }
+  docker_e2e_harness_descendant_pids() {
+    local parent_pid="$1"
+    local child_pid
+    for child_pid in $(pgrep -P "$parent_pid" 2>/dev/null || true); do
+      docker_e2e_harness_descendant_pids "$child_pid"
+      printf '%s\n' "$child_pid"
+    done
+  }
+  terminate_harness_docker_run() {
+    [ -n "$docker_run_pid" ] || return 0
+    kill -0 "$docker_run_pid" 2>/dev/null || return 0
+    local descendant_pids
+    descendant_pids="$(docker_e2e_harness_descendant_pids "$docker_run_pid")"
+    if [ -n "$descendant_pids" ]; then
+      kill -TERM $descendant_pids 2>/dev/null || true
+    fi
+    kill -TERM "$docker_run_pid" 2>/dev/null || true
+    local grace_seconds="${OPENCLAW_DOCKER_E2E_CONTAINER_TERM_GRACE_SECONDS:-10}"
+    if ! [[ "$grace_seconds" =~ ^[0-9]+$ ]] || [ "$grace_seconds" -lt 1 ]; then
+      grace_seconds="10"
+    else
+      grace_seconds="$((10#$grace_seconds))"
+    fi
+    local wait_attempt
+    for wait_attempt in $(seq 1 "$((grace_seconds * 10))"); do
+      if ! kill -0 "$docker_run_pid" 2>/dev/null; then
+        return 0
+      fi
+      /bin/sleep 0.1
+    done
+    descendant_pids="$(docker_e2e_harness_descendant_pids "$docker_run_pid")"
+    if [ -n "$descendant_pids" ]; then
+      kill -KILL $descendant_pids 2>/dev/null || true
+    fi
+    kill -KILL "$docker_run_pid" 2>/dev/null || true
+  }
+  cleanup_harness_run() {
+    local cleanup_status="${1:-$?}"
+    local exit_after_cleanup="${2:-0}"
+    if [ "$cleanup_done" = "1" ]; then
+      if [ "$exit_after_cleanup" = "1" ]; then
+        exit "$cleanup_status"
+      fi
+      return "$cleanup_status"
+    fi
+    cleanup_done=1
+    trap - INT TERM HUP
+    terminate_harness_docker_run
+    wait "$docker_run_pid" 2>/dev/null || true
+    docker_e2e_cleanup_container_cidfile "$cidfile"
+    rmdir "$cid_dir" 2>/dev/null || true
+    docker_e2e_cleanup_package_mount_args
+    if [ -n "$harness_stdin_fd" ]; then
+      exec {harness_stdin_fd}<&-
+      harness_stdin_fd=""
+    fi
+    restore_harness_traps
+    if [ "$exit_after_cleanup" = "1" ]; then
+      exit "$cleanup_status"
+    fi
+    return "$cleanup_status"
+  }
+  trap 'cleanup_harness_run 130 1' INT
+  trap 'cleanup_harness_run 143 1' TERM
+  trap 'cleanup_harness_run 129 1' HUP
+  exec {harness_stdin_fd}<&0
+  docker_e2e_docker_run_cmd run --rm --cidfile "$cidfile" "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@" <&$harness_stdin_fd &
+  docker_run_pid="$!"
+  local had_errexit=0
+  case "$-" in
+    *e*)
+      had_errexit=1
+      ;;
+  esac
+  set +e
+  wait "$docker_run_pid"
+  run_status="$?"
+  if [ "$had_errexit" = "1" ]; then
+    set -e
+  fi
+  cleanup_harness_run 0
   return "$run_status"
 }
 

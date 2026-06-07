@@ -106,6 +106,7 @@ type MockOpenAiRequestSnapshot = {
   plannedToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
   toolOutputCallId?: string;
+  toolOutputStructuredError?: true;
 };
 
 // Anthropic /v1/messages request/response shapes the mock actually needs.
@@ -125,6 +126,7 @@ type AnthropicMessageContentBlock =
   | {
       type: "tool_result";
       tool_use_id: string;
+      is_error?: boolean;
       content: string | Array<{ type: "text"; text: string }>;
     }
   | { type: "image"; source: Record<string, unknown> };
@@ -395,6 +397,13 @@ function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
   );
 }
 
+function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
+  if (item.type !== "function_call_output") {
+    return false;
+  }
+  return item.is_error === true || item.isError === true;
+}
+
 function extractToolOutput(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
   for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
@@ -423,6 +432,35 @@ function extractToolOutput(input: ResponsesInputItem[]) {
     }
   }
   return "";
+}
+
+function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
+  const lastUserIndex = findLastUserIndex(input);
+  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      return functionCallOutputIsStructuredError(item);
+    }
+  }
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      const laterUserTexts = input
+        .slice(index + 1)
+        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
+        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
+        .filter(Boolean);
+      if (
+        laterUserTexts.length > 0 &&
+        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+      ) {
+        return functionCallOutputIsStructuredError(item);
+      }
+    }
+  }
+  return false;
 }
 
 function extractToolOutputCallId(input: ResponsesInputItem[]) {
@@ -2867,6 +2905,7 @@ function convertAnthropicMessagesToResponsesInput(params: {
             type: "function_call_output",
             call_id: block.tool_use_id,
             output,
+            ...(block.is_error === true ? { is_error: true } : {}),
           });
         }
         continue;
@@ -3235,6 +3274,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           plannedToolName: extractPlannedToolName(events),
           plannedToolArgs: extractPlannedToolArgs(events),
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
+          ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
         };
         requests.push(lastRequest);
         if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
@@ -3293,6 +3333,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           plannedToolName: extractPlannedToolName(events),
           plannedToolArgs: extractPlannedToolArgs(events),
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
+          ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
         };
         requests.push(lastRequest);
         if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {

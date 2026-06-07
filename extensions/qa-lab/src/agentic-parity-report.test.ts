@@ -13,18 +13,18 @@ import {
 } from "./agentic-parity-report.js";
 
 const FULL_PARITY_PASS_SCENARIOS: QaParityReportScenario[] = [
-  { name: "Approval turn tool followthrough", status: "pass" as const },
-  { name: "Compaction retry after mutating tool", status: "pass" as const },
-  { name: "Model switch with tool continuity", status: "pass" as const },
-  { name: "Source and docs discovery report", status: "pass" as const },
-  { name: "Image understanding from attachment", status: "pass" as const },
-  { name: "Subagent handoff", status: "pass" as const },
-  { name: "Subagent fanout synthesis", status: "pass" as const },
-  { name: "Subagent stale child links", status: "pass" as const },
-  { name: "Memory recall after context switch", status: "pass" as const },
-  { name: "Thread memory isolation", status: "pass" as const },
-  { name: "Config restart capability flip", status: "pass" as const },
-  { name: "Instruction followthrough repo contract", status: "pass" as const },
+  { name: "Approval turn tool followthrough", status: "pass" },
+  { name: "Compaction retry after mutating tool", status: "pass" },
+  { name: "Model switch with tool continuity", status: "pass" },
+  { name: "Source and docs discovery report", status: "pass" },
+  { name: "Image understanding from attachment", status: "pass" },
+  { name: "Subagent handoff", status: "pass" },
+  { name: "Subagent fanout synthesis", status: "pass" },
+  { name: "Subagent stale child links", status: "pass" },
+  { name: "Memory recall after context switch", status: "pass" },
+  { name: "Thread memory isolation", status: "pass" },
+  { name: "Config restart capability flip", status: "pass" },
+  { name: "Instruction followthrough repo contract", status: "pass" },
 ];
 
 function withScenarioOverride(name: string, override: Partial<QaParityReportScenario>) {
@@ -107,6 +107,14 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
       runtimePair: ["openclaw", "codex"],
     },
   };
+}
+
+function firstRuntimeParityScenario() {
+  const scenario = makeRuntimeParitySummary().scenarios[0];
+  if (!scenario) {
+    throw new Error("missing runtime parity scenario fixture");
+  }
+  return scenario;
 }
 
 describe("qa agentic parity report", () => {
@@ -216,7 +224,7 @@ describe("qa agentic parity report", () => {
 
   it("counts passing runtime parity scenarios with tool calls in both runtimes", () => {
     const metrics = computeQaAgenticParityMetrics({
-      scenarios: [makeRuntimeParitySummary().scenarios[0]!],
+      scenarios: [firstRuntimeParityScenario()],
     });
 
     expect(metrics.validToolCallCount).toBe(1);
@@ -262,13 +270,14 @@ describe("qa agentic parity report", () => {
   });
 
   it("fails the parity gate when candidate and baseline cover different non-parity scenarios", () => {
+    const passScenario = (name: string): QaParityReportScenario => ({ name, status: "pass" });
     const baselineScenarios = [
-      { name: "Approval turn tool followthrough", status: "pass" as const },
-      { name: "Compaction retry after mutating tool", status: "pass" as const },
-      { name: "Model switch with tool continuity", status: "pass" as const },
-      { name: "Source and docs discovery report", status: "pass" as const },
-      { name: "Image understanding from attachment", status: "pass" as const },
-      { name: "Extra non-parity lane", status: "pass" as const },
+      passScenario("Approval turn tool followthrough"),
+      passScenario("Compaction retry after mutating tool"),
+      passScenario("Model switch with tool continuity"),
+      passScenario("Source and docs discovery report"),
+      passScenario("Image understanding from attachment"),
+      passScenario("Extra non-parity lane"),
     ];
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.5",
@@ -314,20 +323,20 @@ describe("qa agentic parity report", () => {
   });
 
   it("scopes parity metrics to declared parity scenarios even when extra lanes are present", () => {
-    const scopedSummary = {
+    const scopedSummary: QaParitySuiteSummary = {
       scenarios: [
-        { name: "Approval turn tool followthrough", status: "pass" as const },
-        { name: "Compaction retry after mutating tool", status: "pass" as const },
-        { name: "Model switch with tool continuity", status: "pass" as const },
-        { name: "Source and docs discovery report", status: "pass" as const },
-        { name: "Image understanding from attachment", status: "pass" as const },
+        { name: "Approval turn tool followthrough", status: "pass" },
+        { name: "Compaction retry after mutating tool", status: "pass" },
+        { name: "Model switch with tool continuity", status: "pass" },
+        { name: "Source and docs discovery report", status: "pass" },
+        { name: "Image understanding from attachment", status: "pass" },
       ],
     };
-    const summaryWithExtras = {
+    const summaryWithExtras: QaParitySuiteSummary = {
       scenarios: [
         ...scopedSummary.scenarios,
-        { name: "Extra lane A", status: "fail" as const, details: "timed out" },
-        { name: "Extra lane B", status: "fail" as const, details: "timed out" },
+        { name: "Extra lane A", status: "fail", details: "timed out" },
+        { name: "Extra lane B", status: "fail", details: "timed out" },
       ],
     };
 
@@ -633,12 +642,12 @@ status=done`,
     // silently produce a reversed verdict. PR L #64789 ships the `run`
     // block on every summary so the parity report can verify it against
     // the caller-supplied label; this test pins the precondition check.
-    const parityPassScenarios = [
-      { name: "Approval turn tool followthrough", status: "pass" as const },
-      { name: "Compaction retry after mutating tool", status: "pass" as const },
-      { name: "Model switch with tool continuity", status: "pass" as const },
-      { name: "Source and docs discovery report", status: "pass" as const },
-      { name: "Image understanding from attachment", status: "pass" as const },
+    const parityPassScenarios: QaParityReportScenario[] = [
+      { name: "Approval turn tool followthrough", status: "pass" },
+      { name: "Compaction retry after mutating tool", status: "pass" },
+      { name: "Model switch with tool continuity", status: "pass" },
+      { name: "Source and docs discovery report", status: "pass" },
+      { name: "Image understanding from attachment", status: "pass" },
     ];
 
     expect(() =>
@@ -659,8 +668,8 @@ status=done`,
   });
 
   it("throws QaParityLabelMismatchError when the baseline run.primaryProvider does not match the label", () => {
-    const parityPassScenarios = [
-      { name: "Approval turn tool followthrough", status: "pass" as const },
+    const parityPassScenarios: QaParityReportScenario[] = [
+      { name: "Approval turn tool followthrough", status: "pass" },
     ];
 
     expect(() =>

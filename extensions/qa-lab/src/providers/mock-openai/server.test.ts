@@ -3752,6 +3752,59 @@ describe("qa mock openai server", () => {
     expect(debug.allInputText).toContain("Delegate one bounded QA task");
   });
 
+  it("exposes structured Anthropic tool_result errors in debug snapshots", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-8",
+        max_tokens: 256,
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_mock_read_error",
+                name: "read",
+                input: { path: "/missing" },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_mock_read_error",
+                is_error: true,
+                content: "ENOENT: no such file or directory",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debug = (await debugResponse.json()) as {
+      toolOutputCallId: string;
+      toolOutputStructuredError?: boolean;
+    };
+    expect(debug.toolOutputCallId).toBe("toolu_mock_read_error");
+    expect(debug.toolOutputStructuredError).toBe(true);
+  });
+
   it("streams Anthropic /v1/messages tool_use responses as SSE", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

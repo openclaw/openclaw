@@ -61,6 +61,29 @@ function requireFullMatrix() {
   return process.env.OPENCLAW_SECRET_PROOF_FULL === "1";
 }
 
+function allowProofSkips() {
+  return process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS === "1";
+}
+
+function skipProof(evidence) {
+  return { status: "skip", evidence };
+}
+
+function isSkippedProofResult(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    value.status === "skip" &&
+    typeof value.evidence === "string"
+  );
+}
+
+function collectBlockingProofResults(entries = results) {
+  return entries.filter(
+    (entry) => entry.status === "fail" || (entry.status === "skip" && !allowProofSkips()),
+  );
+}
+
 function readPositiveInt(raw, fallback, label) {
   const text = String(raw ?? "").trim();
   if (!text) {
@@ -1107,10 +1130,18 @@ async function runWithProof(name, description, fn) {
   try {
     const evidence = await fn();
     const elapsedMs = Date.now() - started;
-    results.push({ name, status: "pass", elapsedMs, evidence });
+    if (isSkippedProofResult(evidence)) {
+      const entry = { name, status: "skip", elapsedMs, evidence: evidence.evidence };
+      results.push(entry);
+      console.log(`[SKIP] ${name} ${description} (${elapsedMs}ms) ${scrub(evidence.evidence)}`);
+      return entry;
+    }
+    const entry = { name, status: "pass", elapsedMs, evidence };
+    results.push(entry);
     console.log(
       `[PASS] ${name} ${description} (${elapsedMs}ms) ${evidence ? scrub(evidence) : ""}`,
     );
+    return entry;
   } catch (error) {
     const elapsedMs = Date.now() - started;
     const message = error instanceof Error ? error.message : String(error);
@@ -1234,6 +1265,15 @@ async function p3ThroughP6StaticReloadAndCommandSnapshot() {
   return "static capture, reload success, reload LKG, and command snapshot resolution proved";
 }
 
+function assertAllowedFailureCommandSucceeded(result, label, combinedOutput) {
+  if (result.signal) {
+    throw new Error(`${label} terminated by signal ${result.signal}: ${combinedOutput}`);
+  }
+  if (result.code !== 0) {
+    throw new Error(`${label} failed (${String(result.code)}): ${combinedOutput}`);
+  }
+}
+
 async function p7AuthProfileSecretRefPersistsAndResolves() {
   await withProofEnv("p7", async (envCtx, _plugin, storePath) => {
     const port = await allocatePort();
@@ -1285,6 +1325,11 @@ async function p7AuthProfileSecretRefPersistsAndResolves() {
         `auth-profile SecretRef did not resolve through plugin integration: ${combined}`,
       );
     }
+    assertAllowedFailureCommandSucceeded(
+      result,
+      "auth-profile SecretRef model status probe",
+      combined,
+    );
     const callsAfter = readJson(storePath).calls;
     if (callsAfter <= callsBefore) {
       throw new Error("auth-profile proof did not invoke the plugin-managed resolver");
@@ -1301,7 +1346,9 @@ async function p8ManagedServiceEnvProof() {
     if (requireFullMatrix()) {
       throw new Error("OPENCLAW_SECRET_PROOF_SERVICE=1 is required for full matrix service proof");
     }
-    return "not run in local rehearsal; final matrix must set OPENCLAW_SECRET_PROOF_SERVICE=1 on a service-capable host";
+    return skipProof(
+      "not run in local rehearsal; final matrix must set OPENCLAW_SECRET_PROOF_SERVICE=1 on a service-capable host",
+    );
   }
   await withProofEnv("p8", async (envCtx) => {
     const port = await allocatePort();
@@ -1531,7 +1578,9 @@ async function p12OpenAiLiveProof() {
     if (requireFullMatrix()) {
       throw new Error("OPENAI_API_KEY is required for full matrix OpenAI proof");
     }
-    return "OPENAI_API_KEY not present; final live matrix must forward the provided OpenAI env profile";
+    return skipProof(
+      "OPENAI_API_KEY not present; final live matrix must forward the provided OpenAI env profile",
+    );
   }
   await withProofEnv(
     "p12",
@@ -1855,18 +1904,22 @@ async function main() {
   if (runError) {
     throw toLintErrorObject(runError, "Non-Error thrown");
   }
-  const failed = results.filter((entry) => entry.status !== "pass");
-  if (failed.length > 0) {
+  const blockingResults = collectBlockingProofResults();
+  if (blockingResults.length > 0) {
     process.exitCode = 1;
   }
 }
 
 export {
+  assertAllowedFailureCommandSucceeded,
+  collectBlockingProofResults,
   cleanupEnv,
   expectGatewayStartupFails,
   gatewayCall,
   runPtySecretsConfigurePreset,
+  runWithProof,
   runCommand,
+  skipProof,
   startGateway,
   waitForManagedGatewayStatus,
   writeProofPlugin,

@@ -14,6 +14,10 @@ const LOG_SCAN_MAX_FILES = 5000;
 const LOG_SCAN_MAX_FINDINGS = 100;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
 const LOG_SCAN_SEGMENT_OVERLAP_CHARS = 256;
+const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnv(
+  "KITCHEN_SINK_EXPECT_FAILURE_OUTPUT_MAX_BYTES",
+  1024 * 1024,
+);
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
@@ -45,9 +49,21 @@ function resolveHomePath(value) {
   return value;
 }
 
+function readTextFileBounded(file, maxBytes, label) {
+  const stats = fs.statSync(file);
+  if (stats.size > maxBytes) {
+    throw new Error(`${label} exceeded ${maxBytes} bytes: ${file} (${stats.size} bytes)`);
+  }
+  return fs.readFileSync(file, "utf8");
+}
+
 function expectFailure() {
   const outputFile = process.argv[3];
-  const output = fs.readFileSync(outputFile, "utf8");
+  const output = readTextFileBounded(
+    outputFile,
+    EXPECT_FAILURE_OUTPUT_MAX_BYTES,
+    "expected failure output",
+  );
   const source = process.env.KITCHEN_SINK_SOURCE;
   const spec = process.env.KITCHEN_SINK_SPEC;
   const displayedSpec = source === "npm" ? spec.replace(/^npm:/u, "") : spec;
@@ -75,12 +91,12 @@ function scanTextFileLines(file, onLine) {
       while (currentLine.length > LOG_SCAN_MAX_LINE_CHARS) {
         const segment = currentLine.slice(0, LOG_SCAN_MAX_LINE_CHARS);
         currentLine = currentLine.slice(LOG_SCAN_MAX_LINE_CHARS - LOG_SCAN_SEGMENT_OVERLAP_CHARS);
-        if (emitLine(segment, { truncated: true }) === false) {
+        if (!emitLine(segment, { truncated: true })) {
           return false;
         }
       }
       if (complete) {
-        if (emitLine(currentLine) === false) {
+        if (!emitLine(currentLine)) {
           return false;
         }
         currentLine = "";
@@ -97,11 +113,11 @@ function scanTextFileLines(file, onLine) {
       const text = buffer.subarray(0, bytesRead).toString("utf8");
       const lines = text.split(/\r?\n/u);
       for (let index = 0; index < lines.length - 1; index += 1) {
-        if (appendLineText(lines[index], true) === false) {
+        if (!appendLineText(lines[index], true)) {
           return;
         }
       }
-      if (appendLineText(lines.at(-1) ?? "", false) === false) {
+      if (!appendLineText(lines.at(-1) ?? "", false)) {
         return;
       }
     }
@@ -134,26 +150,44 @@ function scanLogFiles(roots, onFile) {
   let scannedFiles = 0;
   let visitedEntries = 0;
   for (const root of roots) {
-    const pending = [root];
+    const pending = [{ entry: root, counted: false }];
     while (pending.length > 0) {
-      const entry = pending.pop();
+      const pendingEntry = pending.pop();
+      const entry = pendingEntry?.entry;
       if (!entry || !fs.existsSync(entry)) {
         continue;
       }
-      visitedEntries += 1;
-      if (visitedEntries > LOG_SCAN_MAX_ENTRIES) {
-        throw new Error(
-          `kitchen-sink log scan exceeded ${LOG_SCAN_MAX_ENTRIES} filesystem entries`,
-        );
+      if (!pendingEntry.counted) {
+        visitedEntries += 1;
+        if (visitedEntries > LOG_SCAN_MAX_ENTRIES) {
+          throw new Error(
+            `kitchen-sink log scan exceeded ${LOG_SCAN_MAX_ENTRIES} filesystem entries`,
+          );
+        }
       }
-      const stat = fs.lstatSync(entry);
-      if (stat.isSymbolicLink()) {
+      const entryType = pendingEntry.dirent ?? fs.lstatSync(entry);
+      if (entryType.isSymbolicLink()) {
         continue;
       }
-      if (stat.isDirectory()) {
-        const children = fs.readdirSync(entry).toSorted((left, right) => right.localeCompare(left));
-        for (const child of children) {
-          pending.push(path.join(entry, child));
+      if (entryType.isDirectory()) {
+        const dir = fs.opendirSync(entry);
+        try {
+          let child;
+          while ((child = dir.readSync()) !== null) {
+            visitedEntries += 1;
+            if (visitedEntries > LOG_SCAN_MAX_ENTRIES) {
+              throw new Error(
+                `kitchen-sink log scan exceeded ${LOG_SCAN_MAX_ENTRIES} filesystem entries`,
+              );
+            }
+            pending.push({
+              counted: true,
+              dirent: child,
+              entry: path.join(entry, child.name),
+            });
+          }
+        } finally {
+          dir.closeSync();
         }
         continue;
       }
@@ -164,7 +198,7 @@ function scanLogFiles(roots, onFile) {
       if (scannedFiles > LOG_SCAN_MAX_FILES) {
         throw new Error(`kitchen-sink log scan exceeded ${LOG_SCAN_MAX_FILES} candidate files`);
       }
-      if (onFile(entry, scannedFiles) === false) {
+      if (!onFile(entry, scannedFiles)) {
         return scannedFiles;
       }
     }
@@ -439,9 +473,21 @@ function assertInstalled() {
   const list = readJson(scratchFile(`kitchen-sink-${label}-plugins.json`));
   const inspect = readJson(scratchFile(`kitchen-sink-${label}-inspect.json`));
   const allInspect = readJson(scratchFile(`kitchen-sink-${label}-inspect-all.json`));
+  if (!Array.isArray(allInspect)) {
+    throw new Error("kitchen-sink inspect --all output was not an array");
+  }
   const plugin = (list.plugins || []).find((entry) => entry.id === pluginId);
   if (!plugin) {
     throw new Error(`kitchen-sink plugin not found after install: ${pluginId}`);
+  }
+  const allInspectPlugin = allInspect.find((entry) => entry?.plugin?.id === pluginId);
+  if (!allInspectPlugin) {
+    throw new Error(`kitchen-sink plugin missing from inspect --all output: ${pluginId}`);
+  }
+  if (!allInspectPlugin.plugin?.enabled || allInspectPlugin.plugin?.status !== "loaded") {
+    throw new Error(
+      `expected enabled loaded kitchen-sink plugin in inspect --all, got enabled=${allInspectPlugin.plugin?.enabled} status=${allInspectPlugin.plugin?.status}`,
+    );
   }
   if (plugin.status !== "loaded") {
     throw new Error(`unexpected kitchen-sink status after enable: ${plugin.status}`);
@@ -449,7 +495,7 @@ function assertInstalled() {
   if (inspect.plugin?.id !== pluginId) {
     throw new Error(`unexpected inspected kitchen-sink plugin id: ${inspect.plugin?.id}`);
   }
-  if (inspect.plugin?.enabled !== true || inspect.plugin?.status !== "loaded") {
+  if (!inspect.plugin?.enabled || inspect.plugin?.status !== "loaded") {
     throw new Error(
       `expected enabled loaded kitchen-sink plugin, got enabled=${inspect.plugin?.enabled} status=${inspect.plugin?.status}`,
     );
@@ -466,7 +512,7 @@ function assertInstalled() {
   const diagnostics = [
     ...(list.diagnostics || []),
     ...(inspect.diagnostics || []),
-    ...(allInspect.diagnostics || []),
+    ...(allInspectPlugin.diagnostics || []),
   ];
   const errorMessages = new Set(
     diagnostics.filter((diag) => diag?.level === "error").map((diag) => String(diag.message || "")),

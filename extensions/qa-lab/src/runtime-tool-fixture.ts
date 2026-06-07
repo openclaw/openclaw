@@ -7,7 +7,7 @@ import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
-type QaRuntimeToolFixtureConfig = {
+type QaRuntimeToolFixtureConfig = Record<string, unknown> & {
   toolName?: unknown;
   happyPrompt?: unknown;
   failurePrompt?: unknown;
@@ -27,6 +27,7 @@ type QaRuntimeToolFixtureRequest = {
   plannedToolArgs?: unknown;
   toolOutputCallId?: string;
   toolOutput?: string;
+  toolOutputStructuredError?: unknown;
 };
 
 type QaRuntimeToolFixtureTranscriptToolCall = {
@@ -40,6 +41,7 @@ type QaRuntimeToolFixtureTranscriptToolResult = {
   tool?: string;
   text: string;
   failure: boolean;
+  structuredFailure: boolean;
 };
 
 type QaRuntimeToolFixtureDeps = {
@@ -64,28 +66,33 @@ type QaRuntimeToolFixtureDeps = {
   ensureImageGenerationConfigured: (env: QaSuiteRuntimeEnv) => Promise<unknown>;
 };
 
-function readString(value: unknown, fallback = "") {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
+function readString(raw: unknown, fallback = "") {
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : fallback;
 }
 
-function readBoolean(value: unknown, fallback: boolean) {
-  return typeof value === "boolean" ? value : fallback;
+function readBoolean(raw: unknown, fallback: boolean) {
+  return typeof raw === "boolean" ? raw : fallback;
 }
 
-function isKnownBroken(value: unknown) {
-  return Boolean(value && typeof value === "object");
+function isKnownBroken(raw: unknown): raw is Record<string, unknown> {
+  return isRecord(raw);
 }
 
-function isKnownHarnessGap(value: unknown) {
-  return Boolean(value && typeof value === "object");
+function isKnownHarnessGap(raw: unknown): raw is Record<string, unknown> {
+  return isRecord(raw);
 }
 
-function isQaRuntimeToolFixtureRequest(value: unknown): value is QaRuntimeToolFixtureRequest {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+function isQaRuntimeToolFixtureRequest(raw: unknown): raw is QaRuntimeToolFixtureRequest {
+  return isRecord(raw);
 }
 
-function readQaRuntimeToolFixtureRequests(value: unknown): QaRuntimeToolFixtureRequest[] {
-  return Array.isArray(value) ? value.filter(isQaRuntimeToolFixtureRequest) : [];
+function readQaRuntimeToolFixtureRequests(raw: unknown): QaRuntimeToolFixtureRequest[] {
+  return Array.isArray(raw) ? raw.filter(isQaRuntimeToolFixtureRequest) : [];
+}
+
+function formatPlannedToolArgs(rawArgs: unknown) {
+  const encodedArgs = JSON.stringify(rawArgs ?? {});
+  return encodedArgs ?? "undefined";
 }
 
 function requestMatchesPrompt(request: QaRuntimeToolFixtureRequest, promptSnippet: string) {
@@ -94,6 +101,31 @@ function requestMatchesPrompt(request: QaRuntimeToolFixtureRequest, promptSnippe
 
 function requestHasToolOutput(request: QaRuntimeToolFixtureRequest) {
   return typeof request.toolOutput === "string" && request.toolOutput.trim().length > 0;
+}
+
+function isHardFailureToolOutputText(text: string) {
+  return (
+    /\b(?:ENOENT|EACCES|EPERM)\b/u.test(text) ||
+    /(?:^|\n)\s*(?:Error|Exception|Failed):/u.test(text) ||
+    /\b(?:no such file|permission denied|forbidden)\b/iu.test(text)
+  );
+}
+
+function requestHasHappyPathFailureToolOutput(request: QaRuntimeToolFixtureRequest) {
+  return (
+    request.toolOutputStructuredError === true ||
+    (typeof request.toolOutput === "string" && isHardFailureToolOutputText(request.toolOutput))
+  );
+}
+
+function requestHasFailureLikeToolOutput(request: QaRuntimeToolFixtureRequest) {
+  return (
+    typeof request.toolOutput === "string" &&
+    isFailureLikeToolResult({
+      text: request.toolOutput,
+      isError: request.toolOutputStructuredError,
+    })
+  );
 }
 
 function readNonEmptyString(value: unknown) {
@@ -117,7 +149,7 @@ function stringifyTranscriptToolResult(value: unknown): string {
   try {
     return JSON.stringify(value);
   } catch {
-    return String(value);
+    return "";
   }
 }
 
@@ -214,12 +246,22 @@ function isFailureLikeToolResult(params: {
   is_error?: unknown;
 }) {
   return (
-    params.type === "tool_result_error" ||
-    readBooleanTrue(params.isError) ||
-    readBooleanTrue(params.is_error) ||
+    isStructuredFailureToolResult(params) ||
     /\b(?:denied|enoent|error|exception|fail(?:ed|ure)?|forbidden|invalid|missing|not found|permission)\b/iu.test(
       params.text,
     )
+  );
+}
+
+function isStructuredFailureToolResult(params: {
+  type?: string;
+  isError?: unknown;
+  is_error?: unknown;
+}) {
+  return (
+    params.type === "tool_result_error" ||
+    readBooleanTrue(params.isError) ||
+    readBooleanTrue(params.is_error)
   );
 }
 
@@ -234,6 +276,10 @@ function extractTranscriptToolResults(
     readNonEmptyString(message.tool);
   if ((message.role === "tool" || message.role === "toolResult") && message.content !== undefined) {
     const text = extractTranscriptText(message.content);
+    const structuredFailure = isStructuredFailureToolResult({
+      isError: message.isError,
+      is_error: message.is_error,
+    });
     results.push({
       id:
         normalizeToolCallId(message.tool_call_id) ??
@@ -242,6 +288,7 @@ function extractTranscriptToolResults(
         normalizeToolCallId(message.id),
       ...(tool ? { tool } : {}),
       text,
+      structuredFailure,
       failure: isFailureLikeToolResult({
         text,
         isError: message.isError,
@@ -265,6 +312,11 @@ function extractTranscriptToolResults(
     const text = stringifyTranscriptToolResult(
       block.content ?? block.text ?? block.result ?? block.error ?? block.message,
     );
+    const structuredFailure = isStructuredFailureToolResult({
+      type,
+      isError: block.isError,
+      is_error: block.is_error,
+    });
     const blockTool =
       readNonEmptyString(block.toolName) ??
       readNonEmptyString(block.tool_name) ??
@@ -279,6 +331,7 @@ function extractTranscriptToolResults(
         normalizeToolCallId(block.id),
       ...(blockTool ? { tool: blockTool } : {}),
       text,
+      structuredFailure,
       failure: isFailureLikeToolResult({
         type,
         text,
@@ -454,9 +507,7 @@ function formatKnownBrokenDetails(
   tools: Set<string>,
   config: QaRuntimeToolFixtureConfig,
 ) {
-  const knownBroken = isKnownBroken(config.knownBroken)
-    ? (config.knownBroken as Record<string, unknown>)
-    : {};
+  const knownBroken = isKnownBroken(config.knownBroken) ? config.knownBroken : {};
   const issue = readString(knownBroken.issue);
   const reason = readString(knownBroken.reason, "known broken runtime tool fixture");
   return [
@@ -487,10 +538,10 @@ function formatCodexNativeWorkspaceDetails(params: {
     params.reason ? `reason: ${params.reason}` : undefined,
     `available OpenClaw dynamic tools: ${[...params.tools].toSorted().join(", ")}`,
     params.happyRequest
-      ? `${params.toolName} mock provider happy planned args (diagnostic only): ${JSON.stringify(params.happyRequest.plannedToolArgs ?? {})}`
+      ? `${params.toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(params.happyRequest.plannedToolArgs)}`
       : undefined,
     params.failureRequest
-      ? `${params.toolName} mock provider failure planned args (diagnostic only): ${JSON.stringify(params.failureRequest.plannedToolArgs ?? {})}`
+      ? `${params.toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(params.failureRequest.plannedToolArgs)}`
       : undefined,
   ]
     .filter(Boolean)
@@ -498,9 +549,7 @@ function formatCodexNativeWorkspaceDetails(params: {
 }
 
 function formatKnownHarnessGapDetails(toolName: string, config: QaRuntimeToolFixtureConfig) {
-  const knownHarnessGap = isKnownHarnessGap(config.knownHarnessGap)
-    ? (config.knownHarnessGap as Record<string, unknown>)
-    : {};
+  const knownHarnessGap = isKnownHarnessGap(config.knownHarnessGap) ? config.knownHarnessGap : {};
   const issue = readString(knownHarnessGap.issue);
   const reason = readString(knownHarnessGap.reason, "known QA harness gap");
   return [`known-harness-gap ${toolName}: ${reason}`, issue ? `tracking: ${issue}` : undefined]
@@ -538,7 +587,7 @@ export async function runRuntimeToolFixture(
   );
   const tools = await deps.readEffectiveTools(env, happySessionKey);
   const metadata = readRuntimeToolCoverageMetadata({
-    config: config as Record<string, unknown>,
+    config,
   });
   const dynamicExposureIntentionallyExcluded =
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === "codex" &&
@@ -604,6 +653,12 @@ export async function runRuntimeToolFixture(
           : `expected live happy-path tool call for ${toolName}`,
       );
     }
+    if (happyRequest.outputRequest.structuredFailure) {
+      if (isKnownHarnessGap(config.knownHarnessGap)) {
+        return formatKnownHarnessGapDetails(toolName, config);
+      }
+      throw new Error(`expected live happy-path successful tool output for ${toolName}`);
+    }
     const failureRequest = await readLiveToolEvidence({
       env,
       sessionKey: failureSessionKey,
@@ -666,6 +721,12 @@ export async function runRuntimeToolFixture(
         : `expected mock happy-path request for ${toolName}`,
     );
   }
+  if (requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
+    if (isKnownHarnessGap(config.knownHarnessGap)) {
+      return formatKnownHarnessGapDetails(toolName, config);
+    }
+    throw new Error(`expected mock happy-path successful tool output for ${toolName}`);
+  }
   const failurePlannedRequest = findPlannedRequest({
     requests,
     requestCountBefore,
@@ -697,6 +758,12 @@ export async function runRuntimeToolFixture(
         : `expected mock failure-path request for ${toolName}`,
     );
   }
+  if (!requestHasFailureLikeToolOutput(failureRequest.outputRequest)) {
+    if (isKnownHarnessGap(config.knownHarnessGap)) {
+      return formatKnownHarnessGapDetails(toolName, config);
+    }
+    throw new Error(`expected mock failure-path tool failure output for ${toolName}`);
+  }
 
   if (dynamicExposureIntentionallyExcluded) {
     return formatCodexNativeWorkspaceDetails({
@@ -709,7 +776,7 @@ export async function runRuntimeToolFixture(
   }
 
   return [
-    `${toolName} mock provider happy planned args (diagnostic only): ${JSON.stringify(happyRequest.plannedRequest.plannedToolArgs ?? {})}`,
-    `${toolName} mock provider failure planned args (diagnostic only): ${JSON.stringify(failureRequest.plannedRequest.plannedToolArgs ?? {})}`,
+    `${toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(happyRequest.plannedRequest.plannedToolArgs)}`,
+    `${toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(failureRequest.plannedRequest.plannedToolArgs)}`,
   ].join("\n");
 }
