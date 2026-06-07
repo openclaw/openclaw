@@ -27,6 +27,10 @@ const agentTurnTimeoutSeconds = readPositiveIntEnv(
 const SCAN_CHUNK_BYTES = 64 * 1024;
 const SCAN_CARRY_CHARS = 256;
 const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+const AGENT_OUTPUT_MAX_BYTES = readPositiveIntEnv(
+  "OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES",
+  1024 * 1024,
+);
 const SESSION_FILE_LIST_LIMIT = 20;
 
 function requireEnv(name) {
@@ -355,6 +359,14 @@ function assertAgentTurn() {
   const toolName = requireEnv("TOOL_NAME");
   const outputPath = agentOutputPath();
   const errorPath = agentErrorPath();
+  const outputStat = fs.statSync(outputPath);
+  if (outputStat.isFile() && outputStat.size > AGENT_OUTPUT_MAX_BYTES) {
+    const stdoutTail = readTextFileTail(outputPath, ERROR_DETAIL_TAIL_BYTES);
+    const stderrTail = readTextFileTail(errorPath, ERROR_DETAIL_TAIL_BYTES);
+    throw new Error(
+      `live agent output exceeded ${AGENT_OUTPUT_MAX_BYTES} bytes:\nstdout tail=${stdoutTail}\nstderr tail=${stderrTail}`,
+    );
+  }
   const stdout = fs.readFileSync(outputPath, "utf8");
   const response = JSON.parse(stdout);
   const text = extractAgentReplyTexts(JSON.stringify(response)).join("\n");

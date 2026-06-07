@@ -131,6 +131,105 @@ describe("runtime tool fixture", () => {
     expect(details).toContain("mock provider happy planned args (diagnostic only)");
   });
 
+  it("requires mock runtime tool fixtures to produce tool output", async () => {
+    const env = await makeEnv({
+      mock: { baseUrl: "http://127.0.0.1:9999" },
+    });
+    const fetchJson = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          allInputText: "target=read",
+          plannedToolName: "read",
+          plannedToolArgs: { path: "README.md" },
+        },
+        {
+          allInputText: "failure target=read",
+          plannedToolName: "read",
+          plannedToolArgs: { path: "/missing" },
+        },
+        {
+          allInputText: "failure target=read",
+          toolOutput: "ENOENT: no such file or directory",
+        },
+      ]);
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "read",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+          },
+          promptSnippet: "target=read",
+          failurePromptSnippet: "failure target=read",
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set(["read"])),
+          runAgentPrompt: vi.fn(async () => ({})),
+          fetchJson,
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("expected mock happy-path tool output for read");
+  });
+
+  it("accepts mock runtime tool fixtures only after planned calls return output", async () => {
+    const env = await makeEnv({
+      mock: { baseUrl: "http://127.0.0.1:9999" },
+    });
+    const fetchJson = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          allInputText: "target=read",
+          plannedToolName: "read",
+          plannedToolArgs: { path: "README.md" },
+        },
+        {
+          allInputText: "target=read",
+          toolOutput: "README contents",
+        },
+        {
+          allInputText: "failure target=read",
+          plannedToolName: "read",
+          plannedToolArgs: { path: "/missing" },
+        },
+        {
+          allInputText: "failure target=read",
+          toolOutput: "ENOENT: no such file or directory",
+        },
+      ]);
+
+    const details = await runRuntimeToolFixture(
+      env,
+      {
+        toolName: "read",
+        toolCoverage: {
+          bucket: "openclaw-dynamic-integration",
+          expectedLayer: "openclaw-dynamic",
+        },
+        promptSnippet: "target=read",
+        failurePromptSnippet: "failure target=read",
+      },
+      {
+        createSession: vi.fn(async (_env, _label, key) => key!),
+        readEffectiveTools: vi.fn(async () => new Set(["read"])),
+        runAgentPrompt: vi.fn(async () => ({})),
+        fetchJson,
+        ensureImageGenerationConfigured: vi.fn(),
+      },
+    );
+
+    expect(details).toContain("read mock provider happy planned args");
+    expect(details).toContain("read mock provider failure planned args");
+  });
+
   it("still fails required OpenClaw dynamic fixtures when the tool is absent", async () => {
     const env = await makeEnv();
 

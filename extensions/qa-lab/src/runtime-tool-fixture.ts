@@ -22,6 +22,7 @@ type QaRuntimeToolFixtureRequest = {
   allInputText?: string;
   plannedToolName?: string;
   plannedToolArgs?: unknown;
+  toolOutput?: string;
 };
 
 type QaRuntimeToolFixtureDeps = {
@@ -74,10 +75,15 @@ function requestMatchesPrompt(request: QaRuntimeToolFixtureRequest, promptSnippe
   return (request.allInputText ?? "").includes(promptSnippet);
 }
 
+function requestHasToolOutput(request: QaRuntimeToolFixtureRequest) {
+  return typeof request.toolOutput === "string" && request.toolOutput.trim().length > 0;
+}
+
 function findPlannedRequest(params: {
   requests: readonly QaRuntimeToolFixtureRequest[];
   requestCountBefore: number;
   promptSnippet: string;
+  excludedPromptSnippet?: string;
   toolName: string;
 }) {
   return params.requests
@@ -85,8 +91,42 @@ function findPlannedRequest(params: {
     .find(
       (request) =>
         requestMatchesPrompt(request, params.promptSnippet) &&
+        (!params.excludedPromptSnippet ||
+          !requestMatchesPrompt(request, params.excludedPromptSnippet)) &&
         request.plannedToolName === params.toolName,
     );
+}
+
+function findExecutedRequest(params: {
+  requests: readonly QaRuntimeToolFixtureRequest[];
+  requestCountBefore: number;
+  promptSnippet: string;
+  excludedPromptSnippet?: string;
+  toolName: string;
+}) {
+  let plannedRequest: QaRuntimeToolFixtureRequest | undefined;
+  for (const request of params.requests.slice(params.requestCountBefore)) {
+    if (!requestMatchesPrompt(request, params.promptSnippet)) {
+      continue;
+    }
+    if (
+      params.excludedPromptSnippet &&
+      requestMatchesPrompt(request, params.excludedPromptSnippet)
+    ) {
+      continue;
+    }
+    if (request.plannedToolName === params.toolName) {
+      plannedRequest ??= request;
+      if (requestHasToolOutput(request)) {
+        return { plannedRequest, outputRequest: request };
+      }
+      continue;
+    }
+    if (plannedRequest && requestHasToolOutput(request)) {
+      return { plannedRequest, outputRequest: request };
+    }
+  }
+  return null;
 }
 
 function formatKnownBrokenDetails(
@@ -235,10 +275,18 @@ export async function runRuntimeToolFixture(
   const requests = readQaRuntimeToolFixtureRequests(
     await deps.fetchJson(`${env.mock.baseUrl}/debug/requests`),
   );
-  const happyRequest = findPlannedRequest({
+  const happyPlannedRequest = findPlannedRequest({
     requests,
     requestCountBefore,
     promptSnippet,
+    excludedPromptSnippet: failurePromptSnippet,
+    toolName,
+  });
+  const happyRequest = findExecutedRequest({
+    requests,
+    requestCountBefore,
+    promptSnippet,
+    excludedPromptSnippet: failurePromptSnippet,
     toolName,
   });
   if (!happyRequest) {
@@ -247,14 +295,25 @@ export async function runRuntimeToolFixture(
         toolName,
         tools,
         reason: metadata.reason,
+        happyRequest: happyPlannedRequest,
       });
     }
     if (isKnownHarnessGap(config.knownHarnessGap)) {
       return formatKnownHarnessGapDetails(toolName, config);
     }
-    throw new Error(`expected mock happy-path request for ${toolName}`);
+    throw new Error(
+      happyPlannedRequest
+        ? `expected mock happy-path tool output for ${toolName}`
+        : `expected mock happy-path request for ${toolName}`,
+    );
   }
-  const failureRequest = findPlannedRequest({
+  const failurePlannedRequest = findPlannedRequest({
+    requests,
+    requestCountBefore,
+    promptSnippet: failurePromptSnippet,
+    toolName,
+  });
+  const failureRequest = findExecutedRequest({
     requests,
     requestCountBefore,
     promptSnippet: failurePromptSnippet,
@@ -266,13 +325,18 @@ export async function runRuntimeToolFixture(
         toolName,
         tools,
         reason: metadata.reason,
-        happyRequest,
+        happyRequest: happyPlannedRequest,
+        failureRequest: failurePlannedRequest,
       });
     }
     if (isKnownHarnessGap(config.knownHarnessGap)) {
       return formatKnownHarnessGapDetails(toolName, config);
     }
-    throw new Error(`expected mock failure-path request for ${toolName}`);
+    throw new Error(
+      failurePlannedRequest
+        ? `expected mock failure-path tool output for ${toolName}`
+        : `expected mock failure-path request for ${toolName}`,
+    );
   }
 
   if (dynamicExposureIntentionallyExcluded) {
@@ -280,13 +344,13 @@ export async function runRuntimeToolFixture(
       toolName,
       tools,
       reason: metadata.reason,
-      happyRequest,
-      failureRequest,
+      happyRequest: happyRequest.plannedRequest,
+      failureRequest: failureRequest.plannedRequest,
     });
   }
 
   return [
-    `${toolName} mock provider happy planned args (diagnostic only): ${JSON.stringify(happyRequest.plannedToolArgs ?? {})}`,
-    `${toolName} mock provider failure planned args (diagnostic only): ${JSON.stringify(failureRequest.plannedToolArgs ?? {})}`,
+    `${toolName} mock provider happy planned args (diagnostic only): ${JSON.stringify(happyRequest.plannedRequest.plannedToolArgs ?? {})}`,
+    `${toolName} mock provider failure planned args (diagnostic only): ${JSON.stringify(failureRequest.plannedRequest.plannedToolArgs ?? {})}`,
   ].join("\n");
 }

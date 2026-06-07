@@ -1002,6 +1002,39 @@ setInterval(() => {}, 1000);
     }
   });
 
+  it("streams host command logs instead of retaining them in memory", async () => {
+    const source = readFileSync(TS_PATHS.hostCommand, "utf8");
+    const runStreamingBlock = source.slice(source.indexOf("export async function runStreaming"));
+    expect(runStreamingBlock).toContain("createWriteStream");
+    expect(runStreamingBlock).toContain("child.kill(signal)");
+    expect(runStreamingBlock).toContain("writeLogChunk(chunk)");
+    expect(runStreamingBlock).not.toContain('let log = ""');
+    expect(runStreamingBlock).not.toContain("log += text");
+    expect(runStreamingBlock).not.toContain("writeFile(options.logPath, log");
+
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-host-command-log-"));
+    const logPath = join(tempDir, "stream.log");
+    try {
+      const status = await runStreaming(
+        process.execPath,
+        [
+          "-e",
+          "process.stdout.write('x'.repeat(128 * 1024)); process.stderr.write('stream-done');",
+        ],
+        {
+          logPath,
+          quiet: true,
+        },
+      );
+
+      expect(status).toBe(0);
+      expect(statSync(logPath).size).toBeGreaterThan(128 * 1024);
+      expect(readFileSync(logPath, "utf8")).toContain("stream-done");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "does not treat timed command stderr as wrapper control data",
     () => {

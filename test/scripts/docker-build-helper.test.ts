@@ -1769,6 +1769,22 @@ test -f "$TMPDIR/docker-cmd-seen"
     }
   });
 
+  it("threads the live plugin tool output cap into the Docker harness", () => {
+    const runner = readFileSync(LIVE_PLUGIN_TOOL_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain(
+      'AGENT_OUTPUT_MAX_BYTES="${OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES:-1048576}"',
+    );
+    expect(runner).toContain(
+      '-e "OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES=$AGENT_OUTPUT_MAX_BYTES"',
+    );
+    expect(runner).toContain("OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_DUMP_BYTES");
+    expect(runner).toContain('tail -c "$agent_output_dump_bytes" /tmp/openclaw-agent.json');
+    const dumpLogsStart = runner.indexOf("openclaw_e2e_dump_logs \\");
+    const dumpLogsEnd = runner.indexOf("\n}", dumpLogsStart);
+    expect(runner.slice(dumpLogsStart, dumpLogsEnd)).not.toContain("/tmp/openclaw-agent.json");
+  });
+
   it("cleans every prepared Docker package tarball on every runner exit path", () => {
     const paths = packageBackedDockerRunnerPaths();
 

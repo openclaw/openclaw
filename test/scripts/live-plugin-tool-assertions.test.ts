@@ -212,6 +212,31 @@ describe("live plugin tool assertions", () => {
     }
   });
 
+  it("rejects oversized agent output before parsing it", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+
+    try {
+      writeFileSync(
+        path.join(root, "agent.json"),
+        `DO_NOT_DUMP_OLD_AGENT_OUTPUT${"x".repeat(70 * 1024)}\nrecent oversized stdout tail`,
+        "utf8",
+      );
+      writeFileSync(path.join(root, "agent.err"), "recent stderr tail\n", "utf8");
+
+      const result = runAssertion(root, {
+        OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES: "1024",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("live agent output exceeded 1024 bytes");
+      expect(result.stderr).toContain("recent oversized stdout tail");
+      expect(result.stderr).toContain("recent stderr tail");
+      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_AGENT_OUTPUT");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("does not dump session transcript contents when a transcript check fails", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
     const sessionsDir = path.join(root, "state", "agents", "main", "sessions");

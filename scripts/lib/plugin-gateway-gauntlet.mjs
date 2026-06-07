@@ -532,6 +532,16 @@ function validateQaSuiteSummary(summary) {
   ) {
     return `QA suite summary skipped count mismatch: counts.skipped=${String(summary.counts.skipped)}, skipped scenarios=${statusCounts.skipped}`;
   }
+  if (summary.counts.failed === 0) {
+    const emptyPassedScenario = summary.scenarios.find(
+      (scenario) =>
+        scenario.status === "pass" &&
+        (!Array.isArray(scenario.steps) || scenario.steps.length === 0),
+    );
+    if (emptyPassedScenario) {
+      return `QA suite summary passed scenario has no step evidence: ${String(emptyPassedScenario.name ?? "<unknown>")}`;
+    }
+  }
   return null;
 }
 
