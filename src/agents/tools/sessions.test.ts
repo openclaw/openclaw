@@ -820,15 +820,15 @@ describe("sessions_send gating", () => {
     );
     expect(callGatewayMock).toHaveBeenCalledTimes(3);
     expect(requireGatewayRequest(0).method).toBe("sessions.resolve");
-    expect(requireGatewayRequest(0).params).toEqual({ label: "nope" });
-    expect(requireGatewayRequest(1).params).toEqual({
+    expect(requireGatewayRequest(0).params).toEqual({
       label: "nope",
       hubDelegatedOwner: MAIN_AGENT_SESSION_KEY,
     });
-    expect(requireGatewayRequest(2).params).toEqual({
+    expect(requireGatewayRequest(1).params).toEqual({
       label: "nope",
       spawnedBy: MAIN_AGENT_SESSION_KEY,
     });
+    expect(requireGatewayRequest(2).params).toEqual({ label: "nope" });
   });
 
   it("prefers sessionKey over a redundant label", async () => {

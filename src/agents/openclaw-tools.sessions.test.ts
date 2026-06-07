@@ -1283,6 +1283,7 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
       if (request.method === "sessions.resolve") {
+        expect(request.params?.hubDelegatedOwner).toBe(requesterKey);
         expect(request.params?.spawnedBy).toBeUndefined();
         return { key: targetKey };
       }
@@ -1349,6 +1350,9 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
       if (request.method === "sessions.resolve") {
+        if (request.params?.hubDelegatedOwner || request.params?.spawnedBy) {
+          throw new Error("No session found with label: shared-label");
+        }
         expect(request.params?.spawnedBy).toBeUndefined();
         return { key: targetKey };
       }
@@ -1406,13 +1410,17 @@ describe("sessions tools", () => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
       if (request.method === "sessions.resolve") {
         resolveAttempts += 1;
-        if (!request.params?.hubDelegatedOwner) {
+        if (request.params?.hubDelegatedOwner) {
+          expect(request.params.hubDelegatedOwner).toBe(requesterKey);
           throw new Error(
             "Multiple sessions found with label: refactor (agent:codex:acp:a, agent:codex:acp:b)",
           );
         }
-        expect(request.params?.hubDelegatedOwner).toBe(requesterKey);
-        return { key: targetKey };
+        if (request.params?.spawnedBy) {
+          expect(request.params.spawnedBy).toBe(requesterKey);
+          return { key: targetKey };
+        }
+        throw new Error("unexpected unscoped label resolve");
       }
       if (request.method === "agent") {
         return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
@@ -1467,6 +1475,90 @@ describe("sessions tools", () => {
     expect(resolveAttempts).toBe(2);
   });
 
+  it("sessions_send prefers owned hub-delegated label over a global label match", async () => {
+    const requesterKey = "agent:main:webchat:main";
+    const delegateKey = "agent:codex:acp:delegate-child";
+    const globalKey = "agent:beta:discord:channel:123";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        if (request.params?.hubDelegatedOwner) {
+          expect(request.params.hubDelegatedOwner).toBe(requesterKey);
+          return { key: delegateKey };
+        }
+        if (!request.params?.spawnedBy) {
+          return { key: globalKey };
+        }
+        throw new Error("unexpected spawnedBy label resolve");
+      }
+      if (request.method === "agent") {
+        expect((request.params as { sessionKey?: string } | undefined)?.sessionKey).toBe(
+          delegateKey,
+        );
+        return { runId: "run-delegate", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-delegate", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "delegate reply" }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) => {
+      if (sessionKey === delegateKey) {
+        return {
+          sessionId: "delegate-session",
+          updatedAt: 1,
+          spawnedBy: requesterKey,
+          parentSessionKey: requesterKey,
+          hubDelegated: {
+            ownerSessionKey: requesterKey,
+            createdAt: 1,
+          },
+          label: "shared-label",
+        };
+      }
+      if (sessionKey === globalKey) {
+        return {
+          sessionId: "global-visible-session",
+          updatedAt: 1,
+          label: "shared-label",
+        };
+      }
+      return undefined;
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "webchat",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-owned-label-precedence", {
+      label: "shared-label",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("ok");
+    expect(
+      callGatewayMock.mock.calls.filter(
+        (call) => (call[0] as { method?: string }).method === "sessions.resolve",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("sessions_send preserves spawnedBy label fallback for non-delegate children", async () => {
     const requesterKey = "agent:main:webchat:main";
     const targetKey = "agent:main:subagent:owned-child";
@@ -1475,13 +1567,15 @@ describe("sessions tools", () => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
       if (request.method === "sessions.resolve") {
         resolveAttempts += 1;
+        if (request.params?.hubDelegatedOwner) {
+          throw new Error("No session found with label: worker");
+        }
         if (!request.params?.spawnedBy) {
           throw new Error(
             "Multiple sessions found with label: worker (agent:main:subagent:a, agent:other:subagent:b)",
           );
         }
         expect(request.params?.spawnedBy).toBe(requesterKey);
-        expect(request.params?.hubDelegatedOwner).toBeUndefined();
         return { key: targetKey };
       }
       if (request.method === "agent") {
@@ -1528,7 +1622,7 @@ describe("sessions tools", () => {
       timeoutSeconds: 1,
     });
     expect(sessionsSendDetails(result.details).status).toBe("ok");
-    expect(resolveAttempts).toBe(3);
+    expect(resolveAttempts).toBe(2);
   });
 
   it("sessions_send resolves sessionId inputs", async () => {

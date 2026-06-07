@@ -289,16 +289,22 @@ async function resolveSessionsSendLabelSessionKey(params: {
     return assertHubDelegateOwner(scoped.key);
   }
 
-  let resolved = await tryResolve(baseParams);
-  if (!resolved.ok && requesterKey && isHubDelegatedLabelResolveRetryError(resolved.error)) {
-    let scoped = await tryResolve({ ...baseParams, hubDelegatedOwner: requesterKey });
-    if (!scoped.ok && isHubDelegatedLabelResolveRetryError(scoped.error)) {
-      scoped = await tryResolve({ ...baseParams, spawnedBy: requesterKey });
+  // Prefer owner-scoped hub-delegated labels before global label resolve so a
+  // visible global session cannot shadow an owned delegate with the same label.
+  if (requesterKey) {
+    let ownerScoped = await tryResolve({ ...baseParams, hubDelegatedOwner: requesterKey });
+    if (ownerScoped.ok) {
+      return assertHubDelegateOwner(ownerScoped.key);
     }
-    if (scoped.ok) {
-      resolved = scoped;
+    if (isHubDelegatedLabelResolveRetryError(ownerScoped.error)) {
+      ownerScoped = await tryResolve({ ...baseParams, spawnedBy: requesterKey });
+      if (ownerScoped.ok) {
+        return assertHubDelegateOwner(ownerScoped.key);
+      }
     }
   }
+
+  const resolved = await tryResolve(baseParams);
   if (!resolved.ok) {
     return {
       ok: false,
