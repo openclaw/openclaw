@@ -222,13 +222,10 @@ function resolveScopedSessionSelection(
   const scopedSessionKey = normalizeOptionalString(scoped?.sessionKey);
   const scopedLastActiveSessionKey = normalizeOptionalString(scoped?.lastActiveSessionKey);
   if (scopedSessionKey && scopedLastActiveSessionKey) {
-    return sanitizeRestoredSessionSelection(
-      {
-        sessionKey: scopedSessionKey,
-        lastActiveSessionKey: scopedLastActiveSessionKey,
-      },
-      defaults,
-    );
+    return {
+      sessionKey: scopedSessionKey,
+      lastActiveSessionKey: scopedLastActiveSessionKey,
+    };
   }
 
   const legacySessionKey = normalizeOptionalString(parsed.sessionKey) ?? defaults.sessionKey;
