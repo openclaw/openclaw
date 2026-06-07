@@ -92,13 +92,10 @@ async function ensureSandboxWorkspaceLayout(params: {
   const sandboxWorkspaceDir =
     cfg.scope === "shared" ? workspaceRoot : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
   const workspaceDir = cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
-  const materializedSkillsRoot =
-    cfg.scope === "shared"
-      ? resolveSandboxWorkspaceDir(
-          path.join(SANDBOX_STATE_DIR, "skills-workspaces"),
-          scopeKey,
-        )
-      : sandboxWorkspaceDir;
+  const materializedSkillsRoot = resolveSandboxWorkspaceDir(
+    path.join(SANDBOX_STATE_DIR, "skills-workspaces"),
+    scopeKey,
+  );
   const skillsWorkspaceDir =
     cfg.workspaceAccess === "rw"
       ? resolveMaterializedSandboxSkillsWorkspaceDir(materializedSkillsRoot)

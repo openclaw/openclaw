@@ -350,7 +350,6 @@ describe("resolveSandboxContext", () => {
 
   it("materializes skills into a hidden read-only workspace for writable sandboxes", async () => {
     syncSkillsToWorkspaceMock.mockClear();
-    const stateDir = await createSandboxFixtureDir("state");
     const workspaceDir = await createSandboxFixtureDir("workspace");
     const userOwnedSandboxSkillsDir = path.join(
       workspaceDir,
@@ -369,7 +368,7 @@ describe("resolveSandboxContext", () => {
             mode: "all",
             scope: "session",
             workspaceAccess: "rw",
-            workspaceRoot: path.join(stateDir, "sandboxes"),
+            workspaceRoot: path.join(workspaceDir, ".openclaw", "sandboxes"),
           },
         },
       },
@@ -395,12 +394,17 @@ describe("resolveSandboxContext", () => {
     >;
     const [syncOptions] = syncCalls[0] ?? [];
     expect(syncOptions?.sourceWorkspaceDir).toBe(workspaceDir);
-    expect(syncOptions?.targetWorkspaceDir).toContain(path.join(stateDir, "sandboxes"));
+    expect(syncOptions?.targetWorkspaceDir).toContain(
+      path.join(".openclaw", "sandbox", "skills-workspaces"),
+    );
     expect(syncOptions?.targetWorkspaceDir).toMatch(
       /[\\/]agent-main-main-[a-f0-9]{8}[\\/]\.openclaw[\\/]sandbox-skills$/,
     );
     expect(syncOptions?.targetWorkspaceDir).not.toBe(
       path.join(workspaceDir, ".openclaw", "sandbox-skills"),
+    );
+    expect(syncOptions?.targetWorkspaceDir?.startsWith(path.join(workspaceDir, ".openclaw"))).toBe(
+      false,
     );
     expect(syncOptions?.config).toBe(cfg);
     expect(syncOptions?.agentId).toBe("main");
