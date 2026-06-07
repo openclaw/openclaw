@@ -132,4 +132,41 @@ describe("emitCliBanner", () => {
     expect(writeSpy).toHaveBeenCalledWith("\n🦞 OpenClaw 2026.3.7 (abc1234)\n\n");
     expect(hasEmittedCliBanner()).toBe(true);
   });
+
+  it("resets bannerEmitted flag via __testing helper", async () => {
+    const { emitCliBanner, hasEmittedCliBanner, __testing } =
+      await importFreshBannerModule();
+    setStdoutIsTty(false);
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    // First emission — banner is emitted and flag is set
+    emitCliBanner("2026.3.7", {
+      argv: ["node", "openclaw"],
+      commit: "abc1234",
+      env: { LANG: "en_US.UTF-8" },
+      isTty: true,
+      mode: "off",
+      platform: "darwin",
+      richTty: false,
+    });
+    expect(hasEmittedCliBanner()).toBe(true);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+
+    // Reset — flag is cleared
+    __testing.resetBannerEmittedForTests();
+    expect(hasEmittedCliBanner()).toBe(false);
+
+    // Second emission after reset — banner is emitted again
+    emitCliBanner("2026.3.7", {
+      argv: ["node", "openclaw"],
+      commit: "abc1234",
+      env: { LANG: "en_US.UTF-8" },
+      isTty: true,
+      mode: "off",
+      platform: "darwin",
+      richTty: false,
+    });
+    expect(hasEmittedCliBanner()).toBe(true);
+    expect(writeSpy).toHaveBeenCalledTimes(2);
+  });
 });
