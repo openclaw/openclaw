@@ -21,6 +21,7 @@ import {
   ToolsLinksSchema,
   ToolsMediaSchema,
   TtsConfigSchema,
+  TypingModeSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -1070,6 +1071,8 @@ export const AgentEntrySchema = z
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     tts: TtsConfigSchema,
+    typingMode: TypingModeSchema.optional(),
+    typingIntervalSeconds: z.number().int().positive().optional(),
     skillsLimits: AgentSkillsLimitsSchema,
     contextLimits: AgentContextLimitsSchema,
     contextTokens: z.number().int().positive().optional(),

@@ -316,6 +316,10 @@ export const FIELD_HELP: Record<string, string> = {
     "When true, defer heartbeat turns on this agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeat turns.",
   "agents.list[].heartbeat.skipWhenBusy":
     "Per-agent override that defers heartbeat turns on that agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeat turns.",
+  "agents.list[].typingMode":
+    "Optional per-agent typing mode (never|message|turn). Overrides agents.defaults.typingMode for this agent.",
+  "agents.list[].typingIntervalSeconds":
+    "Optional per-agent typing interval in seconds. Overrides agents.defaults.typingIntervalSeconds for this agent.",
   browser:
     "Browser runtime controls for local or remote CDP attachment, profile routing, and screenshot/snapshot behavior. Keep defaults unless your automation workflow requires custom browser transport settings.",
   "browser.enabled":
